@@ -1,0 +1,9 @@
+-Q build/theories Classifier
+theories/Predicate.v
+theories/Raw.v
+theories/prefixgen/Extract.v
+theories/prefixgen/Base.v
+theories/prefixgen/Prefixgen.v
+theories/pathgen/Base.v
+theories/pathgen/Pathgen.v
+theories/Theorems.v

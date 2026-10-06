@@ -1,0 +1,47 @@
+# CONDITIONAL EXAMPLE, not facts verified from the binary or Isla traces.
+# Supplying this file explicitly assumes the following runtime contract.
+# The code checks byte targets, argument values, object extents and provenance;
+# it cannot prove the implementation at the external target satisfies this ABI.
+entry = 0
+# Matches `.xpost.image` VMA in `example/just_tx.elf`.
+image_base = 0x40380200
+max_paths = 4096
+max_path_len = 4096
+return_values = [0, 1, 2, 3, 4]
+
+[stack]
+# Incoming S is 16-byte aligned, at least this large, with 16 writable bytes below.
+top_min = 0x10000
+size = 16
+separated_ram = true
+
+[packet]
+# x10 initially points to readable { data:u32, data_end:u32 } fields at +0/+4.
+# data <= data_end; data <= data_max. Buffer RAM is disjoint from the stack/maps.
+context_reg = 10
+data_max = 0xffff0000
+alignment = 4
+separated_ram = true
+writable = true
+
+[[calls]]
+index = 44
+# PC-relative `c.jal` / JAL link from just_tx image at image_base.
+target = 0x40380000
+helper = "MapLookupElem"
+arg_regs = [11, 12]
+result_bits = 32
+returns_normally = true
+preserves_stack = true
+preserves_packet = true
+selector = { reg = 10, value = 1 }
+
+[[maps]]
+handle = 0x3fc9b690
+id = 3
+key_size = 4
+value_size = 8
+value_alignment = 4
+value_base_max = 0xffff0000
+separated_ram = true
+writable = true

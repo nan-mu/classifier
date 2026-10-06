@@ -1,0 +1,18 @@
+[package]
+name = "classifier"
+version = "0.1.0"
+edition = "2024"
+description = "eBPF/RV32 prefixgen (structured Prefix IR, BPF-asm style)"
+publish = false
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+object = { version = "0.36", default-features = false, features = ["read", "elf"] }
+regex = "1"
+riscv-isa = "0.3"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+pretty_assertions = "1"

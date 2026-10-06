@@ -1,0 +1,5 @@
+/target
+/out
+/rocq/build
+*.pre_session_restore
+/decisions.tsv
