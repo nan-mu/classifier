@@ -7,7 +7,7 @@ fn main() {
     let lean_root = manifest_dir.parent().unwrap();
 
     let status = Command::new("lake")
-        .args(["build", "CommonMath", "LeanRV32IMC"])
+        .args(["build", "CommonMath", "RV32IMC"])
         .current_dir(lean_root)
         .status()
         .expect("failed to spawn lake");
@@ -26,7 +26,7 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lake_lib.display());
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
-    println!("cargo:rustc-link-lib=dylib=classifier_LeanRV32IMC");
+    println!("cargo:rustc-link-lib=dylib=classifier_RV32IMC");
     println!("cargo:rustc-link-lib=dylib=classifier_CommonMath");
     println!("cargo:rustc-link-lib=dylib=leanshared");
     println!("cargo:rustc-link-lib=dylib=Init_shared");
@@ -38,7 +38,8 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed={}", lean_root.join("CommonMath.lean").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("LeanRV32IMC.lean").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("LeanRV32IMC").display());
+    println!("cargo:rerun-if-changed={}", lean_root.join("CommonMath").display());
+    println!("cargo:rerun-if-changed={}", lean_root.join("RV32IMC.lean").display());
+    println!("cargo:rerun-if-changed={}", lean_root.join("RV32IMC").display());
     println!("cargo:rerun-if-changed={}", lean_root.join("lakefile.toml").display());
 }

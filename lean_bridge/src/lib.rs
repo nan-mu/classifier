@@ -1,4 +1,4 @@
-//! Thin Rust interface over Lean `@[export]` symbols from `CommonMath` and `LeanRV32IMC`.
+//! Thin Rust interface over Lean `@[export]` symbols from `CommonMath` and `RV32IMC`.
 
 use std::sync::Once;
 
@@ -16,7 +16,7 @@ mod ffi {
 
         pub fn initialize_Init(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_CommonMath(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_LeanRV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_RV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         pub fn common_math_add32(a: u32, b: u32) -> u32;
         pub fn common_math_sub32(a: u32, b: u32) -> u32;
@@ -44,7 +44,7 @@ pub fn init() {
         let world = std::ptr::null_mut();
         let _ = ffi::initialize_Init(1, world);
         let _ = ffi::initialize_classifier_CommonMath(1, world);
-        let _ = ffi::initialize_classifier_LeanRV32IMC(1, world);
+        let _ = ffi::initialize_classifier_RV32IMC(1, world);
         ffi::lean_io_mark_end_initialization();
     });
 }
@@ -81,7 +81,7 @@ pub mod common_math {
 pub mod rv32 {
     use super::{ffi, init};
 
-    /// Instruction tags matching `LeanRV32IMC.instructionTag`.
+    /// Instruction tags matching `RV32IMC.insnTag`.
     pub mod tag {
         pub const ILLEGAL: u32 = 0;
         pub const LUI: u32 = 2;

@@ -1,7 +1,6 @@
-import LeanRV32IMC.Types
+import RV32IMC.Insn
 
-namespace LeanRV32IMC
-/- encdec_backwards / encdec_compressed_backwards -/
+namespace RV32IMC
 
 /-- Low 2 bits ≠ 0b11 ⇒ compressed. -/
 def isRVC (h : BitVec 16) : Bool :=
@@ -19,8 +18,8 @@ private def mkReg (n : Nat) : regidx :=
 private def mkCReg (n : Nat) : cregidx :=
   .Cregidx (BitVec.ofNat 3 n)
 
-/-- Sail `encdec_compressed_backwards` (RV32 Zca). -/
-def encdec_compressed_backwards (h : BitVec 16) : instruction :=
+/-- Sail `encodeCompressed` (RV32 Zca). -/
+def encodeCompressed (h : BitVec 16) : Insn :=
   let op := slice16 h 1 0
   let funct3 := slice16 h 15 13
   match op, funct3 with
@@ -96,8 +95,8 @@ def encdec_compressed_backwards (h : BitVec 16) : instruction :=
     else .C_ADD (rd, rs2)
   | _, _ => .C_ILLEGAL h
 
-/-- Sail `encdec_backwards` (RV32 I+M). -/
-def encdec_backwards (w : BitVec 32) : instruction :=
+/-- Sail `encode` (RV32 I+M). -/
+def encode (w : BitVec 32) : Insn :=
   let opcode := slice32 w 6 0
   let rd := mkReg (slice32 w 11 7)
   let funct3 := slice32 w 14 12
@@ -209,7 +208,7 @@ def encdec_backwards (w : BitVec 32) : instruction :=
   | _ => .ILLEGAL w
 
 /-- Discriminant tag for FFI (stable small integers). -/
-def instructionTag (i : instruction) : UInt32 :=
+def insnTag (i : Insn) : UInt32 :=
   UInt32.ofNat <|
     match i with
     | .ILLEGAL _ => 0
@@ -287,4 +286,13 @@ def instructionTag (i : instruction) : UInt32 :=
     | .C_EBREAK _ => 69
     | .C_ADD _ => 70
 
-end LeanRV32IMC
+@[export lean_rv32_decode32]
+def exportEncode32 (w : UInt32) : UInt32 :=
+  insnTag (encode (BitVec.ofNat 32 w.toNat))
+
+@[export lean_rv32_decode16]
+def exportEncode16 (h : UInt32) : UInt32 :=
+  insnTag (encodeCompressed (BitVec.ofNat 16 (h.toNat &&& 0xffff)))
+
+end RV32IMC
+

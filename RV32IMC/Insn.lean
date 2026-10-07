@@ -1,13 +1,6 @@
-/-!
-# LeanRV32IMC.Types — register indices, op tags, instruction
+namespace RV32IMC
 
-Sail constructor names are kept for the decoded `instruction` object.
-No SailM / ExecutionResult.
--/
-
-namespace LeanRV32IMC
-
-/-- Architectural X register index (RV32: 5 bits). -/
+/-- Field index for an X register (5 bits). -/
 inductive regidx where
   | Regidx (_ : BitVec 5)
   deriving Inhabited, BEq, DecidableEq, Repr
@@ -18,13 +11,11 @@ inductive cregidx where
   deriving Inhabited, BEq, DecidableEq, Repr
 
 inductive Signedness where
-  | Signed
-  | Unsigned
+  | Signed | Unsigned
   deriving BEq, DecidableEq, Inhabited, Repr
 
 inductive VectorHalf where
-  | High
-  | Low
+  | High | Low
   deriving BEq, DecidableEq, Inhabited, Repr
 
 inductive bop where
@@ -47,7 +38,6 @@ inductive uop where
   | LUI | AUIPC
   deriving BEq, DecidableEq, Inhabited, Repr
 
-/-- Sail `mul_op` payload for MUL / MULH / MULHSU / MULHU. -/
 structure mul_op where
   result_part : VectorHalf
   signed_rs1 : Signedness
@@ -56,7 +46,6 @@ structure mul_op where
 
 abbrev word := BitVec 32
 abbrev half := BitVec 16
-/-- Memory access width in bytes (1 / 2 / 4 for RV32). -/
 abbrev word_width := Nat
 
 def creg2reg_idx (c : cregidx) : regidx :=
@@ -69,9 +58,8 @@ def sp : regidx := .Regidx 2#5
 def regidx.toNat : regidx → Nat
   | .Regidx b => b.toNat
 
-/-! ## Instruction -/
-
-inductive instruction where
+/-- Decoded RV32IMC instruction (Sail constructor names). -/
+inductive Insn where
   | ILLEGAL (_ : word)
   | C_ILLEGAL (_ : half)
   | UTYPE (_ : BitVec 20 × regidx × uop)
@@ -123,4 +111,4 @@ inductive instruction where
   | C_ADD (_ : regidx × regidx)
   deriving Inhabited, Repr
 
-end LeanRV32IMC
+end RV32IMC

@@ -1,11 +1,10 @@
-# Classifier Lean slice
+# Classifier
 
-Architecture-agnostic math in `CommonMath/`. RV32IMC decode and Expr value
-functions in `LeanRV32IMC/`. Rust `lean_bridge` links Lake shared libraries.
+Root library: `CommonMath` (shared Reg/Term/Expr).
+ISA slice: `RV32IMC` (`Insn`, `encode`, `expr` only).
 
 ```bash
 lake build
+lake build RV32IMC
 cargo test --manifest-path lean_bridge/Cargo.toml
 ```
-
-Toolchain: Lean 4.29.0. After layout changes: **Lean 4: Restart Server**.
