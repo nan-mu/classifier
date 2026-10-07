@@ -1,10 +1,11 @@
 # Classifier repository guide for AI agents
 
 Host-side classifier for BPF and RV32IMC XDP programs. The active pipeline is
-**prefixgen** then **pathgen**: extract partitioned machine code from ELF →
-structured `Insn = (machine, Prefix)` → expand forward `IfGoto` into `Assert`
-syntax paths (`docs/SMT/` T0). Stack normalization, pruning, SMT, and
-cross-ISA equivalence are not the current task.
+**prefixgen** then **pathgen**, plus optional **QF_BV** path-family matching
+(`src/qfbv/`). Extract partitioned machine code from ELF → structured
+`Insn = (machine, Prefix)` → expand forward `IfGoto` into `Assert` syntax
+paths (`docs/SMT/` T0). Stack normalization and prune are still deferred;
+cross-ISA assert equivalence is available via the QF_BV driver.
 
 ## Working conventions
 
@@ -22,15 +23,16 @@ describe `Parameter`/`Axiom` or `Admitted` statements as completed proofs.
 
 ```text
 src/lib.rs          public API
-src/main.rs         CLI (`bpf` / `rv32`; bare run = prefixgen + pathgen → out/)
+src/main.rs         CLI (`bpf` / `rv32` / `qfbv` / `xdp-assert-equiv`)
 src/predicate/      Insn / Prefix / Predicate IR + canonical printer
 src/prefixgen/      ELF extract + decode → Insn
 src/pathgen/        Insn → Path (IfGoto → Assert); task name `pathgen`
+src/qfbv/           QF_BV compile + path-family matching (CoqQFBV / optional Z3)
 src/emit.rs         out/<arch>/prefixgen/ and pathgen/
 src/load.rs         legacy toml asm helper
 src/rv32/           decode / lower / environment (used by RV prefixgen)
 src/bpf/            legacy string T0–T5 (not the CLI default)
-rocq/               Predicate / Raw / Prefixgen theories
+rocq/               Predicate / Raw / Prefixgen / pathgen theories
 docs/SMT/           predicate IR + solver design
 docs/Theorem/       historical stage specs
 example/bpf.o       default BPF relocatable input (section `xdp*`)
@@ -79,9 +81,22 @@ Each line: `<index>: <machine>, <prefix>` (`<index>` right-aligned to the progra
 Task names are `prefixgen` and `pathgen`. Do not introduce new runtime `t0`/`t1`
 task names.
 
+## QF_BV / path-family matching
+
+```bash
+cargo run -- qfbv <file.smt2> [--solver …] [--split-conjs]
+cargo run -- xdp-assert-equiv [--oracle z3] [--solver coqqfbv]
+```
+
+- Authoritative backend default is standalone CoqQFBV (`DEFAULT_COQQFBV`).
+- Optional `--oracle` (e.g. `z3`) is untrusted discovery only; verification still
+  goes through `--solver`.
+- Fixture XDP compile is fail-closed on unmodeled memory; use
+  `compile_xdp_*_path_asserts` with the explicit environment contract.
+
 ## Deferred
 
-- stack `wsN`, prune, solver, equiv
+- stack `wsN`, prune
 - applying BPF map relocations into immediates
 
 ## Build & run
@@ -115,9 +130,9 @@ Sources in `rocq/theories/`; build artifacts in `rocq/build/` (not beside `.v`).
 | `prefixgen/extract.rs` | `prefixgen/Extract.v` |
 | `prefixgen/bpf_decode.rs` + `rv32.rs` | `prefixgen/Base.v` (`Module Bpf` / `Module Rv32`) |
 | `prefixgen/mod.rs` | `prefixgen/Prefixgen.v` |
-| `src/pathgen/` | `pathgen/Base.v` / `pathgen/Pathgen.v` |
+| `src/pathgen/` | `pathgen/Base.v` / `pathgen/Pathgen.v` / `Functional.v` / `PredicateEquiv.v` |
+| `src/qfbv/` | pathgen equiv obligations (Rust driver; Rocq models matching) |
 
 BPF and RV32IMC machine-preservation are proved from `Base.Bpf` /
 `Base.Rv32`. Pathgen proves path `machine` preservation (under unique
-indices) and Huffman codes starting with `0`; no full path-family restore
-or prune proofs in tree.
+indices) and Huffman codes starting with `0`.

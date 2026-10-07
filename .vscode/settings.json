@@ -1,0 +1,6 @@
+{
+  "lean4.envPathExtensions": [
+    "${userHome}/.elan/bin"
+  ],
+  "lean4.automaticallyBuildDependencies": true
+}

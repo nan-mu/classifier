@@ -16,6 +16,8 @@ VFILES := \
   $(SRC)/prefixgen/Base.v \
   $(SRC)/prefixgen/Prefixgen.v \
   $(SRC)/pathgen/Base.v \
+  $(SRC)/pathgen/Functional.v \
+  $(SRC)/pathgen/PredicateEquiv.v \
   $(SRC)/pathgen/Pathgen.v \
   $(SRC)/Theorems.v
 
@@ -36,11 +38,17 @@ $(BUILD)/prefixgen/Prefixgen.vo: \
   $(BUILD)/Predicate.vo $(BUILD)/Raw.vo \
   $(BUILD)/prefixgen/Extract.vo $(BUILD)/prefixgen/Base.vo
 $(BUILD)/pathgen/Base.vo: $(BUILD)/Predicate.vo
-$(BUILD)/pathgen/Pathgen.vo: $(BUILD)/Predicate.vo $(BUILD)/pathgen/Base.vo
+$(BUILD)/pathgen/Functional.vo: \
+  $(BUILD)/Predicate.vo $(BUILD)/pathgen/Base.vo
+$(BUILD)/pathgen/PredicateEquiv.vo: \
+  $(BUILD)/Predicate.vo $(BUILD)/pathgen/Base.vo
+$(BUILD)/pathgen/Pathgen.vo: \
+  $(BUILD)/Predicate.vo $(BUILD)/pathgen/Base.vo \
+  $(BUILD)/pathgen/Functional.vo $(BUILD)/pathgen/PredicateEquiv.vo
 $(BUILD)/Theorems.vo: \
   $(BUILD)/Predicate.vo $(BUILD)/Raw.vo \
   $(BUILD)/prefixgen/Base.vo $(BUILD)/prefixgen/Prefixgen.vo \
-  $(BUILD)/pathgen/Base.vo
+  $(BUILD)/pathgen/Base.vo $(BUILD)/pathgen/Functional.vo
 
 clean:
 	rm -rf build

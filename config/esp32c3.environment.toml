@@ -37,7 +37,8 @@ preserves_packet = true
 selector = { reg = 10, value = 1 }
 
 [[maps]]
-handle = 0x3fc9b690
+# Concrete handle materialised by just_tx (lui/addi w11 before the helper call).
+handle = 0x403802e8
 id = 3
 key_size = 4
 value_size = 8

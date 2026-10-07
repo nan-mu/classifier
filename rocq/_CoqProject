@@ -5,5 +5,7 @@ theories/prefixgen/Extract.v
 theories/prefixgen/Base.v
 theories/prefixgen/Prefixgen.v
 theories/pathgen/Base.v
+theories/pathgen/Functional.v
+theories/pathgen/PredicateEquiv.v
 theories/pathgen/Pathgen.v
 theories/Theorems.v

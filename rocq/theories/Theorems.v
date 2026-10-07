@@ -4,7 +4,7 @@ From Stdlib Require Import List NArith.
 Import ListNotations.
 From Classifier Require Import Predicate Raw.
 From Classifier Require Import prefixgen.Base prefixgen.Prefixgen.
-From Classifier Require Import pathgen.Base.
+From Classifier Require Import pathgen.Base pathgen.Functional.
 
 Module Theorems.
 Import Predicate Raw.
@@ -61,7 +61,7 @@ Theorem pathgen_preserves_machines :
     Pathgen.pathgen prog policy entry fuel = Some paths ->
     Pathgen.path_machines_ok prog paths.
 Proof.
-  exact Pathgen.pathgen_preserves_machines.
+  exact PathgenFunctional.preserves_machines.
 Qed.
 
 Theorem pathgen_codes_start_with_zero :
@@ -69,7 +69,7 @@ Theorem pathgen_codes_start_with_zero :
     Pathgen.pathgen prog policy entry fuel = Some paths ->
     Pathgen.codes_start_with_zero paths.
 Proof.
-  exact Pathgen.pathgen_codes_start_with_zero.
+  exact PathgenFunctional.codes_start_with_zero.
 Qed.
 
 End Theorems.

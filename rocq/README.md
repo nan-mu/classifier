@@ -15,7 +15,9 @@ theories/
                         Tests from out/*/prefixgen/prog.txt
     Prefixgen.v         facade + Module Tests
   pathgen/
-    Base.v              expand IfGoto→Assert + machine/code theorems
+    Base.v              executable expand (IfGoto→Assert) + proof helpers
+    Functional.v        generator functionality (machine/code preservation)
+    PredicateEquiv.v    solver-independent assert-equivalence proposition
     Pathgen.v           facade
   Theorems.v
 build/theories/         .vo / .glob (generated)
@@ -46,5 +48,13 @@ make -C rocq clean    # removes build/ and stray in-tree .vo
 - `Base.Bpf`: executable word→Prefix + machine-preservation proof
 - `Base.Rv32`: IMC decode used by just_tx fixtures
 - `Extract`: parametric (host ELF outside TCB)
-- `Pathgen`: fuel-bounded expand; `pathgen_preserves_machines` /
-  `pathgen_codes_start_with_zero` (no path-family restore / prune)
+- `Pathgen.Functional`: fuel-bounded generator functionality;
+  machine preservation and path-code shape (no path-family restore / prune)
+- `Pathgen.PredicateEquiv`: defines paired-path assert equality and proves it
+  equivalent to the absence of a `contract /\ (left xor right)` counterexample;
+  it also proves that a duplicate-free, covering matching of such pairs implies
+  bidirectional path-family assert equivalence
+- Rocq deliberately does not model solver invocation or certificate checking.
+  Rust invokes the standalone CoqQFBV executable on an SMT-LIB2 file.  A proof
+  connecting the current Rust Path→SMT-LIB serializer to `PredicateEquiv` remains a
+  separate obligation and must not be described as complete.

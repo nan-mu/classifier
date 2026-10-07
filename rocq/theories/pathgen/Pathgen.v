@@ -4,6 +4,8 @@ From Stdlib Require Import List.
 Import ListNotations.
 From Classifier Require Import Predicate.
 From Classifier Require Import pathgen.Base.
+From Classifier Require Import pathgen.Functional.
+From Classifier Require Import pathgen.PredicateEquiv.
 
 Module PathgenFacade.
 Import Predicate.

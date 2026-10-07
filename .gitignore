@@ -3,3 +3,10 @@
 /rocq/build
 *.pre_session_restore
 /decisions.tsv
+/recovery/
+/proof/sail-riscv/
+/proof/sail/
+/proof/rv32imc/.lake/
+/proof/rv32imc/lake-manifest.json
+/.lake/
+/lake-manifest.json

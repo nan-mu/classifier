@@ -76,12 +76,35 @@ Definition next_pos (prog : Program) (pos : nat) : option nat :=
   let n := S pos in
   if Nat.ltb n (length prog) then Some n else None.
 
-Definition assert_insn (i : Insn) (c : Condition) (expected : bool) (id : PredicateId)
-  : Insn :=
+(** Mirror Rust's [replace_if_with_assert]: preserve non-control predicates,
+    replace the first [PIfGoto], discard any later [PIfGoto], and append an
+    assertion when no conditional was present. *)
+Fixpoint replace_if_with_assert
+  (prefix : Prefix) (c : Condition) (expected : bool) (id : PredicateId)
+  (replaced : bool) : Prefix :=
+  match prefix with
+  | [] =>
+      if replaced then []
+      else [{| node_id := id; node_pred := PAssert c expected |}]
+  | node :: rest =>
+      match node.(node_pred) with
+      | PIfGoto _ _ =>
+          if replaced then
+            replace_if_with_assert rest c expected id true
+          else
+            {| node_id := id; node_pred := PAssert c expected |}
+              :: replace_if_with_assert rest c expected id true
+      | _ =>
+          node :: replace_if_with_assert rest c expected id replaced
+      end
+  end.
+
+Definition assert_insn
+  (i : Insn) (c : Condition) (expected : bool) (id : PredicateId) : Insn :=
   {| insn_index := i.(insn_index);
      insn_machine := i.(insn_machine);
      insn_prefix :=
-       [{| node_id := id; node_pred := PAssert c expected |}] |}.
+       replace_if_with_assert i.(insn_prefix) c expected id false |}.
 
 Definition machine_at_index (prog : Program) (idx : nat) : option Machine :=
   match find_pos prog idx with
@@ -540,6 +563,22 @@ Example forward_if_machines :
   | None => False
   end.
 Proof. simpl. repeat split. Qed.
+
+Example forward_if_preserves_non_control_predicates :
+  let set_node :=
+    {| node_id := 7%nat;
+       node_pred := PSet (Rw 0) (OImm (Bv32 1)) |} in
+  let if_node :=
+    {| node_id := 8%nat;
+       node_pred := PIfGoto cond_eq0 1%Z |} in
+  let input :=
+    {| insn_index := 0%nat;
+       insn_machine := MRv32 1;
+       insn_prefix := [set_node; if_node] |} in
+  (assert_insn input cond_eq0 true 9).(insn_prefix) =
+    [set_node;
+     {| node_id := 9%nat; node_pred := PAssert cond_eq0 true |}].
+Proof. reflexivity. Qed.
 
 Example no_branch_code_zero :
   let prog := [mk 0 (MBpf 9) PExit] in
