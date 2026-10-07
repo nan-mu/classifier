@@ -1,32 +1,37 @@
 # Classifier repository guide for AI agents
 
-Lean4 RV32IMC slice for ESP32-C3 XDP native code. Sail execute stubs are gone.
-Shared mathematics and Expr value functions follow `doc/common-math.md` and
-`doc/rv32imc-expr-value-functions.md`.
+Lean4 classifier mathematics and RV32IMC decode/value. Architecture-agnostic
+structures live under `CommonMath/`; RV32IMC is one concrete ISA layer.
 
 ## Working conventions
 
 - Use concise prose or lists, not tables, when writing Markdown plans for this user.
-- Ground changes in the checked-out Lean sources and the Rust `lean_bridge` tests.
-- Keep changes scoped to the requested task. Do not reintroduce the deleted
-  Rust/Rocq classifier stack under `src/` unless the user asks.
-- Incomplete Predicate / virtual-mark matching may return `none` (reject); do not
-  describe those TBD rules as completed proofs.
+- Ground changes in Lean sources and `lean_bridge` Rust FFI tests.
+- Keep ISA-specific rules (x0, RV32M div overflow, Sail constructors) out of `CommonMath`.
+- LOAD/STORE virtual-mark matching may still return `none`; do not call that finished.
 
 ## Layout
 
 ```text
-CommonMath.lean              shared Reg/Term/Expr/solve/numeric ops
-LeanRV32IMC.lean             root imports
-LeanRV32IMC/Types.lean       regidx, op tags, instruction
-LeanRV32IMC/Decode.lean      encdec_backwards / compressed
-LeanRV32IMC/Value.lean       value(Eg, i) Expr value functions
-LeanRV32IMC/Ffi.lean         @[export] C ABI for Rust
-lean_bridge/                 Rust crate: FFI + cargo test
-doc/common-math.md           math definitions
+CommonMath/
+  Bits.lean      Width, InsnWidth, M/s/u
+  Reg.lean       RegKind, Reg (alpha is arch-assigned)
+  Numeric.lean   §7 named numeric functions
+  Op.lean        form operators + interpretOp
+  Term.lean      Term, FV, eval, solve, *Star
+  Expr.lean      Rel, Expr, ExprSet, override, interpretExpr
+  Insn.lean      Insn, Predicate/InstNext stubs, HistoryItem
+  Ffi.lean       @[export] numeric smoke tests
+LeanRV32IMC/
+  Types.lean     instruction inductive (Sail names)
+  Decode.lean    encdec_*
+  Regs.lean      x0/ra/sp/pc → CommonMath.Reg
+  MArith.lean    RV32M mulh/div/rem rules
+  Value.lean     value(Eg, i) using CommonMath Expr
+  Ffi.lean       decode/value/ExprSet exports
+lean_bridge/     Rust FFI + cargo test
+doc/common-math.md
 doc/rv32imc-expr-value-functions.md
-lakefile.toml                Lake libs (shared facets)
-lean-toolchain               leanprover/lean4:v4.29.0
 ```
 
 ## Build & check
@@ -36,17 +41,10 @@ lake build
 cargo test --manifest-path lean_bridge/Cargo.toml
 ```
 
-Requires `elan` with toolchain `leanprover/lean4:v4.29.0` and a Rust toolchain.
-`lean_bridge/build.rs` runs `lake build` and links the Lake shared libraries.
-After Lean layout changes: **Lean 4: Restart Server**.
+Toolchain: `lean-toolchain` → Lean 4.29.0. After layout changes: **Lean 4: Restart Server**.
 
 ## Scope
 
-Kept in Lean: RV32 base I, M (`MUL`/`DIV`/`REM`), and Zca compressed ops used on RV32.
-
-Dropped from the full Sail Lean_RV32D model: RV64 `*W` / `C_*W` / `C_LD*`,
-Zcb, A/F/D/V, crypto, and other extensions.
-
-`value` returns `Option ExprSet` (`none` = reject, `some []` = success with no new Expr).
-LOAD/STORE virtual-mark matching is TBD and currently rejects.
-SailM / ExecutionResult / `def_wanted` execute stubs are not part of this tree.
+CommonMath models `doc/common-math.md` (Reg/Term/Expr/solve/history shells).
+LeanRV32IMC adds decode plus Expr value functions for I/M/Zca.
+Predicate payloads and InstNext structure remain TBD.

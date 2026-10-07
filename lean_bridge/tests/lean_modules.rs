@@ -18,15 +18,14 @@ fn common_math_and() {
 }
 
 #[test]
-fn common_math_div_by_zero_is_all_ones() {
+fn common_math_divu_by_zero_is_all_ones() {
     assert_eq!(common_math::divu32(42, 0), 0xffff_ffff);
-    assert_eq!(common_math::div32(42, 0), 0xffff_ffff);
 }
 
 #[test]
-fn common_math_div_overflow_min_neg_over_neg_one() {
-    // DIV: x = -2^31, y = -1 → 2^31 as bit pattern
-    assert_eq!(common_math::div32(0x8000_0000, 0xffff_ffff), 0x8000_0000);
+fn common_math_tq_toward_zero() {
+    // TQ(-7, 2) = -3 → bit pattern
+    assert_eq!(common_math::tq32((-7i32) as u32, 2), (-3i32) as u32);
 }
 
 #[test]
@@ -94,4 +93,9 @@ fn value_div_by_zero() {
 #[test]
 fn ecall_is_rejected() {
     assert!(rv32::ecall_rejects());
+}
+
+#[test]
+fn expr_override_replaces_same_key_keeps_others() {
+    assert!(rv32::expr_override_keeps());
 }

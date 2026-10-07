@@ -1,41 +1,31 @@
 import CommonMath
 import LeanRV32IMC.Types
-
-/-!
-# LeanRV32IMC.Value — Expr value functions
-
-Implements `value(E_g, i) = E_i` from `doc/rv32imc-expr-value-functions.md`.
-Partial: `none` means reject; `some []` means success with no new Expr.
--/
+import LeanRV32IMC.Regs
+import LeanRV32IMC.MArith
 
 namespace LeanRV32IMC
 open CommonMath
 
-/-! ## Helpers -/
+/- value(Eg, i): none = reject; some empty = success with no new Expr -/
 
-def regOf (r : regidx) : Reg := Reg.real32 r.toNat
-
-def isX0 (r : regidx) : Bool := r.toNat == 0
-
-/-- Sign-extend a bit-pattern of width `srcBits` into 32-bit Nat. -/
 def sextBits (srcBits : Nat) (v : Nat) : Nat :=
   M 32 (s srcBits (MNat srcBits v))
 
 def immI32 (imm : BitVec 12) : Nat := sextBits 12 imm.toNat
-
 def uimmU32 (imm : BitVec 20) : Nat := MNat 32 (imm.toNat <<< 12)
+def cImm6 (imm : BitVec 6) : Nat := sextBits 6 imm.toNat
+def cAddi4spnImm (nzimm : BitVec 8) : Nat := nzimm.toNat
+def cAddi16spImm (imm : BitVec 6) : Nat := sextBits 10 (imm.toNat <<< 4)
+def cLuiU (imm : BitVec 6) : Nat := M 32 (s 6 imm.toNat * Int.ofNat (1 <<< 12))
 
-/-- Read equality term for a real register; x0 is always C(0). -/
 def readReg (Eg : ExprSet) (r : regidx) : Option Term :=
   if isX0 r then some (Term.C32 0)
-  else lookupEq Eg (regOf r)
+  else Eg.lookupEq (regOf r)
 
-def readPC (Eg : ExprSet) : Option Term :=
-  lookupEq Eg Reg.pc32
+def readPC (Eg : ExprSet) : Option Term := Eg.lookupEq regPc
 
-/-- Validate x0 equality in Eg if present. -/
 def checkX0 (Eg : ExprSet) : Bool :=
-  match lookupEq Eg Reg.x0 with
+  match Eg.lookupEq regX0 with
   | none => true
   | some t =>
       match eval (solve t) with
@@ -43,16 +33,10 @@ def checkX0 (Eg : ExprSet) : Bool :=
       | _ => false
 
 def assign (rd : regidx) (t : Term) : ExprSet :=
-  if isX0 rd then [] else [Expr.mkEq (regOf rd) (solve t)]
+  if isX0 rd then ExprSet.empty
+  else ExprSet.empty.insertEq (regOf rd) (solve t)
 
-def assignReg (r : Reg) (t : Term) : ExprSet :=
-  [Expr.mkEq r (solve t)]
-
-/-- Require key-unique Eg and legal x0. -/
-def guardEg (Eg : ExprSet) : Bool :=
-  keysUnique Eg && checkX0 Eg
-
-/-! ## Per-constructor value -/
+def guardEg (Eg : ExprSet) : Bool := Eg.keysUnique && checkX0 Eg
 
 def valueUTYPE (Eg : ExprSet) (imm : BitVec 20) (rd : regidx) (op : uop) : Option ExprSet :=
   if !guardEg Eg then none
@@ -63,7 +47,7 @@ def valueUTYPE (Eg : ExprSet) (imm : BitVec 20) (rd : regidx) (op : uop) : Optio
     | .AUIPC =>
         match readPC Eg with
         | none => none
-        | some tπ => some (assign rd (star .w32 (.auipc32 U) [tπ]))
+        | some tπ => some (assign rd (addStar .w32 tπ (Term.C32 U)))
 
 def valueITYPE (Eg : ExprSet) (imm : BitVec 12) (rs1 rd : regidx) (op : iop) : Option ExprSet :=
   if !guardEg Eg then none
@@ -71,15 +55,15 @@ def valueITYPE (Eg : ExprSet) (imm : BitVec 12) (rs1 rd : regidx) (op : iop) : O
     match readReg Eg rs1 with
     | none => none
     | some ta =>
-        let I := immI32 imm
+        let I := Term.C32 (immI32 imm)
         let t :=
           match op with
-          | .ADDI => star .w32 (.addImm32 I) [ta]
-          | .SLTI => star .w32 (.slti32 I) [ta]
-          | .SLTIU => star .w32 (.sltiu32 I) [ta]
-          | .ANDI => star .w32 (.andImm32 I) [ta]
-          | .ORI => star .w32 (.orImm32 I) [ta]
-          | .XORI => star .w32 (.xorImm32 I) [ta]
+          | .ADDI => addStar .w32 ta I
+          | .SLTI => ltsStar .w32 ta I
+          | .SLTIU => ltuStar .w32 ta I
+          | .ANDI => andStar 32 .w32 ta I
+          | .ORI => orStar 32 .w32 ta I
+          | .XORI => xorStar 32 .w32 ta I
         some (assign rd t)
 
 def valueSHIFTIOP (Eg : ExprSet) (shamt : BitVec 6) (rs1 rd : regidx) (op : sop) : Option ExprSet :=
@@ -88,12 +72,12 @@ def valueSHIFTIOP (Eg : ExprSet) (shamt : BitVec 6) (rs1 rd : regidx) (op : sop)
     match readReg Eg rs1 with
     | none => none
     | some ta =>
-        let k := shamt.toNat % 32
+        let k := Term.C32 (shamt.toNat % 32)
         let t :=
           match op with
-          | .SLLI => star .w32 (.shlImm32 k) [ta]
-          | .SRLI => star .w32 (.lshrImm32 k) [ta]
-          | .SRAI => star .w32 (.ashrImm32 k) [ta]
+          | .SLLI => shlStar .w32 ta k
+          | .SRLI => lshrStar .w32 ta k
+          | .SRAI => ashrStar .w32 ta k
         some (assign rd t)
 
 def valueRTYPE (Eg : ExprSet) (rs2 rs1 rd : regidx) (op : rop) : Option ExprSet :=
@@ -103,16 +87,16 @@ def valueRTYPE (Eg : ExprSet) (rs2 rs1 rd : regidx) (op : rop) : Option ExprSet 
     | some ta, some tb =>
         let t :=
           match op with
-          | .ADD => star .w32 (.add .w32) [ta, tb]
-          | .SUB => star .w32 (.sub .w32) [ta, tb]
-          | .SLT => star .w32 (.lts .w32) [ta, tb]
-          | .SLTU => star .w32 (.ltu .w32) [ta, tb]
-          | .AND => star .w32 (.and 32) [ta, tb]
-          | .OR => star .w32 (.or 32) [ta, tb]
-          | .XOR => star .w32 (.xor 32) [ta, tb]
-          | .SLL => star .w32 (.shl .w32) [ta, tb]
-          | .SRL => star .w32 (.lshr .w32) [ta, tb]
-          | .SRA => star .w32 (.ashr .w32) [ta, tb]
+          | .ADD => addStar .w32 ta tb
+          | .SUB => subStar .w32 ta tb
+          | .SLT => ltsStar .w32 ta tb
+          | .SLTU => ltuStar .w32 ta tb
+          | .AND => andStar 32 .w32 ta tb
+          | .OR => orStar 32 .w32 ta tb
+          | .XOR => xorStar 32 .w32 ta tb
+          | .SLL => shlStar .w32 ta tb
+          | .SRL => lshrStar .w32 ta tb
+          | .SRA => ashrStar .w32 ta tb
         some (assign rd t)
     | _, _ => none
 
@@ -121,14 +105,16 @@ def valueMUL (Eg : ExprSet) (rs2 rs1 rd : regidx) (mop : mul_op) : Option ExprSe
   else
     match readReg Eg rs1, readReg Eg rs2 with
     | some ta, some tb =>
-        let t :=
+        let t? :=
           match mop.result_part, mop.signed_rs1, mop.signed_rs2 with
-          | .Low, _, _ => star .w32 (.mullo .w32) [ta, tb]
-          | .High, .Signed, .Signed => star .w32 .mulh32 [ta, tb]
-          | .High, .Signed, .Unsigned => star .w32 .mulhsu32 [ta, tb]
-          | .High, .Unsigned, .Unsigned => star .w32 .mulhu32 [ta, tb]
-          | .High, .Unsigned, .Signed => star .w32 .mulhsu32 [tb, ta]
-        some (assign rd t)
+          | .Low, _, _ => some (mulloStar .w32 ta tb)
+          | .High, .Signed, .Signed => closedBin mulh ta tb
+          | .High, .Signed, .Unsigned => closedBin mulhsu ta tb
+          | .High, .Unsigned, .Unsigned => closedBin mulhu ta tb
+          | .High, .Unsigned, .Signed => closedBin mulhsu tb ta
+        match t? with
+        | some t => some (assign rd t)
+        | none => none
     | _, _ => none
 
 def valueDIV (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option ExprSet :=
@@ -136,10 +122,9 @@ def valueDIV (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option E
   else
     match readReg Eg rs1, readReg Eg rs2 with
     | some ta, some tb =>
-        let t :=
-          if isUnsigned then star .w32 .divu32 [ta, tb]
-          else star .w32 .div32 [ta, tb]
-        some (assign rd t)
+        match closedBin (if isUnsigned then divu else divs) ta tb with
+        | some t => some (assign rd t)
+        | none => none
     | _, _ => none
 
 def valueREM (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option ExprSet :=
@@ -147,58 +132,35 @@ def valueREM (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option E
   else
     match readReg Eg rs1, readReg Eg rs2 with
     | some ta, some tb =>
-        let t :=
-          if isUnsigned then star .w32 .remu32 [ta, tb]
-          else star .w32 .rem32 [ta, tb]
-        some (assign rd t)
+        match closedBin (if isUnsigned then remu else rems) ta tb with
+        | some t => some (assign rd t)
+        | none => none
     | _, _ => none
 
 def valueJAL (Eg : ExprSet) (rd : regidx) : Option ExprSet :=
   if !guardEg Eg then none
-  else if isX0 rd then some []
+  else if isX0 rd then some ExprSet.empty
   else
     match readPC Eg with
     | none => none
-    | some tπ => some (assign rd (star .w32 .linkPlus4 [tπ]))
+    | some tπ => some (assign rd (addStar .w32 tπ (Term.C32 4)))
 
 def valueJALR (Eg : ExprSet) (rs1 rd : regidx) : Option ExprSet :=
   if !guardEg Eg then none
   else
-    -- Base must be defined even when link is discarded.
     match readReg Eg rs1 with
     | none => none
     | some _ =>
-        if isX0 rd then some []
+        if isX0 rd then some ExprSet.empty
         else
           match readPC Eg with
           | none => none
-          | some tπ => some (assign rd (star .w32 .linkPlus4 [tπ]))
+          | some tπ => some (assign rd (addStar .w32 tπ (Term.C32 4)))
 
-/-- LOAD / C_LW / C_LWSP: virtual-mark matching TBD → reject for now (except empty when later). -/
-def valueLOAD (_Eg : ExprSet) (_rd : regidx) : Option ExprSet :=
-  none
-
-/-- STORE / C_SW / C_SWSP: virtual-mark matching TBD → reject. -/
-def valueSTORE (_Eg : ExprSet) : Option ExprSet :=
-  none
-
-def valueEmpty (Eg : ExprSet) : Option ExprSet :=
-  if guardEg Eg then some [] else none
-
+def valueLOAD (_Eg : ExprSet) (_rd : regidx) : Option ExprSet := none
+def valueSTORE (_Eg : ExprSet) : Option ExprSet := none
+def valueEmpty (Eg : ExprSet) : Option ExprSet := if guardEg Eg then some ExprSet.empty else none
 def valueReject : Option ExprSet := none
-
-/-! ## Compressed immediates (already partially recovered in decode fields) -/
-
-def cImm6 (imm : BitVec 6) : Nat := sextBits 6 imm.toNat
-
-/-- C.ADDI4SPN nzuimm field is already scaled (low 2 bits zero). -/
-def cAddi4spnImm (nzimm : BitVec 8) : Nat := nzimm.toNat
-
-/-- C.ADDI16SP: sign-extend 6-bit field then append 4 zero bits. -/
-def cAddi16spImm (imm : BitVec 6) : Nat := sextBits 10 (imm.toNat <<< 4)
-
-/-- C.LUI: \(U_C=M_{32}(s_6(h)2^{12})\). -/
-def cLuiU (imm : BitVec 6) : Nat := M 32 (s 6 imm.toNat * Int.ofNat (1 <<< 12))
 
 def valueC_ADDI4SPN (Eg : ExprSet) (rdc : cregidx) (nzimm : BitVec 8) : Option ExprSet :=
   if !guardEg Eg then none
@@ -207,18 +169,15 @@ def valueC_ADDI4SPN (Eg : ExprSet) (rdc : cregidx) (nzimm : BitVec 8) : Option E
     match readReg Eg sp with
     | none => none
     | some tsp =>
-        let ι := cAddi4spnImm nzimm
-        some (assign (creg2reg_idx rdc) (star .w32 (.addImm32 ι) [tsp]))
+        some (assign (creg2reg_idx rdc) (addStar .w32 tsp (Term.C32 (cAddi4spnImm nzimm))))
 
 def valueC_ADDI (Eg : ExprSet) (imm : BitVec 6) (rsd : regidx) : Option ExprSet :=
   if !guardEg Eg then none
-  else if isX0 rsd then some []  -- HINT / NOP-class when rd=x0
+  else if isX0 rsd then some ExprSet.empty
   else
     match readReg Eg rsd with
     | none => none
-    | some td =>
-        let ι := cImm6 imm
-        some (assign rsd (star .w32 (.addImm32 ι) [td]))
+    | some td => some (assign rsd (addStar .w32 td (Term.C32 (cImm6 imm))))
 
 def valueC_LI (Eg : ExprSet) (imm : BitVec 6) (rd : regidx) : Option ExprSet :=
   if !guardEg Eg then none
@@ -230,9 +189,7 @@ def valueC_ADDI16SP (Eg : ExprSet) (imm : BitVec 6) : Option ExprSet :=
   else
     match readReg Eg sp with
     | none => none
-    | some tsp =>
-        let ι := cAddi16spImm imm
-        some (assign sp (star .w32 (.addImm32 ι) [tsp]))
+    | some tsp => some (assign sp (addStar .w32 tsp (Term.C32 (cAddi16spImm imm))))
 
 def valueC_LUI (Eg : ExprSet) (imm : BitVec 6) (rd : regidx) : Option ExprSet :=
   if !guardEg Eg then none
@@ -242,15 +199,15 @@ def valueC_LUI (Eg : ExprSet) (imm : BitVec 6) (rd : regidx) : Option ExprSet :=
 
 def valueC_shift (Eg : ExprSet) (shamt : BitVec 6) (rsd : cregidx) (op : sop) : Option ExprSet :=
   if !guardEg Eg then none
-  else if shamt.toNat == 0 then none  -- reserved for SRLI/SRAI; C.SLLI shamt=0 is HINT
+  else if shamt.toNat == 0 then none
   else
     let r := creg2reg_idx rsd
     valueSHIFTIOP Eg shamt r r op
 
 def valueC_SLLI (Eg : ExprSet) (shamt : BitVec 6) (rsd : regidx) : Option ExprSet :=
   if !guardEg Eg then none
-  else if isX0 rsd then some []  -- HINT
-  else if shamt.toNat == 0 then some []  -- HINT on RV32
+  else if isX0 rsd then some ExprSet.empty
+  else if shamt.toNat == 0 then some ExprSet.empty
   else valueSHIFTIOP Eg shamt rsd rsd .SLLI
 
 def valueC_ANDI (Eg : ExprSet) (imm : BitVec 6) (rsd : cregidx) : Option ExprSet :=
@@ -259,29 +216,23 @@ def valueC_ANDI (Eg : ExprSet) (imm : BitVec 6) (rsd : cregidx) : Option ExprSet
     let r := creg2reg_idx rsd
     match readReg Eg r with
     | none => none
-    | some td =>
-        let I := cImm6 imm
-        some (assign r (star .w32 (.andImm32 I) [td]))
+    | some td => some (assign r (andStar 32 .w32 td (Term.C32 (cImm6 imm))))
 
 def valueC_binary (Eg : ExprSet) (rsd rs2 : cregidx) (op : rop) : Option ExprSet :=
-  let a := creg2reg_idx rsd
-  let b := creg2reg_idx rs2
-  valueRTYPE Eg b a a op
+  valueRTYPE Eg (creg2reg_idx rs2) (creg2reg_idx rsd) (creg2reg_idx rsd) op
 
 def valueC_MV (Eg : ExprSet) (rd rs2 : regidx) : Option ExprSet :=
   if !guardEg Eg then none
-  else if isX0 rd then some []  -- HINT
-  else if isX0 rs2 then
-    -- C.MV rd, x0 := copy zero
-    some (assign rd (Term.C32 0))
+  else if isX0 rd then some ExprSet.empty
+  else if isX0 rs2 then some (assign rd (Term.C32 0))
   else
     match readReg Eg rs2 with
     | none => none
-    | some tb => some (assign rd (star .w32 (.id .w32) [tb]))
+    | some tb => some (assign rd (idStar .w32 tb))
 
 def valueC_ADD (Eg : ExprSet) (rsd rs2 : regidx) : Option ExprSet :=
   if !guardEg Eg then none
-  else if isX0 rsd then some []  -- HINT
+  else if isX0 rsd then some ExprSet.empty
   else valueRTYPE Eg rs2 rsd rsd .ADD
 
 def valueC_JAL (Eg : ExprSet) : Option ExprSet :=
@@ -289,7 +240,7 @@ def valueC_JAL (Eg : ExprSet) : Option ExprSet :=
   else
     match readPC Eg with
     | none => none
-    | some tπ => some (assign ra (star .w32 .linkPlus2 [tπ]))
+    | some tπ => some (assign ra (addStar .w32 tπ (Term.C32 2)))
 
 def valueC_JALR (Eg : ExprSet) (rs1 : regidx) : Option ExprSet :=
   if !guardEg Eg then none
@@ -300,11 +251,8 @@ def valueC_JALR (Eg : ExprSet) (rs1 : regidx) : Option ExprSet :=
     | some _ =>
         match readPC Eg with
         | none => none
-        | some tπ => some (assign ra (star .w32 .linkPlus2 [tπ]))
+        | some tπ => some (assign ra (addStar .w32 tπ (Term.C32 2)))
 
-/-! ## Top-level value -/
-
-/-- \(\operatorname{value}(E_g,i)\). `none` = reject. -/
 def value (Eg : ExprSet) (i : instruction) : Option ExprSet :=
   match i with
   | .UTYPE (imm, rd, op) => valueUTYPE Eg imm rd op
@@ -321,14 +269,8 @@ def value (Eg : ExprSet) (i : instruction) : Option ExprSet :=
   | .STORE _ => valueSTORE Eg
   | .FENCE_TSO _ => valueEmpty Eg
   | .FENCE _ => valueEmpty Eg
-  | .ECALL _ => valueReject
-  | .EBREAK _ => valueReject
-  | .MRET _ => valueReject
-  | .SRET _ => valueReject
-  | .WFI _ => valueReject
-  | .SFENCE_VMA _ => valueReject
-  | .ILLEGAL _ => valueReject
-  | .C_ILLEGAL _ => valueReject
+  | .ECALL _ | .EBREAK _ | .MRET _ | .SRET _ | .WFI _ | .SFENCE_VMA _ => valueReject
+  | .ILLEGAL _ | .C_ILLEGAL _ => valueReject
   | .C_NOP _ => valueEmpty Eg
   | .C_ADDI4SPN (rdc, nzimm) => valueC_ADDI4SPN Eg rdc nzimm
   | .C_ADDI (imm, rsd) => valueC_ADDI Eg imm rsd
@@ -350,25 +292,16 @@ def value (Eg : ExprSet) (i : instruction) : Option ExprSet :=
   | .C_J _ => valueEmpty Eg
   | .C_JR rs1 =>
       if isX0 rs1 then valueReject
-      else
-        match readReg Eg rs1 with
-        | none => none
-        | some _ => valueEmpty Eg
-  | .C_BEQZ _ => valueEmpty Eg
-  | .C_BNEZ _ => valueEmpty Eg
+      else match readReg Eg rs1 with | none => none | some _ => valueEmpty Eg
+  | .C_BEQZ _ | .C_BNEZ _ => valueEmpty Eg
   | .C_LW _ => valueLOAD Eg zreg
-  | .C_LWSP (_uimm, rd) =>
-      if isX0 rd then valueReject
-      else valueLOAD Eg rd
-  | .C_SW _ => valueSTORE Eg
-  | .C_SWSP _ => valueSTORE Eg
+  | .C_LWSP (_uimm, rd) => if isX0 rd then valueReject else valueLOAD Eg rd
+  | .C_SW _ | .C_SWSP _ => valueSTORE Eg
   | .C_EBREAK _ => valueReject
 
-/-- Apply override after a successful value. -/
 def step (Eg : ExprSet) (i : instruction) : Option ExprSet :=
   match value Eg i with
   | none => none
-  | some Ei =>
-      if keysUnique Ei then some (override Eg Ei) else none
+  | some Ei => if Ei.keysUnique then some (ExprSet.override Eg Ei) else none
 
 end LeanRV32IMC

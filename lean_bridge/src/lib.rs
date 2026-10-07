@@ -21,8 +21,9 @@ mod ffi {
         pub fn common_math_add32(a: u32, b: u32) -> u32;
         pub fn common_math_sub32(a: u32, b: u32) -> u32;
         pub fn common_math_and32(a: u32, b: u32) -> u32;
-        pub fn common_math_div32(a: u32, b: u32) -> u32;
+        pub fn common_math_tq32(a: u32, b: u32) -> u32;
         pub fn common_math_divu32(a: u32, b: u32) -> u32;
+        pub fn lean_rv32_expr_override_keeps(unused: u32) -> u32;
 
         pub fn lean_rv32_decode32(w: u32) -> u32;
         pub fn lean_rv32_decode16(h: u32) -> u32;
@@ -66,9 +67,9 @@ pub mod common_math {
         unsafe { ffi::common_math_and32(a, b) }
     }
 
-    pub fn div32(a: u32, b: u32) -> u32 {
+    pub fn tq32(a: u32, b: u32) -> u32 {
         init();
-        unsafe { ffi::common_math_div32(a, b) }
+        unsafe { ffi::common_math_tq32(a, b) }
     }
 
     pub fn divu32(a: u32, b: u32) -> u32 {
@@ -131,5 +132,10 @@ pub mod rv32 {
     pub fn ecall_rejects() -> bool {
         init();
         unsafe { ffi::lean_rv32_value_ecall_rejects(0) == 1 }
+    }
+
+    pub fn expr_override_keeps() -> bool {
+        init();
+        unsafe { ffi::lean_rv32_expr_override_keeps(0) == 1 }
     }
 }

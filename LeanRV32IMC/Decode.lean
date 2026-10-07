@@ -1,10 +1,7 @@
 import LeanRV32IMC.Types
 
-/-!
-# LeanRV32IMC.Decode — encdec_backwards / encdec_compressed_backwards
--/
-
 namespace LeanRV32IMC
+/- encdec_backwards / encdec_compressed_backwards -/
 
 /-- Low 2 bits ≠ 0b11 ⇒ compressed. -/
 def isRVC (h : BitVec 16) : Bool :=
