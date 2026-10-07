@@ -1,6 +1,11 @@
 name = "classifier"
 version = "0.1.0"
-defaultTargets = ["LeanRV32IMC"]
+defaultTargets = ["LeanRV32IMC", "CommonMath"]
+
+[[lean_lib]]
+name = "CommonMath"
+defaultFacets = ["shared"]
 
 [[lean_lib]]
 name = "LeanRV32IMC"
+defaultFacets = ["shared"]

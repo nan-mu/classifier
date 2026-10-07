@@ -1,3 +1,6 @@
 /.lake/
 /lake-manifest.json
 *.pre_session_restore
+/target/
+/lean_bridge/target/
+/.audit/
