@@ -4,4 +4,3 @@ defaultTargets = ["LeanRV32IMC"]
 
 [[lean_lib]]
 name = "LeanRV32IMC"
-srcDir = "proof/rv32imc"

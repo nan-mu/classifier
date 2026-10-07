@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decode proof/rv32imc/esp32c3.bin with Sail-named encdec_* and check the stream."""
+"""Decode esp32c3.bin with Sail-named encdec_* and check the stream."""
 
 from __future__ import annotations
 
