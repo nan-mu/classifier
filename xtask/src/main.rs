@@ -107,21 +107,36 @@ fn demo(root: &Path) {
 
     while !stop.load(Ordering::SeqCst) {
         if child_exited(&mut server) {
-            let _ = vite.kill();
+            stop_all(&mut vite, &mut server);
             panic!("debug_server exited early");
         }
         if child_exited(&mut vite) {
-            let _ = server.kill();
+            stop_all(&mut vite, &mut server);
             panic!("vite exited early");
         }
         thread::sleep(Duration::from_millis(200));
     }
 
-    let _ = vite.kill();
-    let _ = server.kill();
-    let _ = vite.wait();
-    let _ = server.wait();
+    stop_all(&mut vite, &mut server);
     eprintln!("demo stopped");
+}
+
+fn stop_all(vite: &mut Child, server: &mut Child) {
+    kill_tree(vite);
+    kill_tree(server);
+}
+
+fn kill_tree(child: &mut Child) {
+    let pid = child.id();
+    #[cfg(unix)]
+    {
+        // Kill the process group leader's children via pkill -P, then the child.
+        let _ = Command::new("pkill")
+            .args(["-P", &pid.to_string()])
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn run_checked(cmd: &mut Command, label: &str) {
