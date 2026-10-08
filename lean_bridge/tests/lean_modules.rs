@@ -29,6 +29,13 @@ fn common_math_tq_toward_zero() {
 }
 
 #[test]
+fn path_demo_section18_budget() {
+    assert!(common_math::path_demo_check());
+    assert_eq!(common_math::path_demo_nodes(11), 12);
+    assert_eq!(common_math::path_demo_nodes(10), 0);
+}
+
+#[test]
 fn decode_addi() {
     // addi x1, x2, 5  → 0x00510093
     assert_eq!(rv32::decode32(0x0051_0093), rv32::tag::ADDI);

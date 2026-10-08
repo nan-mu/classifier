@@ -15,7 +15,7 @@ math, register ADTs, or Sail execute stubs.
 
 ```text
 CommonMath.lean                 root reexports
-CommonMath/{Bits,Reg,Numeric,Op,Term,Expr,Insn,Ffi}.lean
+CommonMath/{Bits,Reg,Numeric,Op,Term,Expr,Direction,Insn,Path,Expand,Demo,Ffi}.lean
 RV32IMC.lean                    imports Insn + Encode + Expr
 RV32IMC/Insn.lean               decoded Insn + field tags
 RV32IMC/Encode.lean             encode / encodeCompressed

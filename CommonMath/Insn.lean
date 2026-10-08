@@ -1,5 +1,6 @@
 import CommonMath.Bits
 import CommonMath.Expr
+import CommonMath.Direction
 
 namespace CommonMath
 
@@ -20,9 +21,10 @@ structure Predicate where
   tag : Nat
   deriving DecidableEq, BEq, Repr, Inhabited
 
-/-- Successor info placeholder. Concrete structure TBD. -/
+/-- \(\mathrm{Inst}_{\mathrm{next}}=\mathrm{Direction}\times\mathrm{NodeId}\) (§13.3). -/
 structure InstNext where
-  tag : Nat
+  dir    : Direction
+  target : NodeId
   deriving DecidableEq, BEq, Repr, Inhabited
 
 /-- One history item \((i,\mathcal P,\mathcal E,\mathcal N)\). -/

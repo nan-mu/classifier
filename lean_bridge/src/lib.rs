@@ -23,6 +23,8 @@ mod ffi {
         pub fn common_math_and32(a: u32, b: u32) -> u32;
         pub fn common_math_tq32(a: u32, b: u32) -> u32;
         pub fn common_math_divu32(a: u32, b: u32) -> u32;
+        pub fn lean_path_demo_check(unused: u32) -> u32;
+        pub fn lean_path_demo_nodes(budget: u32) -> u32;
         pub fn lean_rv32_expr_override_keeps(unused: u32) -> u32;
 
         pub fn lean_rv32_decode32(w: u32) -> u32;
@@ -75,6 +77,18 @@ pub mod common_math {
     pub fn divu32(a: u32, b: u32) -> u32 {
         init();
         unsafe { ffi::common_math_divu32(a, b) }
+    }
+
+    /// §18 demo: `B=11` Complete with Exit and `B=10` LimitExceeded.
+    pub fn path_demo_check() -> bool {
+        init();
+        unsafe { ffi::lean_path_demo_check(0) == 1 }
+    }
+
+    /// Node count on Complete for budget `B`, else 0.
+    pub fn path_demo_nodes(budget: u32) -> u32 {
+        init();
+        unsafe { ffi::lean_path_demo_nodes(budget) }
     }
 }
 
