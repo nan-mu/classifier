@@ -39,12 +39,3 @@ cargo xtask demo   # lake build + debug_server :8788 + Vite :5173 (Ctrl-C stops 
 ```
 
 Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
-
-## Lean via Codex
-
-Lean4 implementation routes through user Cursor rule `lean-via-codex` +
-`python3 ~/.cursor/scripts/codex-quota-gate.py --json`: Codex CLI `-m gpt-6.1-sol`
-via `~/.cursor/scripts/codex-lean-exec.sh` (`--approve-for-me`, stdin closed)
-only when 5h and weekly remaining are both **> 50%**; otherwise Cursor auto
-subagents. Never redeem Codex reset credits unless the operator asks. Do not
-use removed `--full-auto`.
