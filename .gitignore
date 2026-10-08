@@ -3,4 +3,7 @@
 *.pre_session_restore
 /target/
 /lean_bridge/target/
+/debug_server/target/
+/debug_web/node_modules/
+/debug_web/dist/
 /.audit/

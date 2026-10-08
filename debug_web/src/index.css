@@ -1,0 +1,20 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #1c1b19;
+  color: #e7e2d6;
+}
+
+.react-flow {
+  background: #1c1b19;
+}
+
+.react-flow__attribution {
+  background: transparent;
+  color: #8a8175;
+}

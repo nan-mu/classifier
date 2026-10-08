@@ -21,6 +21,8 @@ RV32IMC/Insn.lean               decoded Insn + field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
 RV32IMC/Expr.lean               expr / step (+ FFI smoke exports)
 lean_bridge/                    Rust FFI tests
+debug_server/                   axum §18 Expand debug API (mock; Lean wire-up later)
+debug_web/                      Vite + Kuma UI + xyflow canvas for that API
 doc/common-math.md
 doc/rv32imc-expr-value-functions.md
 ```
@@ -31,6 +33,9 @@ doc/rv32imc-expr-value-functions.md
 lake build
 lake build RV32IMC
 cargo test --manifest-path lean_bridge/Cargo.toml
+cargo test --manifest-path debug_server/Cargo.toml
+# debug UI: cargo run --manifest-path debug_server/Cargo.toml
+#            then cd debug_web && npm install && npm run dev  (http://127.0.0.1:5173)
 ```
 
 Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
