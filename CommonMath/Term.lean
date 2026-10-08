@@ -7,7 +7,8 @@ inductive Term where
   | const (w : Width) (c : Nat)
   | var (w : Width) (ξ : Nat)
   | app (w : Width) (op : Op) (args : List Term)
-  deriving Repr, Inhabited
+  deriving BEq, Repr, Inhabited
+
 
 def Term.width : Term → Width
   | .const w _ => w
@@ -33,19 +34,24 @@ def FV : Term → List Var
 
 def FV.isEmpty (t : Term) : Bool := (FV t).isEmpty
 
-partial def eval : Term → Option Nat
-  | .const _ c => some c
-  | .var _ _ => none
-  | .app _ op args =>
-      let rec go : List Term → Option (List Nat)
-        | [] => some []
-        | t :: ts =>
-          match eval t, go ts with
-          | some v, some vs => some (v :: vs)
-          | _, _ => none
-      match go args with
-      | some vs => interpretOp op vs
-      | none => none
+mutual
+  def eval : Term → Option Nat
+    | .const _ c => some c
+    | .var _ _ => none
+    | .app _ op args =>
+        match evalArgs args with
+        | some vs => interpretOp op vs
+        | none => none
+  termination_by t => sizeOf t
+
+  private def evalArgs : List Term → Option (List Nat)
+    | [] => some []
+    | t :: ts =>
+        match eval t, evalArgs ts with
+        | some v, some vs => some (v :: vs)
+        | _, _ => none
+  termination_by ts => sizeOf ts
+end
 
 /-- \(\operatorname{solve}_w\): fold closed terms to constants; leave open terms intact. -/
 def solve (t : Term) : Term :=
@@ -54,6 +60,15 @@ def solve (t : Term) : Term :=
     | some c => .const t.width (MNat t.width.bits c)
     | none => t
   else t
+
+/-- Solving twice has the same result as solving once (§10.1). -/
+theorem solve_idempotent (t : Term) : solve (solve t) = solve t := by
+  unfold solve
+  split
+  · split
+    · simp [FV.isEmpty, FV, eval, Term.width, MNat]
+    · simp_all
+  · rfl
 
 /-- \(f^\star(t_1,\ldots,t_n)=\operatorname{solve}_w(f(t_1,\ldots,t_n))\). -/
 def star (w : Width) (op : Op) (args : List Term) : Term :=

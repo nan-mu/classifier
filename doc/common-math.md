@@ -776,6 +776,16 @@ updateExpr 按对应指令规则覆写目标寄存器的关系，不把普通集
 
 mergePredicate 表示 Predicate 同类合并。这里不预先认定它是集合并集或简单覆写，不定义其交换性、幂等性等引理。若某类操作尚没有已确定的合并规则，局部处理应报告不支持，不能自行选择合并含义。
 
+当前 Lean 条件类定义为 `Predicate.cmp (rel : Rel) (lhs rhs : Term)`。
+源 Terms 在检查时读取并固定；32 位比较先取模 `2^32`，有符号关系按二进制补码解释。
+Taken 保存分支关系，NotTaken 保存 `rel.compl`，不新增 Expr。
+`mergePredicate` 的条件类规则为：空局部 Pi 保持 P；依局部顺序追加结构上尚未存在的条件。
+互补条件都保留，不把符号未知或互补条件判为不可行；各后继仍保存独立节点快照。
+返回观察定义为 `Predicate.ret (value : Term)`，仅在绑定到外层返回地址的 Exit 候选中捕获执行后的 a0/x10 项。cmp 与 ret 均按结构相等去重并追加；ret 的 `eval?` 返回 none，因为它是观察而非布尔条件。
+JSON 条件字段为 `kind`, `rel`, `width`, `lhs`, `rhs`；返回观察为 `{"kind":"ret","term":"..."}`。不保留 tag、op 或 negated 冗余字段。
+`rel` 直接保存实际关系，例如 NotTaken 对应 `geu`。
+
+
 给定本次产生的 \(\mathcal E_i,\mathcal P_i\)，更新为：
 
 \[

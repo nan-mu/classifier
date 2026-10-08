@@ -16,10 +16,21 @@ def Insn.mk16 (b : Nat) : Insn := ⟨.w16, MNat 16 b⟩
 def Insn.mk32 (b : Nat) : Insn := ⟨.w32, MNat 32 b⟩
 def Insn.mk64 (b : Nat) : Insn := ⟨.w64, MNat 64 b⟩
 
-/-- Predicate placeholder. Concrete elements TBD. -/
-structure Predicate where
-  tag : Nat
-  deriving DecidableEq, BEq, Repr, Inhabited
+/-- A branch condition over Terms fixed from the pre-execution snapshot.
+Comparisons use 32-bit operands (modulo 2^32), with signed relations
+interpreting those bits as two’s complement. Return observations capture a value, rather than a Boolean condition. -/
+inductive Predicate where
+  | cmp (rel : Rel) (lhs : Term) (rhs : Term)
+  | ret (value : Term)
+  deriving BEq, Repr, Inhabited
+
+/-- RV32 condition interpretation. Unknown source values remain unknown. -/
+def Predicate.eval? : Predicate → Option Bool
+  | .ret _ => none
+  | .cmp rel lhs rhs => do
+    let a ← eval (solve lhs)
+    let b ← eval (solve rhs)
+    pure (interpretRel 32 rel a b)
 
 /-- \(\mathrm{Inst}_{\mathrm{next}}=\mathrm{Direction}\times\mathrm{NodeId}\) (§13.3). -/
 structure InstNext where

@@ -10,7 +10,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use expand::{Session, Snapshot};
+use expand::{ProgramKind, Session, Snapshot};
 use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 
@@ -23,6 +23,7 @@ struct AppState {
 #[derive(Deserialize)]
 struct CreateBody {
     budget: Option<u32>,
+    program: Option<String>,
 }
 
 fn app(state: AppState) -> Router {
@@ -60,14 +61,19 @@ async fn create_session(
     State(app): State<AppState>,
     body: Bytes,
 ) -> Result<Json<Snapshot>, StatusCode> {
-    let budget = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
-        11
+    let (budget, program) = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
+        (11, ProgramKind::Esp32c3)
     } else {
-        let parsed: CreateBody = serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        parsed.budget.unwrap_or(11)
+        let parsed: CreateBody =
+            serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let program = match parsed.program.as_deref() {
+            None => ProgramKind::Esp32c3,
+            Some(s) => ProgramKind::parse(s).ok_or(StatusCode::BAD_REQUEST)?,
+        };
+        (parsed.budget.unwrap_or(11), program)
     };
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
-    let session = Session::new(id.clone(), budget);
+    let session = Session::new(id.clone(), budget, program);
     let snap = session.snapshot();
     app.sessions
         .lock()

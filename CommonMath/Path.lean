@@ -63,17 +63,19 @@ inductive StepResult where
 def updateExpr (E Ei : ExprSet) : ExprSet :=
   ExprSet.override E Ei
 
-/-- Demo-total merge. Concrete Predicate class rules remain TBD in the doc. -/
-def mergePredicate (P Pi : List Predicate) : List Predicate :=
-  Id.run do
-    let mut acc := P
-    for p in Pi do
-      if !acc.any (fun q => q.tag == p.tag) then
-        acc := acc ++ [p]
-    pure acc
+/-- cmp merges append structurally new conditions, retaining complements.
+Return observations use the same append/dedup rule.
+An empty local effect is identity. -/
+def mergePredicate (P Pi : List Predicate) : Except RejectReason (List Predicate) :=
+  match Pi with
+  | [] => .ok P
+  | p :: ps =>
+    mergePredicate (if P.contains p then P else P ++ [p]) ps
 
-def SemState.applyLocal (σ : SemState) (Ei : ExprSet) (Pi : List Predicate) : SemState :=
-  ⟨updateExpr σ.exprs Ei, mergePredicate σ.predicates Pi⟩
+def SemState.applyLocal (σ : SemState) (Ei : ExprSet) (Pi : List Predicate) :
+    Except RejectReason SemState := do
+  let predicates ← mergePredicate σ.predicates Pi
+  pure ⟨updateExpr σ.exprs Ei, predicates⟩
 
 def Location.isExit : Location → Bool
   | .exit => true

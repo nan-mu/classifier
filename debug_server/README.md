@@ -1,5 +1,7 @@
 # debug_server
 
+[项目入口](../README.md) · [文档索引](../doc/README.md)
+
 HTTP session chrome for the section 18 Expand demo. Expand graphs and SemState
 `exprs` / `predicates` come from Lean `rv32Snapshot` via `lean_binding`. Instruction
 list text is partitioned at runtime from repo-root `esp32c3.bin` with the
@@ -27,7 +29,9 @@ The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to overrid
 
 ## Routes
 
-`POST /api/session` accepts `{"budget": 11}`. An empty object uses budget 11.
+`POST /api/session` accepts `{"program":"esp32c3","budget":512}`.
+`program` is `esp32c3` (default) or `demo`; omitted budget defaults to 11.
+For the section 18 bounded-loop example, use `{"program":"demo","budget":11}`.
 
 `POST /api/session/<id>/step` advances the Lean step counter by one and refreshes.
 
@@ -35,4 +39,8 @@ The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to overrid
 
 `GET /api/session/<id>` returns the current snapshot.
 
-Budget 11 ends as `complete` with an Exit node and fuel 0. Budget 10 ends as `fail` with reason `LimitExceeded`, and the return node is still in `work`.
+For `program: "demo"`, budget 11 ends as `complete` with an Exit node and fuel 0. Budget 10 ends as `fail` with reason `LimitExceeded`, and the return node is still in `work`.
+
+The ESP32-C3 image has separate binding and target-resolution limits; a larger
+budget does not guarantee completion. Current observations are documented in
+[RV32IMC value functions, section 7.4](../doc/rv32imc-expr-value-functions.md).

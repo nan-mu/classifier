@@ -18,6 +18,17 @@ private def mkReg (n : Nat) : regidx :=
 private def mkCReg (n : Nat) : cregidx :=
   .Cregidx (BitVec.ofNat 3 n)
 
+/-- Recovered signed displacement divided by two (implicit low zero bit). -/
+private def cjOffset (h : BitVec 16) : BitVec 11 :=
+  BitVec.ofNat 11 (((slice16 h 12 12) <<< 10) |||
+    (slice16 h 11 11 <<< 3) ||| (slice16 h 10 9 <<< 7) |||
+    (slice16 h 8 8 <<< 9) ||| (slice16 h 7 7 <<< 5) |||
+    (slice16 h 6 6 <<< 6) ||| (slice16 h 5 3) ||| (slice16 h 2 2 <<< 4))
+
+private def cbOffset (h : BitVec 16) : BitVec 8 :=
+  BitVec.ofNat 8 ((slice16 h 12 12 <<< 7) ||| (slice16 h 11 10 <<< 2) |||
+    (slice16 h 6 5 <<< 5) ||| (slice16 h 4 3) ||| (slice16 h 2 2 <<< 4))
+
 /-- Sail `encodeCompressed` (RV32 Zca). -/
 def encodeCompressed (h : BitVec 16) : Insn :=
   let op := slice16 h 1 0
@@ -34,7 +45,8 @@ def encodeCompressed (h : BitVec 16) : Insn :=
     let uimm :=
       (slice16 h 5 5 <<< 6) ||| (slice16 h 12 10 <<< 3) |||
         (slice16 h 6 6 <<< 2)
-    .C_LW (BitVec.ofNat 5 uimm, mkCReg (slice16 h 9 7), mkCReg (slice16 h 4 2))
+    -- The five-bit field stores the word offset; Expr scales it back to bytes.
+    .C_LW (BitVec.ofNat 5 (uimm >>> 2), mkCReg (slice16 h 9 7), mkCReg (slice16 h 4 2))
   | 0, 6 =>
     let uimm :=
       (slice16 h 5 5 <<< 6) ||| (slice16 h 12 10 <<< 3) |||
@@ -46,7 +58,7 @@ def encodeCompressed (h : BitVec 16) : Insn :=
     if rdn == 0 && immn == 0 then .C_NOP 0#6
     else .C_ADDI (BitVec.ofNat 6 immn, mkReg rdn)
   | 1, 1 =>
-    .C_JAL (BitVec.ofNat 11 (slice16 h 12 2))
+    .C_JAL (cjOffset h)
   | 1, 2 =>
     .C_LI (BitVec.ofNat 6 ((slice16 h 12 12 <<< 5) ||| slice16 h 6 2), mkReg (slice16 h 11 7))
   | 1, 3 =>
@@ -69,20 +81,22 @@ def encodeCompressed (h : BitVec 16) : Insn :=
       | 1 => .C_XOR (rd, rs2)
       | 2 => .C_OR (rd, rs2)
       | _ => .C_AND (rd, rs2)
-  | 1, 5 => .C_J (BitVec.ofNat 11 (slice16 h 12 2))
-  | 1, 6 => .C_BEQZ (BitVec.ofNat 8 (slice16 h 12 2), mkCReg (slice16 h 9 7))
-  | 1, 7 => .C_BNEZ (BitVec.ofNat 8 (slice16 h 12 2), mkCReg (slice16 h 9 7))
+  | 1, 5 => .C_J (cjOffset h)
+  | 1, 6 => .C_BEQZ (cbOffset h, mkCReg (slice16 h 9 7))
+  | 1, 7 => .C_BNEZ (cbOffset h, mkCReg (slice16 h 9 7))
   | 2, 0 =>
     .C_SLLI (
       BitVec.ofNat 6 ((slice16 h 12 12 <<< 5) ||| slice16 h 6 2),
       mkReg (slice16 h 11 7))
   | 2, 2 =>
+    -- Store the word offset so all eight byte-offset bits survive the six-bit field.
     let uimm :=
       (slice16 h 3 2 <<< 6) ||| (slice16 h 12 12 <<< 5) ||| (slice16 h 6 4 <<< 2)
-    .C_LWSP (BitVec.ofNat 6 uimm, mkReg (slice16 h 11 7))
+    .C_LWSP (BitVec.ofNat 6 (uimm >>> 2), mkReg (slice16 h 11 7))
   | 2, 6 =>
+    -- Store the word offset so all eight byte-offset bits survive the six-bit field.
     let uimm := (slice16 h 8 7 <<< 6) ||| (slice16 h 12 9 <<< 2)
-    .C_SWSP (BitVec.ofNat 6 uimm, mkReg (slice16 h 6 2))
+    .C_SWSP (BitVec.ofNat 6 (uimm >>> 2), mkReg (slice16 h 6 2))
   | 2, 4 =>
     let rdn := slice16 h 11 7
     let rs2n := slice16 h 6 2
@@ -296,3 +310,11 @@ def exportEncode16 (h : UInt32) : UInt32 :=
 
 end RV32IMC
 
+
+-- The maximum SP-relative word offset decodes to 252 bytes, without truncation.
+#guard (match RV32IMC.encodeCompressed 0xdf86#16 with
+  | .C_SWSP (off, r) => off.toNat == 63 && r.toNat == 1
+  | _ => false)
+#guard (match RV32IMC.encodeCompressed 0x50fe#16 with
+  | .C_LWSP (off, r) => off.toNat == 63 && r.toNat == 1
+  | _ => false)

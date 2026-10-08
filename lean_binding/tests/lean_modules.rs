@@ -52,8 +52,9 @@ fn path_demo_snapshot_complete_and_limit() {
     assert_eq!(exprs[0]["reg"], "real32:1");
     assert_eq!(exprs[0]["rel"], "eq");
     assert_eq!(exprs[0]["term"], "3");
+    // Predicate class merge is undefined until Phase 3; Demo keeps empty Pi.
     let preds = nodes[11]["predicates"].as_array().expect("predicates");
-    assert!(preds.iter().any(|p| p["tag"] == 3));
+    assert!(preds.is_empty());
 
     // After 10 successful expandOnes with B=10, fuel is 0 and work remains (running).
     // The next expandOne observes LimitExceeded.
@@ -143,4 +144,76 @@ fn ecall_is_rejected() {
 #[test]
 fn expr_override_replaces_same_key_keeps_others() {
     assert!(rv32::expr_override_keeps());
+}
+
+#[test]
+fn rv32_expand_esp32c3_root_and_opening() {
+    let root: serde_json::Value =
+        serde_json::from_str(&rv32::expand_snapshot(0, 48)).expect("json");
+    assert_eq!(root["status"], "running");
+    assert_eq!(root["fuel"], 48);
+    assert_eq!(root["work"], serde_json::json!([0]));
+    let nodes = root["nodes"].as_array().expect("nodes");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0]["loc"], "0");
+    let exprs = nodes[0]["exprs"].as_array().expect("exprs");
+    assert_eq!(exprs.len(), 28);
+    assert!(exprs.iter().any(|e| e["reg"] == "real32:0" && e["term"] == "0"));
+    assert!(exprs.iter().any(|e| e["reg"] == "stack32:0"));
+
+    // After first C_LW a2,0(a0): real32:12 = EntryVar.data (v32:4).
+    let step1: serde_json::Value =
+        serde_json::from_str(&rv32::expand_snapshot(1, 48)).expect("json");
+    assert_eq!(step1["status"], "running");
+    let n1 = step1["nodes"].as_array().expect("nodes");
+    assert_eq!(n1.len(), 2);
+    let exprs1 = n1[1]["exprs"].as_array().expect("exprs");
+    assert!(exprs1
+        .iter()
+        .any(|e| e["reg"] == "real32:12" && e["term"] == "v32:4"));
+
+    // Short budget: after B successful expands fuel is 0 and work remains (running);
+    // the next expand observes LimitExceeded. Exit is unreachable on 48 insns.
+    let at_limit: serde_json::Value =
+        serde_json::from_str(&rv32::expand_snapshot(3, 3)).expect("json");
+    assert_eq!(at_limit["status"], "running");
+    assert_eq!(at_limit["fuel"], 0);
+    assert_eq!(at_limit["nodes"].as_array().expect("nodes").len(), 4);
+
+    let limited: serde_json::Value =
+        serde_json::from_str(&rv32::expand_snapshot(4, 3)).expect("json");
+    assert_eq!(limited["status"], "fail");
+    assert_eq!(limited["reason"], "LimitExceeded");
+    assert_eq!(limited["nodes"].as_array().expect("nodes").len(), 4);
+}
+
+#[test]
+fn rv32_out_of_image_cjal_preserves_partial_graph() {
+    let snapshot = |steps| -> serde_json::Value {
+        serde_json::from_str(&rv32::expand_snapshot(steps, 512)).expect("json")
+    };
+    let before = snapshot(39);
+    let failed = snapshot(40);
+    assert_eq!(before["status"], "running");
+    assert_eq!(before["work"], serde_json::json!([41, 42, 43]));
+    assert_eq!(before["fuel"], 473);
+    assert_eq!(failed["status"], "fail");
+    assert_eq!(failed["reason"], "UnboundTarget");
+    // Includes every pre-instruction expression and predicate: BLTU forks,
+    // successful STORE effects, and the short-side return survive rejection.
+    assert_eq!(failed["nodes"], before["nodes"]);
+    assert_eq!(failed["edges"], before["edges"]);
+    let nodes = failed["nodes"].as_array().expect("nodes");
+    let edges = failed["edges"].as_array().expect("edges");
+    assert_eq!(nodes.len(), 44);
+    assert_eq!(nodes[41]["id"], 41);
+    assert_eq!(nodes[41]["loc"], "36");
+    assert!(edges.iter().any(|e| e["dst"] == 41));
+    assert!(!edges.iter().any(|e| e["src"] == 41));
+    assert!(edges.iter().any(|e| e["dir"] == "Taken"));
+    assert!(edges.iter().any(|e| e["dir"] == "NotTaken"));
+    assert!(nodes.iter().any(|n| n["loc"] == "exit"));
+    assert_eq!(failed["work"], serde_json::json!([42, 43]));
+    assert_eq!(failed["fuel"], 472);
+    assert_eq!(snapshot(512), failed);
 }

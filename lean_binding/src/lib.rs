@@ -40,6 +40,7 @@ mod ffi {
         pub fn lean_rv32_value_lui(uimm20: u32, rd: u32) -> u32;
         pub fn lean_rv32_value_div(rs1_val: u32, rs2_val: u32) -> u32;
         pub fn lean_rv32_value_ecall_rejects(unused: u32) -> u32;
+        pub fn lean_rv32_expand_snapshot(steps: u32, budget: u32) -> LeanObj;
     }
 }
 
@@ -170,5 +171,19 @@ pub mod rv32 {
     pub fn expr_override_keeps() -> bool {
         init();
         unsafe { ffi::lean_rv32_expr_override_keeps(0) == 1 }
+    }
+
+    /// JSON after `steps` expandOne calls on the Lean smoke program (`rv32Snapshot`).
+    pub fn expand_snapshot(steps: u32, budget: u32) -> String {
+        init();
+        unsafe {
+            let obj = ffi::lean_rv32_expand_snapshot(steps, budget);
+            let cstr = ffi::lean_binding_string_cstr(obj);
+            let s = std::ffi::CStr::from_ptr(cstr)
+                .to_string_lossy()
+                .into_owned();
+            ffi::lean_binding_dec(obj);
+            s
+        }
     }
 }

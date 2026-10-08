@@ -5,6 +5,54 @@ import CommonMath.Render
 
 namespace CommonMath
 
+/-- cmp merge is idempotent; empty Pi is identity even for nonempty P. -/
+def demoCmpMergeIdempotent : Bool :=
+  let p := Predicate.cmp .ltu (Term.V32 1) (Term.V32 2)
+  match mergePredicate [p] [p, p], mergePredicate [p] [] with
+  | .ok merged, .ok unchanged => merged == [p] && unchanged == [p]
+  | _, _ => false
+
+/-- Distinct conditions append once, and complementary conditions are retained. -/
+def demoCmpMergeAppendCheck : Bool :=
+  let p := Predicate.cmp .ltu (Term.V32 1) (Term.V32 2)
+  let q := Predicate.cmp .geu (Term.V32 1) (Term.V32 2)
+  match mergePredicate [p] [q, p, q] with
+  | .ok merged => merged == [p, q]
+  | _ => false
+
+#guard demoCmpMergeIdempotent
+#guard demoCmpMergeAppendCheck
+#guard renderPredicateJson (.cmp .ltu (Term.V32 1) (Term.V32 2)) ==
+  "{\"kind\":\"cmp\",\"rel\":\"ltu\",\"width\":32,\"lhs\":\"v32:1\",\"rhs\":\"v32:2\"}"
+
+/-- Return observations append once, preserving existing conditions and order. -/
+def demoRetMergeAppendCheck : Bool :=
+  let p := Predicate.cmp .ltu (Term.V32 1) (Term.V32 2)
+  let r := Predicate.ret (Term.V32 1)
+  let s := Predicate.ret (Term.C32 0)
+  match mergePredicate [p] [r, r, s, p, s], mergePredicate [r] [r, r],
+      mergePredicate [r] [] with
+  | .ok merged, .ok deduped, .ok unchanged =>
+    merged == [p, r, s] && deduped == [r] && unchanged == [r]
+  | _, _, _ => false
+
+#guard demoRetMergeAppendCheck
+#guard renderPredicateJson (.ret (Term.V32 1)) ==
+  "{\"kind\":\"ret\",\"term\":\"v32:1\"}"
+#guard renderPredicateJson (.ret (Term.C32 0)) ==
+  "{\"kind\":\"ret\",\"term\":\"0\"}"
+
+/-- Retained handoff check name: nonempty condition Pi now succeeds. -/
+def demoNonemptyPiMergeCheck : Bool := demoCmpMergeAppendCheck
+
+#guard demoNonemptyPiMergeCheck
+#guard (Predicate.cmp .ltu (Term.V32 1) (Term.C32 2)).eval? == none
+#guard (Predicate.cmp .lts (Term.C32 0xffffffff) (Term.C32 0)).eval? == some true
+#guard (Predicate.cmp .ltu (Term.C32 0xffffffff) (Term.C32 0)).eval? == some false
+#guard (Predicate.cmp .eq (.const .w32 0x100000000) (Term.C32 0)).eval? == some true
+#guard renderPredicateJson (.cmp .geu (Term.V32 1) (Term.V32 2)) ==
+  "{\"kind\":\"cmp\",\"rel\":\"geu\",\"width\":32,\"lhs\":\"v32:1\",\"rhs\":\"v32:2\"}"
+
 /-! ## §18 bounded loop demo (`doc/common-math.md` §18) -/
 
 private def demoReg : Reg := Reg.real32 1
@@ -17,10 +65,6 @@ private def readR (σ : SemState) : Option Nat :=
 private def setR (v : Nat) : ExprSet :=
   ExprSet.empty.insertEq demoReg (Term.C32 v)
 
-private def predTaken : Predicate := ⟨1⟩
-private def predNotTaken : Predicate := ⟨2⟩
-private def predReturn : Predicate := ⟨3⟩
-
 def demoProgLen : Nat := 4
 
 /-- Single-instruction rule for the §18 listing. -/
@@ -31,15 +75,15 @@ def demoStep (j : Nat) (σ : SemState) : StepResult :=
     match j with
     | 0 =>
       if r ≥ 3 then
-        .candidates [⟨.taken, .pos 3, ExprSet.empty, [predTaken]⟩]
+        .candidates [⟨.taken, .pos 3, ExprSet.empty, []⟩]
       else
-        .candidates [⟨.notTaken, .pos 1, ExprSet.empty, [predNotTaken]⟩]
+        .candidates [⟨.notTaken, .pos 1, ExprSet.empty, []⟩]
     | 1 =>
       .candidates [⟨.only, .pos 2, setR (r + 1), []⟩]
     | 2 =>
       .candidates [⟨.only, .pos 0, ExprSet.empty, []⟩]
     | 3 =>
-      .candidates [⟨.only, .exit, ExprSet.empty, [predReturn]⟩]
+      .candidates [⟨.only, .exit, ExprSet.empty, []⟩]
     | _ => .reject .unboundTarget
 
 def demoσ0 : SemState := ⟨setR 0, []⟩

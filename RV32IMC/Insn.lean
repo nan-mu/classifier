@@ -87,6 +87,7 @@ inductive Insn where
   | C_LW (_ : BitVec 5 × cregidx × cregidx)
   | C_SW (_ : BitVec 5 × cregidx × cregidx)
   | C_ADDI (_ : BitVec 6 × regidx)
+  /-- Signed halfword displacement; the implicit low zero bit is omitted. -/
   | C_JAL (_ : BitVec 11)
   | C_LI (_ : BitVec 6 × regidx)
   | C_ADDI16SP (_ : BitVec 6)
@@ -98,11 +99,15 @@ inductive Insn where
   | C_XOR (_ : cregidx × cregidx)
   | C_OR (_ : cregidx × cregidx)
   | C_AND (_ : cregidx × cregidx)
+  /-- Signed halfword displacement. -/
   | C_J (_ : BitVec 11)
+  /-- Signed halfword displacement and compressed source register. -/
   | C_BEQZ (_ : BitVec 8 × cregidx)
   | C_BNEZ (_ : BitVec 8 × cregidx)
   | C_SLLI (_ : BitVec 6 × regidx)
+  /-- Unsigned word offset; the implicit low two zero bits are omitted. -/
   | C_LWSP (_ : BitVec 6 × regidx)
+  /-- Unsigned word offset; the implicit low two zero bits are omitted. -/
   | C_SWSP (_ : BitVec 6 × regidx)
   | C_JR (_ : regidx)
   | C_JALR (_ : regidx)

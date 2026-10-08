@@ -1,36 +1,41 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 
 export type StateNodeData = {
+  nodeId: number;
   loc: string;
-  exprCount: number;
+  egCount: number;
   predCount: number;
   focused: boolean;
+  compare: boolean;
   head: boolean;
+  entry: boolean;
+  processed: boolean;
 };
 
 export type StateFlowNode = Node<StateNodeData, "state">;
 
 const handleStyle = { opacity: 0, width: 8, height: 8 };
 
-/** Four-way handles so force-layout edges are not forced top→bottom. */
 export function StateNodeView({ data }: NodeProps<StateFlowNode>) {
   return (
     <div
       className={`state-node${data.focused ? " state-node--focus" : ""}${
-        data.head ? " state-node--head" : ""
+        data.compare ? " state-node--compare" : ""
+      }${data.head ? " state-node--head" : ""}${data.entry ? " state-node--entry" : ""}${
+        data.processed ? " state-node--done" : ""
       }`}
     >
-      <Handle id="t" type="target" position={Position.Top} style={handleStyle} />
       <Handle id="l" type="target" position={Position.Left} style={handleStyle} />
       <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
-      <Handle id="b" type="source" position={Position.Bottom} style={handleStyle} />
       <div className="state-node__loc">
-        {data.loc === "exit" ? "exit" : `pos ${data.loc}`}
+        #{data.nodeId} · {data.loc === "exit" ? "exit" : `pos ${data.loc}`}
       </div>
       <div className="state-node__meta">
-        E={data.exprCount} · P={data.predCount}
+        E={data.egCount} · P={data.predCount}
       </div>
-      {data.head ? <div className="state-node__head">队列首</div> : null}
+      {data.entry ? <div className="state-node__badge">入口</div> : null}
+      {data.head ? <div className="state-node__head">Work 首</div> : null}
+      {data.processed && !data.head ? <div className="state-node__badge">已处理</div> : null}
     </div>
   );
 }

@@ -1,0 +1,165 @@
+import type { ExprRow, GraphEdge, GraphNode, PredRow, SessionSnapshot } from "./types";
+
+/** Local UI selection over an immutable Snapshot. Never mutates core SemState. */
+export type ViewerSelection = {
+  focus: number;
+  compare: number | null;
+  edgeKey: string | null;
+  /** View-only: hide non-focused arrivals that share a program location. */
+  collapseSameLoc: boolean;
+  panel: "node" | "step" | "path" | "compare" | "dual";
+};
+
+export function edgeKey(e: Pick<GraphEdge, "from" | "to" | "dir">): string {
+  return `${e.from}->${e.to}:${e.dir}`;
+}
+
+export function parseEdgeKey(key: string): { from: number; to: number; dir: string } | null {
+  const m = /^(\d+)->(\d+):(.+)$/.exec(key);
+  if (!m) return null;
+  return { from: Number(m[1]), to: Number(m[2]), dir: m[3]! };
+}
+
+export function pathToRoot(nodeId: number, nodes: GraphNode[]): number[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const path: number[] = [];
+  let cur: number | undefined = nodeId;
+  const seen = new Set<number>();
+  while (cur !== undefined && !seen.has(cur)) {
+    seen.add(cur);
+    path.push(cur);
+    const n = byId.get(cur);
+    if (!n || n.preds.length === 0) break;
+    cur = n.preds[0];
+  }
+  return path.reverse();
+}
+
+/** Nodes already dequeued (not in Work and not Exit-pending). */
+export function processedIds(snap: SessionSnapshot): Set<number> {
+  const work = new Set(snap.work);
+  const out = new Set<number>();
+  for (const n of snap.nodes) {
+    if (work.has(n.id)) continue;
+    if (n.loc === "exit") {
+      out.add(n.id);
+      continue;
+    }
+    // A non-work node that has been expanded has outgoing edges.
+    if (snap.edges.some((e) => e.from === n.id)) out.add(n.id);
+  }
+  return out;
+}
+
+export function sameExprKey(a: ExprRow, b: ExprRow): boolean {
+  return a.reg === b.reg && a.rel === b.rel;
+}
+
+export type ExprDiff = {
+  added: ExprRow[];
+  removed: ExprRow[];
+  changed: { before: ExprRow; after: ExprRow }[];
+  same: ExprRow[];
+};
+
+export function diffExprs(a: ExprRow[], b: ExprRow[]): ExprDiff {
+  const added: ExprRow[] = [];
+  const removed: ExprRow[] = [];
+  const changed: { before: ExprRow; after: ExprRow }[] = [];
+  const same: ExprRow[] = [];
+  for (const be of b) {
+    const ae = a.find((x) => sameExprKey(x, be));
+    if (!ae) added.push(be);
+    else if (ae.term !== be.term) changed.push({ before: ae, after: be });
+    else same.push(be);
+  }
+  for (const ae of a) {
+    if (!b.some((x) => sameExprKey(x, ae))) removed.push(ae);
+  }
+  return { added, removed, changed, same };
+}
+
+function predKey(p: PredRow): string {
+  if (p.kind === "cmp") {
+    return `cmp:${p.rel ?? ""}:${p.width ?? ""}:${p.lhs ?? ""}:${p.rhs ?? ""}`;
+  }
+  if (p.kind === "ret") return `ret:${p.term ?? ""}`;
+  if (p.kind === "tag") return `tag:${p.tag ?? ""}`;
+  return `unknown:${JSON.stringify(p)}`;
+}
+
+export function diffPredicates(a: PredRow[], b: PredRow[]): {
+  added: PredRow[];
+  removed: PredRow[];
+} {
+  const aKeys = new Set(a.map(predKey));
+  const bKeys = new Set(b.map(predKey));
+  return {
+    added: b.filter((p) => !aKeys.has(predKey(p))),
+    removed: a.filter((p) => !bKeys.has(predKey(p))),
+  };
+}
+
+export function formatPred(p: PredRow): string {
+  if (p.kind === "cmp") {
+    const w = p.width != null ? `${p.width}` : "?";
+    return `cmp/${w} [${p.rel ?? "?"}] ${p.lhs ?? "?"} ⋈ ${p.rhs ?? "?"}`;
+  }
+  if (p.kind === "ret") return `ret ${p.term ?? "?"}`;
+  if (p.kind === "tag") return `tag ${p.tag ?? "?"}`;
+  return "unknown predicate";
+}
+
+export function countBranchEdges(snap: SessionSnapshot): {
+  taken: number;
+  notTaken: number;
+} {
+  let taken = 0;
+  let notTaken = 0;
+  for (const e of snap.edges) {
+    if (e.dir === "taken") taken += 1;
+    if (e.dir === "not_taken") notTaken += 1;
+  }
+  return { taken, notTaken };
+}
+
+/** Visible node ids under collapseSameLoc (data unchanged). */
+export function visibleNodeIds(
+  snap: SessionSnapshot,
+  focus: number,
+  compare: number | null,
+  collapseSameLoc: boolean,
+): Set<number> {
+  if (!collapseSameLoc) return new Set(snap.nodes.map((n) => n.id));
+  const keep = new Set<number>([focus]);
+  if (compare !== null) keep.add(compare);
+  const chosenLoc = new Map<string, number>();
+  for (const n of snap.nodes) {
+    if (keep.has(n.id)) {
+      chosenLoc.set(n.loc, n.id);
+    }
+  }
+  for (const n of snap.nodes) {
+    const picked = chosenLoc.get(n.loc);
+    if (picked === undefined) {
+      chosenLoc.set(n.loc, n.id);
+      keep.add(n.id);
+    } else if (picked === n.id) {
+      keep.add(n.id);
+    }
+  }
+  // Always keep ancestors of focus so the path stays connected.
+  for (const id of pathToRoot(focus, snap.nodes)) keep.add(id);
+  if (compare !== null) {
+    for (const id of pathToRoot(compare, snap.nodes)) keep.add(id);
+  }
+  return keep;
+}
+
+export function inboundEdges(nodeId: number, edges: GraphEdge[]): GraphEdge[] {
+  return edges.filter((e) => e.to === nodeId);
+}
+
+export function outboundEdges(nodeId: number, edges: GraphEdge[]): GraphEdge[] {
+  return edges.filter((e) => e.from === nodeId);
+}

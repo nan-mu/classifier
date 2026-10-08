@@ -52,6 +52,7 @@ def renderOp : Op → String
   | .zext q w _ => s!"zext{q}/{renderWidth w}"
   | .sext q w _ => s!"sext{q}/{renderWidth w}"
   | .bswap q _ => s!"bswap{q}"
+  | .inputByte => "inputByte"
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
 
 partial def renderTerm : Term → String
@@ -64,8 +65,12 @@ partial def renderTerm : Term → String
 def renderExprJson (e : Expr) : String :=
   s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\"}"
 
-def renderPredicateJson (p : Predicate) : String :=
-  s!"\{\"tag\":{p.tag}}"
+def renderPredicateJson : Predicate → String
+  | .ret value =>
+    s!"\{\"kind\":\"ret\",\"term\":\"{renderTerm value}\"}"
+  | .cmp rel lhs rhs =>
+    -- rel is the complete effective relation; no redundant atom/polarity fields.
+    s!"\{\"kind\":\"cmp\",\"rel\":\"{renderRel rel}\",\"width\":32,\"lhs\":\"{renderTerm lhs}\",\"rhs\":\"{renderTerm rhs}\"}"
 
 def renderExprSetJson (E : ExprSet) : String :=
   String.intercalate "," (E.entries.map renderExprJson)

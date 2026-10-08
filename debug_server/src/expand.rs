@@ -1,4 +1,4 @@
-use lean_binding::rv32;
+use lean_binding::{common_math, rv32};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -9,10 +9,51 @@ struct LogEntry {
     msg: String,
 }
 
-/// Session chrome only. Graph comes from Lean `rv32Snapshot` over `esp32c3.bin`.
-/// Insn list/words are partitioned at runtime with `riscv-isa` (`rv32_image`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgramKind {
+    Esp32c3,
+    Demo,
+}
+
+impl ProgramKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "esp32c3" => Some(Self::Esp32c3),
+            "demo" => Some(Self::Demo),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Esp32c3 => "esp32c3",
+            Self::Demo => "demo",
+        }
+    }
+}
+
+/// §18 bounded-loop demo positions (Lean `demoProgLen` = 4). Not RV32 encodings.
+fn demo_insns() -> Vec<InsnOut> {
+    [
+        "j0: if r >= 3 then Taken→j3 else NotTaken→j1",
+        "j1: r := r + 1",
+        "j2: goto j0",
+        "j3: return / Exit",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(j, text)| InsnOut {
+        j: j as u32,
+        text: text.to_string(),
+    })
+    .collect()
+}
+
+/// Session chrome only. Graph comes from Lean expand snapshots.
+/// Esp32c3 insn list/words are partitioned at runtime with `riscv-isa` (`rv32_image`).
 pub struct Session {
     id: String,
+    program: ProgramKind,
     budget: u32,
     steps: u32,
     focus: u32,
@@ -20,15 +61,20 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(id: impl Into<String>, budget: u32) -> Self {
+    pub fn new(id: impl Into<String>, budget: u32, program: ProgramKind) -> Self {
         let mut session = Self {
             id: id.into(),
+            program,
             budget,
             steps: 0,
             focus: 0,
             log: Vec::new(),
         };
-        session.push_log("init root pre-state j0=0");
+        session.push_log(format!(
+            "init root pre-state program={} budget={}",
+            program.as_str(),
+            budget
+        ));
         session.sync_focus_from_lean();
         session
     }
@@ -86,15 +132,19 @@ impl Session {
             budget: self.budget,
             work,
             focus: self.focus,
-            insns: rv32_image::esp32c3_image()
-                .insns
-                .iter()
-                .enumerate()
-                .map(|(j, insn)| InsnOut {
-                    j: j as u32,
-                    text: insn.text.clone(),
-                })
-                .collect(),
+            program: self.program.as_str(),
+            insns: match self.program {
+                ProgramKind::Esp32c3 => rv32_image::esp32c3_image()
+                    .insns
+                    .iter()
+                    .enumerate()
+                    .map(|(j, insn)| InsnOut {
+                        j: j as u32,
+                        text: insn.text.clone(),
+                    })
+                    .collect(),
+                ProgramKind::Demo => demo_insns(),
+            },
             nodes,
             edges,
             log: self
@@ -106,11 +156,15 @@ impl Session {
                 })
                 .collect(),
             cursor_j,
+            proof_note: "core_result_only; UI does not assert formal proof",
         }
     }
 
     fn lean_value(&self) -> Value {
-        let raw = rv32::expand_snapshot(self.steps, self.budget);
+        let raw = match self.program {
+            ProgramKind::Esp32c3 => rv32::expand_snapshot(self.steps, self.budget),
+            ProgramKind::Demo => common_math::path_demo_snapshot(self.steps, self.budget),
+        };
         serde_json::from_str(&raw).unwrap_or_else(|_| {
             serde_json::json!({
                 "status": "fail",
@@ -187,12 +241,64 @@ fn parse_exprs(n: &Value) -> Vec<ExprOut> {
         .collect()
 }
 
+/// Lean `renderPredicateJson`:
+/// - `{"kind":"cmp","rel","width","lhs","rhs"}`
+/// - `{"kind":"ret","term"}`
 fn parse_predicates(n: &Value) -> Vec<PredOut> {
     n["predicates"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|p| p["tag"].as_u64().map(|tag| PredOut { tag }))
+        .map(|p| {
+            let kind = p.get("kind").and_then(|k| k.as_str());
+            match kind {
+                Some("cmp") => PredOut {
+                    kind: "cmp".into(),
+                    tag: None,
+                    rel: p["rel"].as_str().map(str::to_string),
+                    width: p["width"].as_u64().map(|w| w as u32),
+                    lhs: p["lhs"].as_str().map(str::to_string),
+                    rhs: p["rhs"].as_str().map(str::to_string),
+                    term: None,
+                },
+                Some("ret") => PredOut {
+                    kind: "ret".into(),
+                    tag: None,
+                    rel: None,
+                    width: None,
+                    lhs: None,
+                    rhs: None,
+                    term: p["term"].as_str().map(str::to_string),
+                },
+                _ if p.get("rel").is_some() && p.get("lhs").is_some() => PredOut {
+                    kind: "cmp".into(),
+                    tag: None,
+                    rel: p["rel"].as_str().map(str::to_string),
+                    width: p["width"].as_u64().map(|w| w as u32),
+                    lhs: p["lhs"].as_str().map(str::to_string),
+                    rhs: p["rhs"].as_str().map(str::to_string),
+                    term: None,
+                },
+                _ if p["tag"].as_u64().is_some() => PredOut {
+                    kind: "tag".into(),
+                    tag: p["tag"].as_u64(),
+                    rel: None,
+                    width: None,
+                    lhs: None,
+                    rhs: None,
+                    term: None,
+                },
+                _ => PredOut {
+                    kind: "unknown".into(),
+                    tag: None,
+                    rel: None,
+                    width: None,
+                    lhs: None,
+                    rhs: None,
+                    term: None,
+                },
+            }
+        })
         .collect()
 }
 
@@ -261,11 +367,13 @@ pub struct Snapshot {
     pub budget: u32,
     pub work: Vec<u32>,
     pub focus: u32,
+    pub program: &'static str,
     pub insns: Vec<InsnOut>,
     pub nodes: Vec<NodeOut>,
     pub edges: Vec<EdgeOut>,
     pub log: Vec<LogOut>,
     pub cursor_j: u32,
+    pub proof_note: &'static str,
 }
 
 #[derive(Serialize)]
@@ -283,7 +391,20 @@ pub struct ExprOut {
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct PredOut {
-    pub tag: u64,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rel: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lhs: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rhs: Option<String>,
+    /// Return observation term (`kind=ret`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub term: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -323,7 +444,7 @@ mod tests {
 
     #[test]
     fn fresh_session_matches_the_root_snapshot() {
-        let session = Session::new("s", 3);
+        let session = Session::new("s", 3, ProgramKind::Esp32c3);
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
         assert_eq!(snap.reason, None);
@@ -339,15 +460,17 @@ mod tests {
         assert_eq!(snap.nodes[0].exprs.len(), 28);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
-        assert_eq!(snap.log[0].msg, "init root pre-state j0=0");
+        assert!(snap.log[0].msg.contains("esp32c3"));
+        assert_eq!(snap.program, "esp32c3");
         assert!(snap.insns[0].text.starts_with("0000 LW "));
         assert_eq!(snap.insns.len(), 48);
+        assert!(snap.proof_note.contains("core_result_only"));
     }
 
     #[test]
     fn budget_3_hits_limit_mid_program() {
         // esp32c3.bin is 48 insns; budget 3 cannot reach Exit.
-        let mut session = Session::new("s", 3);
+        let mut session = Session::new("s", 3, ProgramKind::Esp32c3);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
@@ -360,7 +483,7 @@ mod tests {
 
     #[test]
     fn budget_2_hits_limit_before_exit() {
-        let mut session = Session::new("s", 2);
+        let mut session = Session::new("s", 2, ProgramKind::Esp32c3);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
@@ -373,7 +496,7 @@ mod tests {
 
     #[test]
     fn zero_fuel_fails_on_first_expand() {
-        let mut session = Session::new("s", 0);
+        let mut session = Session::new("s", 0, ProgramKind::Esp32c3);
         assert_eq!(session.snapshot().status, "running");
         session.step_once();
         let snap = session.snapshot();
@@ -387,7 +510,7 @@ mod tests {
 
     #[test]
     fn one_step_enqueues_fallthrough_child() {
-        let mut session = Session::new("s", 3);
+        let mut session = Session::new("s", 3, ProgramKind::Esp32c3);
         session.step_once();
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
@@ -399,9 +522,121 @@ mod tests {
         assert_eq!(snap.edges[0].dst, 1);
         assert_eq!(snap.edges[0].dir, "only");
         assert_eq!(snap.nodes[1].loc, "1");
-        // C_LW a2,0(a0) — LOAD still symbolic until Lean LOAD lands.
-        let a2 = eq_term(&snap.nodes[1], "real32:12").expect("a2");
-        assert!(a2.starts_with("v32:"), "expected symbolic load, got {a2}");
+        // C_LW a2,0(a0) → SW(αCtx+0) = EntryVar.data.
+        assert_eq!(eq_term(&snap.nodes[1], "real32:12"), Some("v32:4"));
         assert_eq!(snap.nodes[1].preds, vec![0]);
+    }
+
+    #[test]
+    fn demo_session_budget_11_completes_with_taken_not_taken() {
+        let mut session = Session::new("demo", 11, ProgramKind::Demo);
+        session.run_all();
+        let snap = session.snapshot();
+        assert_eq!(snap.program, "demo");
+        assert_eq!(snap.status, "complete");
+        assert!(snap.edges.iter().any(|e| e.dir == "taken"));
+        assert!(snap.edges.iter().any(|e| e.dir == "not_taken"));
+        assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
+    }
+
+    #[test]
+    fn esp32c3_opening_emits_bltu_taken_and_not_taken() {
+        // Opening reaches symbolic BLTU a1,a3,+116; expand forks Taken then NotTaken.
+        let mut session = Session::new("s", 48, ProgramKind::Esp32c3);
+        for _ in 0..5 {
+            session.step_once();
+        }
+        let snap = session.snapshot();
+        assert_ne!(
+            snap.status,
+            "fail",
+            "BLTU must not Fail(Unsupported); got {:?}",
+            snap.reason
+        );
+        let taken: Vec<_> = snap.edges.iter().filter(|e| e.dir == "taken").collect();
+        let not_taken: Vec<_> = snap.edges.iter().filter(|e| e.dir == "not_taken").collect();
+        assert!(!taken.is_empty(), "missing Taken edge");
+        assert!(!not_taken.is_empty(), "missing NotTaken edge");
+        // Same branch source (BLTU node) fans out both directions.
+        assert!(taken.iter().any(|t| not_taken.iter().any(|n| n.src == t.src)));
+        let ltu = snap.nodes.iter().flat_map(|n| &n.predicates).find(|p| {
+            p.kind == "cmp" && p.rel.as_deref() == Some("ltu")
+        });
+        let geu = snap.nodes.iter().flat_map(|n| &n.predicates).find(|p| {
+            p.kind == "cmp" && p.rel.as_deref() == Some("geu")
+        });
+        let ltu = ltu.expect("ltu cmp Predicate on Taken path");
+        let geu = geu.expect("geu cmp Predicate on NotTaken path");
+        assert_eq!(ltu.width, Some(32));
+        assert_eq!(geu.width, Some(32));
+        assert!(ltu.lhs.as_ref().is_some_and(|s| !s.is_empty()));
+        assert!(ltu.rhs.as_ref().is_some_and(|s| !s.is_empty()));
+        assert_eq!(ltu.lhs, geu.lhs);
+        assert_eq!(ltu.rhs, geu.rhs);
+    }
+
+    #[test]
+    fn parse_cmp_predicate_json() {
+        let lean = serde_json::json!({
+            "nodes": [{
+                "loc": "4",
+                "exprs": [],
+                "predicates": [{
+                    "kind": "cmp",
+                    "rel": "ltu",
+                    "width": 32,
+                    "lhs": "v32:4",
+                    "rhs": "add32(v32:4,v32:5)"
+                }]
+            }],
+            "edges": []
+        });
+        let (nodes, _) = graph_from_lean(&lean);
+        assert_eq!(nodes[0].predicates.len(), 1);
+        let p = &nodes[0].predicates[0];
+        assert_eq!(p.kind, "cmp");
+        assert_eq!(p.rel.as_deref(), Some("ltu"));
+        assert_eq!(p.width, Some(32));
+        assert_eq!(p.lhs.as_deref(), Some("v32:4"));
+        assert_eq!(p.rhs.as_deref(), Some("add32(v32:4,v32:5)"));
+        assert!(p.tag.is_none());
+        assert!(p.term.is_none());
+    }
+
+    #[test]
+    fn parse_ret_predicate_json() {
+        let lean = serde_json::json!({
+            "nodes": [{
+                "loc": "exit",
+                "exprs": [],
+                "predicates": [{ "kind": "ret", "term": "8" }]
+            }],
+            "edges": []
+        });
+        let (nodes, _) = graph_from_lean(&lean);
+        assert_eq!(nodes[0].predicates[0].kind, "ret");
+        assert_eq!(nodes[0].predicates[0].term.as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn esp32c3_fail_preserves_partial_graph_with_bltu_and_ret() {
+        let mut session = Session::new("s", 512, ProgramKind::Esp32c3);
+        session.run_all();
+        let snap = session.snapshot();
+        assert_eq!(snap.status, "fail");
+        assert_eq!(snap.reason.as_deref(), Some("UnboundTarget"));
+        assert!(snap.nodes.len() >= 40, "partial graph nodes={}", snap.nodes.len());
+        assert!(snap.edges.iter().any(|e| e.dir == "taken"));
+        assert!(snap.edges.iter().any(|e| e.dir == "not_taken"));
+        assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
+        assert!(snap.nodes.iter().any(|n| {
+            n.loc == "exit"
+                && n.predicates.iter().any(|p| p.kind == "ret" && p.term.is_some())
+        }));
+        assert!(snap.nodes.iter().any(|n| {
+            n.predicates
+                .iter()
+                .any(|p| p.kind == "cmp" && p.rel.as_deref() == Some("ltu"))
+        }));
     }
 }

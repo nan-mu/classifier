@@ -36,12 +36,16 @@ private def prepareCandidate (σ : SemState) (c : Candidate) (progLen : Nat) :
     Except RejectReason (Direction × Location × SemState) :=
   match c.loc with
   | .exit =>
-      Except.ok (c.dir, .exit, σ.applyLocal c.exprs c.predicates)
+      do
+        let state ← σ.applyLocal c.exprs c.predicates
+        pure (c.dir, .exit, state)
   | .pos k =>
       if k ≥ progLen then
         Except.error .unboundTarget
       else
-        Except.ok (c.dir, .pos k, σ.applyLocal c.exprs c.predicates)
+        do
+          let state ← σ.applyLocal c.exprs c.predicates
+          pure (c.dir, .pos k, state)
 
 private def prepareAll (σ : SemState) (progLen : Nat) :
     List Candidate → Except RejectReason (List (Direction × Location × SemState))
