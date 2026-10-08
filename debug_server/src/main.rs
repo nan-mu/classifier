@@ -1,4 +1,5 @@
 mod expand;
+mod rv32_image;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -137,9 +138,9 @@ mod http_tests {
     }
 
     #[tokio::test]
-    async fn run_returns_complete_with_exit() {
+    async fn run_hits_limit_on_short_budget() {
         let router = app(new_state());
-        let (status, created) = call(&router, "POST", "/api/session", br#"{"budget":11}"#).await;
+        let (status, created) = call(&router, "POST", "/api/session", br#"{"budget":2}"#).await;
         assert_eq!(status, StatusCode::OK);
         let id = created["id"].as_str().expect("id");
         let (status, done) = call(
@@ -150,26 +151,16 @@ mod http_tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(done["status"], "complete");
-        assert_eq!(done["reason"], serde_json::Value::Null);
-        assert_eq!(done["fuel"], 0);
-        assert_eq!(done["work"], serde_json::json!([]));
+        assert_eq!(done["status"], "fail");
+        assert_eq!(done["reason"], "LimitExceeded");
         let nodes = done["nodes"].as_array().expect("nodes");
-        assert_eq!(nodes.len(), 12);
-        assert_eq!(nodes[11]["loc"], "exit");
-        let exprs = nodes[11]["exprs"].as_array().expect("exprs");
-        assert_eq!(exprs[0]["reg"], "real32:1");
-        assert_eq!(exprs[0]["term"], "3");
-        assert!(nodes[11]["predicates"]
-            .as_array()
-            .expect("predicates")
-            .iter()
-            .any(|p| p["tag"] == 3));
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[2]["loc"], "2");
 
         let (status, fetched) = call(&router, "GET", &format!("/api/session/{id}"), b"").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(fetched["status"], "complete");
-        assert_eq!(fetched["nodes"].as_array().expect("nodes").len(), 12);
+        assert_eq!(fetched["status"], "fail");
+        assert_eq!(fetched["nodes"].as_array().expect("nodes").len(), 3);
     }
 
     #[tokio::test]

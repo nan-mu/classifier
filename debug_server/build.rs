@@ -1,5 +1,4 @@
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -28,23 +27,8 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lean_lib.display());
     }
 
-    let bin = repo_root.join("esp32c3.bin");
-    let decoder = repo_root.join("decode_imc.py");
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let out_rs = out_dir.join("esp32c3_insns.rs");
-    let generated = Command::new("python3")
-        .arg(&decoder)
-        .arg("--compact-rust")
-        .arg(&bin)
-        .output()
-        .expect("python3 decode_imc.py --compact-rust");
-    assert!(
-        generated.status.success(),
-        "decode_imc.py failed: {}",
-        String::from_utf8_lossy(&generated.stderr)
+    println!(
+        "cargo:rerun-if-changed={}",
+        repo_root.join("esp32c3.bin").display()
     );
-    fs::write(&out_rs, generated.stdout).expect("write esp32c3_insns.rs");
-
-    println!("cargo:rerun-if-changed={}", bin.display());
-    println!("cargo:rerun-if-changed={}", decoder.display());
 }

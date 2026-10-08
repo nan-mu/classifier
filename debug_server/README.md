@@ -1,8 +1,11 @@
 # debug_server
 
 HTTP session chrome for the section 18 Expand demo. Expand graphs and SemState
-`exprs` / `predicates` come from Lean `demoSnapshot` via `lean_binding`. Instruction
-text is generated at build time from repo-root `esp32c3.bin` via `decode_imc.py`.
+`exprs` / `predicates` come from Lean `rv32Snapshot` via `lean_binding`. Instruction
+list text is partitioned at runtime from repo-root `esp32c3.bin` with the
+`riscv-isa` crate (strict RV32IMC 2/4-byte lengths). Regenerate
+`RV32IMC/Esp32c3Program.lean` with
+`UPDATE_ESP32C3_LEAN=1 cargo test -p debug_server lean_words`.
 This crate keeps session id, step count, focus, and the append-only log. It does
 not reimplement Expand.
 

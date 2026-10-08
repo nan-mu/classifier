@@ -121,6 +121,7 @@ dependencies = [
  "axum",
  "http-body-util",
  "lean_binding",
+ "riscv-isa",
  "serde",
  "serde_json",
  "tokio",
@@ -375,6 +376,12 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "riscv-isa"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6353b6f97390cddfc8fccc0a253bc30dd10ff38b5685ec5925cc3d4d6b09c05a"
 
 [[package]]
 name = "ryu"

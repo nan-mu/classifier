@@ -1,15 +1,16 @@
-use lean_binding::common_math;
+use lean_binding::rv32;
 use serde::Serialize;
 use serde_json::Value;
 
-include!(concat!(env!("OUT_DIR"), "/esp32c3_insns.rs"));
+use crate::rv32_image;
 
 struct LogEntry {
     t: u32,
     msg: String,
 }
 
-/// Session chrome only. Graph / fuel / status always come from Lean `demoSnapshot`.
+/// Session chrome only. Graph comes from Lean `rv32Snapshot` over `esp32c3.bin`.
+/// Insn list/words are partitioned at runtime with `riscv-isa` (`rv32_image`).
 pub struct Session {
     id: String,
     budget: u32,
@@ -27,7 +28,7 @@ impl Session {
             focus: 0,
             log: Vec::new(),
         };
-        session.push_log("init root at pos 0");
+        session.push_log("init root pre-state j0=0");
         session.sync_focus_from_lean();
         session
     }
@@ -85,12 +86,13 @@ impl Session {
             budget: self.budget,
             work,
             focus: self.focus,
-            insns: ESP32C3_INSNS
+            insns: rv32_image::esp32c3_image()
+                .insns
                 .iter()
                 .enumerate()
-                .map(|(j, text)| InsnOut {
+                .map(|(j, insn)| InsnOut {
                     j: j as u32,
-                    text,
+                    text: insn.text.clone(),
                 })
                 .collect(),
             nodes,
@@ -108,7 +110,7 @@ impl Session {
     }
 
     fn lean_value(&self) -> Value {
-        let raw = common_math::path_demo_snapshot(self.steps, self.budget);
+        let raw = rv32::expand_snapshot(self.steps, self.budget);
         serde_json::from_str(&raw).unwrap_or_else(|_| {
             serde_json::json!({
                 "status": "fail",
@@ -269,7 +271,7 @@ pub struct Snapshot {
 #[derive(Serialize)]
 pub struct InsnOut {
     pub j: u32,
-    pub text: &'static str,
+    pub text: String,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -312,20 +314,6 @@ pub struct LogOut {
 mod tests {
     use super::*;
 
-    fn locs(snap: &Snapshot) -> Vec<(u32, &str)> {
-        snap.nodes
-            .iter()
-            .map(|n| (n.id, n.loc.as_str()))
-            .collect()
-    }
-
-    fn edges(snap: &Snapshot) -> Vec<(u32, &str, u32)> {
-        snap.edges
-            .iter()
-            .map(|e| (e.src, e.dir, e.dst))
-            .collect()
-    }
-
     fn eq_term<'a>(node: &'a NodeOut, reg: &str) -> Option<&'a str> {
         node.exprs
             .iter()
@@ -335,94 +323,52 @@ mod tests {
 
     #[test]
     fn fresh_session_matches_the_root_snapshot() {
-        let session = Session::new("s", 11);
+        let session = Session::new("s", 3);
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
         assert_eq!(snap.reason, None);
-        assert_eq!(snap.fuel, 11);
-        assert_eq!(snap.budget, 11);
+        assert_eq!(snap.fuel, 3);
+        assert_eq!(snap.budget, 3);
         assert_eq!(snap.work, vec![0]);
         assert_eq!(snap.focus, 0);
         assert_eq!(snap.cursor_j, 0);
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.nodes[0].loc, "0");
-        assert_eq!(eq_term(&snap.nodes[0], "real32:1"), Some("0"));
+        assert_eq!(eq_term(&snap.nodes[0], "real32:0"), Some("0"));
+        assert!(eq_term(&snap.nodes[0], "stack32:0").is_some());
+        assert_eq!(snap.nodes[0].exprs.len(), 28);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
-        assert_eq!(snap.log[0].t, 0);
-        assert_eq!(snap.log[0].msg, "init root at pos 0");
-        assert!(snap.insns[0].text.starts_with("0000 C_LW "));
-        assert!(snap.insns.len() >= 12);
+        assert_eq!(snap.log[0].msg, "init root pre-state j0=0");
+        assert!(snap.insns[0].text.starts_with("0000 LW "));
+        assert_eq!(snap.insns.len(), 48);
     }
 
     #[test]
-    fn budget_11_run_matches_section_18() {
-        let mut session = Session::new("s", 11);
-        session.run_all();
-        let snap = session.snapshot();
-        assert_eq!(snap.status, "complete");
-        assert_eq!(snap.reason, None);
-        assert_eq!(snap.fuel, 0);
-        assert_eq!(snap.work, Vec::<u32>::new());
-        assert_eq!(snap.focus, 11);
-        assert_eq!(snap.cursor_j, 3);
-        assert_eq!(
-            locs(&snap),
-            vec![
-                (0, "0"),
-                (1, "1"),
-                (2, "2"),
-                (3, "0"),
-                (4, "1"),
-                (5, "2"),
-                (6, "0"),
-                (7, "1"),
-                (8, "2"),
-                (9, "0"),
-                (10, "3"),
-                (11, "exit"),
-            ]
-        );
-        assert_eq!(eq_term(&snap.nodes[11], "real32:1"), Some("3"));
-        assert!(snap.nodes[11]
-            .predicates
-            .iter()
-            .any(|p| p.tag == 3));
-        assert_eq!(
-            edges(&snap),
-            vec![
-                (0, "not_taken", 1),
-                (1, "only", 2),
-                (2, "only", 3),
-                (3, "not_taken", 4),
-                (4, "only", 5),
-                (5, "only", 6),
-                (6, "not_taken", 7),
-                (7, "only", 8),
-                (8, "only", 9),
-                (9, "taken", 10),
-                (10, "only", 11),
-            ]
-        );
-        assert!(snap.nodes.iter().any(|node| node.loc == "exit"));
-        assert_eq!(snap.log.last().map(|entry| entry.msg.as_str()), Some("complete"));
-    }
-
-    #[test]
-    fn budget_10_stops_before_the_return() {
-        let mut session = Session::new("s", 10);
+    fn budget_3_hits_limit_mid_program() {
+        // esp32c3.bin is 48 insns; budget 3 cannot reach Exit.
+        let mut session = Session::new("s", 3);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
         assert_eq!(snap.fuel, 0);
-        assert_eq!(snap.work, Vec::<u32>::new());
-        assert_eq!(snap.focus, 10);
-        assert_eq!(snap.cursor_j, 3);
-        assert_eq!(snap.nodes.len(), 11);
+        assert_eq!(snap.nodes.len(), 4);
+        assert_eq!(snap.nodes[3].loc, "3");
         assert!(snap.nodes.iter().all(|node| node.loc != "exit"));
-        assert_eq!(snap.nodes[10].loc, "3");
-        assert_eq!(eq_term(&snap.nodes[10], "real32:1"), Some("3"));
+    }
+
+    #[test]
+    fn budget_2_hits_limit_before_exit() {
+        let mut session = Session::new("s", 2);
+        session.run_all();
+        let snap = session.snapshot();
+        assert_eq!(snap.status, "fail");
+        assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
+        assert_eq!(snap.fuel, 0);
+        assert!(snap.nodes.iter().all(|node| node.loc != "exit"));
+        assert_eq!(snap.nodes.len(), 3);
+        assert_eq!(snap.nodes[2].loc, "2");
     }
 
     #[test]
@@ -433,30 +379,29 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
-        assert_eq!(snap.work, Vec::<u32>::new());
+        // Lean keeps the pending head on LimitExceeded before any child is appended.
+        assert_eq!(snap.work, vec![0]);
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.fuel, 0);
     }
 
     #[test]
-    fn one_step_enqueues_the_not_taken_child() {
-        let mut session = Session::new("s", 11);
+    fn one_step_enqueues_fallthrough_child() {
+        let mut session = Session::new("s", 3);
         session.step_once();
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
-        assert_eq!(snap.fuel, 10);
+        assert_eq!(snap.fuel, 2);
         assert_eq!(snap.work, vec![1]);
         assert_eq!(snap.focus, 1);
         assert_eq!(snap.cursor_j, 1);
         assert_eq!(snap.edges[0].src, 0);
         assert_eq!(snap.edges[0].dst, 1);
-        assert_eq!(snap.edges[0].dir, "not_taken");
+        assert_eq!(snap.edges[0].dir, "only");
         assert_eq!(snap.nodes[1].loc, "1");
-        assert_eq!(eq_term(&snap.nodes[1], "real32:1"), Some("0"));
+        // C_LW a2,0(a0) — LOAD still symbolic until Lean LOAD lands.
+        let a2 = eq_term(&snap.nodes[1], "real32:12").expect("a2");
+        assert!(a2.starts_with("v32:"), "expected symbolic load, got {a2}");
         assert_eq!(snap.nodes[1].preds, vec![0]);
-        assert!(snap.nodes[1]
-            .predicates
-            .iter()
-            .any(|p| p.tag == 2));
     }
 }

@@ -24,9 +24,9 @@ RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
 RV32IMC/Expand.lean             rv32Step / rv32Snapshot (+ lean_rv32_expand_snapshot)
 RV32IMC/Esp32c3Program.lean     generated `esp32c3Words` from `esp32c3.bin`
 doc/rv32-initial-expr.zh.md     RV32 entry E0 spec
-esp32c3.bin                     XDP image under test (regenerate Lean/Rust tables via decode_imc.py)
+esp32c3.bin                     XDP image under test (partition/label via `riscv-isa` in debug_server)
 lean_binding/                   Rust FFI binding to Lean @[export]s (incl. demoSnapshot)
-debug_server/                   axum §18 Expand debug API (Lean-backed via lean_binding)
+debug_server/                   axum §18 Expand debug API (Lean-backed; insn stream via riscv-isa)
 debug_web/                      Vite + Kuma UI + xyflow canvas for that API
 xtask/                          `cargo xtask demo` one-shot launcher
 doc/common-math.md
