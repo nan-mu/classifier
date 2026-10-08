@@ -16,10 +16,13 @@ math, register ADTs, or Sail execute stubs.
 ```text
 CommonMath.lean                 root reexports
 CommonMath/{Bits,Reg,Numeric,Op,Term,Expr,Direction,Insn,Path,Render,Expand,Demo,Ffi}.lean
-RV32IMC.lean                    imports Insn + Encode + Expr
+RV32IMC.lean                    imports Insn + Encode + Expr + Initial + Expand
 RV32IMC/Insn.lean               decoded Insn + field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
 RV32IMC/Expr.lean               expr / step (+ FFI smoke exports)
+RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
+RV32IMC/Expand.lean             rv32Step / rv32Snapshot (+ lean_rv32_expand_snapshot)
+doc/rv32-initial-expr.zh.md     RV32 entry E0 spec
 lean_binding/                   Rust FFI binding to Lean @[export]s (incl. demoSnapshot)
 debug_server/                   axum §18 Expand debug API (Lean-backed via lean_binding)
 debug_web/                      Vite + Kuma UI + xyflow canvas for that API
