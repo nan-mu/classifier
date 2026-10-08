@@ -45,6 +45,15 @@ cargo xtask demo   # lake build + debug_server :8788 + Vite :5173 (Ctrl-C stops 
 
 Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
 
+## Model access (operator)
+
+- Parent chat and Cursor Task subagents: **Cursor Auto** only (`Task` model:
+  omit / `inherit`; pstack roles: `auto`). Do not pin paid Task slugs.
+- Lean work: Codex MCP `user-codex-subagent` on **`gpt-6.1-sol`**.
+- Codex reasoning effort: at most **`high`** (`low`|`medium`|`high`). Never
+  `xhigh` / `max` / `ultra`, never Fast speed tier, never reset to bypass caps.
+- Defaults live in `~/.codex/config.toml` and `~/.cursor/rules/model-access.mdc`.
+
 ## Lean4 via MCP Codex subagent
 
 Any Lean4 reasoning or programming (`*.lean`, `lakefile*`, `lake-manifest.json`,
