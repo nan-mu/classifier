@@ -1,6 +1,7 @@
 import CommonMath.Expand
 import CommonMath.Term
 import CommonMath.Reg
+import CommonMath.Render
 
 namespace CommonMath
 
@@ -78,7 +79,8 @@ private def dirTag : Direction → String
   | .taken => "Taken"
   | .notTaken => "NotTaken"
 
-/-- JSON snapshot after `steps` expandOne calls (or earlier terminal). -/
+/-- JSON snapshot after `steps` expandOne calls (or earlier terminal).
+Node payload is SemState σ=(E,P) per `doc/common-math.md` §12. -/
 def demoSnapshot (steps budget : Nat) : String :=
   let pack (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
       (fuel : Nat) (status : String) (reason : Option RejectReason) (log : String) : String :=
@@ -86,11 +88,10 @@ def demoSnapshot (steps budget : Nat) : String :=
       let mut acc : List String := []
       for i in [:nodes.size] do
         if let some n := nodes[i]? then
-          let r := match readR n.state with | some v => toString v | none => "null"
-          let preds := String.intercalate "," (n.state.predicates.map fun p => toString p.tag)
+          let (ej, pj) := renderSemStateJson n.state
           let loc := match n.loc with | .exit => "exit" | .pos j => toString j
           acc := acc ++
-            [s!"\{\"id\":{i},\"loc\":\"{loc}\",\"r\":{r},\"preds\":[{preds}]}"]
+            [s!"\{\"id\":{i},\"loc\":\"{loc}\",\"exprs\":[{ej}],\"predicates\":[{pj}]}"]
       pure (String.intercalate "," acc)
     let edgeStrs := String.intercalate ","
       (edges.toList.map fun e =>

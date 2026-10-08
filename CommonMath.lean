@@ -7,6 +7,7 @@ import CommonMath.Expr
 import CommonMath.Direction
 import CommonMath.Insn
 import CommonMath.Path
+import CommonMath.Render
 import CommonMath.Expand
 import CommonMath.Demo
 import CommonMath.Ffi
