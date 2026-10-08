@@ -15,7 +15,7 @@ math, register ADTs, or Sail execute stubs.
 
 ```text
 CommonMath.lean                 root reexports
-CommonMath/{Bits,Reg,Numeric,Op,Term,Expr,Direction,Insn,Path,Expand,Demo,Ffi}.lean
+CommonMath/{Bits,Reg,Numeric,Op,Term,Expr,Direction,Insn,Path,Render,Expand,Demo,Ffi}.lean
 RV32IMC.lean                    imports Insn + Encode + Expr
 RV32IMC/Insn.lean               decoded Insn + field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
@@ -44,5 +44,7 @@ Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart S
 
 Lean4 implementation routes through user Cursor rule `lean-via-codex` +
 `python3 ~/.cursor/scripts/codex-quota-gate.py --json`: Codex CLI `-m gpt-6.1-sol`
+via `~/.cursor/scripts/codex-lean-exec.sh` (`--approve-for-me`, stdin closed)
 only when 5h and weekly remaining are both **> 50%**; otherwise Cursor auto
-subagents. Never redeem Codex reset credits unless the operator asks.
+subagents. Never redeem Codex reset credits unless the operator asks. Do not
+use removed `--full-auto`.
