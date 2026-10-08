@@ -1,10 +1,16 @@
 # debug_web
 
-Canvas for the Expand demo. Vite proxies `/api` to the mock server.
+Canvas for the Expand demo. Vite proxies `/api` to the Lean-backed debug server.
 
 ## Run
 
-Start `debug_server` first. Then, from `debug_web`, run:
+From the repo root (preferred):
+
+```bash
+cargo xtask demo
+```
+
+Or start pieces by hand: run `debug_server`, then from `debug_web`:
 
 ```bash
 npm install

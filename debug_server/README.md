@@ -6,7 +6,13 @@ and the append-only log. It does not reimplement Expand.
 
 ## Run
 
-From `debug_server`, run:
+From the repo root (preferred):
+
+```bash
+cargo xtask demo
+```
+
+Or from `debug_server`:
 
 ```bash
 cargo run

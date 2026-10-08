@@ -1,0 +1,4 @@
+[workspace]
+resolver = "2"
+members = ["xtask", "lean_bridge", "debug_server"]
+default-members = ["xtask"]

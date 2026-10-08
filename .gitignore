@@ -4,6 +4,8 @@
 /target/
 /lean_bridge/target/
 /debug_server/target/
+/xtask/target/
+
 /debug_web/node_modules/
 /debug_web/dist/
 /.audit/
