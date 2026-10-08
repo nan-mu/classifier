@@ -20,8 +20,8 @@ RV32IMC.lean                    imports Insn + Encode + Expr
 RV32IMC/Insn.lean               decoded Insn + field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
 RV32IMC/Expr.lean               expr / step (+ FFI smoke exports)
-lean_bridge/                    Rust FFI tests
-debug_server/                   axum §18 Expand debug API (mock; Lean wire-up later)
+lean_bridge/                    Rust FFI to Lean @[export]s (incl. demoSnapshot)
+debug_server/                   axum §18 Expand debug API (Lean-backed via lean_bridge)
 debug_web/                      Vite + Kuma UI + xyflow canvas for that API
 doc/common-math.md
 doc/rv32imc-expr-value-functions.md

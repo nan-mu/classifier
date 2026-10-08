@@ -110,7 +110,11 @@ def demoSnapshot (steps budget : Nat) : String :=
     | Sum.inl (.fail reason g) =>
         pack g.nodes g.edges [] 0 "fail" (some reason) "fail"
     | Sum.inr ws =>
-        pack ws.nodes ws.edges ws.work ws.fuel "running" none s!"steps={steps}"
+        -- Empty Work is Complete at the next loop head (§16); surface it without an extra step.
+        if ws.work.isEmpty then
+          pack ws.nodes ws.edges [] ws.fuel "complete" none "complete"
+        else
+          pack ws.nodes ws.edges ws.work ws.fuel "running" none s!"steps={steps}"
 
 @[export lean_path_demo_check]
 def exportDemoCheck (_unused : UInt32) : UInt32 :=

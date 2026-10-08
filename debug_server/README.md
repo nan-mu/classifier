@@ -1,6 +1,8 @@
 # debug_server
 
-Mock HTTP server for the section 18 Expand demo. Sessions stay in memory. This crate does not call Lean.
+HTTP session chrome for the section 18 Expand demo. Expand graphs come from Lean
+`demoSnapshot` via `lean_bridge`. This crate keeps session id, step count, focus,
+and the append-only log. It does not reimplement Expand.
 
 ## Run
 
@@ -16,9 +18,9 @@ The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to overrid
 
 `POST /api/session` accepts `{"budget": 11}`. An empty object uses budget 11.
 
-`POST /api/session/<id>/step` runs one Expand iteration.
+`POST /api/session/<id>/step` advances the Lean step counter by one and refreshes.
 
-`POST /api/session/<id>/run` runs until the status is `complete` or `fail`.
+`POST /api/session/<id>/run` steps until status is `complete` or `fail` (cap `budget+1`).
 
 `GET /api/session/<id>` returns the current snapshot.
 

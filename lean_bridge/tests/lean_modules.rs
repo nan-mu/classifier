@@ -36,6 +36,38 @@ fn path_demo_section18_budget() {
 }
 
 #[test]
+fn path_demo_snapshot_complete_and_limit() {
+    assert!(common_math::path_demo_check());
+
+    let done: serde_json::Value =
+        serde_json::from_str(&common_math::path_demo_snapshot(11, 11)).expect("json");
+    assert_eq!(done["status"], "complete");
+    assert_eq!(done["reason"], serde_json::Value::Null);
+    assert_eq!(done["fuel"], 0);
+    let nodes = done["nodes"].as_array().expect("nodes");
+    assert_eq!(nodes.len(), 12);
+    assert_eq!(nodes[11]["loc"], "exit");
+    assert_eq!(nodes[11]["r"], 3);
+
+    // After 10 successful expandOnes with B=10, fuel is 0 and work remains (running).
+    // The next expandOne observes LimitExceeded.
+    let at_limit: serde_json::Value =
+        serde_json::from_str(&common_math::path_demo_snapshot(10, 10)).expect("json");
+    assert_eq!(at_limit["status"], "running");
+    assert_eq!(at_limit["fuel"], 0);
+    assert_eq!(at_limit["work"], serde_json::json!([10]));
+
+    let limited: serde_json::Value =
+        serde_json::from_str(&common_math::path_demo_snapshot(11, 10)).expect("json");
+    assert_eq!(limited["status"], "fail");
+    assert_eq!(limited["reason"], "LimitExceeded");
+    assert_eq!(limited["fuel"], 0);
+    let limited_nodes = limited["nodes"].as_array().expect("nodes");
+    assert_eq!(limited_nodes.len(), 11);
+    assert!(limited_nodes.iter().all(|n| n["loc"] != "exit"));
+}
+
+#[test]
 fn decode_addi() {
     // addi x1, x2, 5  → 0x00510093
     assert_eq!(rv32::decode32(0x0051_0093), rv32::tag::ADDI);

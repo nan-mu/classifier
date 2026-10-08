@@ -5,7 +5,7 @@ use std::sync::Once;
 static INIT: Once = Once::new();
 
 mod ffi {
-    use std::os::raw::{c_uchar, c_void};
+    use std::os::raw::{c_char, c_uchar, c_void};
 
     type LeanObj = *mut c_void;
 
@@ -18,6 +18,10 @@ mod ffi {
         pub fn initialize_classifier_CommonMath(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_RV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
+        // Inlines from lean.h, exported by shim.c
+        pub fn lean_bridge_string_cstr(o: LeanObj) -> *const c_char;
+        pub fn lean_bridge_dec(o: LeanObj);
+
         pub fn common_math_add32(a: u32, b: u32) -> u32;
         pub fn common_math_sub32(a: u32, b: u32) -> u32;
         pub fn common_math_and32(a: u32, b: u32) -> u32;
@@ -25,6 +29,7 @@ mod ffi {
         pub fn common_math_divu32(a: u32, b: u32) -> u32;
         pub fn lean_path_demo_check(unused: u32) -> u32;
         pub fn lean_path_demo_nodes(budget: u32) -> u32;
+        pub fn lean_path_demo_snapshot(steps: u32, budget: u32) -> LeanObj;
         pub fn lean_rv32_expr_override_keeps(unused: u32) -> u32;
 
         pub fn lean_rv32_decode32(w: u32) -> u32;
@@ -89,6 +94,20 @@ pub mod common_math {
     pub fn path_demo_nodes(budget: u32) -> u32 {
         init();
         unsafe { ffi::lean_path_demo_nodes(budget) }
+    }
+
+    /// JSON snapshot after `steps` expandOne calls (Lean `demoSnapshot`).
+    pub fn path_demo_snapshot(steps: u32, budget: u32) -> String {
+        init();
+        unsafe {
+            let obj = ffi::lean_path_demo_snapshot(steps, budget);
+            let cstr = ffi::lean_bridge_string_cstr(obj);
+            let s = std::ffi::CStr::from_ptr(cstr)
+                .to_string_lossy()
+                .into_owned();
+            ffi::lean_bridge_dec(obj);
+            s
+        }
     }
 }
 

@@ -1,68 +1,6 @@
-use std::collections::VecDeque;
-
+use lean_bridge::common_math;
 use serde::Serialize;
-
-/// Program location. Exit is a graph marker, not an instruction index.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Loc {
-    Pos(u32),
-    Exit,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Dir {
-    Only,
-    Taken,
-    NotTaken,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Status {
-    Running,
-    Complete,
-    Fail,
-}
-
-struct Node {
-    loc: Loc,
-    r: u32,
-    preds: Vec<u32>,
-    x: i32,
-    y: i32,
-    depth: u32,
-}
-
-struct Edge {
-    src: u32,
-    dst: u32,
-    dir: Dir,
-}
-
-struct LogEntry {
-    t: u32,
-    msg: String,
-}
-
-struct Cand {
-    dir: Dir,
-    loc: Loc,
-    r: u32,
-}
-
-pub struct Session {
-    id: String,
-    status: Status,
-    reason: Option<String>,
-    fuel: u32,
-    budget: u32,
-    work: VecDeque<u32>,
-    focus: u32,
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
-    log: Vec<LogEntry>,
-    cursor_j: u32,
-    tick: u32,
-}
+use serde_json::Value;
 
 const INSN_TEXT: [&str; 4] = [
     "if r >= 3 then 3 else 1",
@@ -71,127 +9,86 @@ const INSN_TEXT: [&str; 4] = [
     "return observe r",
 ];
 
+struct LogEntry {
+    t: u32,
+    msg: String,
+}
+
+/// Session chrome only. Graph / fuel / status always come from Lean `demoSnapshot`.
+pub struct Session {
+    id: String,
+    budget: u32,
+    steps: u32,
+    focus: u32,
+    log: Vec<LogEntry>,
+}
+
 impl Session {
     pub fn new(id: impl Into<String>, budget: u32) -> Self {
         let mut session = Self {
             id: id.into(),
-            status: Status::Running,
-            reason: None,
-            fuel: budget,
             budget,
-            work: VecDeque::from([0]),
+            steps: 0,
             focus: 0,
-            nodes: vec![Node {
-                loc: Loc::Pos(0),
-                r: 0,
-                preds: Vec::new(),
-                x: 0,
-                y: 0,
-                depth: 0,
-            }],
-            edges: Vec::new(),
             log: Vec::new(),
-            cursor_j: 0,
-            tick: 0,
         };
         session.push_log("init root at pos 0, r=0");
+        session.sync_focus_from_lean();
         session
     }
 
     pub fn run_all(&mut self) {
-        while self.status == Status::Running {
+        let cap = self.budget.saturating_add(1);
+        for _ in 0..cap {
+            if self.lean_status() != "running" {
+                break;
+            }
             self.step_once();
         }
     }
 
-    /// One loop iteration of §16 Expand.
-    ///
-    /// Work is checked before fuel. A step that empties Work reports Complete
-    /// in this response, including when fuel lands on 0. That is the next loop
-    /// head, so the client does not send a blank extra step.
     pub fn step_once(&mut self) {
-        if self.status != Status::Running {
+        if self.lean_status() != "running" {
             return;
         }
-        if self.work.is_empty() {
-            self.mark_complete(None);
-            return;
-        }
-        if self.fuel == 0 {
-            self.mark_fail("LimitExceeded");
-            return;
-        }
-
-        let eta = self.work.pop_front().expect("work non-empty");
-        self.fuel -= 1;
-        let parent = &self.nodes[eta as usize];
-        let parent_x = parent.x;
-        let parent_depth = parent.depth;
-        let parent_loc = parent.loc;
-        let parent_r = parent.r;
-        let stepped_pos = match parent_loc {
-            Loc::Pos(j) => j,
-            Loc::Exit => {
-                self.mark_fail("StepOnExit");
-                return;
+        self.steps = self.steps.saturating_add(1);
+        let lean = self.lean_value();
+        let status = lean["status"].as_str().unwrap_or("fail");
+        match status {
+            "complete" => self.push_log("complete"),
+            "fail" => {
+                let reason = lean["reason"].as_str().unwrap_or("?");
+                self.push_log(format!("fail {reason}"));
             }
-        };
-
-        let prepared = match demo_step(parent_loc, parent_r) {
-            Ok(cands) => cands,
-            Err(reason) => {
-                self.mark_fail(reason);
-                return;
-            }
-        };
-
-        let count = prepared.len();
-        for (index, cand) in prepared.into_iter().enumerate() {
-            let zeta = self.nodes.len() as u32;
-            let depth = parent_depth + 1;
-            self.nodes.push(Node {
-                loc: cand.loc,
-                r: cand.r,
-                preds: vec![eta],
-                x: child_x(parent_x, index, count),
-                y: depth as i32 * 100,
-                depth,
-            });
-            self.edges.push(Edge {
-                src: eta,
-                dst: zeta,
-                dir: cand.dir,
-            });
-            if cand.loc != Loc::Exit {
-                self.work.push_back(zeta);
-            }
-            self.push_log(format!(
-                "expand node {eta} pos {stepped_pos} r={parent_r} {} -> node {zeta} loc {} r={}",
-                dir_name(cand.dir),
-                loc_name(cand.loc),
-                cand.r
-            ));
+            _ => self.push_log(format!("steps={}", self.steps)),
         }
-
-        if self.work.is_empty() {
-            self.mark_complete(Some(stepped_pos));
-        } else if let Some(&head) = self.work.front() {
-            self.focus_node(head);
-        }
+        self.sync_focus_from_lean();
     }
 
     pub fn snapshot(&self) -> Snapshot {
+        let lean = self.lean_value();
+        let (nodes, edges) = layout_from_lean(&lean);
+        let work = lean_u32_list(&lean["work"]);
+        let status = lean["status"].as_str().unwrap_or("fail");
+        let reason = match &lean["reason"] {
+            Value::Null => None,
+            Value::String(s) => Some(s.clone()),
+            other => Some(other.to_string()),
+        };
+        let fuel = lean["fuel"].as_u64().unwrap_or(0) as u32;
+        let cursor_j = cursor_from_nodes(&nodes, self.focus);
+
         Snapshot {
             id: self.id.clone(),
-            status: match self.status {
-                Status::Running => "running",
-                Status::Complete => "complete",
-                Status::Fail => "fail",
+            status: match status {
+                "running" => "running",
+                "complete" => "complete",
+                _ => "fail",
             },
-            reason: self.reason.clone(),
-            fuel: self.fuel,
+            reason,
+            fuel,
             budget: self.budget,
-            work: self.work.iter().copied().collect(),
+            work,
             focus: self.focus,
             insns: INSN_TEXT
                 .iter()
@@ -201,28 +98,8 @@ impl Session {
                     text,
                 })
                 .collect(),
-            nodes: self
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(id, node)| NodeOut {
-                    id: id as u32,
-                    loc: loc_name(node.loc).to_string(),
-                    r: node.r,
-                    preds: node.preds.clone(),
-                    x: node.x,
-                    y: node.y,
-                })
-                .collect(),
-            edges: self
-                .edges
-                .iter()
-                .map(|edge| EdgeOut {
-                    src: edge.src,
-                    dst: edge.dst,
-                    dir: dir_name(edge.dir),
-                })
-                .collect(),
+            nodes,
+            edges,
             log: self
                 .log
                 .iter()
@@ -231,81 +108,143 @@ impl Session {
                     msg: entry.msg.clone(),
                 })
                 .collect(),
-            cursor_j: self.cursor_j,
+            cursor_j,
         }
     }
 
-    fn focus_node(&mut self, id: u32) {
-        self.focus = id;
-        if let Loc::Pos(j) = self.nodes[id as usize].loc {
-            self.cursor_j = j;
-        }
+    fn lean_value(&self) -> Value {
+        let raw = common_math::path_demo_snapshot(self.steps, self.budget);
+        serde_json::from_str(&raw).unwrap_or_else(|_| {
+            serde_json::json!({
+                "status": "fail",
+                "reason": "LeanJson",
+                "fuel": 0,
+                "work": [],
+                "nodes": [],
+                "edges": [],
+            })
+        })
     }
 
-    fn mark_complete(&mut self, stepped_pos: Option<u32>) {
-        self.status = Status::Complete;
-        self.reason = None;
-        if let Some(j) = stepped_pos {
-            self.cursor_j = j;
-        }
-        if let Some(id) = self
-            .nodes
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, node)| node.loc == Loc::Exit)
-            .map(|(id, _)| id as u32)
-        {
-            self.focus = id;
-        }
-        self.push_log("complete");
+    fn lean_status(&self) -> String {
+        self.lean_value()["status"]
+            .as_str()
+            .unwrap_or("fail")
+            .to_string()
     }
 
-    fn mark_fail(&mut self, reason: &str) {
-        self.status = Status::Fail;
-        self.reason = Some(reason.to_string());
-        self.push_log(format!("fail {reason}"));
+    fn sync_focus_from_lean(&mut self) {
+        let lean = self.lean_value();
+        let work = lean_u32_list(&lean["work"]);
+        let nodes = lean["nodes"].as_array();
+        if let Some(&head) = work.first() {
+            self.focus = head;
+            return;
+        }
+        if let Some(nodes) = nodes {
+            if let Some((id, _)) = nodes.iter().enumerate().rev().find(|(_, n)| n["loc"] == "exit")
+            {
+                self.focus = id as u32;
+            }
+        }
     }
 
     fn push_log(&mut self, msg: impl Into<String>) {
-        let t = self.tick;
-        self.tick += 1;
-        self.log.push(LogEntry { t, msg: msg.into() });
+        let t = self.log.len() as u32;
+        self.log.push(LogEntry {
+            t,
+            msg: msg.into(),
+        });
     }
 }
 
-fn demo_step(loc: Loc, r: u32) -> Result<Vec<Cand>, &'static str> {
-    let Loc::Pos(j) = loc else {
-        return Err("StepOnExit");
-    };
-    match j {
-        0 if r >= 3 => Ok(vec![Cand {
-            dir: Dir::Taken,
-            loc: Loc::Pos(3),
-            r,
-        }]),
-        0 => Ok(vec![Cand {
-            dir: Dir::NotTaken,
-            loc: Loc::Pos(1),
-            r,
-        }]),
-        1 => Ok(vec![Cand {
-            dir: Dir::Only,
-            loc: Loc::Pos(2),
-            r: r + 1,
-        }]),
-        2 => Ok(vec![Cand {
-            dir: Dir::Only,
-            loc: Loc::Pos(0),
-            r,
-        }]),
-        3 => Ok(vec![Cand {
-            dir: Dir::Only,
-            loc: Loc::Exit,
-            r,
-        }]),
-        _ => Err("InvalidTarget"),
+fn lean_u32_list(v: &Value) -> Vec<u32> {
+    v.as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_u64().map(|n| n as u32))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn map_dir(tag: &str) -> &'static str {
+    match tag {
+        "Only" | "only" => "only",
+        "Taken" | "taken" => "taken",
+        "NotTaken" | "not_taken" => "not_taken",
+        _ => "only",
     }
+}
+
+/// Layout and predecessor ids from Lean edges. Lean `preds` are predicate tags, not parents.
+fn layout_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
+    let lean_nodes = lean["nodes"].as_array().cloned().unwrap_or_default();
+    let lean_edges = lean["edges"].as_array().cloned().unwrap_or_default();
+
+    let mut preds: Vec<Vec<u32>> = vec![Vec::new(); lean_nodes.len()];
+    let mut depth: Vec<u32> = vec![0; lean_nodes.len()];
+    let mut child_index: Vec<usize> = vec![0; lean_nodes.len()];
+    let mut sibling_count: Vec<usize> = vec![0; lean_nodes.len()];
+
+    for edge in &lean_edges {
+        let src = edge["src"].as_u64().unwrap_or(0) as usize;
+        let dst = edge["dst"].as_u64().unwrap_or(0) as usize;
+        if dst < preds.len() {
+            preds[dst].push(src as u32);
+        }
+        if src < sibling_count.len() {
+            sibling_count[src] += 1;
+        }
+    }
+
+    let mut seen_from_src: Vec<usize> = vec![0; lean_nodes.len()];
+    for edge in &lean_edges {
+        let src = edge["src"].as_u64().unwrap_or(0) as usize;
+        let dst = edge["dst"].as_u64().unwrap_or(0) as usize;
+        if dst < child_index.len() && src < seen_from_src.len() {
+            child_index[dst] = seen_from_src[src];
+            seen_from_src[src] += 1;
+            depth[dst] = depth.get(src).copied().unwrap_or(0).saturating_add(1);
+        }
+    }
+
+    let mut xs: Vec<i32> = vec![0; lean_nodes.len()];
+    let order: Vec<usize> = {
+        let mut ids: Vec<usize> = (0..lean_nodes.len()).collect();
+        ids.sort_by_key(|&i| depth[i]);
+        ids
+    };
+    for i in order {
+        if let Some(&parent) = preds[i].first() {
+            let p = parent as usize;
+            xs[i] = child_x(xs[p], child_index[i], sibling_count[p].max(1));
+        }
+    }
+
+    let nodes = lean_nodes
+        .iter()
+        .enumerate()
+        .map(|(id, n)| NodeOut {
+            id: id as u32,
+            loc: n["loc"].as_str().unwrap_or("?").to_string(),
+            r: n["r"].as_u64().unwrap_or(0) as u32,
+            preds: preds.get(id).cloned().unwrap_or_default(),
+            x: xs[id],
+            y: depth[id] as i32 * 100,
+        })
+        .collect();
+
+    let edges = lean_edges
+        .iter()
+        .map(|e| EdgeOut {
+            src: e["src"].as_u64().unwrap_or(0) as u32,
+            dst: e["dst"].as_u64().unwrap_or(0) as u32,
+            dir: map_dir(e["dir"].as_str().unwrap_or("Only")),
+        })
+        .collect();
+
+    (nodes, edges)
 }
 
 fn child_x(parent_x: i32, index: usize, count: usize) -> i32 {
@@ -317,23 +256,21 @@ fn child_x(parent_x: i32, index: usize, count: usize) -> i32 {
     parent_x - mid + index as i32 * span
 }
 
-fn loc_name(loc: Loc) -> &'static str {
-    match loc {
-        Loc::Pos(0) => "0",
-        Loc::Pos(1) => "1",
-        Loc::Pos(2) => "2",
-        Loc::Pos(3) => "3",
-        Loc::Pos(_) => "?",
-        Loc::Exit => "exit",
+fn cursor_from_nodes(nodes: &[NodeOut], focus: u32) -> u32 {
+    let Some(node) = nodes.get(focus as usize) else {
+        return 0;
+    };
+    if let Ok(j) = node.loc.parse::<u32>() {
+        return j;
     }
-}
-
-fn dir_name(dir: Dir) -> &'static str {
-    match dir {
-        Dir::Only => "only",
-        Dir::Taken => "taken",
-        Dir::NotTaken => "not_taken",
+    for &p in &node.preds {
+        if let Some(parent) = nodes.get(p as usize) {
+            if let Ok(j) = parent.loc.parse::<u32>() {
+                return j;
+            }
+        }
     }
+    0
 }
 
 #[derive(Serialize)]
@@ -387,20 +324,17 @@ pub struct LogOut {
 mod tests {
     use super::*;
 
-    fn locs(session: &Session) -> Vec<(u32, &'static str, u32, i32, i32)> {
-        session
-            .nodes
+    fn locs(snap: &Snapshot) -> Vec<(u32, &str, u32, i32, i32)> {
+        snap.nodes
             .iter()
-            .enumerate()
-            .map(|(id, node)| (id as u32, loc_name(node.loc), node.r, node.x, node.y))
+            .map(|n| (n.id, n.loc.as_str(), n.r, n.x, n.y))
             .collect()
     }
 
-    fn edges(session: &Session) -> Vec<(u32, &'static str, u32)> {
-        session
-            .edges
+    fn edges(snap: &Snapshot) -> Vec<(u32, &str, u32)> {
+        snap.edges
             .iter()
-            .map(|edge| (edge.src, dir_name(edge.dir), edge.dst))
+            .map(|e| (e.src, e.dir, e.dst))
             .collect()
     }
 
@@ -437,7 +371,7 @@ mod tests {
         assert_eq!(snap.focus, 11);
         assert_eq!(snap.cursor_j, 3);
         assert_eq!(
-            locs(&session),
+            locs(&snap),
             vec![
                 (0, "0", 0, 0, 0),
                 (1, "1", 0, 0, 100),
@@ -454,7 +388,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            edges(&session),
+            edges(&snap),
             vec![
                 (0, "not_taken", 1),
                 (1, "only", 2),
@@ -481,7 +415,8 @@ mod tests {
         assert_eq!(snap.status, "fail");
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
         assert_eq!(snap.fuel, 0);
-        assert_eq!(snap.work, vec![10]);
+        // Lean fail snapshots drop the work list; focus stays on the stuck node.
+        assert_eq!(snap.work, Vec::<u32>::new());
         assert_eq!(snap.focus, 10);
         assert_eq!(snap.cursor_j, 3);
         assert_eq!(snap.nodes.len(), 11);
@@ -491,13 +426,14 @@ mod tests {
     }
 
     #[test]
-    fn zero_fuel_fails_without_popping_work() {
+    fn zero_fuel_fails_on_first_expand() {
         let mut session = Session::new("s", 0);
+        assert_eq!(session.snapshot().status, "running");
         session.step_once();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
-        assert_eq!(snap.work, vec![0]);
+        assert_eq!(snap.work, Vec::<u32>::new());
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.fuel, 0);
     }

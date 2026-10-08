@@ -23,6 +23,12 @@ fn main() {
 
     let lake_lib = lean_root.join(".lake/build/lib");
     let lean_lib = PathBuf::from(lean_prefix).join("lib/lean");
+    let lean_include = PathBuf::from(lean_prefix).join("include");
+
+    cc::Build::new()
+        .file(manifest_dir.join("shim.c"))
+        .include(&lean_include)
+        .compile("lean_bridge_shim");
 
     println!("cargo:rustc-link-search=native={}", lake_lib.display());
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
@@ -37,6 +43,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lean_lib.display());
     }
 
+    println!("cargo:rerun-if-changed={}", manifest_dir.join("shim.c").display());
     println!("cargo:rerun-if-changed={}", lean_root.join("CommonMath.lean").display());
     println!("cargo:rerun-if-changed={}", lean_root.join("CommonMath").display());
     println!("cargo:rerun-if-changed={}", lean_root.join("RV32IMC.lean").display());
