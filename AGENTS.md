@@ -39,3 +39,10 @@ cargo xtask demo   # lake build + debug_server :8788 + Vite :5173 (Ctrl-C stops 
 ```
 
 Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
+
+## Lean4 via user Codex
+
+Lean4 implementation/questions: follow user Cursor rule `lean4-codex-handoff`.
+Main agent emits a full Task/subagent prompt for the operator to run in Codex;
+does not edit Lean or call Codex CLI. After the operator reports Codex finished
+(often with no details), the main agent verifies via git + `lake` / tests.
