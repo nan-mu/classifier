@@ -45,15 +45,41 @@ cargo xtask demo   # lake build + debug_server :8788 + Vite :5173 (Ctrl-C stops 
 
 Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
 
-## Lean4 via user Codex
+## Lean4 via MCP Codex subagent
 
-Lean4 implementation/questions: follow user Cursor rule `lean4-codex-handoff`.
-Main agent does not edit Lean or call Codex CLI. After the operator reports Codex
-finished (often with no details), the main agent verifies via git + `lake` / tests.
+Any Lean4 reasoning or programming (`*.lean`, `lakefile*`, `lake-manifest.json`,
+`lake build`, theorem/proof work, or FFI that exists only to expose Lean exports)
+is done by **Codex**, invoked through the Cursor MCP namespace
+`user-codex-subagent` — not by the main agent editing Lean, and not by pasting
+into a human-run Codex session.
 
-### Codex handoff file
+### Hard constraints (main agent)
 
-Write the full copy-pastable Codex / Task brief to a **gitignored** file under
-`.codex/` (directory is in `.gitignore`). Prefer a stable name such as
-`.codex/lean-handoff.md` (overwrite per task). Tell the operator the path; do not
-rely on chat-only fences as the sole copy of the prompt. Never commit `.codex/`.
+- Do **not** implement or edit Lean4 sources for the Lean portion of the task.
+- Do **not** call Codex CLI directly (`codex exec`, wrappers, quota gates).
+- Do **not** pin Cursor Task paid model slugs solely to do the Lean work.
+- Non-Lean glue (Rust/TS/docs that are not Lean) may proceed only when it does
+  not require guessing unfinished Lean APIs; otherwise wait for Codex completion.
+
+### Invoke Codex
+
+1. Write a self-contained brief (see below) to a **gitignored** file under
+   `.codex/` (directory is in `.gitignore`). Prefer `.codex/lean-handoff.md`
+   (overwrite per task). Never commit `.codex/`.
+2. Call MCP `user-codex-subagent` → `spawn_agent` with that brief as `prompt`
+   (absolute repo root / cwd context must be in the prompt text). For independent
+   Lean sub-tasks, use `spawn_agents_parallel` with one `{ "prompt": "..." }`
+   per agent.
+3. When the MCP call returns, verify yourself: `git status` / `git diff`, then
+   run the brief’s done checks (`lake build`, `lake build RV32IMC`, targeted
+   tests). Continue the parent task from that evidence, or spawn again if Lean
+   work is still incomplete.
+
+Prompt content requirements (same substance as user rule `lean4-codex-handoff`):
+absolute repo root and working directory; plain-language goal; constraints from
+this file (e.g. CommonMath vs RV32IMC); paths to read first; a binary done check;
+what to leave for the parent (commit only if asked; no drive-by refactors).
+
+This repo’s MCP spawn path **supersedes** the copy-paste / “operator says Codex
+finished” handoff in that user rule. Keep writing `.codex/lean-handoff.md` as the
+canonical brief; chat-only fences are not the sole copy.
