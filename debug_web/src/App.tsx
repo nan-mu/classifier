@@ -1,6 +1,7 @@
 import { Box, Button, Flex, Text } from "@kuma-ui/core";
 import {
   Background,
+  ConnectionMode,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -64,18 +65,21 @@ function DebugScreen() {
     logRef.current?.scrollIntoView({ block: "end" });
   }, [snap?.log.length]);
 
-  const graphKey = snap
-    ? `${snap.id}:${snap.nodes.length}:${snap.edges.length}:${snap.fuel}`
-    : "";
-  const positions = useForceLayout(snap?.nodes ?? [], snap?.edges ?? [], graphKey);
+  const positions = useForceLayout(snap?.nodes ?? [], snap?.edges ?? []);
+  const sessionId = snap?.id;
+  const fittedSession = useRef<string | null>(null);
 
+  // Fit once per session after positions exist. Do not re-fit on every step
+  // (that zooms to the origin while force still settles).
   useEffect(() => {
-    if (!snap) return;
+    if (!sessionId || Object.keys(positions).length === 0) return;
+    if (fittedSession.current === sessionId) return;
+    fittedSession.current = sessionId;
     const frame = requestAnimationFrame(() => {
-      void flow.fitView({ padding: 0.28, duration: 220 });
+      void flow.fitView({ padding: 0.35, duration: 280 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [flow, snap?.id, snap?.nodes.length]);
+  }, [flow, positions, sessionId]);
 
   const apply = useCallback((next: SessionSnapshot) => {
     setSnap(next);
@@ -128,36 +132,45 @@ function DebugScreen() {
   const flowNodes = useMemo<StateFlowNode[]>(() => {
     if (!snap) return [];
     const headId = snap.work[0];
-    return snap.nodes.map((node) => {
+    return snap.nodes.flatMap((node) => {
       const id = String(node.id);
-      const pos = positions[id] ?? { x: 0, y: 0 };
-      return {
-        id,
-        type: "state",
-        position: { x: pos.x, y: pos.y },
-        data: {
-          loc: node.loc,
-          exprCount: node.exprs.length,
-          predCount: node.predicates.length,
-          focused: node.id === focus,
-          head: node.id === headId,
+      const pos = positions[id];
+      if (!pos) return [];
+      return [
+        {
+          id,
+          type: "state" as const,
+          position: { x: pos.x, y: pos.y },
+          data: {
+            loc: node.loc,
+            exprCount: node.exprs.length,
+            predCount: node.predicates.length,
+            focused: node.id === focus,
+            head: node.id === headId,
+          },
+          draggable: false,
         },
-        draggable: false,
-      };
+      ];
     });
   }, [focus, positions, snap]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     if (!snap) return [];
-    return snap.edges.map((edge) => ({
-      id: `${edge.from}-${edge.to}`,
-      source: String(edge.from),
-      target: String(edge.to),
-      label: edge.dir,
-      className: "flow-edge",
-      labelStyle: { fill: "#c9bfb0", fontSize: 11 },
-    }));
-  }, [snap]);
+    const placed = new Set(flowNodes.map((n) => n.id));
+    return snap.edges
+      .filter((edge) => placed.has(String(edge.from)) && placed.has(String(edge.to)))
+      .map((edge) => ({
+        id: `${edge.from}->${edge.to}-${edge.dir}`,
+        source: String(edge.from),
+        target: String(edge.to),
+        sourceHandle: "b",
+        targetHandle: "t",
+        type: "smoothstep",
+        label: edge.dir,
+        className: "flow-edge",
+        labelStyle: { fill: "#c9bfb0", fontSize: 10 },
+      }));
+  }, [flowNodes, snap]);
 
   return (
     <Flex className="app-shell" height="100%" flexDirection="column">
@@ -194,7 +207,10 @@ function DebugScreen() {
             nodesDraggable={false}
             nodesFocusable={false}
             elementsSelectable={false}
-            fitView
+            connectionMode={ConnectionMode.Loose}
+            fitView={false}
+            minZoom={0.15}
+            maxZoom={2}
             proOptions={{ hideAttribution: false }}
             colorMode="dark"
           >

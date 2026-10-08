@@ -10,6 +10,9 @@ export type StateNodeData = {
 
 export type StateFlowNode = Node<StateNodeData, "state">;
 
+const handleStyle = { opacity: 0, width: 8, height: 8 };
+
+/** Four-way handles so force-layout edges are not forced top→bottom. */
 export function StateNodeView({ data }: NodeProps<StateFlowNode>) {
   return (
     <div
@@ -17,7 +20,10 @@ export function StateNodeView({ data }: NodeProps<StateFlowNode>) {
         data.head ? " state-node--head" : ""
       }`}
     >
-      <Handle type="target" position={Position.Top} style={{ opacity: 0 }} />
+      <Handle id="t" type="target" position={Position.Top} style={handleStyle} />
+      <Handle id="l" type="target" position={Position.Left} style={handleStyle} />
+      <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
+      <Handle id="b" type="source" position={Position.Bottom} style={handleStyle} />
       <div className="state-node__loc">
         {data.loc === "exit" ? "exit" : `pos ${data.loc}`}
       </div>
@@ -25,7 +31,6 @@ export function StateNodeView({ data }: NodeProps<StateFlowNode>) {
         E={data.exprCount} · P={data.predCount}
       </div>
       {data.head ? <div className="state-node__head">队列首</div> : null}
-      <Handle type="source" position={Position.Bottom} style={{ opacity: 0 }} />
     </div>
   );
 }

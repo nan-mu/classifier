@@ -66,10 +66,40 @@ body {
   min-height: 0;
 }
 
+.panel--left .panel__title {
+  padding: 8px 10px 4px;
+  font-size: 12px;
+}
+
+.panel--left .panel__body {
+  padding: 0 2px 6px 0;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 148, 128, 0.55) transparent;
+}
+
+.panel--left .panel__body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.panel--left .panel__body::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+
+.panel--left .panel__body::-webkit-scrollbar-thumb {
+  background: rgba(160, 148, 128, 0.45);
+  border-radius: 999px;
+}
+
+.panel--left .panel__body::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 184, 156, 0.7);
+}
+
 .insn-row {
-  padding: 8px 14px;
-  border-left: 3px solid transparent;
-  transition: background 160ms ease, border-color 160ms ease;
+  padding: 3px 8px 3px 6px;
+  border-left: 2px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
 .insn-row--current {
@@ -78,7 +108,8 @@ body {
 }
 
 .insn-row__text {
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.35;
   color: var(--text);
   white-space: nowrap;
 }
