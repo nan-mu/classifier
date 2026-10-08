@@ -9,3 +9,6 @@
 /debug_web/node_modules/
 /debug_web/dist/
 /.audit/
+
+# Local Codex / agent handoff prompts (never commit)
+/.codex/

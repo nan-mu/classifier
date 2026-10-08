@@ -43,6 +43,12 @@ Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart S
 ## Lean4 via user Codex
 
 Lean4 implementation/questions: follow user Cursor rule `lean4-codex-handoff`.
-Main agent emits a full Task/subagent prompt for the operator to run in Codex;
-does not edit Lean or call Codex CLI. After the operator reports Codex finished
-(often with no details), the main agent verifies via git + `lake` / tests.
+Main agent does not edit Lean or call Codex CLI. After the operator reports Codex
+finished (often with no details), the main agent verifies via git + `lake` / tests.
+
+### Codex handoff file
+
+Write the full copy-pastable Codex / Task brief to a **gitignored** file under
+`.codex/` (directory is in `.gitignore`). Prefer a stable name such as
+`.codex/lean-handoff.md` (overwrite per task). Tell the operator the path; do not
+rely on chat-only fences as the sole copy of the prompt. Never commit `.codex/`.
