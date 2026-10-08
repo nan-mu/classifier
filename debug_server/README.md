@@ -1,7 +1,7 @@
 # debug_server
 
 HTTP session chrome for the section 18 Expand demo. Expand graphs come from Lean
-`demoSnapshot` via `lean_bridge`. This crate keeps session id, step count, focus,
+`demoSnapshot` via `lean_binding`. This crate keeps session id, step count, focus,
 and the append-only log. It does not reimplement Expand.
 
 ## Run

@@ -2,7 +2,7 @@
 /lake-manifest.json
 *.pre_session_restore
 /target/
-/lean_bridge/target/
+/lean_binding/target/
 /debug_server/target/
 /xtask/target/
 

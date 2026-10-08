@@ -1,4 +1,4 @@
-use lean_bridge::common_math;
+use lean_binding::common_math;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -168,6 +168,18 @@ fn lean_u32_list(v: &Value) -> Vec<u32> {
         .unwrap_or_default()
 }
 
+/// §18 demo uses `real32:1`; Lean JSON no longer ships a bare `r` field.
+fn demo_r_from_exprs(n: &Value) -> u32 {
+    n["exprs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|e| e["reg"] == "real32:1" && e["rel"] == "eq")
+        .and_then(|e| e["term"].as_str())
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0)
+}
+
 fn map_dir(tag: &str) -> &'static str {
     match tag {
         "Only" | "only" => "only",
@@ -228,7 +240,7 @@ fn layout_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
         .map(|(id, n)| NodeOut {
             id: id as u32,
             loc: n["loc"].as_str().unwrap_or("?").to_string(),
-            r: n["r"].as_u64().unwrap_or(0) as u32,
+            r: demo_r_from_exprs(n),
             preds: preds.get(id).cloned().unwrap_or_default(),
             x: xs[id],
             y: depth[id] as i32 * 100,

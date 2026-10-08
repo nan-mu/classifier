@@ -6,5 +6,5 @@ ISA slice: `RV32IMC` (`Insn`, `encode`, `expr` only).
 ```bash
 lake build
 lake build RV32IMC
-cargo test --manifest-path lean_bridge/Cargo.toml
+cargo test --manifest-path lean_binding/Cargo.toml
 ```

@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["xtask", "lean_bridge", "debug_server"]
+members = ["xtask", "lean_binding", "debug_server"]
 default-members = ["xtask"]

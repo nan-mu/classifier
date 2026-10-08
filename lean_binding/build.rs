@@ -28,7 +28,7 @@ fn main() {
     cc::Build::new()
         .file(manifest_dir.join("shim.c"))
         .include(&lean_include)
-        .compile("lean_bridge_shim");
+        .compile("lean_binding_shim");
 
     println!("cargo:rustc-link-search=native={}", lake_lib.display());
     println!("cargo:rustc-link-search=native={}", lean_lib.display());

@@ -20,8 +20,8 @@ RV32IMC.lean                    imports Insn + Encode + Expr
 RV32IMC/Insn.lean               decoded Insn + field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
 RV32IMC/Expr.lean               expr / step (+ FFI smoke exports)
-lean_bridge/                    Rust FFI to Lean @[export]s (incl. demoSnapshot)
-debug_server/                   axum §18 Expand debug API (Lean-backed via lean_bridge)
+lean_binding/                   Rust FFI binding to Lean @[export]s (incl. demoSnapshot)
+debug_server/                   axum §18 Expand debug API (Lean-backed via lean_binding)
 debug_web/                      Vite + Kuma UI + xyflow canvas for that API
 xtask/                          `cargo xtask demo` one-shot launcher
 doc/common-math.md
@@ -33,7 +33,7 @@ doc/rv32imc-expr-value-functions.md
 ```bash
 lake build
 lake build RV32IMC
-cargo test -p lean_bridge
+cargo test -p lean_binding
 cargo test -p debug_server
 cargo xtask demo   # lake build + debug_server :8788 + Vite :5173 (Ctrl-C stops both)
 ```

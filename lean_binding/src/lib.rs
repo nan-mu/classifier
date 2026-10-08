@@ -19,8 +19,8 @@ mod ffi {
         pub fn initialize_classifier_RV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
-        pub fn lean_bridge_string_cstr(o: LeanObj) -> *const c_char;
-        pub fn lean_bridge_dec(o: LeanObj);
+        pub fn lean_binding_string_cstr(o: LeanObj) -> *const c_char;
+        pub fn lean_binding_dec(o: LeanObj);
 
         pub fn common_math_add32(a: u32, b: u32) -> u32;
         pub fn common_math_sub32(a: u32, b: u32) -> u32;
@@ -101,11 +101,11 @@ pub mod common_math {
         init();
         unsafe {
             let obj = ffi::lean_path_demo_snapshot(steps, budget);
-            let cstr = ffi::lean_bridge_string_cstr(obj);
+            let cstr = ffi::lean_binding_string_cstr(obj);
             let s = std::ffi::CStr::from_ptr(cstr)
                 .to_string_lossy()
                 .into_owned();
-            ffi::lean_bridge_dec(obj);
+            ffi::lean_binding_dec(obj);
             s
         }
     }

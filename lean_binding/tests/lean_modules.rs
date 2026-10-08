@@ -1,6 +1,6 @@
 //! Integration tests that call Lean4 modules through the Rust FFI surface.
 
-use lean_bridge::{common_math, rv32};
+use lean_binding::{common_math, rv32};
 
 #[test]
 fn common_math_add_wraps_at_32() {
@@ -47,7 +47,13 @@ fn path_demo_snapshot_complete_and_limit() {
     let nodes = done["nodes"].as_array().expect("nodes");
     assert_eq!(nodes.len(), 12);
     assert_eq!(nodes[11]["loc"], "exit");
-    assert_eq!(nodes[11]["r"], 3);
+    let exprs = nodes[11]["exprs"].as_array().expect("exprs");
+    assert_eq!(exprs.len(), 1);
+    assert_eq!(exprs[0]["reg"], "real32:1");
+    assert_eq!(exprs[0]["rel"], "eq");
+    assert_eq!(exprs[0]["term"], "3");
+    let preds = nodes[11]["predicates"].as_array().expect("predicates");
+    assert!(preds.iter().any(|p| p["tag"] == 3));
 
     // After 10 successful expandOnes with B=10, fuel is 0 and work remains (running).
     // The next expandOne observes LimitExceeded.
