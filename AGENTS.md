@@ -39,3 +39,10 @@ cargo test --manifest-path debug_server/Cargo.toml
 ```
 
 Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
+
+## Lean via Codex
+
+Lean4 implementation routes through user Cursor rule `lean-via-codex` +
+`python3 ~/.cursor/scripts/codex-quota-gate.py --json`: Codex CLI `-m gpt-6.1-sol`
+only when 5h and weekly remaining are both **> 50%**; otherwise Cursor auto
+subagents. Never redeem Codex reset credits unless the operator asks.
