@@ -157,7 +157,14 @@ mod http_tests {
         let nodes = done["nodes"].as_array().expect("nodes");
         assert_eq!(nodes.len(), 12);
         assert_eq!(nodes[11]["loc"], "exit");
-        assert_eq!(nodes[11]["r"], 3);
+        let exprs = nodes[11]["exprs"].as_array().expect("exprs");
+        assert_eq!(exprs[0]["reg"], "real32:1");
+        assert_eq!(exprs[0]["term"], "3");
+        assert!(nodes[11]["predicates"]
+            .as_array()
+            .expect("predicates")
+            .iter()
+            .any(|p| p["tag"] == 3));
 
         let (status, fetched) = call(&router, "GET", &format!("/api/session/{id}"), b"").await;
         assert_eq!(status, StatusCode::OK);

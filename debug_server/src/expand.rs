@@ -2,12 +2,7 @@ use lean_binding::common_math;
 use serde::Serialize;
 use serde_json::Value;
 
-const INSN_TEXT: [&str; 4] = [
-    "if r >= 3 then 3 else 1",
-    "r := r + 1",
-    "goto 0",
-    "return observe r",
-];
+include!(concat!(env!("OUT_DIR"), "/esp32c3_insns.rs"));
 
 struct LogEntry {
     t: u32,
@@ -32,7 +27,7 @@ impl Session {
             focus: 0,
             log: Vec::new(),
         };
-        session.push_log("init root at pos 0, r=0");
+        session.push_log("init root at pos 0");
         session.sync_focus_from_lean();
         session
     }
@@ -67,7 +62,7 @@ impl Session {
 
     pub fn snapshot(&self) -> Snapshot {
         let lean = self.lean_value();
-        let (nodes, edges) = layout_from_lean(&lean);
+        let (nodes, edges) = graph_from_lean(&lean);
         let work = lean_u32_list(&lean["work"]);
         let status = lean["status"].as_str().unwrap_or("fail");
         let reason = match &lean["reason"] {
@@ -90,7 +85,7 @@ impl Session {
             budget: self.budget,
             work,
             focus: self.focus,
-            insns: INSN_TEXT
+            insns: ESP32C3_INSNS
                 .iter()
                 .enumerate()
                 .map(|(j, text)| InsnOut {
@@ -168,18 +163,6 @@ fn lean_u32_list(v: &Value) -> Vec<u32> {
         .unwrap_or_default()
 }
 
-/// §18 demo uses `real32:1`; Lean JSON no longer ships a bare `r` field.
-fn demo_r_from_exprs(n: &Value) -> u32 {
-    n["exprs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|e| e["reg"] == "real32:1" && e["rel"] == "eq")
-        .and_then(|e| e["term"].as_str())
-        .and_then(|t| t.parse().ok())
-        .unwrap_or(0)
-}
-
 fn map_dir(tag: &str) -> &'static str {
     match tag {
         "Only" | "only" => "only",
@@ -189,48 +172,40 @@ fn map_dir(tag: &str) -> &'static str {
     }
 }
 
-/// Layout and predecessor ids from Lean edges. Lean `preds` are predicate tags, not parents.
-fn layout_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
+fn parse_exprs(n: &Value) -> Vec<ExprOut> {
+    n["exprs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|e| ExprOut {
+            reg: e["reg"].as_str().unwrap_or("?").to_string(),
+            rel: e["rel"].as_str().unwrap_or("?").to_string(),
+            term: e["term"].as_str().unwrap_or("?").to_string(),
+        })
+        .collect()
+}
+
+fn parse_predicates(n: &Value) -> Vec<PredOut> {
+    n["predicates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| p["tag"].as_u64().map(|tag| PredOut { tag }))
+        .collect()
+}
+
+/// Parent ids from Lean edges. Lean node `predicates` are SemState tags, not parents.
+/// Positions are omitted; the web canvas owns force layout.
+fn graph_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
     let lean_nodes = lean["nodes"].as_array().cloned().unwrap_or_default();
     let lean_edges = lean["edges"].as_array().cloned().unwrap_or_default();
 
     let mut preds: Vec<Vec<u32>> = vec![Vec::new(); lean_nodes.len()];
-    let mut depth: Vec<u32> = vec![0; lean_nodes.len()];
-    let mut child_index: Vec<usize> = vec![0; lean_nodes.len()];
-    let mut sibling_count: Vec<usize> = vec![0; lean_nodes.len()];
-
     for edge in &lean_edges {
         let src = edge["src"].as_u64().unwrap_or(0) as usize;
         let dst = edge["dst"].as_u64().unwrap_or(0) as usize;
         if dst < preds.len() {
             preds[dst].push(src as u32);
-        }
-        if src < sibling_count.len() {
-            sibling_count[src] += 1;
-        }
-    }
-
-    let mut seen_from_src: Vec<usize> = vec![0; lean_nodes.len()];
-    for edge in &lean_edges {
-        let src = edge["src"].as_u64().unwrap_or(0) as usize;
-        let dst = edge["dst"].as_u64().unwrap_or(0) as usize;
-        if dst < child_index.len() && src < seen_from_src.len() {
-            child_index[dst] = seen_from_src[src];
-            seen_from_src[src] += 1;
-            depth[dst] = depth.get(src).copied().unwrap_or(0).saturating_add(1);
-        }
-    }
-
-    let mut xs: Vec<i32> = vec![0; lean_nodes.len()];
-    let order: Vec<usize> = {
-        let mut ids: Vec<usize> = (0..lean_nodes.len()).collect();
-        ids.sort_by_key(|&i| depth[i]);
-        ids
-    };
-    for i in order {
-        if let Some(&parent) = preds[i].first() {
-            let p = parent as usize;
-            xs[i] = child_x(xs[p], child_index[i], sibling_count[p].max(1));
         }
     }
 
@@ -240,10 +215,9 @@ fn layout_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
         .map(|(id, n)| NodeOut {
             id: id as u32,
             loc: n["loc"].as_str().unwrap_or("?").to_string(),
-            r: demo_r_from_exprs(n),
+            exprs: parse_exprs(n),
+            predicates: parse_predicates(n),
             preds: preds.get(id).cloned().unwrap_or_default(),
-            x: xs[id],
-            y: depth[id] as i32 * 100,
         })
         .collect();
 
@@ -257,15 +231,6 @@ fn layout_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
         .collect();
 
     (nodes, edges)
-}
-
-fn child_x(parent_x: i32, index: usize, count: usize) -> i32 {
-    if count <= 1 {
-        return parent_x;
-    }
-    let span = 180;
-    let mid = (count as i32 - 1) * span / 2;
-    parent_x - mid + index as i32 * span
 }
 
 fn cursor_from_nodes(nodes: &[NodeOut], focus: u32) -> u32 {
@@ -307,14 +272,25 @@ pub struct InsnOut {
     pub text: &'static str,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ExprOut {
+    pub reg: String,
+    pub rel: String,
+    pub term: String,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct PredOut {
+    pub tag: u64,
+}
+
 #[derive(Serialize)]
 pub struct NodeOut {
     pub id: u32,
     pub loc: String,
-    pub r: u32,
+    pub exprs: Vec<ExprOut>,
+    pub predicates: Vec<PredOut>,
     pub preds: Vec<u32>,
-    pub x: i32,
-    pub y: i32,
 }
 
 #[derive(Serialize)]
@@ -336,10 +312,10 @@ pub struct LogOut {
 mod tests {
     use super::*;
 
-    fn locs(snap: &Snapshot) -> Vec<(u32, &str, u32, i32, i32)> {
+    fn locs(snap: &Snapshot) -> Vec<(u32, &str)> {
         snap.nodes
             .iter()
-            .map(|n| (n.id, n.loc.as_str(), n.r, n.x, n.y))
+            .map(|n| (n.id, n.loc.as_str()))
             .collect()
     }
 
@@ -348,6 +324,13 @@ mod tests {
             .iter()
             .map(|e| (e.src, e.dir, e.dst))
             .collect()
+    }
+
+    fn eq_term<'a>(node: &'a NodeOut, reg: &str) -> Option<&'a str> {
+        node.exprs
+            .iter()
+            .find(|e| e.reg == reg && e.rel == "eq")
+            .map(|e| e.term.as_str())
     }
 
     #[test]
@@ -363,12 +346,13 @@ mod tests {
         assert_eq!(snap.cursor_j, 0);
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.nodes[0].loc, "0");
-        assert_eq!(snap.nodes[0].r, 0);
+        assert_eq!(eq_term(&snap.nodes[0], "real32:1"), Some("0"));
+        assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
         assert_eq!(snap.log[0].t, 0);
-        assert_eq!(snap.log[0].msg, "init root at pos 0, r=0");
-        assert_eq!(snap.insns[0].text, "if r >= 3 then 3 else 1");
-        assert_eq!(snap.insns[3].text, "return observe r");
+        assert_eq!(snap.log[0].msg, "init root at pos 0");
+        assert!(snap.insns[0].text.starts_with("0000 C_LW "));
+        assert!(snap.insns.len() >= 12);
     }
 
     #[test]
@@ -385,20 +369,25 @@ mod tests {
         assert_eq!(
             locs(&snap),
             vec![
-                (0, "0", 0, 0, 0),
-                (1, "1", 0, 0, 100),
-                (2, "2", 1, 0, 200),
-                (3, "0", 1, 0, 300),
-                (4, "1", 1, 0, 400),
-                (5, "2", 2, 0, 500),
-                (6, "0", 2, 0, 600),
-                (7, "1", 2, 0, 700),
-                (8, "2", 3, 0, 800),
-                (9, "0", 3, 0, 900),
-                (10, "3", 3, 0, 1000),
-                (11, "exit", 3, 0, 1100),
+                (0, "0"),
+                (1, "1"),
+                (2, "2"),
+                (3, "0"),
+                (4, "1"),
+                (5, "2"),
+                (6, "0"),
+                (7, "1"),
+                (8, "2"),
+                (9, "0"),
+                (10, "3"),
+                (11, "exit"),
             ]
         );
+        assert_eq!(eq_term(&snap.nodes[11], "real32:1"), Some("3"));
+        assert!(snap.nodes[11]
+            .predicates
+            .iter()
+            .any(|p| p.tag == 3));
         assert_eq!(
             edges(&snap),
             vec![
@@ -427,14 +416,13 @@ mod tests {
         assert_eq!(snap.status, "fail");
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
         assert_eq!(snap.fuel, 0);
-        // Lean fail snapshots drop the work list; focus stays on the stuck node.
         assert_eq!(snap.work, Vec::<u32>::new());
         assert_eq!(snap.focus, 10);
         assert_eq!(snap.cursor_j, 3);
         assert_eq!(snap.nodes.len(), 11);
         assert!(snap.nodes.iter().all(|node| node.loc != "exit"));
         assert_eq!(snap.nodes[10].loc, "3");
-        assert_eq!(snap.nodes[10].r, 3);
+        assert_eq!(eq_term(&snap.nodes[10], "real32:1"), Some("3"));
     }
 
     #[test]
@@ -464,7 +452,11 @@ mod tests {
         assert_eq!(snap.edges[0].dst, 1);
         assert_eq!(snap.edges[0].dir, "not_taken");
         assert_eq!(snap.nodes[1].loc, "1");
-        assert_eq!(snap.nodes[1].r, 0);
+        assert_eq!(eq_term(&snap.nodes[1], "real32:1"), Some("0"));
         assert_eq!(snap.nodes[1].preds, vec![0]);
+        assert!(snap.nodes[1]
+            .predicates
+            .iter()
+            .any(|p| p.tag == 2));
     }
 }

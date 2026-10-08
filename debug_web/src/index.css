@@ -1,3 +1,16 @@
+:root {
+  --bg0: #161411;
+  --bg1: rgba(34, 30, 26, 0.72);
+  --bg2: rgba(48, 43, 36, 0.55);
+  --line: rgba(120, 108, 90, 0.45);
+  --text: #ece6da;
+  --muted: #a89f90;
+  --accent: #e2cfab;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  --radius: 18px;
+  --glass: blur(16px) saturate(1.25);
+}
+
 html,
 body,
 #root {
@@ -6,15 +19,194 @@ body,
 }
 
 body {
-  background: #1c1b19;
-  color: #e7e2d6;
+  background:
+    radial-gradient(1200px 700px at 12% -10%, rgba(120, 96, 64, 0.22), transparent 55%),
+    radial-gradient(900px 600px at 90% 110%, rgba(70, 88, 110, 0.18), transparent 50%),
+    var(--bg0);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+.app-shell {
+  color: var(--text);
+}
+
+.panel {
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+  overflow: hidden;
+}
+
+.panel--canvas {
+  background: rgba(22, 20, 17, 0.45);
+}
+
+.panel__title {
+  padding: 12px 14px 8px;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.panel__title--small {
+  padding-bottom: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.panel__body {
+  min-height: 0;
+}
+
+.insn-row {
+  padding: 8px 14px;
+  border-left: 3px solid transparent;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.insn-row--current {
+  background: rgba(226, 207, 171, 0.12);
+  border-left-color: var(--accent);
+}
+
+.insn-row__text {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.sem-heading {
+  display: block;
+  margin: 4px 0 12px;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.sem-sub {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+}
+
+.sem-sub--gap {
+  margin-top: 14px;
+}
+
+.sem-line {
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(80, 72, 60, 0.45);
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.log-strip {
+  border-top: 1px solid var(--line);
+  background: rgba(20, 18, 15, 0.45);
+}
+
+.log-line {
+  padding: 3px 0;
+  font-size: 11px;
+  color: #c7bdae;
+}
+
+.toolbar {
+  height: 72px;
+  margin: 0 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg1);
+  box-shadow: var(--shadow);
+  backdrop-filter: var(--glass);
+  -webkit-backdrop-filter: var(--glass);
+}
+
+.toolbar__btn {
+  padding: 10px 18px;
+  background: rgba(52, 46, 38, 0.9);
+  color: var(--text);
+  border: 1px solid rgba(140, 126, 104, 0.55);
+  border-radius: 12px;
+  font-size: 14px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+.toolbar__btn:not(:disabled):hover {
+  transform: translateY(-1px);
+  background: rgba(68, 60, 48, 0.95);
+}
+
+.toolbar__status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.error-banner {
+  position: absolute;
+  z-index: 2;
+  color: #e0b4a4;
+}
+
+.state-node {
+  min-width: 148px;
+  padding: 10px 12px;
+  background: rgba(42, 38, 32, 0.88);
+  color: var(--text);
+  border: 1px solid rgba(110, 100, 86, 0.55);
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.state-node--focus {
+  border-color: #f3efe4;
+  box-shadow: 0 0 0 1px rgba(243, 239, 228, 0.35), 0 14px 34px rgba(0, 0, 0, 0.35);
+  transform: scale(1.02);
+}
+
+.state-node--head .state-node__head {
+  color: #c4b49a;
+  margin-top: 4px;
+}
+
+.state-node__loc {
+  font-weight: 600;
+}
+
+.state-node__meta {
+  color: var(--muted);
+  margin-top: 2px;
 }
 
 .react-flow {
-  background: #1c1b19;
+  background: transparent;
 }
 
 .react-flow__attribution {
   background: transparent;
   color: #8a8175;
+}
+
+.flow-edge {
+  stroke: #8d8476 !important;
 }

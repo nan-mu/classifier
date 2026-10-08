@@ -5,13 +5,22 @@ export type InsnRow = {
   text: string;
 };
 
+export type ExprRow = {
+  reg: string;
+  rel: string;
+  term: string;
+};
+
+export type PredRow = {
+  tag: number;
+};
+
 export type GraphNode = {
   id: number;
   loc: string;
-  r: number;
+  exprs: ExprRow[];
+  predicates: PredRow[];
   preds: number[];
-  x: number;
-  y: number;
 };
 
 export type GraphEdge = {

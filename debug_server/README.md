@@ -1,8 +1,10 @@
 # debug_server
 
-HTTP session chrome for the section 18 Expand demo. Expand graphs come from Lean
-`demoSnapshot` via `lean_binding`. This crate keeps session id, step count, focus,
-and the append-only log. It does not reimplement Expand.
+HTTP session chrome for the section 18 Expand demo. Expand graphs and SemState
+`exprs` / `predicates` come from Lean `demoSnapshot` via `lean_binding`. Instruction
+text is generated at build time from repo-root `esp32c3.bin` via `decode_imc.py`.
+This crate keeps session id, step count, focus, and the append-only log. It does
+not reimplement Expand.
 
 ## Run
 
