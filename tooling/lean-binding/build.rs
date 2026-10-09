@@ -4,14 +4,7 @@ use std::process::Command;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let lean_root = manifest_dir.parent().unwrap();
-
-    let status = Command::new("lake")
-        .args(["build", "CommonMath", "RV32IMC"])
-        .current_dir(lean_root)
-        .status()
-        .expect("failed to spawn lake");
-    assert!(status.success(), "lake build failed");
+    let lean_root = manifest_dir.parent().unwrap().parent().unwrap();
 
     let lean_prefix = Command::new("lean")
         .args(["--print-prefix"])
@@ -44,9 +37,6 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed={}", manifest_dir.join("shim.c").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("CommonMath.lean").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("CommonMath").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("RV32IMC.lean").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("RV32IMC").display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("lakefile.toml").display());
+    println!("cargo:rerun-if-changed={}", lake_lib.display());
+    println!("cargo:rerun-if-changed={}", lean_root.join("lakefile.lean").display());
 }

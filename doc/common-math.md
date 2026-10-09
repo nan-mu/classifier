@@ -1,135 +1,101 @@
-# 分类器共同数学定义
+# 共同数学基础：符号值、关系与有限执行历史
 
-本文合并输入、输出历史结构、寄存器与符号运算定义、已约定的指令分类，以及带状态快照的节点、路径与有预算的展开算法。具体指令的值函数分别见 [RV32IMC 值函数](rv32imc-expr-value-functions.md) 和 [eBPF 值函数](ebpf-expr-value-functions.md)。本文使用数学集合、有限序列与函数；算法使用独立于编程语言的伪代码。新增的节点与算法定义为当前草案。
+本文建立指令分析所需的共同数学对象，并证明符号求解、关系更新及有预算展开的基本性质。具体指令的数值函数见 [RV32IMC 值函数](rv32imc-expr-value-functions.md)和 [eBPF 值函数](ebpf-expr-value-functions.md)；入口赋值见 [RV32 初态](rv32-initial-expr.zh.md)。
 
-## 1. 记号与基本对象
+全文区分三种陈述：定义规定模型对象；命题给出从定义推出的结论；假设说明结论成立所需的外部条件。Predicate 的完整观察语义、资源绑定和跨指令集行为等价性尚未确定，不能由本文的局部性质直接推出。
 
-### 1.1 集合与序列记号
+## 1. 记号与位向量
 
-对集合 \(A\)，定义其有限序列集合与有限子集集合：
+令 \(\mathbb N=\{0,1,2,\ldots\}\)。对集合 \(A\)，定义
 
 \[
 A^\ast=\bigcup_{m\in\mathbb N}A^m,
 \qquad
-\mathscr F(A)=\{B\subseteq A:\lvert B\rvert<\infty\}.
+\mathscr F(A)=\{B\subseteq A:|B|<\infty\}.
 \]
 
-这里 \(\mathbb N=\{0,1,2,\ldots\}\)，\(A^0\) 包含空序列。\(\times\) 表示笛卡尔积，\(\bigsqcup\) 表示保留类型标签的不交并。
+\(A^\ast\) 是有限序列集合，\(\mathscr F(A)\) 是有限子集集合；空序列记为 \(\varepsilon\)。\(\bigsqcup\) 表示保留类型标签的不交并。
 
-### 1.2 统一名称
-
-| 记号 | 含义 |
-|---|---|
-| \(\mathrm{Insn}\) | 原始指令集合 |
-| \(\mathrm{Predicate}\) | 谓词集合，具体元素与解释待定 |
-| \(\mathrm{Expr}\) | 寄存器关系标记集合 |
-| \(\mathrm{Inst}_{\mathrm{next}}\) | 后继方向与目标节点引用，第 13 节定义 |
-| \(\mathrm{Reg}_{k,w}\)、\(\mathrm{Reg}_w\) | 指定类型、位宽的寄存器集合；指定宽度的全部寄存器集合 |
-| \(\mathrm{Const}_w\) | w 位常元集合 |
-| \(\mathrm{Var}_w\) | w 位变元集合 |
-| \(\mathrm{Term}_w\) | w 位符号项集合 |
-| \(\mathrm{Op}_{(w_1,\ldots,w_n)\to w}\) | 指定输入、输出位宽的形式运算符集合 |
-| \(\mathrm{Rel}_w\) | w 位值上的二元关系符号集合 |
-
-这些名称分别在后文定义。全文不另用其他名称指代同一集合。
-
-### 1.3 元素与参数记号
-
-| 记号 | 含义与取值 |
-|---|---|
-| \(i\in\mathrm{Insn}\) | 一条指令，i 不作为数字索引或立即数 |
-| \(p\in\mathrm{Predicate}\) | 一个谓词，p 不表示 PC 值 |
-| \(e\in\mathrm{Expr}\) | 一个寄存器关系标记 |
-| \(r_w\in\mathrm{Reg}_w\) | 一个 w 位寄存器标记 |
-| \(t_w\in\mathrm{Term}_w\) | 一个 w 位符号项 |
-| \(w\in W=\{32,64\}\) | 寄存器与符号项的位宽 |
-| \(v,q\in\mathbb N_{>0}\) | 数值辅助函数的输入位宽、选定运算或截取位宽 |
-| \(a,b,c\) | 位向量的数值；每个公式另行给出所属的 \(\mathbb B_q\) |
-| \(\alpha\) | 寄存器标识，属于对应类型的 \(\mathcal I_k\) |
-| \(\xi\) | 变元名称，属于对应位宽的 \(\Xi_w\) |
-| \(f\) | 形式运算符 |
-| \(\widehat f\) | f 对应的数值函数 |
-| \(f^\star\) | f 对符号项的求解后应用 |
-| \(G\)、\(G^\star\) | 已命名数值函数及其符号提升，如 ADD、Z |
-| \(\bowtie\in\mathrm{Rel}_w\) | 一个关系符号 |
-| \(\widehat{\bowtie}\) | 关系符号的数值解释 |
-| \(j\) | 序列、函数参数或位位置的数字索引 |
-| \(n\ge1\) | 运算符的参数个数 |
-| \(m\in\mathbb N\) | 有限序列长度 |
-| \(\varphi\) | 一个数学命题，用于指示函数 \(\mathbf1[\varphi]\) |
-
-PC、SP 是寄存器标识。书写 w 位 PC 的数值与符号项时，分别使用 \(\pi\in\mathbb B_w\) 与 \(t_\pi\in\mathrm{Term}_w\)。具体指令中的已解码立即数、偏移使用 \(\iota,\delta\)，不占用 i。
-
-## 2. 输入、输出与执行历史
-
-### 2.1 原始指令
-
-令指令编码宽度集合为
+对正整数 \(q\)，定义位向量的非负整数表示：
 
 \[
-W_{\mathrm{Insn}}=\{16,32,64\}.
+\mathbb B_q=\{0,1,\ldots,2^q-1\},
+\qquad
+M_q(z)=z\bmod 2^q\quad(z\in\mathbb Z).
 \]
 
-对正整数 q，令
+余数总取 \(\mathbb B_q\) 中的代表。有符号与无符号解释分别为
 
 \[
-\mathbb B_q=\{0,1,\ldots,2^q-1\}.
+u_q(a)=a,
+\qquad
+s_q(a)=
+\begin{cases}
+a,&a<2^{q-1},\\
+a-2^q,&a\ge 2^{q-1}.
+\end{cases}
 \]
 
-定义
+寄存器与符号项的位宽集合为 \(W=\{32,64\}\)。辅助数值函数可使用其他正整数位宽，但不因此增加寄存器或符号项的类别。
+
+全文以 \(i\) 表示指令，\(p\) 表示谓词，\(e\) 表示寄存器关系，\(r\) 表示寄存器标记，\(t\) 表示符号项。\(j\) 表示位置或序列索引，\(\iota,\delta\) 表示立即数或偏移，\(\pi,t_\pi\) 分别表示程序计数器的数值与符号项。
+
+**引理 1（模归一化）。** 对任意整数 \(z,k\)，有
 
 \[
-\mathrm{Insn}=
-\bigsqcup_{w\in W_{\mathrm{Insn}}}
-\bigl(\{w\}\times\mathbb B_w\bigr).
+M_q(M_q(z))=M_q(z),
+\qquad M_q(z+k2^q)=M_q(z).
 \]
 
-一条指令携带编码位宽与对应位模式。这里的 \(W_{\mathrm{Insn}}\) 与寄存器位宽集合 W 是两个不同集合。
+**证明。** 两个等式的左右两侧属于同一模 \(2^q\) 的剩余类，且都取该类唯一的非负代表。\(\square\)
 
-输入是原始指令的有限序列：
+## 2. 原始指令与执行历史
+
+### 2.1 输入
+
+令原始指令编码宽度集合为 \(W_{\mathrm{Insn}}=\{16,32,64\}\)，定义
 
 \[
+\mathrm{Insn}
+=\bigsqcup_{w\in W_{\mathrm{Insn}}}
+\bigl(\{w\}\times\mathbb B_w\bigr),
+\qquad
 \mathbf I=(i_0,\ldots,i_{m-1})\in\mathrm{Insn}^\ast.
 \]
 
-每个 \(i_j\) 是一条指令，j 才是序列位置。
+原始指令携带编码位宽及位模式。其语义解释可使用已解码指令对象；二者不能与序列位置混同。指令编码宽度与寄存器位宽是不同的概念。
 
-### 2.2 历史项与输出集合
+### 2.2 历史与观察
 
-一项历史记录写作
+设 \(\mathrm{Predicate}\) 为观察谓词集合。其完整定义作为模型参数保留；在比较两种架构的行为前，还需指定观察的选取与解释。
+
+一项历史记录属于
 
 \[
-(i,\mathcal P,\mathcal E,\mathcal N)
-\in
-\mathrm{Insn}
-\times\mathscr F(\mathrm{Predicate})
+\mathrm{Insn}\times\mathscr F(\mathrm{Predicate})
 \times\mathscr F(\mathrm{Expr})
 \times\mathscr F(\mathrm{Inst}_{\mathrm{next}}).
 \]
 
-其中 \(\mathcal P\) 是该项的谓词有限集合，\(\mathcal E\) 是 Expr 有限集合，\(\mathcal N\) 是后继信息有限集合。在第 17 节的路径投影中，\(\mathcal P,\mathcal E\) 采用该指令执行后的状态快照，因而也保留最后一条返回指令产生的信息。执行节点则采用指令执行前的快照；两种记录的时刻明确区分。
+四个分量依次为原始指令、谓词集合、寄存器关系集合和后继信息集合。后继信息在第 13 节定义。
 
-一条执行历史 h 是这些历史项组成的有限序列。成功输出是多条历史组成的有限集合：
+一条历史是这些记录组成的有限序列，成功输出为有限历史集合：
 
 \[
 \boxed{
-\mathcal H\in
-\mathscr F\!\left(
-\left(
-\mathrm{Insn}
-\times\mathscr F(\mathrm{Predicate})
+\mathcal H\in\mathscr F\!\left(
+\left(\mathrm{Insn}\times\mathscr F(\mathrm{Predicate})
 \times\mathscr F(\mathrm{Expr})
-\times\mathscr F(\mathrm{Inst}_{\mathrm{next}})
-\right)^\ast
+\times\mathscr F(\mathrm{Inst}_{\mathrm{next}})\right)^\ast
 \right).
 }
 \]
 
-历史内部保留执行顺序；各项中的三个集合及多条历史组成的输出集合使用集合语义。后继信息采用弱链表形式，是历史项携带状态的一部分，不要求每项包含完整机器状态。
+序列保留执行顺序，集合不引入顺序。第 17 节的投影采用每条指令执行后的关系与谓词，因而保留最后一次返回观察；第 13 节的普通执行节点采用执行前快照。
 
-Predicate 承载最终语义一致比较所选取的谓词信息。Expr 记录中间寄存器关系；不同架构的这些中间标记允许不一致。具体谓词及最终选取范围继续待定。
+Expr 描述中间寄存器关系。不同架构可以产生不同 Expr；这些中间关系的相等不是跨架构行为等价性的定义。
 
-## 3. 三类寄存器、六种变体
+## 3. 寄存器标记
 
 令
 
@@ -138,34 +104,34 @@ K=\{\mathrm{Real},\mathrm{Stack},\mathrm{Map}\},
 \qquad W=\{32,64\}.
 \]
 
-Real、Stack、Map 分别表示真实寄存器、虚拟栈寄存器、虚拟 Map 寄存器。给定各自的标识集合 \(\mathcal I_k\)，定义
+给定各类标识集合 \(\mathcal I_k\)，定义
 
 \[
-\mathrm{Reg}_{k,w}
-=
-\{(k,w,\alpha):\alpha\in\mathcal I_k\},
+\mathrm{Reg}_{k,w}=\{(k,w,\alpha):\alpha\in\mathcal I_k\},
 \qquad
-\mathrm{Reg}_w=
-\bigsqcup_{k\in K}\mathrm{Reg}_{k,w}.
+\mathrm{Reg}_w=\bigsqcup_{k\in K}\mathrm{Reg}_{k,w}.
 \]
 
-以下构造名称是这些三元组的统一书写形式：
+Real 表示真实寄存器，Stack、Map 表示虚拟栈单元与虚拟 Map 单元。统一使用以下名称：
 
-| 类型 | 32 位标记 | 64 位标记 |
-|---|---|---|
-| 真实寄存器 | \(\mathrm{Real}_{32}(\alpha)\) | \(\mathrm{Real}_{64}(\alpha)\) |
-| 虚拟栈寄存器 | \(\mathrm{SW}(\alpha)\) | \(\mathrm{SR}(\alpha)\) |
-| 虚拟 Map 寄存器 | \(\mathrm{Map}_{32}(\alpha)\) | \(\mathrm{Map}_{64}(\alpha)\) |
+\[
+\begin{aligned}
+\mathrm{Real}_{32}(\alpha)&=(\mathrm{Real},32,\alpha),&
+\mathrm{Real}_{64}(\alpha)&=(\mathrm{Real},64,\alpha),\\
+\mathrm{SW}(\alpha)&=(\mathrm{Stack},32,\alpha),&
+\mathrm{SR}(\alpha)&=(\mathrm{Stack},64,\alpha),\\
+\mathrm{Map}_{32}(\alpha)&=(\mathrm{Map},32,\alpha),&
+\mathrm{Map}_{64}(\alpha)&=(\mathrm{Map},64,\alpha).
+\end{aligned}
+\]
 
-例如，\(\mathrm{SW}(\alpha)\) 就是 \((\mathrm{Stack},32,\alpha)\)，\(\mathrm{SR}(\alpha)\) 就是 \((\mathrm{Stack},64,\alpha)\)。
-
-PC、SP 和通用寄存器名称均属于 \(\mathcal I_{\mathrm{Real}}\)。这里不区分 RV32 与 eBPF，也不增加架构寄存器类别。具体指令中的寄存器编号及别名由对应指令定义解释。
+PC、SP 与通用寄存器名称属于真实寄存器标识。不同别名若指向同一寄存器，就采用同一个标记。虚拟标记表示已经绑定的单元；单凭地址表达式不能推出绑定存在、唯一或访问有效。
 
 ## 4. 常元、变元与符号项
 
-### 4.1 常元与变元
+### 4.1 叶子与运算符
 
-对 \(w\in W\)，给定位宽对应的变元名称集合 \(\Xi_w\)，定义
+对 \(w\in W\)，给定变元名称集合 \(\Xi_w\)，定义
 
 \[
 \mathrm{Const}_w=\{C_w(c):c\in\mathbb B_w\},
@@ -173,77 +139,52 @@ PC、SP 和通用寄存器名称均属于 \(\mathcal I_{\mathrm{Real}}\)。这�
 \mathrm{Var}_w=\{V_w(\xi):\xi\in\Xi_w\}.
 \]
 
-\(C_w(c)\) 表示确定的 w 位值。\(V_w(\xi)\) 表示一个固定的符号值名称，不是对可变寄存器的引用。同名但位宽不同的变元仍是不同元素。
+常元表示确定值，变元表示固定的符号输入。同名但位宽不同的变元是不同元素。变元不引用执行过程中变化的寄存器；未定义寄存器也不自动对应一个新变元。
 
-没有定义的寄存器不记录为某个特殊变元或常元。指令所需源项没有定义时，解析拒绝。
-
-### 4.2 运算符与值函数
-
-对 \(w_1,\ldots,w_n,w\in W\)，给定
+对 \(n\in\mathbb N_{>0}\) 及 \(w_1,\ldots,w_n,w\in W\)，形式运算符及其数值解释满足
 
 \[
 f\in\mathrm{Op}_{(w_1,\ldots,w_n)\to w},
 \qquad
-\widehat f:
-\prod_{j=1}^{n}\mathbb B_{w_j}\longrightarrow\mathbb B_w.
+\widehat f:\prod_{j=1}^{n}\mathbb B_{w_j}\to\mathbb B_w.
 \]
 
-f 是形式符号；\(\widehat f\) 是确定且全定义的数值函数。已解码立即数、操作宽度及已明确的字节序可以作为运算符的固定参数。
+**假设 A（纯数值解释）。** 本文讨论的每个 \(\widehat f\) 都是确定的全函数。指令立即数、运算宽度或固定字节序可作为运算符参数。未给定的外部资源或调用结果不满足这一假设，不能仅凭常元实参被解释成确定返回值。
 
-已经命名的数值函数 G，对应形式符号记作 \(f_G\)，满足 \(\widehat{f_G}=G\)。这里不会因为外部调用的参数都是常元，就假定其返回值是可由这些参数决定的纯数值函数。
+### 4.2 有限项与类型
 
-### 4.3 符号项
-
-定义 \(\mathrm{Term}_w\) 为下列有限构造项的集合：
+\(\mathrm{Term}_w\) 是由以下规则生成的有限项集合：
 
 \[
-t_w::=
-C_w(c)
-\mid V_w(\xi)
-\mid f(t_{w_1},\ldots,t_{w_n}).
+t_w::=C_w(c)\mid V_w(\xi)\mid f(t_{w_1},\ldots,t_{w_n}).
 \]
 
-每个子项的宽度与 f 的输入签名一致。常元、变元是两类叶子，函数应用保存它们之间的运算结构。
-
-辅助数值函数可处理 8、16 位等数值；这不增加 Reg 或 Term 的位宽种类。只有输入、输出签名均落在 W 内的函数才直接提升为 Term 运算符；涉及其他宽度的数值步骤可组成输出为 32/64 位的指令值函数。
+函数应用必须与输入、输出位宽签名一致。常元、变元是叶子，应用记录运算结构。8 位或 16 位的辅助数值步骤可合成为输出为 32 位或 64 位的运算符，无需引入新的 Term 位宽。
 
 ## 5. 求值与 solve
 
 ### 5.1 变元出现集合
 
-令全部变元的集合为
-
-\[
-\mathrm{Var}=\bigsqcup_{w\in W}\mathrm{Var}_w.
-\]
-
-定义变元出现集合函数
-
-\[
-FV:\bigsqcup_{w\in W}\mathrm{Term}_w
-\longrightarrow\mathscr F(\mathrm{Var})
-\]
-
-及其递归规则：
+令 \(\mathrm{Var}=\bigsqcup_{w\in W}\mathrm{Var}_w\)，定义
 
 \[
 FV(C_w(c))=\varnothing,
+\qquad FV(V_w(\xi))=\{V_w(\xi)\},
 \qquad
-FV(V_w(\xi))=\{V_w(\xi)\},
-\]
-
-\[
 FV(f(t_1,\ldots,t_n))=\bigcup_{j=1}^{n}FV(t_j).
 \]
 
-### 5.2 无变元项的求值
+**引理 2（有限性）。** 每个项的 \(FV\) 都是有限集合。
 
-对 \(w\in W\)，定义
+**证明。** 对项结构归纳。常元对应空集，变元对应单元素集合；有限个子项的有限集合之并仍有限。\(\square\)
+
+### 5.2 闭项求值
+
+项 \(t\) 满足 \(FV(t)=\varnothing\) 时称为闭项。定义
 
 \[
 \operatorname{eval}_w:
-\{t\in\mathrm{Term}_w:FV(t)=\varnothing\}
-\longrightarrow\mathbb B_w,
+\{t\in\mathrm{Term}_w:FV(t)=\varnothing\}\to\mathbb B_w,
 \]
 
 \[
@@ -252,98 +193,60 @@ FV(f(t_1,\ldots,t_n))=\bigcup_{j=1}^{n}FV(t_j).
 
 \[
 \operatorname{eval}_w(f(t_1,\ldots,t_n))
-=
-\widehat f\bigl(
-\operatorname{eval}_{w_1}(t_1),\ldots,
-\operatorname{eval}_{w_n}(t_n)
-\bigr).
+=\widehat f\bigl(\operatorname{eval}_{w_1}(t_1),\ldots,
+\operatorname{eval}_{w_n}(t_n)\bigr).
 \]
 
-### 5.3 solve 与符号提升
+**命题 3（闭项求值良定义）。** 在假设 A 下，每个闭项具有唯一的同位宽求值结果。
 
-\[
-\operatorname{solve}_w:\mathrm{Term}_w\longrightarrow\mathrm{Term}_w,
-\]
+**证明。** 闭项中不出现变元，故其叶子均为常元。对项结构归纳，子项的结果唯一且满足输入位宽；\(\widehat f\) 的确定性、全定义性与输出签名给出唯一的同位宽结果。项结构有限，递归求值结束。\(\square\)
+
+### 5.3 整项求解
+
+定义
 
 \[
 \boxed{
 \operatorname{solve}_w(t)=
 \begin{cases}
-C_w(\operatorname{eval}_w(t))&FV(t)=\varnothing,\\
-t&FV(t)\ne\varnothing.
+C_w(\operatorname{eval}_w(t)),&FV(t)=\varnothing,\\
+t,&FV(t)\ne\varnothing.
 \end{cases}}
 \]
 
-定义
+符号提升为
 
 \[
 f^\star(t_1,\ldots,t_n)
-=
-\operatorname{solve}_w(f(t_1,\ldots,t_n)).
+=\operatorname{solve}_w(f(t_1,\ldots,t_n)).
 \]
 
-对已命名数值函数 G，统一记
+已命名数值函数 \(G\) 的形式运算符记为 \(f_G\)，令 \(G^\star=f_G^\star\)。数值函数与符号提升因而分别记作 ADD、\(\mathrm{ADD}^\star\) 等。
+
+solve 只折叠整个闭项。有变元时不折叠其中的闭子项，也不使用相消等代数恒等式。所有源项表示执行前的值；多目标更新使用同一组源项，随后覆写寄存器不改变已经构成的项。
+
+## 6. Expr 与关系解释
+
+### 6.1 同位宽关系
+
+令 \(\mathbb T=\{\mathsf{true},\mathsf{false}\}\)。每个 \(\bowtie\in\mathrm{Rel}_w\) 具有解释
 
 \[
-G^\star=f_G^\star.
-\]
-
-因此 ADD、Z 等名称用于数值函数；\(\mathrm{ADD}^\star\)、\(Z^\star\) 表示对应符号项的构造与 solve。输入、输出宽度由函数签名确定。
-
-含有任何变元时，整个项保持原样，不进行局部常元折叠。例如含变元的 \(f(t_1,t_2)\) 即使某个子项不含变元，solve 仍直接返回整个原项，也不应用相消等代数恒等式。
-
-所有源项表示指令发生前的值。多目标指令的输出使用同一组源项，目标寄存器随后更新不会改变已有项。
-
-## 6. Expr 与关系符号
-
-### 6.1 Expr 的结构
-
-令 \(\mathbb T=\{\mathsf{true},\mathsf{false}\}\)。每个关系符号 \(\bowtie\in\mathrm{Rel}_w\) 有解释
-
-\[
-\widehat{\bowtie}:\mathbb B_w\times\mathbb B_w\longrightarrow\mathbb T.
+\widehat{\bowtie}:\mathbb B_w\times\mathbb B_w\to\mathbb T.
 \]
 
 定义
 
 \[
 \boxed{
-\mathrm{Expr}
-=
-\bigsqcup_{w\in W}
-\left(\mathrm{Reg}_w\times\mathrm{Rel}_w\times\mathrm{Term}_w\right).
+\mathrm{Expr}=\bigsqcup_{w\in W}
+\bigl(\mathrm{Reg}_w\times\mathrm{Rel}_w\times\mathrm{Term}_w\bigr).
 }
 \]
 
-元素记作
+\(e=(r_w,\bowtie,t_w)\) 简写为 \(r_w\bowtie t_w\)。普通等式给出完整值定义；其他关系给出约束。Expr 的关系标记不自动成为 Predicate。
 
-\[
-e=(r_w,\bowtie,t_w),
-\qquad
-\text{通常书写为 }r_w\bowtie t_w.
-\]
-
-左侧始终是寄存器标记，右侧始终是同位宽符号项。普通等式 \(r_w=t_w\) 可用于寄存器定义，其他关系用于条件或约束；关系标记本身不自动成为 Predicate。
-
-### 6.2 等式与有符号、无符号比较
-
-对正整数 q 和整数 z，定义
-
-\[
-M_q(z)=z\bmod2^q,
-\]
-
-其中余数取 \(\mathbb B_q\) 中的非负代表。对 \(a\in\mathbb B_q\)，定义
-
-\[
-u_q(a)=a,
-\qquad
-s_q(a)=
-\begin{cases}
-a&a<2^{q-1},\\
-a-2^q&a\ge2^{q-1}.
-\end{cases}
-\]
+### 6.2 比较与截取比较
 
 关系符号包括
 
@@ -351,71 +254,55 @@ a-2^q&a\ge2^{q-1}.
 =,\ne,<_{u},\le_u,>_u,\ge_u,<_{s},\le_s,>_s,\ge_s.
 \]
 
-令 \(\diamond\in\{=,\ne,<,\le,>,\ge\}\) 表示通常整数关系。对 \(a,b\in\mathbb B_w\)，有
+对整数关系 \(\diamond\in\{=,\ne,<,\le,>,\ge\}\)，规定
 
 \[
-\widehat{\diamond_u}(a,b)
-\iff u_w(a)\diamond u_w(b),
+\widehat{\diamond_u}(a,b)\iff u_w(a)\diamond u_w(b),
 \qquad
-\widehat{\diamond_s}(a,b)
-\iff s_w(a)\diamond s_w(b).
+\widehat{\diamond_s}(a,b)\iff s_w(a)\diamond s_w(b).
 \]
 
-等式与不等式的 u/s 解释相同，省略该下标。
-
-### 6.3 选定位宽的比较与位测试
-
-对 \(1\le q\le w\)，定义
+等式与非等式无需区分有符号、无符号解释。对 \(1\le q\le w\)，低 \(q\) 位比较定义为
 
 \[
 \widehat{\diamond_u^{[q]}}(a,b)
 \iff M_q(a)\diamond M_q(b),
-\]
-
-\[
+\qquad
 \widehat{\diamond_s^{[q]}}(a,b)
 \iff s_q(M_q(a))\diamond s_q(M_q(b)).
 \]
 
-q=w 时可以省略上标。等式、非等式仍省略 u/s，写作 \(=^{[q]}\)、\(\ne^{[q]}\)。这样可以在同一个 64 位 Reg 标记上表达低 32 位比较。
+\(q=w\) 时省略上标；低位等式记作 \(=^{[q]}\)、\(\ne^{[q]}\)。
 
-位与函数 AND 的数值定义见第 7 节。定义
+位测试与补关系定义为
 
 \[
 \widehat{\mathrm{BITSNZ}^{[q]}}(a,b)
-\iff \mathrm{AND}_q(M_q(a),M_q(b))\ne0.
+\iff\mathrm{AND}_q(M_q(a),M_q(b))\ne0,
 \]
 
-BITSZ 是其补关系。一般关系的补符号记作 \(\overline{\bowtie}\)，其解释为
-
 \[
+\widehat{\mathrm{BITSZ}^{[q]}}(a,b)
+\iff\mathrm{AND}_q(M_q(a),M_q(b))=0,
+\qquad
 \widehat{\overline{\bowtie}}(a,b)
-=
-\neg\widehat{\bowtie}(a,b).
+=\neg\widehat{\bowtie}(a,b).
 \]
 
-例如 \(\overline{<_s}=\ge_s\)。这里 \(\neg\) 表示布尔否定。
+例如 \(\overline{<_s}=\ge_s\)。对确定的 \(a,b\)，某关系与其补关系恰有一个成立。
 
-### 6.4 Expr 的 solve
-
-定义
-
-\[
-\operatorname{solve}_{\mathrm{Expr}}:
-\mathrm{Expr}\longrightarrow\mathrm{Expr},
-\]
+### 6.3 关系的求解
 
 \[
 \operatorname{solve}_{\mathrm{Expr}}(r_w,\bowtie,t_w)
-=
-(r_w,\bowtie,\operatorname{solve}_w(t_w)).
+=(r_w,\bowtie,\operatorname{solve}_w(t_w)).
 \]
 
-它仅处理右侧项，不通过左侧 Reg 标记自行判定关系真假。
+这个操作只求解右侧项。没有寄存器值解释时，不能仅凭左侧标记判定关系真假。
 
 ## 7. 共同数值函数
 
-本节命名的函数均为数值函数 G；其符号提升 \(G^\star\) 按第 5 节定义。凡未另行说明，下列 a、b 属于 \(\mathbb B_w\)，w 属于 W。
+本节给出纯数值函数的定义。其符号提升 \(G^\star\) 按第 5 节定义。未另行说明时，数值参数 a、b 属于 \(\mathbb B_w\)，w 属于 W。
 
 ### 7.1 算术
 
@@ -518,7 +405,7 @@ LTU、LTS 的签名为 \(\mathbb B_w^2\to\mathbb B_w\)：
 \mathrm{LOW}_q^{(v)}(a)=M_q(a).
 \]
 
-对位起点 \(o\ge0\)、位段长度 \(\ell\ge1\)，满足 \(o+\ell\le v\)，定义
+对位起点 \(o\in\mathbb N\)、位段长度 \(\ell\in\mathbb N_{>0}\)，满足 \(o+\ell\le v\)，定义
 
 \[
 \mathrm{EXTRACT}_{o,\ell}^{(v)}:
@@ -528,7 +415,7 @@ LTU、LTS 的签名为 \(\mathbb B_w^2\to\mathbb B_w\)：
 M_\ell\left(\left\lfloor a/2^o\right\rfloor\right).
 \]
 
-对输出位宽 w 与截取宽度 q，满足 \(q\le\min(v,w)\)，定义
+对 \(v,q\in\mathbb N_{>0}\)、\(w\in W\)，满足 \(q\le\min(v,w)\)，定义
 
 \[
 Z_{q\to w}^{(v)},S_{q\to w}^{(v)}:
@@ -583,105 +470,60 @@ TQ 是向零截断的商，TR 是对应余数。\(|x|\) 表示绝对值。除零
 
 这里只使用低 q 位，按 8 位字节反转其顺序。输入位宽明确时，可省略上标 (v)；写回目标宽度所需的扩展由具体指令值函数给出。
 
-## 8. 虚拟寄存器关系直接写入 Expr
+## 8. 虚拟单元与真实寄存器的关系
 
-本节直接使用第 3 节的六种 Reg 标记，不增加虚拟传值函数或布局描述。
+### 8.1 同位宽传值
 
-### 8.1 同位宽关系
+若虚拟单元 \(r_v\in\mathrm{Reg}_w\) 已有完整等式 \(r_v=t\)，读取该单元到真实寄存器 \(r_d\) 的局部关系为 \(r_d=t\)。反向写入则使用源真实寄存器的旧项，产生 \(r_v=t_s\)。
 
-下表每行的 t 属于对应的 \(\mathrm{Term}_w\)。\(\alpha\) 属于该虚拟寄存器的标识集合；\(\gamma\in\mathcal I_{\mathrm{Real}}\) 是真实寄存器标识。
+目标必须是实际绑定的一个单元。Stack 与 Map 标记不因公式相同而成为同一目标；源项也不是对随后可变寄存器的引用。
 
-| 位宽 | 已有虚拟寄存器 Expr | 真实寄存器读取时生成的 Expr |
-|---|---|---|
-| 32 | \(\mathrm{SW}(\alpha)=t_{32}\) | \(\mathrm{Real}_{32}(\gamma)=t_{32}\) |
-| 32 | \(\mathrm{Map}_{32}(\alpha)=t_{32}\) | \(\mathrm{Real}_{32}(\gamma)=t_{32}\) |
-| 64 | \(\mathrm{SR}(\alpha)=t_{64}\) | \(\mathrm{Real}_{64}(\gamma)=t_{64}\) |
-| 64 | \(\mathrm{Map}_{64}(\alpha)=t_{64}\) | \(\mathrm{Real}_{64}(\gamma)=t_{64}\) |
+### 8.2 宽度转换与局部约束
 
-反向写入时，已有真实寄存器 Expr 的右侧项直接用于对应虚拟 Reg 标记：
-
-| 位宽 | 已有真实寄存器 Expr | 写入时生成的虚拟寄存器 Expr |
-|---|---|---|
-| 32 | \(\mathrm{Real}_{32}(\gamma)=t_{32}\) | \(\mathrm{SW}(\alpha)=t_{32}\) 或 \(\mathrm{Map}_{32}(\alpha)=t_{32}\) |
-| 64 | \(\mathrm{Real}_{64}(\gamma)=t_{64}\) | \(\mathrm{SR}(\alpha)=t_{64}\) 或 \(\mathrm{Map}_{64}(\alpha)=t_{64}\) |
-
-“或”表示采用该指令实际对应的虚拟 Reg 标记，不同时向两个不同目标添加标记。右侧是发生前已经存在的符号项，不是对随后可被修改的寄存器名称进行引用。
-
-### 8.2 宽度运算与局部关系
-
-若指令需要扩展，使用第 7 节的数值函数提升。例如已有 \(\mathrm{SW}(\alpha)=t_{32}\) 时，可按指令要求记录
+对 \(\mathrm{SW}(\alpha)=t_{32}\)，零扩展读取到 64 位真实寄存器可写为
 
 \[
-\mathrm{Real}_{64}(\gamma)
-=
-Z_{32\to64}^{(32),\star}(t_{32}).
+\mathrm{Real}_{64}(\gamma)=Z_{32\to64}^{(32),\star}(t_{32}).
 \]
 
-只约束低 q 位时，使用第 6 节的关系。例如 \(t_{32}\in\mathrm{Term}_{32}\)：
+局部约束 \(\mathrm{SW}(\alpha)=^{[8]}t_{32}\) 只确定低 8 位。
 
-\[
-\mathrm{SW}(\alpha)=^{[8]}t_{32}.
-\]
+**命题 4（局部关系不确定完整值）。** 固定低 \(q\) 位且 \(q<w\) 时，恰有 \(2^{w-q}\) 个 \(w\) 位值满足该约束。
 
-这只约束对应的低 8 位，不是 SW 整个 32 位值的定义。本文不从局部关系自动补出其余位的值。
+**证明。** 设固定低位为 \(b\in\mathbb B_q\)。全部解恰为 \(a=b+2^q h\)，其中 \(h\in\mathbb B_{w-q}\)。这些值两两不同，并穷尽所有满足 \(M_q(a)=b\) 的值。\(\square\)
 
-栈或 Map 操作的 Expr 记录寄存器关系；其 Predicate 记录该操作对应的可观察语义，具体形式待定。这里没有额外的 READ、LOAD、STORE 传值层。
+因此，局部等式不能替代完整值等式。局部写入如何保留其他位，须由具体指令的值函数规定。
 
-## 9. RV32 指令实例的分类
+## 9. 按局部数学效果分类
 
-分类轴是 Expr、Predicate 的标记效果。后继指令的排列由 \(\mathrm{Inst}_{\mathrm{next}}\) 承载。
+设某个指令实例产生局部效果 \((\mathcal E_i,\mathcal P_i)\)。可区分：
 
-| 类别 | Expr 效果 | Predicate 效果 | 典型情况 |
-|---|---|---|---|
-| 仅更新 Expr | 添加或替换寄存器定义 | 无新增 p | 中间 ALU 运算、常元赋值、链接寄存器赋值 |
-| 仅产生 Predicate | 无新增寄存器定义 | 添加条件或观察 p | 条件分支、程序返回时观察已有返回项 |
-| Expr 与 Predicate | 更新真实或虚拟 Reg 的关系 | 同时描述对应语义 | 栈或 Map 读写；具有返回值或寄存器更新的外部调用 |
-| 两者均无新增 | 无新增 e | 无新增 p | 不写链接寄存器的直接跳转；通常后继推进之外的 NOP、当前观察范围内的 FENCE |
-| 拒绝处理 | 无成功输出 | 无成功输出 | 未定义输入、异常、非法编码、不支持的行为 |
+- 仅产生 Expr：寄存器赋值、算术结果或链接值。
+- 仅产生 Predicate：条件观察或对已有返回项的观察。
+- 同时产生二者：值关系与访问、调用等观察共同发生。
+- 二者均为空：只改变后继位置的跳转或观察范围外的操作。
+- 局部规则无定义：不产生成功候选。
 
-表中的分类保留附件所采用的数据与观察标记口径，通常后继推进本身不作为分类轴。PC 仍是第 3 节定义的真实 Reg 标记；若某指令实例明确记录一个 PC 值 Expr，则按该实例实际增加的 Expr 归类。
+分类针对指令实例及选定观察范围。它不由助记符唯一决定：带链接值的跳转与无链接跳转不同；普通间接跳转与已绑定的最外层返回也不同。
 
-第三类的职责分别为：
+后继位置不作为额外语义状态。若某实例明确产生 PC 等式，就按实际局部关系分类。栈和 Map 的访问观察形式尚未完整定义；数值传值公式不能代替这些观察。
 
-| 操作 | Expr 的职责 | Predicate 的职责 |
-|---|---|---|
-| 读取 SW、SR 或 Map | 为目标 Real 建立相应关系标记 | 表达本次虚拟寄存器读取的语义 |
-| 写入 SW、SR 或 Map | 更新对应虚拟 Reg 的关系标记 | 表达本次虚拟寄存器写入的语义 |
-
-因此，栈或 Map 读写归入 Expr 与 Predicate 类别。它们的数值关系直接写入 Expr，具体观察谓词仍待定。
-
-分类按指令实例及已经识别的语义确定。例如：
-
-- 写入链接值的内部 JAL，归入仅更新 Expr。
-- 不写入链接值的直接 JAL，归入两者均无新增。
-- 被识别为最外层返回的 JALR，需要产生返回 p。
-- 若某个实例明确额外记录条件或 PC 的 Expr，则据其实际 Expr、Predicate 效果确定类别。
-
-## 10. solve 的性质与解释
+## 10. solve 的基本性质
 
 ### 10.1 幂等性
 
-对任意 \(w\in W\)、\(t\in\mathrm{Term}_w\)：
+**命题 5。** 对所有 \(t\in\mathrm{Term}_w\)，
 
 \[
 \operatorname{solve}_w(\operatorname{solve}_w(t))
-=
-\operatorname{solve}_w(t).
+=\operatorname{solve}_w(t).
 \]
 
-证明：若 \(FV(t)=\varnothing\)，第一次求解得到常元，第二次得到同一常元；若 \(FV(t)\ne\varnothing\)，两次均返回原项。
+**证明。** 若 \(FV(t)=\varnothing\)，第一次得到常元 \(C_w(c)\)，其求值仍为 \(c\)，第二次不变。若 \(FV(t)\ne\varnothing\)，两次都返回 \(t\)。\(\square\)
 
-### 10.2 变元解释与项解释
+### 10.2 解释保持性
 
-给定变元赋值解释族
-
-\[
-\nu=(\nu_w)_{w\in W},
-\qquad
-\nu_w:\mathrm{Var}_w\longrightarrow\mathbb B_w.
-\]
-
-定义
+给定变元赋值族 \(\nu_w:\mathrm{Var}_w\to\mathbb B_w\)，定义
 
 \[
 \llbracket C_w(c)\rrbracket_\nu=c,
@@ -691,116 +533,133 @@ Z_{32\to64}^{(32),\star}(t_{32}).
 
 \[
 \llbracket f(t_1,\ldots,t_n)\rrbracket_\nu
-=
-\widehat f\bigl(
-\llbracket t_1\rrbracket_\nu,\ldots,
-\llbracket t_n\rrbracket_\nu
-\bigr).
+=\widehat f(\llbracket t_1\rrbracket_\nu,\ldots,
+\llbracket t_n\rrbracket_\nu).
 \]
 
-于是对任意 t，有
+**引理 6。** 若 \(FV(t)=\varnothing\)，则
+\(\llbracket t\rrbracket_\nu=\operatorname{eval}_w(t)\)，且结果与 \(\nu\) 无关。
+
+**证明。** 对闭项结构归纳。常元情形直接成立；应用情形对每个子项使用归纳假设，再代入同一个 \(\widehat f\)。\(\square\)
+
+**命题 7。** 对任意项与赋值，
 
 \[
 \llbracket\operatorname{solve}_w(t)\rrbracket_\nu
-=
-\llbracket t\rrbracket_\nu.
+=\llbracket t\rrbracket_\nu.
 \]
 
-证明：无变元时，eval 的递归规则与此解释相同；有变元时，solve 返回原项。
+**证明。** 闭项情形由引理 6 与常元解释得到；非闭项情形由 solve 返回原项得到。\(\square\)
 
-### 10.3 Expr 解释与保持性
+### 10.3 Expr 的解释保持性
 
-给定寄存器值解释族
+给定寄存器赋值族 \(\rho_w:\mathrm{Reg}_w\to\mathbb B_w\)，定义
 
 \[
-\rho=(\rho_w)_{w\in W},
-\qquad
-\rho_w:\mathrm{Reg}_w\longrightarrow\mathbb B_w.
+\llbracket(r_w,\bowtie,t_w)\rrbracket_{\rho,\nu}
+=\widehat{\bowtie}(\rho_w(r_w),\llbracket t_w\rrbracket_\nu).
 \]
 
-对 \(e=(r_w,\bowtie,t_w)\)，定义其关系解释：
-
-\[
-\llbracket e\rrbracket_{\rho,\nu}
-=
-\widehat{\bowtie}\bigl(\rho_w(r_w),\llbracket t_w\rrbracket_\nu\bigr).
-\]
-
-由第 10.2 节得到
+**推论 8。**
 
 \[
 \llbracket\operatorname{solve}_{\mathrm{Expr}}(e)\rrbracket_{\rho,\nu}
-=
-\llbracket e\rrbracket_{\rho,\nu}.
+=\llbracket e\rrbracket_{\rho,\nu}.
 \]
 
-\(\rho\) 与 \(\nu\) 是说明关系含义的数学赋值解释，不是本文件另建的执行状态或状态转移模型。这里保持的是单个 Expr 的关系解释，不是要求两个架构的全部中间 Expr 集合相同。
+**证明。** 左侧寄存器与关系符号不变，右侧解释由命题 7 保持。\(\square\)
 
-## 11. 约定边界
+\(\rho,\nu\) 是关系的数学解释，不是新增的运行状态。此处证明单个关系的解释保持性，不证明两个架构的中间关系集合相同。
 
-指令需要的源项未定义时，解析拒绝；不新增未定义 Reg、Var 或 Term。异常、非法指令和不支持的行为不生成成功结果。
+## 11. 定义域与未决假设
 
-外部调用结果、Map 或程序位置绑定、返回继续位置，由已确定的相应谓词或绑定提供符号项；本文件不从常元实参推导外部资源的返回值。
+指令值规则是部分函数。必需的完整值等式缺失、绑定不唯一、非法指令或模型未包含的行为，均使相应规则无定义。无定义与成功返回空局部集合具有不同含义。
 
-Predicate 的具体定义及同类合并规则、寄存器初态继续待定。第 12—18 节给出节点、路径与控制流展开的当前草案；单指令值函数及合并操作作为该算法使用的局部规则，不在本次补充中重新定义。
+以下问题保留为独立的数学任务：
 
-## 12. 语义状态与更新
+1. 访问和外部调用应生成哪些 Predicate，以及如何解释和合并。
+2. 地址、程序位置与虚拟单元之间的绑定及其唯一性、资源有效性。
+3. 外部调用结果、寄存器失效与调用返回配对。
+4. 两种架构之间的入口对应、观察对应和最终行为等价性。
 
-### 12.1 只有 Expr 和 Predicate 两部分
+后文的结构与终止结论均相对于给定的局部规则成立；它们不消除这些假设。
 
-定义：
+## 12. 语义状态与按键更新
+
+### 12.1 状态
+
+定义
 
 \[
-\boxed{\mathrm{State}=\mathscr F(\mathrm{Expr})\times\mathscr F(\mathrm{Predicate}).}
+\boxed{\mathrm{State}
+=\mathscr F(\mathrm{Expr})\times\mathscr F(\mathrm{Predicate}),
+\qquad \sigma=(\mathcal E,\mathcal P).}
 \]
 
-一个状态写作 \(\sigma=(\mathcal E,\mathcal P)\)。\(\mathcal E\) 是当前有效 Expr；\(\mathcal P\) 是经过同类合并的当前 Predicate。
+\(\mathcal E\) 是当前关系集合，\(\mathcal P\) 是当前观察集合。位置、节点引用、方向和预算是结构信息。既定路径条件或观察若为后续语义所需，须在这两部分中表达。
 
-不另建路径条件集合、寄存器值表或外部调用结果表。后续处理需要使用的语义信息，必须由 Expr 或 Predicate 表达。程序位置、节点引用、后继方向、待处理列表和推理预算是结构或算法控制信息，不是第三部分语义状态。
+Predicate 采用集合语义，不在该分量内部记录重复次数或事件顺序。需要顺序时应由执行路径及逐次快照表达；该选择是否满足最终观察需求，仍取决于 Predicate 的定义。
 
-Predicate 不采用时间序列，也不要求重复保存完全相同的 Predicate。该选择不删除逐次执行的节点快照；各次到达仍由路径保留。
+### 12.2 关系键与覆写
 
-### 12.2 使用已有合并操作
-
-本章使用两项局部操作：
+令
 
 \[
-\operatorname{updateExpr}:\mathscr F(\mathrm{Expr})^2\longrightarrow\mathscr F(\mathrm{Expr}),
+\operatorname{key}(r,\bowtie,t)=(r,\bowtie),
+\qquad K(E)=\{\operatorname{key}(e):e\in E\}.
 \]
 
+关系符号包含低位修饰。集合 \(E\) 有效，当且仅当同键关系唯一：
+
 \[
-\operatorname{mergePredicate}:\mathscr F(\mathrm{Predicate})^2\longrightarrow\mathscr F(\mathrm{Predicate}).
+e,e'\in E\land\operatorname{key}(e)=\operatorname{key}(e')
+\Longrightarrow e=e'.
 \]
 
-updateExpr 按对应指令规则覆写目标寄存器的关系，不把普通集合并集当作目标覆写。局部位宽关系仍遵守第 8.2 节，不自行补出未定义部分。
-
-mergePredicate 表示 Predicate 同类合并。这里不预先认定它是集合并集或简单覆写，不定义其交换性、幂等性等引理。若某类操作尚没有已确定的合并规则，局部处理应报告不支持，不能自行选择合并含义。
-
-当前 Lean 条件类定义为 `Predicate.cmp (rel : Rel) (lhs rhs : Term)`。
-源 Terms 在检查时读取并固定；32 位比较先取模 `2^32`，有符号关系按二进制补码解释。
-Taken 保存分支关系，NotTaken 保存 `rel.compl`，不新增 Expr。
-`mergePredicate` 的条件类规则为：空局部 Pi 保持 P；依局部顺序追加结构上尚未存在的条件。
-互补条件都保留，不把符号未知或互补条件判为不可行；各后继仍保存独立节点快照。
-返回观察定义为 `Predicate.ret (value : Term)`，仅在绑定到外层返回地址的 Exit 候选中捕获执行后的 a0/x10 项。cmp 与 ret 均按结构相等去重并追加；ret 的 `eval?` 返回 none，因为它是观察而非布尔条件。
-JSON 条件字段为 `kind`, `rel`, `width`, `lhs`, `rhs`；返回观察为 `{"kind":"ret","term":"..."}`。不保留 tag、op 或 negated 冗余字段。
-`rel` 直接保存实际关系，例如 NotTaken 对应 `geu`。
-
-
-给定本次产生的 \(\mathcal E_i,\mathcal P_i\)，更新为：
+对有效集合定义
 
 \[
-\boxed{\sigma'=
+\boxed{
+\operatorname{updateExpr}(E,F)=E\times F
+=\{e\in E:\operatorname{key}(e)\notin K(F)\}\cup F.
+}
+\]
+
+此处 \(\times\) 表示覆写，其余类型签名中的 \(\times\) 表示笛卡尔积。
+
+**命题 9（键唯一性保持）。** 有效的 \(E,F\) 覆写后仍有效；新集合在 \(K(F)\) 上取 \(F\) 的值，在其余旧键上取 \(E\) 的值。
+
+**证明。** 旧集合中属于 \(K(F)\) 的项全部被移除，因此保留的旧项与新项没有公共键。两部分内部各自键唯一，结论成立。\(\square\)
+
+**推论 10。** 对有效的 \(E,F,H\)，
+
+\[
+E\times\varnothing=E,
+\qquad (E\times F)\times F=E\times F,
+\qquad (E\times F)\times H=E\times(F\times H).
+\]
+
+**证明。** 对任一键分别考察是否出现于 \(H\)、\(F\)、\(E\)：存在时总取最右侧集合中的项。空集、重复覆写与括号位置均不改变这一选择。\(\square\)
+
+覆写普通等式不会删除其他关系键。例如旧不等式可以留下，但键唯一性不证明它仍对更新后的寄存器值成立。
+
+### 12.3 Predicate 合并
+
+设 \(\operatorname{mergePredicate}\) 为给定的部分合并规则。其成功结果为有限集合；本文不预设交换性或幂等性。局部状态更新定义为
+
+\[
+\sigma'=
 \bigl(\operatorname{updateExpr}(\mathcal E,\mathcal E_i),
-\operatorname{mergePredicate}(\mathcal P,\mathcal P_i)\bigr).}
+\operatorname{mergePredicate}(\mathcal P,\mathcal P_i)\bigr).
 \]
 
-所有候选后继均从同一个输入 \(\sigma\) 计算，不能让先处理的分支修改另一个分支的输入。
+未给定的合并规则不能由集合并集代替。各候选都从同一个输入 \(\sigma\) 更新，互不使用另一候选的结果。
 
-## 13. 位置、节点和连接
+## 13. 位置、节点与后继
 
-### 13.1 程序位置
+### 13.1 位置
 
-对于输入 \(\mathbf I=(i_0,\ldots,i_{m-1})\)，定义：
+对长度为 \(m\) 的输入定义
 
 \[
 \mathrm{Pos}_{\mathbf I}=\{j\in\mathbb N:j<m\},
@@ -808,282 +667,179 @@ JSON 条件字段为 `kind`, `rel`, `width`, `lhs`, `rhs`；返回观察为 `{"k
 \mathrm{Loc}_{\mathbf I}=\mathrm{Pos}_{\mathbf I}\sqcup\{\mathrm{Exit}\}.
 \]
 
-位置 j 对应指令 \(\mathbf I[j]\)。同一编码在不同位置出现时，仍是不同指令实例。
+Exit 是正常结束标记，不是指令。未知目标、无定义行为和未完成推理均不能用 Exit 代替。机器地址到序列位置的绑定由局部规则给定，尤其不能把变长指令的字节偏移等同于指令索引。
 
-Exit 是正常结束的结构标记，不是一条 Insn。返回值及返回行为保存在该节点的 Predicate 中。未解析目标、非法指令和不支持的行为不能用 Exit 代替。
+### 13.2 快照节点
 
-机器地址与序列位置的绑定由对应架构的局部规则提供。RV32IMC 的指令长度不同，不能把字节偏移直接当作序列索引。这里不重新规定两种架构的地址计算。
-
-### 13.2 节点保存执行前快照
-
-节点内容为：
+定义节点内容
 
 \[
-\boxed{N=(j,\mathcal E,\mathcal P)\in\mathrm{Loc}_{\mathbf I}\times\mathrm{State}.}
+N=(j,\sigma)=(j,(\mathcal E,\mathcal P))
+\in\mathrm{Loc}_{\mathbf I}\times\mathrm{State}.
 \]
 
-j 属于 Pos 时，\(\mathcal E,\mathcal P\) 表示执行 \(\mathbf I[j]\) 之前的状态。j 为 Exit 时，表示正常结束后的最终状态。
+位置投影记为 \(\operatorname{loc}(N)=j\)，状态投影记为 \(\operatorname{st}(N)=\sigma\)。普通位置保存该指令执行前的快照，Exit 保存返回后的最终快照。快照建立后不变。节点引用 \(\mathrm{NodeId}=\mathbb N\) 与节点内容分开；内容相同的两次到达仍可有不同引用。
 
-节点中不重复保存 Insn，通过位置取得指令。节点一旦建立，其位置和状态快照都不再修改。
-
-节点引用来自 \(\mathrm{NodeId}=\mathbb N\)。一次运行的有限节点表 Nodes 使用连续引用 \(0,\ldots,q-1\)，Nodes[\(\eta\)] 是引用 \(\eta\) 对应的节点内容。
-
-节点引用与节点内容不同：本算法允许两次到达建立内容相同但引用不同的节点。当前位置相同、甚至两部分状态都相同，也不触发自动合并。
-
-### 13.3 后继方向与边
-
-定义：
+### 13.3 方向与连接
 
 \[
-\mathrm{Direction}=\{\mathrm{Only},\mathrm{Taken},\mathrm{NotTaken}\}.
+\mathrm{Direction}=\{\mathrm{Only},\mathrm{Taken},\mathrm{NotTaken}\},
+\qquad
+\mathrm{Inst}_{\mathrm{next}}=\mathrm{Direction}\times\mathrm{NodeId}.
 \]
 
-Only 表示唯一后继；Taken 表示条件成立的方向；NotTaken 表示条件不成立的方向。
+Only 表示唯一后继；Taken、NotTaken 表示条件成立与不成立的方向。连接为 \((\eta,d,\zeta)\)。即使两侧到达同一程序位置，也保留各自的方向及状态快照。
 
-一条执行连接写作：
+## 14. 执行路径与展开图
 
-\[
-e=(\eta,d,\zeta)\in\mathrm{NodeId}\times\mathrm{Direction}\times\mathrm{NodeId},
-\]
-
-其中 \(\eta\) 是源节点引用，\(\zeta\) 是目标节点引用，d 是后继方向。边不重复保存比较项、寄存器关系或观察内容。
-
-对应第 2.2 节，后继信息定义为：
-
-\[
-\boxed{\mathrm{Inst}_{\mathrm{next}}=\mathrm{Direction}\times\mathrm{NodeId}.}
-\]
-
-两个条件方向即使指向同一程序位置，也分别建立连接；各自的条件 Predicate 及状态不能因目标位置相同而消失。
-
-## 14. 执行路径与运行图
-
-一次运行构造图：
+有限展开图为
 
 \[
 G=(\mathrm{Nodes},\mathrm{Edges},\mathrm{root}),
 \qquad\mathrm{root}=0.
 \]
 
-Edges 是执行连接的有限集合。执行路径写作：
+Nodes 是按创建顺序编号的有限节点序列。路径为
 
 \[
-h=(\eta_0,d_0,\eta_1,d_1,\ldots,d_{n-1},\eta_n),
+h=(\eta_0,d_0,\eta_1,\ldots,d_{n-1},\eta_n),
+\qquad
+(\eta_k,d_k,\eta_{k+1})\in\mathrm{Edges}.
 \]
 
-并要求每个 \((\eta_k,d_k,\eta_{k+1})\) 都属于 Edges。路径通过引用保留各节点的状态快照，不再复制一份 Expr 或 Predicate。
+空路径只包含一个节点。正常结束路径从 root 到 Exit。
 
-空执行路径只包含一个节点引用。正常结束路径从 root 出发，最后一个节点的位置为 Exit。
+本模型每次到达均创建新节点，边总由已有引用指向新引用。它共享已经形成的执行前缀，但不合并分别到达的后缀。程序连接图可以有环，展开图则逐次记录循环到达。
 
-本稿采用「每次到达建立新节点」的展开方式。所有新边均从已有节点指向新节点，因此运行图是一棵共享执行前缀的有向树，特别地也是 DAG。它可以把循环的每次到达展开为不同节点，但不共享已经分别计算出的后缀。
+## 15. 局部候选规则
 
-原始指令连接图仍可能有循环。相同程序位置再次出现，不要求运行图回连到旧节点。表达式 Repeat 可用于描述原程序结构，不能替代本次展开中已经产生的节点快照。
-
-## 15. 单指令处理向遍历算法提供什么
-
-### 15.1 输入与返回形式
-
-记 Step 为已选定架构的单指令处理规则。它读取当前位置 j 和执行前状态 \(\sigma\)，并通过 \(\mathbf I[j]\) 取得指令。
-
-Step 返回以下二者之一：
-
-- Reject(reason)：无法处理当前指令，停止整次推理并报告原因。
-- Candidates(C)：返回有限候选序列 C；每项为 \((d,k,\mathcal E_i,\mathcal P_i)\)。
-
-候选中的 k 属于 \(\mathrm{Loc}_{\mathbf I}\)，\(\mathcal E_i,\mathcal P_i\) 是当前指令沿方向 d 产生的局部效果。C 是临时处理结果，不是另存的一部分状态。
-
-采用序列是为了明确候选的处理次序。对于普通条件分支，先 Taken 后 NotTaken；候选的语义仍由各项内容决定。更一般的有限候选也可以采用同一展开步骤，但必须由局部规则完整给出。
-
-### 15.2 指令情形
-
-| 当前指令情形 | Step 的处理 |
-| --- | --- |
-| 普通顺序执行 | 生成唯一 Only 候选，目标为架构规则确定的顺序后继 |
-| 直接跳转 | 生成唯一 Only 候选，目标为已绑定的跳转位置 |
-| 条件成立已确定 | 仅保留 Taken 候选 |
-| 条件不成立已确定 | 仅保留 NotTaken 候选 |
-| 条件尚未确定 | 保留两侧，并分别产生对应条件 Predicate |
-| 所有方向都已证明不可行 | 返回空候选序列；该节点成为不可行叶节点 |
-| 正常返回 | 执行返回观察规则，生成到 Exit 的 Only 候选 |
-| 未定义源项、非法编码、异常、不支持行为或目标绑定失败 | 返回 Reject |
-
-源项在执行前读取并固定。各方向产生的条件 Predicate 使用此次读取的符号项，后续写入不改变已经记录的判断。
-
-只有被证明不可行的候选可以排除。不能把「条件未知」「求解失败」或「绑定失败」当成条件为假。局部求解不能完成时应拒绝或明确报告未完成，不得悄悄返回空候选。
-
-所有非 Exit 目标都必须绑定到实际指令位置。顺序执行越过输入末尾也不自动算作返回；若对应规则未明确允许正常结束，就应拒绝。
-
-### 15.3 本章的定义边界
-
-遍历算法相对于 Step、updateExpr 和 mergePredicate 定义。各指令的数值函数及 Predicate 具体解释仍由已有或后续局部定义提供。本章不把这些尚待确定的细节宣称为已经实现，也不为 Predicate 增加引理。
-
-局部处理和合并必须能够结束，并产生有限结果；否则，全局展开预算不能限制卡在某一次局部调用内部的计算。
-
-## 16. 有预算的节点展开算法
-
-### 16.1 输入、工作数据与结果
-
-输入：指令序列 \(\mathbf I\)、入口位置 \(j_0\)、入口状态 \(\sigma_0\)、预算 \(B\in\mathbb N\)，以及第 15 节的局部规则。入口状态的具体构造不在本算法中规定。
-
-| 工作数据 | 含义 |
-| --- | --- |
-| Nodes | 带状态快照的有限节点表 |
-| Edges | 已建立的执行连接 |
-| Work | 按先进先出次序保存待展开节点引用的序列 |
-| fuel | 尚可调用 Step 的次数，初始为 B |
-
-这些工作数据管理推理过程。语义状态仍只有 \(\mathcal E,\mathcal P\)。Work 只保存节点引用，不复制状态；新节点引用由 Nodes 的当前长度取得，不另存循环计数器。
-
-结果为 Complete(G) 或 Fail(reason)。Complete 表示所有待展开节点都已处理完，并不表示所有分支都正常返回。失败时已经建立的图可用于诊断，但不能冒充完整成功结果。
-
-### 16.2 伪代码
-
-```text
-Expand(I, j0, sigma0, B):
-    如果 j0 不属于 Pos_I:
-        返回 Fail(InvalidEntry)
-
-    Nodes := [ (j0, sigma0.E, sigma0.P) ]
-    Edges := 空集合
-    Work  := [0]
-    fuel  := B
-
-    循环:
-        如果 Work 为空:
-            返回 Complete((Nodes, Edges, root = 0))
-
-        如果 fuel = 0:
-            返回 Fail(LimitExceeded)
-
-        eta  := 取出 Work 首项，并从 Work 删除该项
-        fuel := fuel - 1
-        (j, E, P) := Nodes[eta]
-
-        result := Step(I, j, (E, P))
-        如果 result 为 Reject(reason):
-            返回 Fail(reason)
-
-        C := result 中的有限候选序列
-
-        # 所有候选使用同一个源快照，先完成合并与有效性检查。
-        prepared := 空序列
-        对 C 中每个 (d, k, Ei, Pi)，按既定次序:
-            如果目标无效，或局部更新不支持:
-                返回 Fail(相应原因)
-            Enew := updateExpr(E, Ei)
-            Pnew := mergePredicate(P, Pi)
-            在 prepared 末尾添加 (d, k, Enew, Pnew)
-
-        对 prepared 中每个 (d, k, Enew, Pnew)，按原次序:
-            zeta := Nodes 当前长度
-            在 Nodes 末尾添加 (k, Enew, Pnew)
-            在 Edges 添加 (eta, d, zeta)
-
-            如果 k 不是 Exit:
-                在 Work 末尾添加 zeta
-
-        # C 为空时不建立子节点，也不重新加入 eta。
-        # 返回循环开头，先检查 Work 是否为空。
-```
-
-Exit 节点在创建时已包含返回指令的更新结果，不再调用 Step。非 Exit 节点只在创建时加入 Work 一次，处理后不再加入。
-
-先检查 Work 是否为空，再检查 fuel 是否为零。因此，恰好用完 B 次处理后若已完成所有路径，仍返回 Complete；只有存在未处理节点时才因预算为零报错。
-
-本算法不查询「是否存在相同位置或相同状态的旧节点」。无论此前是否到达过，都创建新引用，保留本次快照。节点合并、缓存复用和循环摘要不是本轮算法的一部分。
-
-### 16.3 执行流程图
-
-```mermaid
-flowchart TD
-    A["检查入口"] -->|无效| F["返回 Fail"]
-    A -->|有效| B["建立根节点与 Work"]
-    B --> C{"Work 为空？"}
-    C -->|是| Z["返回 Complete"]
-    C -->|否| D{"fuel 为零？"}
-    D -->|是| F
-    D -->|否| E["取首项并扣一次预算"]
-    E --> H["用执行前快照调用 Step"]
-    H --> J{"局部处理拒绝？"}
-    J -->|是| F
-    J -->|否| K["从同一源快照合并所有候选"]
-    K --> L{"目标和更新有效？"}
-    L -->|否| F
-    L -->|是| M{"候选为空？"}
-    M -->|是| C
-    M -->|否| N["建立新节点及连接"]
-    N --> O["将非 Exit 子节点加入 Work"]
-    O --> C
-```
-
-### 16.4 终止依据与结构检查
-
-每次 Work 非空且 fuel 非零的迭代，都消耗一次预算。预算为自然数，不会变成负数。每次局部处理及有限候选遍历都结束时，整个算法最多调用 Step B 次，然后 Complete 或 Fail。
-
-构造过程中保持以下结构性质：
-
-1. 所有边的源、目标都是已经建立的节点引用。
-2. 新边满足 \(\eta<\zeta\)，故运行图没有回边。
-3. root 以外每个节点恰好有一个创建它的入边；路径前缀由引用共享。
-4. 所有节点快照建立后不再修改。
-5. 每个非 Exit 节点最多调用 Step 一次；Exit 节点不调用 Step。
-6. 每个候选的输入都是父节点原快照，不是另一个候选更新后的状态。
-
-这些是算法与图结构的性质，不是 Predicate 合并引理。具体行为覆盖性仍依赖 Step 正确保留各可行后继，以及局部更新规则正确。
-
-Lean4 中可按 fuel 对主过程递归：Work 为空先返回 Complete；Work 非空且 fuel 为零返回 Fail；其余情况只递归调用剩余预算 fuel-1。候选处理按有限序列递归，不需要靠原程序终止性来定义主过程。
-
-## 17. 从运行图得到原有历史集合
-
-Complete(G) 后，定义正常结束节点集合：
+设 \(\operatorname{Step}(\mathbf I,j,\sigma)\) 为给定局部规则，结果为以下二者之一：
 
 \[
-\mathcal T_G=\{\eta:\mathrm{Nodes}[\eta].\mathrm{location}=\mathrm{Exit}\}.
+\operatorname{Reject}(a)
+\quad\text{或}\quad
+\operatorname{Candidates}\bigl((d_1,k_1,\mathcal E_1,\mathcal P_1),
+\ldots,(d_c,k_c,\mathcal E_c,\mathcal P_c)\bigr).
 \]
 
-该集合由 Nodes 得到，不在节点中重复保存结束状态。
+候选序列有限，\(k_l\in\mathrm{Loc}_{\mathbf I}\)。条件未知时通常保留 Taken、NotTaken 两侧；已确定条件只保留相应侧。正常返回产生 Exit 候选。空候选仅表示已证明没有可行后继。
 
-对于一条从 root 到 \(\mathcal T_G\) 中节点的路径
-\(h=(\eta_0,d_0,\ldots,d_{n-1},\eta_n)\)，设第 k 条边的源位置为 \(j_k\)，目标节点快照为 \((\mathcal E_{k+1},\mathcal P_{k+1})\)。投影成第 2.2 节的历史项：
+**假设 B（局部终止与有效性）。** Step 与各局部合并均结束。成功候选的 Expr 键唯一，位宽正确，非 Exit 目标已绑定到输入位置。
+
+**假设 C（语义覆盖）。** 局部规则不遗漏任何可行后继，且成功候选的值与观察正确。只能排除已证明不可行的方向；条件未知、求解失败与绑定失败不能作为不可行证明。
+
+假设 B 用于有限展开与结构性质；假设 C 才能支持行为覆盖性。局部规则无定义时整次展开失败，不把输入末尾自动解释成正常返回。
+
+## 16. 有预算展开与终止证明
+
+### 16.1 展开配置
+
+配置写作
 
 \[
-S_k=
-\bigl(\mathbf I[j_k],\mathcal P_{k+1},\mathcal E_{k+1},
-\{(d_k,\eta_{k+1})\}\bigr).
+Q=(N,A,U,b),
 \]
 
-本路径的历史为 \((S_0,\ldots,S_{n-1})\)。末尾 Exit 节点没有指令，不能再生成一个虚构的 Insn 历史项；最后一条真实指令的执行后快照已经包含正常返回信息。
+其中 \(N\) 为节点序列，\(A\) 为边集合，\(U\) 为按先进先出排列的待展开引用序列，\(b\in\mathbb N\) 为剩余预算。
 
-所有正常结束路径的投影组成 \(\mathcal H_G\)。运行图有限且无环，故该集合也是有限的。节点引用在 G 内解释；若导出历史脱离 G，应另行给出引用解析方式，不能留下无法解析的裸引用。
+给定 \(j_0\in\mathrm{Pos}_{\mathbf I}\)、入口状态 \(\sigma_0=(\mathcal E_0,\mathcal P_0)\) 和预算 \(B\)，要求 \(\mathcal E_0\) 键唯一。初配置为
 
-没有成功后继的非 Exit 叶节点属于已确认不可行的分支，不投影成正常返回历史。只要存在未处理的 Work，或发生 Reject、预算耗尽，就没有 Complete(G)，不能把已有部分历史宣称为全部结果。
+\[
+Q_0=\bigl([(j_0,\sigma_0)],\varnothing,[0],B\bigr).
+\]
 
-图与历史投影是两种表示，不要求同时持久保存所有重复内容。图已保存快照；历史项及 \(\mathcal H_G\) 可以按需要由图取得。
+无效入口直接产生 \(\operatorname{Fail}(\mathrm{InvalidEntry})\)。
 
-## 18. 有界循环展开示例
+### 16.2 一步展开关系
 
-入口直接给定 `r = 0`。以下指令列表用于说明遍历，不替代具体机器指令编码：
+按以下优先次序定义：
 
-```text
-0: 若 r >= 3，跳到 3；否则到 1
-1: r := r + 1
-2: 跳到 0
-3: 正常返回，并观察 r
-```
+1. \(U=\varepsilon\)：得到 \(\operatorname{Complete}(G)\)。
+2. \(U\ne\varepsilon\) 且 \(b=0\)：得到 \(\operatorname{Fail}(\mathrm{LimitExceeded})\)。
+3. \(U=\eta\cdot U'\) 且 \(b>0\)：对 \(N[\eta]\) 的位置和状态应用 Step。
 
-各节点中的 Predicate 按同类合并规则得到；这里不展开其具体内容。循环判断处的快照如下：
+第三种情形若被拒绝，或任一候选的合并、目标有效性不成立，则得到 Fail，且不增加节点或边。若全部候选可接受，先从父快照计算各 \(\sigma_l'\)，再令
 
-| 节点引用 | 程序位置 | Expr 中的 r | 条件方向 | 后继 |
-| --- | --- | --- | --- | --- |
-| 0 | 0 | r = 0 | NotTaken | 新节点 1，位置 1 |
-| 3 | 0 | r = 1 | NotTaken | 新节点 4，位置 1 |
-| 6 | 0 | r = 2 | NotTaken | 新节点 7，位置 1 |
-| 9 | 0 | r = 3 | Taken | 新节点 10，位置 3 |
+\[
+\zeta_l=|N|+l-1\quad(1\le l\le c),
+\]
 
-位置 1 和 2 的节点分别记录加法前及跳转前的状态。节点 10 执行返回后，建立节点 11，其位置为 Exit，状态包含最终返回 Predicate。
+\[
+N'=N\cdot[(k_1,\sigma_1'),\ldots,(k_c,\sigma_c')],
+\qquad
+A'=A\cup\{(\eta,d_l,\zeta_l):1\le l\le c\},
+\]
 
-这条执行一共调用 Step 11 次：判断 4 次、加法 3 次、跳转 3 次、返回 1 次。B=11 时完成返回后 Work 为空，即使 fuel=0 也 Complete；B=10 时返回节点仍未处理，报告 LimitExceeded。
+\[
+U''=U'\cdot[\zeta_l:1\le l\le c,\ k_l\ne\mathrm{Exit}],
+\qquad
+Q'=(N',A',U'',b-1).
+\]
 
-程序位置 0 重复出现，但节点 0、3、6、9 的 Expr 不同。新节点没有回连到旧节点，最后一轮明确进入返回位置。因此，本次运行图保留每轮状态，并且无环。
+Exit 不加入待展开序列。\(c=0\) 时只移除父引用并扣减预算。预算计量 Step 的应用次数，不是节点数，也不限制一次局部求解的内部工作量。
 
-若改成不会退出的跳转，或状态虽变化但无法在预算内完成展开，算法同样建立逐次到达节点，直到报告 LimitExceeded。它不据此宣称原程序一定不终止，也不把某一次有限快照当作整个循环的唯一状态。
+### 16.3 终止与有限性
+
+**定理 11。** 在假设 B 下，有限预算展开至多应用 Step \(B\) 次，随后得到 Complete 或 Fail；产生的图有限。
+
+**证明。** 对剩余预算 \(b\) 归纳。若待展开序列为空，直接结束；若非空且 \(b=0\)，也直接结束。其余情形只有一次局部处理。假设 B 保证该处理及有限候选合并结束；若成功，剩余预算变为 \(b-1\)，使用归纳假设。每次只增加有限个节点和边，至多发生 \(B\) 次，因此图有限。\(\square\)
+
+恰好用完预算且待展开序列为空时仍 Complete。预算耗尽只能说明本次展开未完成，不能证明原程序不终止。
+
+### 16.4 图结构不变量
+
+**定理 12。** 每个成功扩展后的图均满足：根以外的节点恰有一个入边；所有边满足 \(\eta<\zeta\)；每个非 Exit 节点至多展开一次；节点快照不变。因此，图是一棵以 root 为根的有向树，特别地是 DAG。
+
+**证明。** 初图只有根，性质成立。每次添加的目标引用都大于已有引用，每个新目标只由当前父节点连接一次，旧边不变。非 Exit 引用只在创建时入队一次，出队后不再入队；Exit 从不入队。快照仅在创建时给定，后续扩展只追加节点。对扩展次数归纳即得全部性质。若存在有向环，沿环引用严格增加后又回到原引用，矛盾。\(\square\)
+
+结构无环不证明局部语义正确，也不限制原程序只能执行无环控制流。
+
+## 17. 历史投影及其有限性
+
+对 Complete 图定义正常结束引用集合
+
+\[
+\mathcal T_G=\{\eta:0\le\eta<|\mathrm{Nodes}|,\
+\operatorname{loc}(\mathrm{Nodes}[\eta])=\mathrm{Exit}\}.
+\]
+
+设正常结束路径为 \(h=(\eta_0,d_0,\ldots,d_{n-1},\eta_n)\)。第 \(k\) 条边的源位置为 \(j_k\)，目标快照为 \((\mathcal E_{k+1},\mathcal P_{k+1})\)，令
+
+\[
+S_k=\bigl(\mathbf I[j_k],\mathcal P_{k+1},\mathcal E_{k+1},
+\{(d_k,\eta_{k+1})\}\bigr),
+\qquad
+\operatorname{hist}(h)=(S_0,\ldots,S_{n-1}).
+\]
+
+最后的 Exit 不产生虚构指令项；返回观察已包含在最后一条真实指令的执行后快照中。
+
+**命题 13。**
+
+\[
+\mathcal H_G=\{\operatorname{hist}(h):h\text{ 是从 root 到 Exit 的路径}\}
+\]
+
+是有限集合。
+
+**证明。** 由定理 11、12，图有限且为树。每个 Exit 节点有唯一的根路径，故正常结束路径数量至多为节点数，各路径长度也有限。投影保持有限性。\(\square\)
+
+节点引用必须在所属图内解释。非 Exit 的不可行叶不属于正常返回历史；Fail 图中的部分历史也不能作为完整输出。
+
+在假设 C 下，可进一步按路径长度归纳：每条可行的正常结束执行均能逐步对应到候选边；若展开 Complete，则其完整路径出现在 \(\mathcal H_G\) 中。反向对应还要求候选不仅覆盖行为，而且每个候选都有相应行为见证。本文不在局部语义未给定时宣称这一等价成立。
+
+## 18. 有界循环例证
+
+给定入口等式 \(r=C_w(0)\)，考虑四个位置：位置 0 判断 \(r\ge_u C_w(3)\)，成立时到 3，否则到 1；位置 1 令 \(r\leftarrow\mathrm{ADD}_w^\star(r,C_w(1))\) 后到 2；位置 2 到 0；位置 3 正常返回并观察 \(r\)。此处右侧的 \(r\) 表示从执行前等式取得的项。
+
+因为 \(w\in\{32,64\}\)，数值 0、1、2、3 的加法不发生回绕。四次判断分别读取常元 0、1、2、3；前三次走 NotTaken，第四次走 Taken。
+
+若每次到达都按创建顺序编号，判断节点引用为 0、3、6、9，位置 3 的引用为 10，Exit 的引用为 11。Step 次数为
+
+\[
+4\text{ 次判断}+3\text{ 次加法}+3\text{ 次跳转}+1\text{ 次返回}=11.
+\]
+
+故 \(B=11\) 时完成，\(B=10\) 时返回位置尚未展开。重复的程序位置对应不同快照节点，既保留逐轮状态，又满足展开图无环。
+
+预算耗尽且待展开序列非空时，结果为 LimitExceeded；局部规则无定义或合并失败则产生相应的 Fail。二者都不构成程序不终止的证明。循环摘要与含星号的路径表达式另见 [代数程序分析](algebraic-program-analysis.zh.md)；它们需要独立的语义与证明。

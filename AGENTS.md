@@ -1,94 +1,107 @@
 # Classifier repository guide for AI agents
 
-`CommonMath` is the root. It owns architecture-agnostic Reg / Term / Expr /
-solve / history shells (`doc/common-math.md`).
+## Architecture
 
-`RV32IMC` is a thin ISA layer that only defines:
-- `Insn` (decoded instruction)
-- `encode` / `encodeCompressed` (bits → Insn)
-- `expr` (ExprSet × Insn ⇀ ExprSet)
+`CommonMath` owns architecture-agnostic Reg / Term / Expr / solve / history
+shells. Read `doc/common-math.md` before changing shared math.
 
-RV32 uses `CommonMath.Reg` / `Term` / `ExprSet`. Do not grow RV32 with shared
-math, register ADTs, or Sail execute stubs.
+`RV32IMC` is a thin ISA layer. It defines decoded `Insn`,
+`encode` / `encodeCompressed` (bits → Insn), and
+`expr` (ExprSet × Insn ⇀ ExprSet).
+
+RV32 uses `CommonMath.Reg`, `Term`, and `ExprSet`. Keep shared math and register
+ADTs in `CommonMath`. Do not add Sail execute stubs to `RV32IMC`.
 
 ## Layout
 
+The repository root is the Lean workspace. Non-Lean tools live in `tooling/`.
+
 ```text
-CommonMath.lean                 root reexports
-CommonMath/{Bits,Reg,Numeric,Op,Term,Expr,Direction,Insn,Path,Render,Expand,Demo,Ffi}.lean
+CommonMath.lean                 shared math root reexports
+CommonMath/                     shared objects, paths, expansion, rendering, FFI exports
 RV32IMC.lean                    imports Insn + Encode + Expr + Initial + Expand
-RV32IMC/Insn.lean               decoded Insn + field tags
+RV32IMC/Insn.lean               decoded instructions and field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
-RV32IMC/Expr.lean               expr / step (+ FFI smoke exports)
+RV32IMC/Expr.lean               expr / step and FFI smoke exports
 RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
-RV32IMC/Expand.lean             rv32Step / rv32Snapshot (+ lean_rv32_expand_snapshot)
-RV32IMC/Esp32c3Program.lean     generated `esp32c3Words` from `esp32c3.bin`
-doc/rv32-initial-expr.zh.md     RV32 entry E0 spec
-esp32c3.bin                     XDP image under test (partition/label via `riscv-isa` in debug_server)
-lean_binding/                   Rust FFI binding to Lean @[export]s (incl. demoSnapshot)
-debug_server/                   axum §18 Expand debug API (Lean-backed; insn stream via riscv-isa)
-debug_web/                      Vite + Kuma UI + xyflow canvas for that API
-xtask/                          `cargo xtask demo` one-shot launcher
-doc/common-math.md
-doc/rv32imc-expr-value-functions.md
+RV32IMC/Expand.lean             rv32Step / rv32Snapshot and snapshot export
+RV32IMC/Esp32c3Program.lean     generated instruction words for the ESP32-C3 fixture
+EBPF.lean, EBPF/                eBPF instruction and expression modules
+lakefile.lean, lean-toolchain   Lean package and pinned toolchain
+doc/                           Lean specifications and research notes
+tooling/Cargo.toml              Rust workspace, with one shared Cargo.lock
+tooling/lean-binding/           Rust FFI binding to Lean exports
+tooling/server/                 axum Expand API, instruction text via riscv-isa
+tooling/web/                    Vite, Kuma UI, and xyflow canvas
+tooling/scripts/dev.py          development service lifecycle, invoked by Lake
+tooling/fixtures/esp32c3.bin    XDP image used by the server and generated Lean words
+tooling/scripts/smoke.py        live API checks and migration snapshot comparison
 ```
 
-## Build & check
+## Build and check
+
+Run these commands from the repository root.
 
 ```bash
 lake build
-lake build RV32IMC
-cargo test -p lean_binding
-cargo test -p debug_server
-cargo xtask demo   # lake build + debug_server :8788 + Vite :5173 (Ctrl-C stops both)
+lake test
 ```
 
-Toolchain: `leanprover/lean4:v4.29.0`. After layout changes: **Lean 4: Restart Server**.
+Start both services from the repository root.
 
-## Model access (operator)
+```bash
+lake run dev
+```
 
-- Parent chat and Cursor Task subagents: **Cursor Auto** only (`Task` model:
-  omit / `inherit`; pstack roles: `auto`). Do not pin paid Task slugs.
-- Lean work: Codex MCP `user-codex-subagent` on **`gpt-6.1-sol`**.
-- Codex reasoning effort: at most **`high`** (`low`|`medium`|`high`). Never
-  `xhigh` / `max` / `ultra`, never Fast speed tier, never reset to bypass caps.
-- Defaults live in `~/.codex/config.toml` and `~/.cursor/rules/model-access.mdc`.
+`lake build` builds Lean shared libraries, the Rust server, and the web app.
+`lake test` runs Rust tests, the web build, and live API checks.
+`lake run dev` builds the server, installs frontend dependencies, and starts
+the API on `8788` and Vite on `5173`. Ctrl-C stops both services.
+Use Lake as the project entrypoint. Cargo and npm are component build tools.
 
-## Lean4 via MCP Codex subagent
+Toolchain is `leanprover/lean4:v4.29.0`. After Lean layout changes, run
+**Lean 4: Restart Server** in the editor.
 
-Any Lean4 reasoning or programming (`*.lean`, `lakefile*`, `lake-manifest.json`,
-`lake build`, theorem/proof work, or FFI that exists only to expose Lean exports)
-is done by **Codex**, invoked through the Cursor MCP namespace
-`user-codex-subagent` — not by the main agent editing Lean, and not by pasting
-into a human-run Codex session.
+## Codex model policy
 
-### Hard constraints (main agent)
+Use only `gpt-6.1-sol` for Codex tasks and subagents, including pstack profiles.
+Use only `low`, `medium`, or `high` reasoning effort. Keep a lower effort when
+suitable. Do not use `xhigh`, `max`, `ultra`, the Fast speed tier, or automatic
+model fallback. If the permitted model is unavailable, report the limitation.
 
-- Do **not** implement or edit Lean4 sources for the Lean portion of the task.
-- Do **not** call Codex CLI directly (`codex exec`, wrappers, quota gates).
-- Do **not** pin Cursor Task paid model slugs solely to do the Lean work.
-- Non-Lean glue (Rust/TS/docs that are not Lean) may proceed only when it does
-  not require guessing unfinished Lean APIs; otherwise wait for Codex completion.
+Preserve this policy when updating or reinstalling pstack custom-agent profiles.
+Change it only when the user explicitly revises it.
 
-### Invoke Codex
+## Recommended workflow for Cursor Auto
 
-1. Write a self-contained brief (see below) to a **gitignored** file under
-   `.codex/` (directory is in `.gitignore`). Prefer `.codex/lean-handoff.md`
-   (overwrite per task). Never commit `.codex/`.
-2. Call MCP `user-codex-subagent` → `spawn_agent` with that brief as `prompt`
-   (absolute repo root / cwd context must be in the prompt text). For independent
-   Lean sub-tasks, use `spawn_agents_parallel` with one `{ "prompt": "..." }`
-   per agent.
-3. When the MCP call returns, verify yourself: `git status` / `git diff`, then
-   run the brief’s done checks (`lake build`, `lake build RV32IMC`, targeted
-   tests). Continue the parent task from that evidence, or spawn again if Lean
-   work is still incomplete.
+This section recommends settings and delegation for a **Cursor Auto main
+agent**. It does not require native Codex sessions to invoke MCP or delegate
+Lean work. Native Codex sessions may edit Lean and FFI sources and run builds
+directly under the architecture and model policies above.
 
-Prompt content requirements (same substance as user rule `lean4-codex-handoff`):
-absolute repo root and working directory; plain-language goal; constraints from
-this file (e.g. CommonMath vs RV32IMC); paths to read first; a binary done check;
-what to leave for the parent (commit only if asked; no drive-by refactors).
+- Prefer Cursor Auto for the parent chat and Cursor Task subagents. Omit the
+  Task model or use `inherit`. Use `auto` for Cursor pstack roles. Avoid pinning
+  paid Cursor Task model slugs solely for Lean work.
+- For Lean work, prefer the Cursor MCP namespace `user-codex-subagent` with
+  `gpt-6.1-sol`. This includes Lean sources, Lake configuration, theorem work,
+  builds, and FFI that exposes Lean exports.
+- Defaults are maintained in `~/.codex/config.toml` and
+  `~/.cursor/rules/model-access.mdc`. Do not reset settings to bypass caps.
 
-This repo’s MCP spawn path **supersedes** the copy-paste / “operator says Codex
-finished” handoff in that user rule. Keep writing `.codex/lean-handoff.md` as the
-canonical brief; chat-only fences are not the sole copy.
+When using this MCP delegation path:
+
+1. Write a self-contained brief to `.codex/lean-handoff.md`. This directory is
+   gitignored. Never commit `.codex/`.
+2. Include the absolute repository root and cwd, goal, architecture constraints,
+   files to read first, pass/fail checks, and deliverables. Do not commit unless
+   asked. Do not include unrelated refactors.
+3. Call `user-codex-subagent` → `spawn_agent` with the brief as `prompt`.
+   For independent Lean tasks, use `spawn_agents_parallel` with one prompt per
+   task. Give each writer separate file ownership.
+4. Inspect `git status` and `git diff`, then run the brief's build and test
+   checks. Continue from that evidence. Rust, TS, and documentation work can
+   proceed independently when it does not depend on unfinished Lean APIs.
+
+If this MCP is unavailable in Cursor, report the limitation and choose an
+available execution path with the user. The file-backed MCP brief replaces the
+older copy-paste or operator-reported completion handoff for this workflow.

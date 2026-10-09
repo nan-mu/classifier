@@ -1,28 +1,29 @@
-# debug_server
+# Server
 
-[项目入口](../README.md) · [文档索引](../doc/README.md)
+[项目入口](../../README.md) · [文档索引](../../doc/README.md)
 
 HTTP session chrome for the section 18 Expand demo. Expand graphs and SemState
-`exprs` / `predicates` come from Lean `rv32Snapshot` via `lean_binding`. Instruction
-list text is partitioned at runtime from repo-root `esp32c3.bin` with the
+`exprs` / `predicates` come from Lean `rv32Snapshot` via the `lean-binding` crate. Instruction
+list text is partitioned at runtime from `tooling/fixtures/esp32c3.bin` with the
 `riscv-isa` crate (strict RV32IMC 2/4-byte lengths). Regenerate
 `RV32IMC/Esp32c3Program.lean` with
-`UPDATE_ESP32C3_LEAN=1 cargo test -p debug_server lean_words`.
+`UPDATE_ESP32C3_LEAN=1 lake env cargo test --manifest-path tooling/Cargo.toml -p server lean_words`.
 This crate keeps session id, step count, focus, and the append-only log. It does
 not reimplement Expand.
 
 ## Run
 
-From the repo root (preferred):
+From the repository root:
 
 ```bash
-cargo xtask demo
+lake run dev
 ```
 
-Or from `debug_server`:
+To run only the server from the repository root:
 
 ```bash
-cargo run
+lake build server
+lake env cargo run --manifest-path tooling/Cargo.toml -p server
 ```
 
 The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to override.
@@ -43,4 +44,4 @@ For `program: "demo"`, budget 11 ends as `complete` with an Exit node and fuel 0
 
 The ESP32-C3 image has separate binding and target-resolution limits; a larger
 budget does not guarantee completion. Current observations are documented in
-[RV32IMC value functions, section 7.4](../doc/rv32imc-expr-value-functions.md).
+[RV32IMC value functions, section 7.4](../../doc/rv32imc-expr-value-functions.md).

@@ -16,34 +16,31 @@
 在仓库根目录运行：
 
 ```bash
-cargo xtask demo
+lake run dev
 ```
 
-启动器构建 Lean、启动 API 和 Vite，并安装前端依赖。打开 <http://127.0.0.1:5173>，按 Ctrl-C 停止服务。默认 API 地址为 <http://127.0.0.1:8788>。
+Lake 构建 Lean 和服务端、安装前端依赖，然后启动 API 和 Vite。打开 <http://127.0.0.1:5173>，按 Ctrl-C 停止服务。默认 API 地址为 <http://127.0.0.1:8788>。
 
-服务接口见 [debug_server](debug_server/README.md)，界面操作与独立启动方式见 [debug_web](debug_web/README.md)。
+服务接口见 [服务端](tooling/server/README.md)，界面操作与独立启动方式见 [前端](tooling/web/README.md)。
 
 ## 构建与检查
 
-Lean 工具链版本由 `lean-toolchain` 指定；本地需安装 Lean/Lake、Rust/Cargo 和 Node.js/npm。
+以下命令在仓库根目录运行。
+
+Lean 工具链版本由 `lean-toolchain` 指定；本地需安装 Lean/Lake、Rust/Cargo、Node.js/npm 和 Python 3。
 
 ```bash
 lake build
-lake build RV32IMC
-cargo test -p lean_binding
-cargo test -p debug_server
-npm --prefix debug_web ci
-npm --prefix debug_web run build
+lake test
 ```
+
+`lake build` 构建 Lean 库、服务端和前端。`lake test` 运行 Rust 测试、前端构建和实际 API 检查。
 
 ## 工作区布局
 
 - `CommonMath/`：架构无关的数学对象与展开实现。
 - `RV32IMC/`、`EBPF/`：指令集相关源码。
-- `lean_binding/`：Lean 导出函数的 Rust 绑定。
-- `debug_server/`、`debug_web/`：调试 API 与图形界面。
-- `xtask/`：工作区启动工具。
+- `tooling/`：Rust/Cargo 工作区、前后端、FFI 绑定、启动工具与测试镜像。组件说明见 [工具工作区](tooling/README.md)。
 - `doc/`：规范、实现说明与研究文档。
-- `esp32c3.bin`：调试用 XDP 镜像。
 
 开发代理的约束与 Lean 工作交接方式见 [AGENTS.md](AGENTS.md)。构建产物和本地代理记录由 `.gitignore` 管理。

@@ -1,124 +1,161 @@
-# RV32 初态 Expr
+# RV32 入口关系：构造、相容性与唯一性
 
-本文定义 XDP 镜像第一条 RV32 指令执行前的 Expr 有限集合。Reg、Term、常元、变元、符号运算及覆写操作均沿用 `common-math.md`。调用输入满足已有的有效性约定；上下文采用标准 `xdp_md` 布局。
+本文给出 XDP 入口的符号关系集合 \(\mathcal E_0\)，并证明其有限性、位宽一致性与关系键唯一性。Reg、Term、符号提升及覆写均采用 [共同数学基础](common-math.md)。
 
-## 1. 入口值
+入口关系以调用环境已经建立、目标程序尚未执行为时刻。调用环境的赋值与资源有效性是前提；本文不从一般机器状态推导这些前提。输入包与 Map 的后续行为也不由初态关系单独确定。
 
-以下各项属于 \(\mathrm{Term}_{32}\)：
+## 1. 入口项与假设
 
-| 项 | 含义 |
-|---|---|
-| \(t_{\mathrm{ctx}}\) | 上下文对象的起始地址 |
-| \(t_{\mathrm{data}}\) | 输入包的起始地址 |
-| \(t_{\mathrm{len}}\) | 输入包的字节长度 |
-| \(t_{\mathrm{sp}}\) | 镜像入口的栈指针值 |
-| \(t_{\mathrm{return}}\) | 镜像返回包装器的位置，即汇编标签 `1:` 的地址 |
-| \(t_{\mathrm{frame}}\) | 包装器保存区 `XDP_FRAME` 的起始地址 |
-| \(t_{\mathrm{entry}}\) | 包装器调用镜像时使用的 `entry` 值 |
+给定以下 \(\mathrm{Term}_{32}\) 中的项：
 
-已知的入口值使用常元 \(C_{32}(c)\)；符号输入使用固定名称的变元 \(V_{32}(\xi)\)。变元表示本次入口的固定值，不引用执行过程中变化的寄存器。相同来源复用同一个项。
+- \(t_{\mathrm{ctx}}\)：上下文对象起始地址。
+- \(t_{\mathrm{data}}\)、\(t_{\mathrm{len}}\)：输入包起始地址与字节长度。
+- \(t_{\mathrm{sp}}\)：入口栈指针。
+- \(t_{\mathrm{return}}\)：外层正常返回位置。
+- \(t_{\mathrm{frame}}\)：调用环境保存区起始地址。
+- \(t_{\mathrm{entry}}\)：目标程序入口位置。
 
-包的结束地址项定义为
+确定输入可取常元，符号输入可取固定名称变元。同一来源复用同一项；这些项不引用随后会变化的寄存器。
+
+**假设 I。** 入口项位宽正确；调用环境满足其对齐、资源与调用有效性条件；本文规定的寄存器赋值就是入口时的赋值。资源条件的完整形式保留为模型参数。
+
+定义包结束地址项
 
 \[
 t_{\mathrm{end}}
-=\mathrm{ADD}_{32}^{\star}
-\bigl(t_{\mathrm{data}},t_{\mathrm{len}}\bigr).
+=\mathrm{ADD}_{32}^{\star}(t_{\mathrm{data}},t_{\mathrm{len}}).
 \]
 
-令 \(\iota_{\mathrm{wifi}}\in\mathbb B_{32}\) 为固定常量 `IFINDEX_WIFI` 的值，使用 \(C_{32}(\iota_{\mathrm{wifi}})\) 表示接口编号。它是定义的常量参数。
+给定 \(\iota_{\mathrm{wifi}}\in\mathbb B_{32}\) 作为接口编号常量。模加法只确定 32 位地址模式；若要解释为不回绕的地址区间，还须加入对实际地址与长度的有效性条件。
 
-## 2. 真实寄存器初态
+## 2. 真实寄存器关系
 
-寄存器编号和 ABI 别名使用同一标识。例如 `sp` 与 `x2` 指向同一个 \(\mathrm{Real}_{32}\) 元素。令
+### 2.1 基础赋值
+
+寄存器别名采用同一标记，例如 \(\mathrm{sp}=x_2\)、\(\mathrm{ra}=x_1\)。令
 
 \[
 R_s=\{\mathrm{s0},\ldots,\mathrm{s11}\}.
 \]
 
-对 \(r\in R_s\cup\{\mathrm{gp},\mathrm{tp}\}\)，令 \(t_r\in\mathrm{Term}_{32}\) 表示调用环境提供的入口值。值未知时使用各自的固定输入变元。
+对 \(r\in R_s\cup\{\mathrm{gp},\mathrm{tp}\}\)，给定入口项 \(t_r\in\mathrm{Term}_{32}\)。未知值使用各自固定的输入名称。
 
-将下表的每一项写成完整等式 \((\mathrm{Real}_{32}(r),=,t)\)，这些等式组成 \(\mathcal E_{\mathrm{base}}\)。
+定义基础关系集合
 
-| 寄存器 \(r\) | 右侧项 \(t\) |
-|---|---|
-| `zero` | \(C_{32}(0)\) |
-| `ra` | \(t_{\mathrm{return}}\) |
-| `sp` | \(t_{\mathrm{sp}}\) |
-| `t0` | \(t_{\mathrm{sp}}\) |
-| `t1` | \(t_{\mathrm{return}}\) |
-| `t2` | \(t_{\mathrm{frame}}\) |
-| `a0` | \(t_{\mathrm{ctx}}\) |
-| \(r\in R_s\cup\{\mathrm{gp},\mathrm{tp}\}\) | \(t_r\) |
+\[
+\begin{aligned}
+\mathcal E_{\mathrm{base}}={}&
+\{\mathrm{Real}_{32}(\mathrm{zero})=C_{32}(0),\
+\mathrm{Real}_{32}(\mathrm{ra})=t_{\mathrm{return}},\
+\mathrm{Real}_{32}(\mathrm{sp})=t_{\mathrm{sp}},\\
+&\mathrm{Real}_{32}(\mathrm{t0})=t_{\mathrm{sp}},\
+\mathrm{Real}_{32}(\mathrm{t1})=t_{\mathrm{return}},\
+\mathrm{Real}_{32}(\mathrm{t2})=t_{\mathrm{frame}},\
+\mathrm{Real}_{32}(\mathrm{a0})=t_{\mathrm{ctx}}\}\\
+&\cup\{\mathrm{Real}_{32}(r)=t_r:r\in R_s\cup\{\mathrm{gp},\mathrm{tp}\}\}.
+\end{aligned}
+\]
 
-这些关系取自已经执行完的调用包装器。因此，`t0` 与 `sp` 共用入口 SP 项，`t1` 与 `ra` 共用返回地址项。镜像自身的序言尚未执行，不提前将 `s0` 设为 `sp`。
+\(\mathrm{t0}\) 与 SP 具有相同入口值，\(\mathrm{t1}\) 与 RA 具有相同返回值项。这些是入口关系，不表示两个不同寄存器具有相同身份。目标程序尚未执行，所以不预设 \(\mathrm{s0}=\mathrm{sp}\)。
 
-令 \(r_{\mathrm{entry}}\) 为包装器中承载 `entry` 操作数的寄存器；它满足该调用的寄存器约束。调用写入 `ra`，其他承载 `entry` 的寄存器保留其值。真实寄存器初态为
+### 2.2 承载入口位置的寄存器
+
+令 \(r_{\mathrm{entry}}\) 为承载入口位置的真实寄存器标识，并满足调用环境约束。本文取其允许范围为
+
+\[
+r_{\mathrm{entry}}\in
+\{\mathrm{ra}\}\cup R_s\cup\{\mathrm{a1},\ldots,\mathrm{a7}\}
+\cup\{\mathrm{t3},\ldots,\mathrm{t6}\}.
+\]
+
+调用建立返回地址后，若该标识为 RA，其入口位置旧值已被返回地址覆盖；其他允许标识仍保留入口位置项。定义
 
 \[
 \mathcal E_{\mathrm{real},0}=
 \begin{cases}
-\mathcal E_{\mathrm{base}},
-&r_{\mathrm{entry}}=\mathrm{ra},\\[2pt]
-\operatorname{updateExpr}\!\left(
-\mathcal E_{\mathrm{base}},
-\{(\mathrm{Real}_{32}(r_{\mathrm{entry}}),=,t_{\mathrm{entry}})\}
-\right),
+\mathcal E_{\mathrm{base}},&r_{\mathrm{entry}}=\mathrm{ra},\\[2pt]
+\operatorname{updateExpr}\left(\mathcal E_{\mathrm{base}},
+\{\mathrm{Real}_{32}(r_{\mathrm{entry}})=t_{\mathrm{entry}}\}\right),
 &r_{\mathrm{entry}}\ne\mathrm{ra}.
 \end{cases}
 \]
 
-这里使用已有的覆写规则：若 `entry` 占用保存寄存器，对应入口等式改为 \(t_{\mathrm{entry}}\)，不保留两个完整定义。未被上述构造定义的真实寄存器不加入初态；读取缺失源项时仍按共同规则拒绝。
+若承载标识属于保存寄存器，普通等式被替换，不同时保留两份完整值定义。未在构造中出现的真实寄存器没有入口等式，读取这些缺失值仍不满足值函数定义域。
 
-## 3. XDP 上下文初态
+## 3. 上下文六槽关系
 
-标准 `xdp_md` 包含六个连续的 32 位字段。其初值由给出的 `XdpMd::from_buf` 确定：
-
-| 索引 \(j\) | 字段 | 字节偏移 \(4j\) | 初值项 \(u_j\) |
-|---|---|---|---|
-| 0 | `data` | 0 | \(t_{\mathrm{data}}\) |
-| 1 | `data_end` | 4 | \(t_{\mathrm{end}}\) |
-| 2 | `data_meta` | 8 | \(C_{32}(0)\) |
-| 3 | `ingress_ifindex` | 12 | \(C_{32}(\iota_{\mathrm{wifi}})\) |
-| 4 | `rx_queue_index` | 16 | \(C_{32}(0)\) |
-| 5 | `egress_ifindex` | 20 | \(C_{32}(0)\) |
-
-令 \(\alpha_{\mathrm{ctx},j}\in\mathcal I_{\mathrm{Stack}}\) 标识调用栈中上下文对象的第 j 个 32 位槽；六个标识互不相同。它们是已有虚拟栈寄存器的标识，不增加 Reg 类型。入口绑定将地址项
+标准 \(\mathrm{xdp\_md}\) 上下文包含六个连续 32 位字段：data、data_end、data_meta、ingress_ifindex、rx_queue_index、egress_ifindex。第 \(j\) 个字段的字节偏移为 \(4j\)。本文规定其初值向量为
 
 \[
-\mathrm{ADD}_{32}^{\star}
-\bigl(t_{\mathrm{ctx}},C_{32}(4j)\bigr)
+(u_0,u_1,u_2,u_3,u_4,u_5)
+=(t_{\mathrm{data}},t_{\mathrm{end}},C_{32}(0),
+C_{32}(\iota_{\mathrm{wifi}}),C_{32}(0),C_{32}(0)).
 \]
 
-对应的字段访问解释为 \(\mathrm{SW}(\alpha_{\mathrm{ctx},j})\) 的访问。该绑定由既有 Predicate 语义承载；Expr 只保存槽的值关系。
+这些初值属于本入口模型的假设；字段布局本身不确定这些值。
 
-上下文初态为
+给定互不相同的虚拟栈标识 \(\alpha_{\mathrm{ctx},0},\ldots,\alpha_{\mathrm{ctx},5}\)。
+
+**假设 II（上下文绑定）。** 地址项
+
+\[
+\mathrm{ADD}_{32}^{\star}(t_{\mathrm{ctx}},C_{32}(4j))
+\]
+
+对应字段的访问唯一绑定到 \(\mathrm{SW}(\alpha_{\mathrm{ctx},j})\)，且访问有效。绑定与资源观察的完整语义需另外给定；Expr 本身只记录值关系。
+
+定义
 
 \[
 \boxed{
 \mathcal E_{\mathrm{ctx},0}
-=\left\{
-\bigl(\mathrm{SW}(\alpha_{\mathrm{ctx},j}),=,u_j\bigr)
-:j\in\{0,\ldots,5\}
-\right\}.
+=\{\mathrm{SW}(\alpha_{\mathrm{ctx},j})=u_j:0\le j<6\}.
 }
 \]
 
-表中的 \(u_j\) 是定义这些等式的书写方式，不另存为一份字段状态。镜像修改字段时，覆写相应 Expr；入口项 \(t_{\mathrm{data}},t_{\mathrm{len}}\) 仍表示原始输入。
+\(u_j\) 只是右侧项的记法，不构成额外字段状态。后续若有合法字段更新，应覆写相应值关系；入口项仍表示原始输入。本文的初态构造不保证任意后续字段写入都有定义。
 
-## 4. 最终初态
+## 4. 初态及其性质
+
+给定有限入口谓词集合 \(\mathcal P_0\)，定义
 
 \[
 \boxed{
-\mathcal E_0
-=\mathcal E_{\mathrm{real},0}
-\cup\mathcal E_{\mathrm{ctx},0}
-\in\mathscr F(\mathrm{Expr}).
+\mathcal E_0=\mathcal E_{\mathrm{real},0}\cup\mathcal E_{\mathrm{ctx},0},
+\qquad\sigma_0=(\mathcal E_0,\mathcal P_0).
 }
 \]
 
-两部分分别使用 Real 与 Stack 标记，不互相覆盖。每个已定义标记有一个完整的 32 位值等式。镜像尚未初始化的局部栈槽不补零；包和 Map 的访问继续按共同语义处理。
+\(\mathcal P_0\) 的含义与必要观察由完整谓词模型决定；本构造不凭空添加观察。
 
-入口节点直接使用这个 \(\mathcal E_0\) 和已有的入口 Predicate 集合。节点与路径定义保持不变。上述参数、表格和集合构造足以确定 Lean4 中的初态构造函数，无需增加第三份运行状态。
+**命题 I1（有限性与位宽）。** 假设 I、II 成立时，\(\mathcal E_0\in\mathscr F(\mathrm{Expr})\)，每个关系均为完整的 32 位等式。
 
-依据：给出的调用包装器与 `XdpMd::from_buf`；上下文字段布局采用 [Linux UAPI 的 `struct xdp_md`](https://github.com/torvalds/linux/blob/master/include/uapi/linux/bpf.h)。
+**证明。** 基础赋值包含有限个真实标识，覆写至多添加一个目标；上下文有六个标识。所有入口项为 32 位，模加法与常元也为 32 位。两部分的每个左侧标记均为 32 位，故每个等式类型正确且总集合有限。\(\square\)
+
+**命题 I2（键唯一性）。** \(\mathcal E_0\) 满足同键关系唯一。
+
+**证明。** 基础赋值中的真实寄存器身份互异，别名不重复加入；按键覆写保持唯一性。上下文六个栈标识互异，故内部键唯一。Real 与 Stack 是不交类别，两部分没有公共键，因此它们的并集仍有效。\(\square\)
+
+**命题 I3（基数）。**
+
+\[
+|\mathcal E_0|=
+\begin{cases}
+27,&r_{\mathrm{entry}}\in\{\mathrm{ra}\}\cup R_s,\\
+28,&r_{\mathrm{entry}}\in\{\mathrm{a1},\ldots,\mathrm{a7},\mathrm{t3},\ldots,\mathrm{t6}\}.
+\end{cases}
+\]
+
+**证明。** \(\mathcal E_{\mathrm{base}}\) 有 \(7+12+2=21\) 个真实键。第一种情形不增加键，第二种增加一个原本不存在的真实键；上下文六键与真实键不交。\(\square\)
+
+**命题 I4（入口关系可满足）。** 对每个变元赋值 \(\nu\)，存在寄存器赋值 \(\rho\) 使 \(\mathcal E_0\) 的全部等式成立。
+
+**证明。** 对每个已定义标记，将 \(\rho\) 指定为其唯一右侧项在 \(\nu\) 下的解释。命题 I2 保证没有冲突。其余寄存器任取同位宽值即可。\(\square\)
+
+该命题只证明 Expr 的代数相容性，不证明入口谓词可满足、资源有效或调用环境真实存在。
+
+## 5. 适用边界与依据
+
+未初始化局部栈槽不补零，未出现的真实寄存器不补任意值。初态不定义一般包访问、Map 访问或外部调用，也不证明 RV32 与 eBPF 入口观察等价。
+
+上下文字段布局见 [Linux UAPI 的 xdp_md 定义](https://github.com/torvalds/linux/blob/master/include/uapi/linux/bpf.h)。真实寄存器入口赋值、接口编号与字段初值由本文的入口契约规定，不是由该布局自动推导的事实。

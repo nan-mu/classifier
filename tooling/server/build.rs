@@ -12,7 +12,7 @@ fn main() {
     let lean_prefix = lean_prefix.trim();
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let repo_root = manifest_dir.parent().unwrap();
+    let repo_root = manifest_dir.parent().unwrap().parent().unwrap();
     let lake_lib = repo_root.join(".lake/build/lib");
     let lean_lib = PathBuf::from(lean_prefix).join("lib/lean");
 
@@ -29,6 +29,6 @@ fn main() {
 
     println!(
         "cargo:rerun-if-changed={}",
-        repo_root.join("esp32c3.bin").display()
+        manifest_dir.join("../fixtures/esp32c3.bin").display()
     );
 }

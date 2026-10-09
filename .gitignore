@@ -1,13 +1,11 @@
 /.lake/
 /lake-manifest.json
 *.pre_session_restore
-/target/
-/lean_binding/target/
-/debug_server/target/
-/xtask/target/
-
-/debug_web/node_modules/
-/debug_web/dist/
+/tooling/target/
+/tooling/*/target/
+/tooling/web/node_modules/
+/tooling/web/dist/
+/tooling/**/__pycache__/
 /.audit/
 
 # Local Codex / agent handoff prompts (never commit)

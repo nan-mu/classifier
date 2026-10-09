@@ -51,7 +51,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .unwrap_or_else(|err| panic!("bind {addr}: {err}"));
-    eprintln!("debug_server http://{addr}");
+    eprintln!("server http://{addr}");
     axum::serve(listener, app(new_state()))
         .await
         .expect("serve");

@@ -1,5 +1,5 @@
 [package]
-name = "lean_binding"
+name = "lean-binding"
 version = "0.1.0"
 edition = "2021"
 description = "Rust FFI binding to Lean CommonMath / LeanRV32IMC @[export]s"
