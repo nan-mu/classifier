@@ -53,6 +53,8 @@ export type SessionSnapshot = {
   id: string;
   status: SessionStatus;
   reason: string | null;
+  /** Rejected step's node; null when no step was attempted (e.g. budget exhaustion). */
+  failed: number | null;
   fuel: number;
   budget: number;
   work: number[];

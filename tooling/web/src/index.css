@@ -299,6 +299,15 @@ body {
   opacity: 0.88;
 }
 
+.state-node--failed {
+  border-color: #e0b4a4;
+  opacity: 1;
+}
+
+.state-node--failed .state-node__badge {
+  color: #e0b4a4;
+}
+
 .topbar {
   flex-wrap: wrap;
 }

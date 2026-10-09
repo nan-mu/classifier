@@ -127,6 +127,7 @@ impl Session {
                 _ => "fail",
             },
             reason,
+            failed: lean["failed"].as_u64().map(|id| id as u32),
             fuel,
             budget: self.budget,
             work,
@@ -170,6 +171,7 @@ impl Session {
             serde_json::json!({
                 "status": "fail",
                 "reason": "LeanJson",
+                "failed": null,
                 "fuel": 0,
                 "work": [],
                 "nodes": [],
@@ -187,6 +189,12 @@ impl Session {
 
     fn sync_focus_from_lean(&mut self) {
         let lean = self.lean_value();
+        if lean["status"] == "fail" {
+            if let Some(failed) = lean["failed"].as_u64() {
+                self.focus = failed as u32;
+                return;
+            }
+        }
         let work = lean_u32_list(&lean["work"]);
         let nodes = lean["nodes"].as_array();
         if let Some(&head) = work.first() {
@@ -397,6 +405,8 @@ pub struct Snapshot {
     pub id: String,
     pub status: &'static str,
     pub reason: Option<String>,
+    /// Node whose attempted step was rejected; null for budget/entry failures.
+    pub failed: Option<u32>,
     pub fuel: u32,
     pub budget: u32,
     pub work: Vec<u32>,
@@ -500,6 +510,7 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
         assert_eq!(snap.reason, None);
+        assert_eq!(snap.failed, None);
         assert_eq!(snap.fuel, 3);
         assert_eq!(snap.budget, 3);
         assert_eq!(snap.work, vec![0]);
@@ -527,6 +538,7 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
+        assert_eq!(snap.failed, None);
         assert_eq!(snap.fuel, 0);
         assert_eq!(snap.nodes.len(), 4);
         assert_eq!(snap.nodes[3].loc, "3");
@@ -750,15 +762,26 @@ mod tests {
             }),
             "lookup must introduce mapWord = regVar(a0)"
         );
-        let fail_node = snap.focus;
+        let fail_node = snap.failed.expect("rejected node");
         let fail_loc = snap
             .nodes
             .iter()
             .find(|n| n.id == fail_node)
             .map(|n| n.loc.as_str());
+        assert_eq!(fail_node, 227);
+        assert_eq!(snap.focus, fail_node);
+        assert_eq!(snap.cursor_j, 48);
+        assert!(!snap.work.contains(&fail_node));
+        assert!(snap.edges.iter().all(|e| e.src != fail_node));
+        let rejected = snap.nodes.iter().find(|n| n.id == fail_node).unwrap();
+        assert_eq!(eq_term(rejected, "real32:10"), Some("1"));
+        assert_eq!(
+            eq_term(rejected, "real32:11"),
+            Some("id32(externalResult166_0(1,1077412584,id32(add32(v32:0,4294967280))))")
+        );
         assert_eq!(
             fail_loc,
-            Some("45"),
+            Some("48"),
             "failure should be LW through opaque map pointer"
         );
         assert!(

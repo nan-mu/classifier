@@ -199,6 +199,8 @@ fn rv32_symbolic_packet_offset_preserves_partial_graph() {
     assert_eq!(before["fuel"], 474);
     assert_eq!(failed["status"], "fail");
     assert_eq!(failed["reason"], "UndefinedSrc");
+    assert_eq!(failed["failed"], 40);
+    assert_eq!(before["failed"], serde_json::Value::Null);
     // Includes every pre-instruction expression and predicate: BLTU forks,
     // successful STORE effects, and the short-side return survive rejection.
     assert_eq!(failed["nodes"], before["nodes"]);

@@ -228,7 +228,8 @@ private def dirTag : Direction → String
   | .notTaken => "NotTaken"
 
 private def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
-    (fuel : Nat) (status : String) (reason : Option RejectReason) : String :=
+    (fuel : Nat) (status : String) (reason : Option RejectReason)
+    (failed : Option NodeId := none) : String :=
   let nodeStrs := Id.run do
     let mut acc : List String := []
     for id in [:nodes.size] do
@@ -244,7 +245,8 @@ private def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List 
   let reasonField := match reason with
     | none => "null"
     | some r => s!"\"{reasonTag r}\""
-  s!"\{\"status\":\"{status}\",\"reason\":{reasonField},\"fuel\":{fuel},\"work\":[{workStr}],\"nodes\":[{nodeStrs}],\"edges\":[{edgeStrs}]}"
+  let failedField := match failed with | none => "null" | some id => toString id
+  s!"\{\"status\":\"{status}\",\"reason\":{reasonField},\"failed\":{failedField},\"fuel\":{fuel},\"work\":[{workStr}],\"nodes\":[{nodeStrs}],\"edges\":[{edgeStrs}]}"
 
 private def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState → StepResult)
     (ws : WorkState) : Nat → String
@@ -259,6 +261,7 @@ private def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState 
       let attempted := !ws.work.isEmpty && ws.fuel > 0
       snapshotJson g.nodes g.edges (if attempted then ws.work.tail else ws.work)
         (if attempted then ws.fuel - 1 else ws.fuel) "fail" (some reason)
+        (if attempted then ws.work.head? else none)
 
 /-- JSON after at most steps expandOne calls; all node Exprs are global pre-execution snapshots.
 The caller binds the contiguous instruction layout and wrapper label via EntryParams. -/

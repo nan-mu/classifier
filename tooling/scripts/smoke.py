@@ -46,6 +46,7 @@ def snapshots(base):
         assert request(base, "GET", path) == done, "GET must return the final snapshot"
         assert done["status"] == "fail", (budget, done["status"])
         assert done["reason"] == "LimitExceeded", done["reason"]
+        assert done["failed"] is None, "budget exhaustion does not reject a step"
         assert len(stepped["nodes"]) > len(created["nodes"]), "step must expand the graph"
         result[f"just_tx.elf/{budget}"] = [created, stepped, done]
     created = request(base, "POST", "/api/session", {"budget": 512})
@@ -53,6 +54,10 @@ def snapshots(base):
     done = request(base, "POST", path + "/run", {})
     assert done["status"] == "fail", done["status"]
     assert done["reason"] == "UndefinedSrc", done["reason"]
+    assert done["focus"] == done["failed"] == 227
+    rejected = next(n for n in done["nodes"] if n["id"] == done["failed"])
+    assert rejected["loc"] == "48", rejected["loc"]
+    assert done["failed"] not in done["work"]
     assert any(n["loc"] == "exit" for n in done["nodes"]), "partial Exit must survive"
     assert any(
         p.get("kind") == "helper" and p.get("helperId") == 1
@@ -89,8 +94,10 @@ def snapshots(base):
     )
     fw_done = request(base, "POST", "/api/session/" + fw["id"] + "/run", {})
     assert fw_done["status"] == "complete", fw_done["reason"]
+    assert fw_done["failed"] is None
     assert any(
-        "externalResult" in e["term"] for n in fw_done["nodes"] for e in n["exprs"]
+        e["reg"] == "real32:10" and "externalResult" in e["term"]
+        for n in fw_done["nodes"] for e in n["exprs"]
     ), "helper effects must reach the graph"
     assert any(
         p.get("kind") == "helper" and p.get("helperId") is not None
@@ -101,8 +108,10 @@ def snapshots(base):
         p.get("kind") == "ret" for n in fw_done["nodes"] for p in n["predicates"]
     ), "Exit must observe a ret Predicate"
     assert any(
-        p.get("kind") == "cmp" for n in fw_done["nodes"] for p in n["predicates"]
+        p.get("kind") == "cmp" and p.get("rel") == "ltu"
+        for n in fw_done["nodes"] for p in n["predicates"]
     ), "branch cmp Predicates must appear"
+    assert {"taken", "not_taken"} <= {e["dir"] for e in fw_done["edges"]}
     invalid = [
         default_elf[:-1],
         default_elf + b"x",

@@ -37,9 +37,58 @@ describe("cantorUnpair / packet regs", () => {
       offset: null,
     });
   });
+
+  it("decodes the Map word introduced by lookup", () => {
+    const alpha = (166 * 167) / 2;
+    const row = { reg: `map32:${alpha}`, rel: "eq", term: "regVar166(real32:10)" };
+    expect(parseReg(row.reg)).toMatchObject({ kind: "map", resource: 166, offset: 0 });
+    expect(formatRegLabel(parseReg(row.reg))).toBe("Map32 κ=166 off=0");
+    expect(termToPlain(parseTerm(row.term))).toBe(row.term);
+    expect(parseReg("map64:0").resource).toBeNull();
+  });
 });
 
 describe("parseTerm", () => {
+  const data = { kind: "var", width: 32, name: "4" } as const;
+
+  it("parses extract's comma as part of the op name", () => {
+    expect(parseTerm("extract0,8(v32:4)")).toEqual({
+      kind: "app", op: "extract0,8", args: [data],
+    });
+  });
+
+  it.each([8, 16])("keeps nested extract0,%i as one zext argument", (bits) => {
+    const text = `zext${bits}/32(extract0,${bits}(v32:4))`;
+    const view = parseTerm(text);
+    expect(view).toEqual({
+      kind: "app", op: `zext${bits}/32`,
+      args: [{ kind: "app", op: `extract0,${bits}`, args: [data] }],
+    });
+    expect(termToPlain(view)).toBe(text);
+  });
+
+  it("handles nested mergeLow and still splits actual argument separators", () => {
+    const view = parseTerm("add32(mergeLow8,32(v32:4,extract0,8(v32:5)),18446744073709551615)");
+    expect(view).toEqual({
+      kind: "app", op: "add32", args: [
+        { kind: "app", op: "mergeLow8,32", args: [
+          data,
+          { kind: "app", op: "extract0,8", args: [{ kind: "var", width: 32, name: "5" }] },
+        ] },
+        { kind: "const", digits: "18446744073709551615" },
+      ],
+    });
+  });
+
+  it("handles comma-named ops following a numeric argument", () => {
+    expect(parseTerm("add32(14,extract0,8(v32:4))")).toEqual({
+      kind: "app", op: "add32", args: [
+        { kind: "const", digits: "14" },
+        { kind: "app", op: "extract0,8", args: [data] },
+      ],
+    });
+  });
+
   it("keeps regVar event in the op and preserves the Reg arg", () => {
     const view = parseTerm("regVar166(real32:10)");
     expect(view).toEqual({

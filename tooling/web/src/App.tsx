@@ -32,6 +32,7 @@ import { StateNodeView, type StateFlowNode } from "./StateNode";
 import type { ArchKind, ExprRow, PredRow, SessionSnapshot } from "./types";
 import { useForceLayout } from "./useForceLayout";
 import {
+  branchSource,
   countBranchEdges,
   diffExprs,
   diffPredicates,
@@ -328,7 +329,7 @@ function DebugScreen() {
 
   const focusedSplit = useMemo(() => {
     if (!focusedNode || !snap) return null;
-    return splitExprs(focusedNode, snap.nodes);
+    return splitExprs(focusedNode, snap.nodes, snap.edges);
   }, [focusedNode, snap]);
 
   const selectedEdge = useMemo(() => {
@@ -417,6 +418,7 @@ function DebugScreen() {
           head: node.id === headId,
           entry: node.id === 0,
           processed: done.has(node.id),
+          failed: snap.status === "fail" && node.id === snap.failed,
           hasHelper: node.predicates.some((p) => p.kind === "helper"),
           hasPacket: node.exprs.some((e) => parseReg(e.reg).kind === "packet"),
           hasRet: node.predicates.some((p) => p.kind === "ret"),
@@ -468,10 +470,10 @@ function DebugScreen() {
 
   const focusBranchSource = useCallback(() => {
     if (!snap) return;
-    const src = snap.edges.find((e) => e.dir === "taken")?.from;
-    if (src === undefined) return;
+    const src = branchSource(sel.focus, snap.edges);
+    if (src === null) return;
     setSel((s) => ({ ...s, focus: src, panel: "node", edgeKey: null }));
-  }, [snap]);
+  }, [sel.focus, snap]);
 
   return (
     <Flex className="app-shell" height="100%" flexDirection="column">
@@ -594,6 +596,7 @@ function DebugScreen() {
             {snap?.status === "fail" ? (
               <Text className="fail-banner" display="block">
                 未完成 · {snap.reason ?? "?"}（保留部分图）
+                {snap.failed != null ? ` · 拒绝节点 #${snap.failed}` : ""}
               </Text>
             ) : null}
           </Box>
@@ -662,12 +665,15 @@ function DebugScreen() {
                     <ExprGroups exprs={focusedSplit.eiIn} />
                   </>
                 ) : null}
-                {focusedSplit.eiOut.length > 0 ? (
-                  <>
-                    <Text className="sem-sub sem-sub--gap">展开写出（eiOut）</Text>
-                    <ExprGroups exprs={focusedSplit.eiOut} />
-                  </>
-                ) : null}
+                {focusedSplit.eiOut.map((delta) => (
+                  <Box key={delta.to}>
+                    <Text className="sem-sub sem-sub--gap">
+                      后继 Δ（eiOut）· {delta.dir === "taken" ? "Taken" :
+                        delta.dir === "not_taken" ? "NotTaken" : "Only"} → #{delta.to}
+                    </Text>
+                    <ExprGroups exprs={delta.exprs} />
+                  </Box>
+                ))}
                 <Text className="sem-sub sem-sub--gap">Predicate</Text>
                 <PredList preds={focusedNode.predicates} />
                 {dualTakenNotTaken ? (

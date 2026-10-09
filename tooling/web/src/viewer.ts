@@ -40,6 +40,10 @@ export function processedIds(snap: SessionSnapshot): Set<number> {
   const work = new Set(snap.work);
   const out = new Set<number>();
   for (const n of snap.nodes) {
+    if (snap.status === "fail" && n.id === snap.failed) {
+      out.add(n.id);
+      continue;
+    }
     if (work.has(n.id)) continue;
     if (n.loc === "exit") {
       out.add(n.id);
@@ -157,6 +161,7 @@ export function visibleNodeIds(
   if (!collapseSameLoc) return new Set(snap.nodes.map((n) => n.id));
   const keep = new Set<number>([focus]);
   if (compare !== null) keep.add(compare);
+  if (snap.status === "fail" && snap.failed !== null) keep.add(snap.failed);
   const chosenLoc = new Map<string, number>();
   for (const n of snap.nodes) {
     if (keep.has(n.id)) {
@@ -177,6 +182,9 @@ export function visibleNodeIds(
   if (compare !== null) {
     for (const id of pathToRoot(compare, snap.nodes)) keep.add(id);
   }
+  if (snap.status === "fail" && snap.failed !== null) {
+    for (const id of pathToRoot(snap.failed, snap.nodes)) keep.add(id);
+  }
   return keep;
 }
 
@@ -186,4 +194,9 @@ export function inboundEdges(nodeId: number, edges: GraphEdge[]): GraphEdge[] {
 
 export function outboundEdges(nodeId: number, edges: GraphEdge[]): GraphEdge[] {
   return edges.filter((e) => e.from === nodeId);
+}
+
+export function branchSource(focus: number, edges: GraphEdge[]): number | null {
+  const branches = edges.filter((e) => e.dir === "taken" || e.dir === "not_taken");
+  return (branches.find((e) => e.from === focus) ?? branches[0])?.from ?? null;
 }

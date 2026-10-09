@@ -11,9 +11,9 @@ export type ParsedReg = {
   kind: RegKind;
   width: 32 | 64 | null;
   alpha: string | null;
-  /** Packet identity κ from Cantor unpair; only set for `packet`. */
+  /** Namespace from Cantor unpair for Packet bytes and Map32 lookup words. */
   resource: number | null;
-  /** Packet byte offset from Cantor unpair; only set for `packet`. */
+  /** Byte offset from Cantor unpair for Packet bytes and Map32 lookup words. */
   offset: number | null;
 };
 
@@ -25,7 +25,7 @@ export type TermView =
 
 const REG_RE = /^(real|stack|map|packet)(32|64):(\d+)$/;
 
-/** Inverse of Lean `Reg.packet` Cantor pairing: α = T_{κ+off} + off. */
+/** Inverse of Lean `Reg.packet` / `Reg.mapWord` pairing: α = T_{κ+off} + off. */
 export function cantorUnpair(alpha: number): { first: number; second: number } | null {
   if (!Number.isInteger(alpha) || alpha < 0 || !Number.isSafeInteger(alpha)) {
     return null;
@@ -55,7 +55,7 @@ export function parseReg(raw: string): ParsedReg {
   const alpha = m[3]!;
   let resource: number | null = null;
   let offset: number | null = null;
-  if (kind === "packet") {
+  if (kind === "packet" || (kind === "map" && m[2] === "32")) {
     const pair = cantorUnpair(Number(alpha));
     if (pair) {
       resource = pair.first;
@@ -81,6 +81,11 @@ function splitTopArgs(body: string): string[] {
     if (ch === "(") depth += 1;
     else if (ch === ")") depth -= 1;
     else if (ch === "," && depth === 0) {
+      // Lean's extract and mergeLow names contain a numeric comma before their opening parenthesis.
+      if (
+        /^(?:extract|mergeLow)\d+$/.test(body.slice(start, i).trim()) &&
+        /^\d+\(/.test(body.slice(i + 1))
+      ) continue;
       out.push(body.slice(start, i));
       start = i + 1;
     }
@@ -139,11 +144,11 @@ export const kindLabel: Record<RegKind, string> = {
   unknown: "?",
 };
 
-/** Display label for a parsed register, including Packet (κ, offset). */
+/** Display label for a parsed register, including paired namespaces and offsets. */
 export function formatRegLabel(reg: ParsedReg): string {
   const kind = kindLabel[reg.kind];
   const w = reg.width ?? "?";
-  if (reg.kind === "packet" && reg.resource != null && reg.offset != null) {
+  if ((reg.kind === "packet" || reg.kind === "map") && reg.resource != null && reg.offset != null) {
     return `${kind}${w} κ=${reg.resource} off=${reg.offset}`;
   }
   return `${kind}${w} α=${reg.alpha ?? "?"}`;
