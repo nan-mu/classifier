@@ -425,7 +425,14 @@ fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
 
 #[test]
 fn unresolved_map_accesses_reject_without_growing_the_graph() {
-    for (id, offset, width) in [(1, 4, 4), (1, 3, 2), (5, 0, 4), (999, 0, 4)] {
+    for (id, offset, width) in [
+        (1, 3, 2),
+        (1, 7, 2),
+        (1, 5, 4),
+        (5, 0, 4),
+        (5, 4, 4),
+        (999, 0, 4),
+    ] {
         for writing in [false, true] {
             let (mut words, pos, _) = call_program(id, 0);
             let access = if writing {
@@ -445,4 +452,105 @@ fn unresolved_map_accesses_reject_without_growing_the_graph() {
             assert_eq!(failed["edges"], before["edges"]);
         }
     }
+}
+
+#[test]
+fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
+    let (mut words, pos, _) = call_program(1, 0);
+    words.splice(
+        pos + 1..pos + 1,
+        [
+            addi(9, 10, 4),
+            addi(10, 0, 5),
+            load(12, 9, 0, 4, true),
+            load(14, 9, 0, 4, true),
+            addi(13, 0, 0x80),
+            store(9, 13, 3, 1),
+            load(15, 9, 3, 1, false),
+            addi(9, 9, 4),
+            store(9, 13, 1, 1), // Fresh third word needs symbolic old bits.
+            load(16, 9, 1, 1, true),
+            store(9, 13, 0xffc, 4), // Full overwrite of the second word.
+            load(17, 9, 0xffc, 4, true),
+            store(9, 13, 4, 4), // Fresh fourth word needs no old content.
+            load(18, 9, 4, 4, true),
+        ],
+    );
+    let s = snapshot(&words, 100);
+    assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    let exit = s["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["loc"] == "exit")
+        .unwrap();
+    let content = format!("externalResult{pos}_2(1)");
+    assert_eq!(term(exit, 12), content);
+    assert_eq!(term(exit, 14), content);
+    assert_eq!(term(exit, 10), "5");
+    assert!(term(exit, 15).contains(&content), "{}", term(exit, 15));
+    assert!(term(exit, 16).contains(&format!("externalResult{pos}_3(1)")));
+    assert_eq!(term(exit, 17), "128");
+    assert_eq!(term(exit, 18), "128");
+    let maps: Vec<_> = exit["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["reg"].as_str().unwrap().starts_with("map32:"))
+        .collect();
+    assert_eq!(maps.len(), 4);
+    for (offset, expected) in [
+        (0, format!("regVar{pos}(real32:10)")),
+        (4, "128".into()),
+        (12, "128".into()),
+    ] {
+        let map = maps
+            .iter()
+            .find(|e| e["reg"] == format!("map32:{}", map_word_alpha(pos as u64, offset)))
+            .unwrap();
+        assert_eq!(map["term"], expected);
+    }
+    let third = maps
+        .iter()
+        .find(|e| e["reg"] == format!("map32:{}", map_word_alpha(pos as u64, 8)))
+        .unwrap();
+    assert!(third["term"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("externalResult{pos}_3(1)")));
+    assert!(!maps.iter().any(|e| e["term"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("externalResult{pos}_4"))));
+}
+
+#[test]
+fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate() {
+    let (mut words, pos, _) = call_program(1, 0);
+    words.splice(
+        pos + 1..pos + 1,
+        [
+            addi(9, 10, 0),
+            0x40d0, // C.LW a2,4(s1), first materialization.
+            addi(13, 0, 0x123),
+            0xc0d4, // C.SW a3,4(s1), same word as C.LW.
+            0x40d8, // C.LW a4,4(s1), current stored word.
+            addi(10, 0, 1),
+            jal(1, 0x100 - (0x400 + pos as i32 * 4 + 22)),
+            load(15, 10, 4, 4, true),
+        ],
+    );
+    let s = snapshot(&words, 100);
+    assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    let exit = s["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["loc"] == "exit")
+        .unwrap();
+    assert_eq!(term(exit, 12), format!("externalResult{pos}_2(1)"));
+    assert_eq!(term(exit, 14), "291");
+    assert_eq!(term(exit, 15), format!("externalResult{}_2(1)", pos + 7));
+    assert_ne!(term(exit, 12), term(exit, 15));
+    assert_eq!(s, snapshot(&words, 100), "event content must replay stably");
 }

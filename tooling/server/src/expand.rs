@@ -734,69 +734,92 @@ mod tests {
     }
 
     #[test]
-    fn just_tx_crosses_first_map_load_then_rejects_unbound_second_word() {
+    fn just_tx_crosses_lookup_and_map_updates_then_exhausts_budget_512() {
         let mut session = default_session("s", 512);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
-        assert_eq!(snap.reason.as_deref(), Some("UndefinedSrc"));
-        assert_eq!(snap.nodes.len(), 263);
-        assert_eq!(snap.edges.len(), 262);
-        assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
-        assert!(
-            snap.nodes.iter().any(|n| {
-                n.predicates
-                    .iter()
-                    .any(|p| p.kind == "helper" && p.helper_id == Some(1))
-            }),
-            "lookup helper Predicate must appear before the second-word failure"
-        );
-        assert!(
-            snap.nodes.iter().any(|n| {
-                n.exprs
-                    .iter()
-                    .any(|e| e.reg.starts_with("map32:") && e.term.starts_with("regVar"))
-            }),
-            "lookup must introduce mapWord = regVar(a0)"
-        );
-        let fail_node = snap.failed.expect("rejected node");
-        let fail_loc = snap
-            .nodes
+        assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
+        assert_eq!(snap.failed, None, "no instruction rejects");
+        assert_eq!(snap.fuel, 0);
+        assert_eq!(snap.nodes.len(), 552);
+        assert_eq!(snap.edges.len(), 551);
+        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 10);
+        assert_eq!(snap.focus, 521);
+        assert_eq!(snap.cursor_j, 75);
+        assert_eq!(snap.work.first(), Some(&snap.focus));
+        assert_eq!(snap.work.len(), 30);
+        assert!(snap.edges.iter().all(|e| !snap.work.contains(&e.src)));
+        assert!(snap.nodes.iter().any(|n| n
+            .predicates
             .iter()
-            .find(|n| n.id == fail_node)
-            .map(|n| n.loc.as_str());
-        assert_eq!(fail_node, 244);
-        assert_eq!(snap.focus, fail_node);
-        assert_eq!(snap.cursor_j, 49);
-        assert!(!snap.work.contains(&fail_node));
-        assert!(snap.edges.iter().all(|e| e.src != fail_node));
-        let rejected = snap.nodes.iter().find(|n| n.id == fail_node).unwrap();
-        assert_eq!(eq_term(rejected, "real32:10"), Some("1"));
-        assert_eq!(
-            eq_term(rejected, "real32:11"),
-            Some("id32(externalResult166_0(1,1077412584,id32(add32(v32:0,4294967280))))")
-        );
-        assert_eq!(
-            fail_loc,
-            Some("49"),
-            "LW a3,4(a1) needs the unbound second Map word"
-        );
-        assert_eq!(eq_term(rejected, "real32:12"), Some("regVar166(real32:10)"));
-        assert_eq!(
-            eq_term(rejected, "map32:13861"),
-            Some("regVar166(real32:10)")
-        );
+            .any(|p| p.kind == "helper" && p.helper_id == Some(1))));
         let first_load = snap.nodes.iter().find(|n| n.id == 227).unwrap();
         assert_eq!(first_load.loc, "48");
-        assert!(snap
-            .edges
-            .iter()
-            .any(|e| e.src == 227 && e.dst == fail_node));
+        let second_load = snap.nodes.iter().find(|n| n.id == 244).unwrap();
+        assert_eq!(second_load.loc, "49");
+        assert_eq!(
+            eq_term(second_load, "real32:12"),
+            Some("regVar166(real32:10)")
+        );
+        assert_eq!(
+            eq_term(second_load, "map32:13861"),
+            Some("regVar166(real32:10)")
+        );
+        let after_load = snap.nodes.iter().find(|n| n.id == 263).unwrap();
+        assert_eq!(after_load.loc, "50");
+        assert!(snap.edges.iter().any(|e| e.src == 244 && e.dst == 263));
+        assert_eq!(
+            eq_term(after_load, "real32:13"),
+            Some("externalResult166_2(1)")
+        );
+        assert_eq!(
+            eq_term(after_load, "map32:14539"),
+            Some("externalResult166_2(1)")
+        );
         assert!(
-            snap.nodes
+            snap.nodes.iter().filter(|n| n.loc == "55").any(|n| {
+                eq_term(n, "map32:13861") == Some("add32(regVar166(real32:10),1)")
+                    && eq_term(n, "map32:14539")
+                        .is_some_and(|t| t.starts_with("add32(externalResult166_2(1),"))
+            }),
+            "both Map stores must reach their successor"
+        );
+        assert!(snap
+            .nodes
+            .iter()
+            .any(|n| n.exprs.iter().any(|e| e.reg.starts_with("packet32:"))));
+    }
+
+    #[test]
+    fn just_tx_larger_budget_completes_with_lookup_update_exit_paths() {
+        let session = default_session("s", 1024);
+        let raw = rv32::expand_bound_words_snapshot(
+            &session.words,
+            session.base_address,
+            session.helper_address,
+            1025,
+            1024,
+        );
+        let s: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(s["status"], "complete");
+        assert_eq!(s["reason"], Value::Null);
+        assert_eq!(s["failed"], Value::Null);
+        assert_eq!(s["fuel"], 187, "837 expansions finish the fixture");
+        assert!(s["work"].as_array().unwrap().is_empty());
+        let (nodes, edges) = graph_from_lean(&s);
+        assert_eq!(nodes.len(), 882);
+        assert_eq!(edges.len(), 881);
+        assert_eq!(nodes.iter().filter(|n| n.loc == "exit").count(), 45);
+        assert_eq!(
+            nodes
                 .iter()
-                .any(|n| n.exprs.iter().any(|e| e.reg.starts_with("packet32:"))),
-            "packet bytes must appear in the just_tx graph"
+                .filter(|n| n.loc == "exit"
+                    && n.exprs.iter().any(|e| e.reg.starts_with("map32:")
+                        && e.term.starts_with("add32(externalResult")))
+                .count(),
+            21,
+            "lookup update paths must reach Exit"
         );
     }
 

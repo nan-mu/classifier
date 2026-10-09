@@ -51,7 +51,7 @@ def encodeCompressed (h : BitVec 16) : Insn :=
     let uimm :=
       (slice16 h 5 5 <<< 6) ||| (slice16 h 12 10 <<< 3) |||
         (slice16 h 6 6 <<< 2)
-    .C_SW (BitVec.ofNat 5 uimm, mkCReg (slice16 h 9 7), mkCReg (slice16 h 4 2))
+    .C_SW (BitVec.ofNat 5 (uimm >>> 2), mkCReg (slice16 h 9 7), mkCReg (slice16 h 4 2))
   | 1, 0 =>
     let rdn := slice16 h 11 7
     let immn := (slice16 h 12 12 <<< 5) ||| slice16 h 6 2
@@ -317,4 +317,13 @@ end RV32IMC
   | _ => false)
 #guard (match RV32IMC.encodeCompressed 0x50fe#16 with
   | .C_LWSP (off, r) => off.toNat == 63 && r.toNat == 1
+  | _ => false)
+
+-- Compressed word loads and stores use the same five-bit word-offset convention.
+#guard (match RV32IMC.encodeCompressed 0xc0d4#16 with
+  | .C_SW (off, base, source) => off.toNat == 1 &&
+      (RV32IMC.creg2reg_idx base).toNat == 9 && (RV32IMC.creg2reg_idx source).toNat == 13
+  | _ => false)
+#guard (match RV32IMC.encodeCompressed 0xdcec#16 with
+  | .C_SW (off, _, _) => off.toNat == 31
   | _ => false)

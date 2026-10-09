@@ -55,23 +55,34 @@ def snapshots(base):
     path = "/api/session/" + created["id"]
     done = request(base, "POST", path + "/run", {})
     assert done["status"] == "fail", done["status"]
-    assert done["reason"] == "UndefinedSrc", done["reason"]
-    assert done["focus"] == done["failed"] == 244
-    rejected = next(n for n in done["nodes"] if n["id"] == done["failed"])
-    # Position 48 reads the bound first word; LW a3,4(a1) needs an unbound second word.
-    assert rejected["loc"] == "49", rejected["loc"]
-    assert any(e["reg"] == "real32:12" and e["term"] == "regVar166(real32:10)"
-               for e in rejected["exprs"]), "first Map word must have been loaded"
-    assert any(e["from"] == 227 and e["to"] == 244 for e in done["edges"])
-    assert len(done["nodes"]) == 263 and len(done["edges"]) == 262
-    assert done["failed"] not in done["work"]
-    assert all(e["from"] != done["failed"] for e in done["edges"])
-    assert any(n["loc"] == "exit" for n in done["nodes"]), "partial Exit must survive"
+    assert done["reason"] == "LimitExceeded", done["reason"]
+    assert done["failed"] is None, "all instructions before budget exhaustion must succeed"
+    assert done["focus"] == 521 and done["cursor_j"] == 75
+    assert done["fuel"] == 0 and len(done["work"]) == 30
+    assert done["work"][0] == done["focus"]
+    assert len(done["nodes"]) == 552 and len(done["edges"]) == 551
+    assert all(e["from"] not in done["work"] for e in done["edges"])
+    assert sum(n["loc"] == "exit" for n in done["nodes"]) == 10
+    after_load = next(n for n in done["nodes"] if n["id"] == 263)
+    assert after_load["loc"] == "50"
+    assert any(e["from"] == 244 and e["to"] == 263 for e in done["edges"])
+    assert any(e["reg"] == "real32:13" and e["term"] == "externalResult166_2(1)"
+               for e in after_load["exprs"]), "second Map word must have been loaded"
+    assert any(e["reg"] == "map32:14539" and e["term"] == "externalResult166_2(1)"
+               for e in after_load["exprs"]), "untouched second word must materialize"
+    assert any(
+        n["loc"] == "55"
+        and any(e["reg"] == "map32:13861" and e["term"] == "add32(regVar166(real32:10),1)"
+                for e in n["exprs"])
+        and any(e["reg"] == "map32:14539" and e["term"].startswith("add32(externalResult166_2(1),")
+                for e in n["exprs"])
+        for n in done["nodes"]
+    ), "both Map stores must update the words that were loaded"
     assert any(
         p.get("kind") == "helper" and p.get("helperId") == 1
         for n in done["nodes"]
         for p in n["predicates"]
-    ), "lookup helper Predicate must appear before the second-word failure"
+    ), "lookup helper Predicate must appear in the graph"
     assert any(
         e["reg"].startswith("map32:") and e["term"].startswith("regVar")
         for n in done["nodes"]

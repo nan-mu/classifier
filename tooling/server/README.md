@@ -15,11 +15,24 @@ step counts, focus, logs, and instruction text. The server depends on the siblin
 The default `tooling/fixtures/just_tx.elf` is a copy of
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`. Its image base is `0x40380200` and
 its dispatcher address is `0x40380000`. With budget 512 the current analysis
-passes position 48's first Map-word load, then fails with `UndefinedSrc` at
-node 244, position 49: `LW a3,4(a1)` needs the unbound second Map word.
-The partial graph has 263 nodes and 262 edges, including some Exit paths.
-The rejected step adds no nodes or edges. The firewall fixture
-`tooling/fixtures/xdp.elf` remains available for helper-completion regressions.
+crosses the lookup, both Map loads at positions 48–49, and both stores at 53–54.
+It exhausts fuel with `LimitExceeded`: 552 nodes, 551 edges, 10 Exits, and 30
+pending nodes. No instruction rejects (`failed` is null); focus is node 521 at
+position 75. The current path model needs 837 expansions to finish. A direct
+Lean snapshot with budget 1024 completes with 882 nodes, 881 edges, and 45 Exits;
+21 Exits carry lookup-region Map updates.
+
+Map word zero remains helper-introduced `regVar`; untouched later words
+materialize on demand through `ExprEffect.inputs` as opaque event-bound content.
+Subword stores preserve symbolic old bits and full-word stores overwrite without
+old content. Compressed loads and stores decode matching word offsets. Accesses
+must fit in one four-byte word and use a concrete affine lookup-return alias.
+Cross-word and non-lookup bases reject. This slice does not establish lookup
+success, ELF value size, actual contents, or consistency between separate lookup
+events. Complete helper resource contracts, general heap binding, and path
+constraint solving remain unfinished.
+
+The firewall fixture `tooling/fixtures/xdp.elf` remains available for helper-completion regressions.
 
 ## Run
 
@@ -92,15 +105,17 @@ so a helper return value cannot become the context pointer.
 Lean emits a typed `helper` Predicate on each summarized call. The snapshot JSON
 carries `kind`, `event` (dynamic source-node identity), `helperId`, and `args`
 (term strings). Lookup also introduces `map32:α = regVar{event}(real32:10)` for
-the first Map word. LOAD/STORE can resolve copies and constant add/subtract aliases
-of one lookup return within [0,4), provided that Map equality exists. Reads write
-only the real destination; byte/halfword stores preserve the rest of the word
-through CommonMath CellAccess. Changing a0 does not change the lookup identity.
-Null/numeric pointers, other helper returns, symbolic offsets, cross-word accesses
-and later words reject. The event-local association proves neither lookup success
-nor actual contents, ELF Map binding/value size, or alias consistency across calls.
-Map memory beyond that word, pointed buffers, helper safety obligations, and
-complete helper correctness remain outside this slice.
+the first Map word. LOAD/STORE resolve copies and constant add/subtract aliases
+of one lookup return, requiring that first-word equality and an access contained
+in one four-byte word. Reads and subword stores materialize untouched later words
+through `ExprEffect.inputs`; full-word stores can create them directly. Reads
+write only the real destination; stores use CommonMath CellAccess and preserve
+other bits for subword writes. Changing a0 does not change the lookup identity.
+Null/numeric pointers, other helper returns, symbolic offsets and cross-word
+accesses reject. The event-local association proves neither lookup success nor
+actual contents, ELF Map binding/value size, or alias consistency across calls.
+Pointed buffers, helper safety obligations, and complete helper correctness
+remain outside this slice.
 
 ## Image and regression limits
 

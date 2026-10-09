@@ -31,9 +31,10 @@ snapshots; it must not become a second implementation of instruction semantics.
 
 - `SemState` contains expressions and predicates. Static program layout and
   wrapper return bindings belong to the ISA step closure.
-- `ExprEffect.inputs` materializes untouched packet inputs; `updates` contains
-  instruction writes. RV32 `expr` returns writes, while `step` transports both
-  in a delta. Previously written bytes must never revert to the entry input.
+- `ExprEffect.inputs` materializes untouched Packet bytes and later Map words;
+  `updates` contains instruction writes. RV32 `expr` returns writes, while `step`
+  transports both in a delta. Previously written bytes and words must never
+  revert to their input content.
 - Expression keys are `(Reg, Rel)`. Apply a local update by replacing the
   matching global keys, preserving other bindings. Validate key uniqueness;
   the list-backed representation does not enforce it by construction.
@@ -76,7 +77,7 @@ The executable slice includes mixed 16/32-bit decoding, arithmetic and bitwise
 updates, direct branches and jumps, bound concrete indirect targets, wrapper
 returns, selected context and stack loads, byte/halfword/word stack stores,
 subword extraction, Packet byte/halfword/word reads and writes, compressed packet
-word accesses, first-word Map byte/halfword/word reads and writes through lookup
+word accesses, event-local Map byte/halfword/word reads and writes through lookup
 return aliases, and ELF-bound helper call summaries. High-half
 multiplication and division/remainder currently require evaluable operands.
 
@@ -87,12 +88,18 @@ offsets reject without a unique binding. Known concrete lengths reject overrun;
 symbolic bounds, permissions, and machine alignment remain unproved premises.
 Stack subword writes preserve the rest of their canonical word and require its
 old value; cross-word stack accesses reject. Map accesses require one lookup
-return event, a concrete affine displacement within its introduced [0,4) word,
-and an existing Map equality. They use CommonMath CellAccess; loads write only
-the real destination, and stores overwrite the Map word, preserving other bits
-for subword writes. Copies and constant add/subtract aliases retain that identity
-after a0 changes. Null/numeric pointers, non-lookup returns, symbolic offsets,
-cross-word accesses and later words reject. This event-local association does
+return event, its helper-introduced word-zero equality, and a concrete affine
+displacement. Each access must fit within a canonical four-byte word and uses
+CommonMath CellAccess. Loads write only the real destination. Untouched later
+words materialize in `ExprEffect.inputs` as opaque
+`externalResult event (1 + wordBase / 4) [C32 1]` content terms. Subword stores
+materialize old content before preserving other bits; aligned full-word stores
+create or overwrite a word without reading old content. Updates always take
+precedence over inputs, so later reads observe current writes. Word zero keeps
+the helper's `regVar` convention. Copies and constant add/subtract aliases retain
+that identity after a0 changes. Null/numeric pointers, non-lookup returns,
+symbolic offsets and cross-word accesses reject. Concrete displacements normalize
+modulo 32 bits; no ELF value size is inferred. This event-local association does
 not prove lookup success, actual Map contents, ELF value size, or alias consistency
 between separate lookups. General heap/ELF Map binding,
 complete helper contracts, symbolic indirect-target resolution, and path
@@ -122,11 +129,15 @@ nor arbitrary fresh packet names resolve these missing bindings. See
 
 The default Compact XDP ELF is `tooling/fixtures/just_tx.elf` (copied from
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`). Its decoded prefix has 79
-instructions. With budget 512 it passes position 48's first Map-word LW and
-reaches Exit on some paths, then fails at node 244, position 49 (`UndefinedSrc`):
-`LW a3,4(a1)` needs the unbound second Map word. The partial graph has 263 nodes
-and 262 edges; the rejected step adds neither. The firewall fixture
-`tooling/fixtures/xdp.elf` is retained for helper-call regressions; full-program
+instructions. With budget 512 it crosses both Map loads at positions 48–49 and
+both stores at 53–54, then exhausts fuel (`LimitExceeded`) without rejecting an
+instruction. The graph has 552 nodes, 551 edges, 10 Exits and 30 pending nodes;
+`failed` is null, focus is node 521 at position 75, and fuel is zero. Completion
+needs 837 expansions under the current unmerged path model. A direct bound
+snapshot with budget 1024 completes with 882 nodes, 881 edges and 45 Exits,
+including 21 carrying lookup-region Map updates. Compressed LW/SW use matching
+word-offset decoding, so position 54 updates the same offset-4 word loaded at 49.
+The firewall fixture `tooling/fixtures/xdp.elf` is retained for helper-call regressions; full-program
 completion additionally requires all resource offsets and accesses to be bound.
 Helper-effect unit coverage also lives in
 `tooling/lean-binding/tests/helper_calls.rs`.
