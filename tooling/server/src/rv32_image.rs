@@ -6,7 +6,9 @@ use std::str::FromStr;
 
 use riscv_isa::{decode_le_bytes, Instruction, Target};
 
-const BIN: &[u8] = include_bytes!("../../fixtures/esp32c3.bin");
+/// Default XDP fixture used when the client omits an uploaded image.
+pub const DEFAULT_BIN: &[u8] = include_bytes!("../../fixtures/esp32c3.bin");
+pub const DEFAULT_NAME: &str = "esp32c3.bin";
 
 #[derive(Debug, Clone)]
 pub struct DecodedInsn {
@@ -152,7 +154,11 @@ pub fn decode_image(bin: &[u8]) -> InsnImage {
 
 pub fn esp32c3_image() -> &'static InsnImage {
     static IMAGE: OnceLock<InsnImage> = OnceLock::new();
-    IMAGE.get_or_init(|| decode_image(BIN))
+    IMAGE.get_or_init(|| decode_image(DEFAULT_BIN))
+}
+
+pub fn words(image: &InsnImage) -> Vec<u32> {
+    image.insns.iter().map(|d| d.word).collect()
 }
 
 pub fn emit_lean_words(image: &InsnImage) -> String {

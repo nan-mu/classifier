@@ -1,8 +1,8 @@
-use lean_binding::{common_math, rv32};
+use lean_binding::rv32;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::rv32_image;
+use crate::rv32_image::{self, InsnImage};
 
 struct LogEntry {
     t: u32,
@@ -10,50 +10,32 @@ struct LogEntry {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProgramKind {
-    Esp32c3,
-    Demo,
+pub enum Arch {
+    Rv32imc,
 }
 
-impl ProgramKind {
+impl Arch {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "esp32c3" => Some(Self::Esp32c3),
-            "demo" => Some(Self::Demo),
+            "rv32imc" | "esp32c3" => Some(Self::Rv32imc),
             _ => None,
         }
     }
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Esp32c3 => "esp32c3",
-            Self::Demo => "demo",
+            Self::Rv32imc => "rv32imc",
         }
     }
 }
 
-/// §18 bounded-loop demo positions (Lean `demoProgLen` = 4). Not RV32 encodings.
-fn demo_insns() -> Vec<InsnOut> {
-    [
-        "j0: if r >= 3 then Taken→j3 else NotTaken→j1",
-        "j1: r := r + 1",
-        "j2: goto j0",
-        "j3: return / Exit",
-    ]
-    .into_iter()
-    .enumerate()
-    .map(|(j, text)| InsnOut {
-        j: j as u32,
-        text: text.to_string(),
-    })
-    .collect()
-}
-
-/// Session chrome only. Graph comes from Lean expand snapshots.
-/// Esp32c3 insn list/words are partitioned at runtime with `riscv-isa` (`rv32_image`).
+/// Session chrome only. Graph comes from Lean expand snapshots over decoded words.
 pub struct Session {
     id: String,
-    program: ProgramKind,
+    arch: Arch,
+    name: String,
+    image: InsnImage,
+    words: Vec<u32>,
     budget: u32,
     steps: u32,
     focus: u32,
@@ -61,18 +43,25 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(id: impl Into<String>, budget: u32, program: ProgramKind) -> Self {
+    pub fn new(id: impl Into<String>, budget: u32, arch: Arch, name: String, bin: &[u8]) -> Self {
+        let image = rv32_image::decode_image(bin);
+        let words = rv32_image::words(&image);
         let mut session = Self {
             id: id.into(),
-            program,
+            arch,
+            name,
+            image,
+            words,
             budget,
             steps: 0,
             focus: 0,
             log: Vec::new(),
         };
         session.push_log(format!(
-            "init root pre-state program={} budget={}",
-            program.as_str(),
+            "init root pre-state arch={} image={} insns={} budget={}",
+            arch.as_str(),
+            session.name,
+            session.words.len(),
             budget
         ));
         session.sync_focus_from_lean();
@@ -132,19 +121,18 @@ impl Session {
             budget: self.budget,
             work,
             focus: self.focus,
-            program: self.program.as_str(),
-            insns: match self.program {
-                ProgramKind::Esp32c3 => rv32_image::esp32c3_image()
-                    .insns
-                    .iter()
-                    .enumerate()
-                    .map(|(j, insn)| InsnOut {
-                        j: j as u32,
-                        text: insn.text.clone(),
-                    })
-                    .collect(),
-                ProgramKind::Demo => demo_insns(),
-            },
+            arch: self.arch.as_str(),
+            program: self.name.clone(),
+            insns: self
+                .image
+                .insns
+                .iter()
+                .enumerate()
+                .map(|(j, insn)| InsnOut {
+                    j: j as u32,
+                    text: insn.text.clone(),
+                })
+                .collect(),
             nodes,
             edges,
             log: self
@@ -161,10 +149,7 @@ impl Session {
     }
 
     fn lean_value(&self) -> Value {
-        let raw = match self.program {
-            ProgramKind::Esp32c3 => rv32::expand_snapshot(self.steps, self.budget),
-            ProgramKind::Demo => common_math::path_demo_snapshot(self.steps, self.budget),
-        };
+        let raw = rv32::expand_words_snapshot(&self.words, self.steps, self.budget);
         serde_json::from_str(&raw).unwrap_or_else(|_| {
             serde_json::json!({
                 "status": "fail",
@@ -367,7 +352,8 @@ pub struct Snapshot {
     pub budget: u32,
     pub work: Vec<u32>,
     pub focus: u32,
-    pub program: &'static str,
+    pub arch: &'static str,
+    pub program: String,
     pub insns: Vec<InsnOut>,
     pub nodes: Vec<NodeOut>,
     pub edges: Vec<EdgeOut>,
@@ -435,6 +421,16 @@ pub struct LogOut {
 mod tests {
     use super::*;
 
+    fn default_session(id: &str, budget: u32) -> Session {
+        Session::new(
+            id,
+            budget,
+            Arch::Rv32imc,
+            rv32_image::DEFAULT_NAME.into(),
+            rv32_image::DEFAULT_BIN,
+        )
+    }
+
     fn eq_term<'a>(node: &'a NodeOut, reg: &str) -> Option<&'a str> {
         node.exprs
             .iter()
@@ -444,7 +440,7 @@ mod tests {
 
     #[test]
     fn fresh_session_matches_the_root_snapshot() {
-        let session = Session::new("s", 3, ProgramKind::Esp32c3);
+        let session = default_session("s", 3);
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
         assert_eq!(snap.reason, None);
@@ -460,8 +456,9 @@ mod tests {
         assert_eq!(snap.nodes[0].exprs.len(), 28);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
-        assert!(snap.log[0].msg.contains("esp32c3"));
-        assert_eq!(snap.program, "esp32c3");
+        assert!(snap.log[0].msg.contains("esp32c3.bin"));
+        assert_eq!(snap.arch, "rv32imc");
+        assert_eq!(snap.program, "esp32c3.bin");
         assert!(snap.insns[0].text.starts_with("0000 LW "));
         assert_eq!(snap.insns.len(), 48);
         assert!(snap.proof_note.contains("core_result_only"));
@@ -470,7 +467,7 @@ mod tests {
     #[test]
     fn budget_3_hits_limit_mid_program() {
         // esp32c3.bin is 48 insns; budget 3 cannot reach Exit.
-        let mut session = Session::new("s", 3, ProgramKind::Esp32c3);
+        let mut session = default_session("s", 3);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
@@ -483,7 +480,7 @@ mod tests {
 
     #[test]
     fn budget_2_hits_limit_before_exit() {
-        let mut session = Session::new("s", 2, ProgramKind::Esp32c3);
+        let mut session = default_session("s", 2);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
@@ -496,7 +493,7 @@ mod tests {
 
     #[test]
     fn zero_fuel_fails_on_first_expand() {
-        let mut session = Session::new("s", 0, ProgramKind::Esp32c3);
+        let mut session = default_session("s", 0);
         assert_eq!(session.snapshot().status, "running");
         session.step_once();
         let snap = session.snapshot();
@@ -510,7 +507,7 @@ mod tests {
 
     #[test]
     fn one_step_enqueues_fallthrough_child() {
-        let mut session = Session::new("s", 3, ProgramKind::Esp32c3);
+        let mut session = default_session("s", 3);
         session.step_once();
         let snap = session.snapshot();
         assert_eq!(snap.status, "running");
@@ -528,21 +525,24 @@ mod tests {
     }
 
     #[test]
-    fn demo_session_budget_11_completes_with_taken_not_taken() {
-        let mut session = Session::new("demo", 11, ProgramKind::Demo);
-        session.run_all();
+    fn uploaded_default_bytes_match_fixture_session() {
+        let session = Session::new(
+            "up",
+            3,
+            Arch::Rv32imc,
+            "upload.bin".into(),
+            rv32_image::DEFAULT_BIN,
+        );
         let snap = session.snapshot();
-        assert_eq!(snap.program, "demo");
-        assert_eq!(snap.status, "complete");
-        assert!(snap.edges.iter().any(|e| e.dir == "taken"));
-        assert!(snap.edges.iter().any(|e| e.dir == "not_taken"));
-        assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
+        assert_eq!(snap.program, "upload.bin");
+        assert_eq!(snap.insns.len(), 48);
+        assert_eq!(snap.nodes[0].exprs.len(), 28);
     }
 
     #[test]
     fn esp32c3_opening_emits_bltu_taken_and_not_taken() {
         // Opening reaches symbolic BLTU a1,a3,+116; expand forks Taken then NotTaken.
-        let mut session = Session::new("s", 48, ProgramKind::Esp32c3);
+        let mut session = default_session("s", 48);
         for _ in 0..5 {
             session.step_once();
         }
@@ -620,7 +620,7 @@ mod tests {
 
     #[test]
     fn esp32c3_fail_preserves_partial_graph_with_bltu_and_ret() {
-        let mut session = Session::new("s", 512, ProgramKind::Esp32c3);
+        let mut session = default_session("s", 512);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");

@@ -1,4 +1,4 @@
-import type { ProgramKind, SessionSnapshot } from "./types";
+import type { ArchKind, SessionSnapshot } from "./types";
 
 async function postJson(path: string, body: unknown): Promise<SessionSnapshot> {
   const res = await fetch(path, {
@@ -14,14 +14,32 @@ async function postJson(path: string, body: unknown): Promise<SessionSnapshot> {
 
 export type CreateOpts = {
   budget?: number;
-  program?: ProgramKind;
+  arch?: ArchKind;
+  name?: string;
+  /** Raw firmware bytes; omitted → server uses embedded `esp32c3.bin`. */
+  image?: ArrayBuffer | null;
 };
 
+function bytesToBase64(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 export function createSession(opts: CreateOpts = {}): Promise<SessionSnapshot> {
-  return postJson("/api/session", {
-    budget: opts.budget ?? 11,
-    program: opts.program ?? "esp32c3",
-  });
+  const body: Record<string, unknown> = {
+    budget: opts.budget ?? 512,
+    arch: opts.arch ?? "rv32imc",
+    name: opts.name ?? "esp32c3.bin",
+  };
+  if (opts.image && opts.image.byteLength > 0) {
+    body.image_b64 = bytesToBase64(opts.image);
+  }
+  return postJson("/api/session", body);
 }
 
 export function stepSession(id: string): Promise<SessionSnapshot> {

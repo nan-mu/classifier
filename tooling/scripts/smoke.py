@@ -25,18 +25,18 @@ def request(base, method, path, body=None):
 
 def snapshots(base):
     result = {}
-    for program, budget in [("demo", 11), ("demo", 10), ("esp32c3", 3)]:
-        created = request(base, "POST", "/api/session", {"program": program, "budget": budget})
+    for budget in (3, 2):
+        created = request(base, "POST", "/api/session", {"budget": budget, "arch": "rv32imc"})
+        assert created["arch"] == "rv32imc", created["arch"]
+        assert created["program"] == "esp32c3.bin", created["program"]
         path = "/api/session/" + created["id"]
         stepped = request(base, "POST", path + "/step", {})
         done = request(base, "POST", path + "/run", {})
         assert request(base, "GET", path) == done, "GET must return the final snapshot"
-        expected = "complete" if program == "demo" and budget == 11 else "fail"
-        assert done["status"] == expected, (program, budget, done["status"])
-        if expected == "fail":
-            assert done["reason"] == "LimitExceeded", done["reason"]
+        assert done["status"] == "fail", (budget, done["status"])
+        assert done["reason"] == "LimitExceeded", done["reason"]
         assert len(stepped["nodes"]) > len(created["nodes"]), "step must expand the graph"
-        result[f"{program}/{budget}"] = [created, stepped, done]
+        result[f"esp32c3.bin/{budget}"] = [created, stepped, done]
     try:
         request(base, "GET", "/api/session/missing")
     except urllib.error.HTTPError as error:
@@ -92,7 +92,7 @@ def main():
                 assert actual == json.loads(args.compare.read_text()), "API snapshots changed during migration"
             if args.capture:
                 args.capture.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n")
-            print("Verified live API create, step, run, GET, and 404 behavior for demo and esp32c3.")
+            print("Verified live API create, step, run, GET, and 404 behavior for default esp32c3.bin.")
             if args.compare:
                 print("All snapshots match the pre-migration baseline.")
         except BaseException:

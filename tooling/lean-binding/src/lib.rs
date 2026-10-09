@@ -21,6 +21,7 @@ mod ffi {
         // Inlines from lean.h, exported by shim.c
         pub fn lean_binding_string_cstr(o: LeanObj) -> *const c_char;
         pub fn lean_binding_dec(o: LeanObj);
+        pub fn lean_binding_mk_uint32_array(data: *const u32, len: usize) -> LeanObj;
 
         pub fn common_math_add32(a: u32, b: u32) -> u32;
         pub fn common_math_sub32(a: u32, b: u32) -> u32;
@@ -41,6 +42,11 @@ mod ffi {
         pub fn lean_rv32_value_div(rs1_val: u32, rs2_val: u32) -> u32;
         pub fn lean_rv32_value_ecall_rejects(unused: u32) -> u32;
         pub fn lean_rv32_expand_snapshot(steps: u32, budget: u32) -> LeanObj;
+        pub fn lean_rv32_expand_words_snapshot(
+            words: LeanObj,
+            steps: u32,
+            budget: u32,
+        ) -> LeanObj;
     }
 }
 
@@ -178,6 +184,21 @@ pub mod rv32 {
         init();
         unsafe {
             let obj = ffi::lean_rv32_expand_snapshot(steps, budget);
+            let cstr = ffi::lean_binding_string_cstr(obj);
+            let s = std::ffi::CStr::from_ptr(cstr)
+                .to_string_lossy()
+                .into_owned();
+            ffi::lean_binding_dec(obj);
+            s
+        }
+    }
+
+    /// JSON after `steps` expandOne calls on a caller-supplied instruction word list.
+    pub fn expand_words_snapshot(words: &[u32], steps: u32, budget: u32) -> String {
+        init();
+        unsafe {
+            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let obj = ffi::lean_rv32_expand_words_snapshot(arr, steps, budget);
             let cstr = ffi::lean_binding_string_cstr(obj);
             let s = std::ffi::CStr::from_ptr(cstr)
                 .to_string_lossy()

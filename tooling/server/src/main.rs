@@ -10,7 +10,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use expand::{ProgramKind, Session, Snapshot};
+use base64::Engine;
+use expand::{Arch, Session, Snapshot};
 use serde::Deserialize;
 use tower_http::cors::CorsLayer;
 
@@ -23,7 +24,12 @@ struct AppState {
 #[derive(Deserialize)]
 struct CreateBody {
     budget: Option<u32>,
-    program: Option<String>,
+    /// ISA selector. Currently only `rv32imc` (alias `esp32c3` accepted).
+    arch: Option<String>,
+    /// Display name for the firmware image. Defaults to `esp32c3.bin`.
+    name: Option<String>,
+    /// Optional base64-encoded firmware bytes. Omitted → embedded `esp32c3.bin`.
+    image_b64: Option<String>,
 }
 
 fn app(state: AppState) -> Router {
@@ -57,23 +63,49 @@ async fn main() {
         .expect("serve");
 }
 
+fn decode_image_b64(raw: &str) -> Result<Vec<u8>, StatusCode> {
+    base64::engine::general_purpose::STANDARD
+        .decode(raw.trim())
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(raw.trim()))
+        .map_err(|_| StatusCode::BAD_REQUEST)
+}
+
 async fn create_session(
     State(app): State<AppState>,
     body: Bytes,
 ) -> Result<Json<Snapshot>, StatusCode> {
-    let (budget, program) = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
-        (11, ProgramKind::Esp32c3)
+    let (budget, arch, name, bin) = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
+        (
+            512,
+            Arch::Rv32imc,
+            rv32_image::DEFAULT_NAME.to_string(),
+            rv32_image::DEFAULT_BIN.to_vec(),
+        )
     } else {
         let parsed: CreateBody =
             serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let program = match parsed.program.as_deref() {
-            None => ProgramKind::Esp32c3,
-            Some(s) => ProgramKind::parse(s).ok_or(StatusCode::BAD_REQUEST)?,
+        let arch = match parsed.arch.as_deref() {
+            None | Some("") => Arch::Rv32imc,
+            Some(s) => Arch::parse(s).ok_or(StatusCode::BAD_REQUEST)?,
         };
-        (parsed.budget.unwrap_or(11), program)
+        let name = parsed
+            .name
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| rv32_image::DEFAULT_NAME.to_string());
+        let bin = match parsed.image_b64.as_deref() {
+            None | Some("") => rv32_image::DEFAULT_BIN.to_vec(),
+            Some(b64) => {
+                let bytes = decode_image_b64(b64)?;
+                if bytes.is_empty() || bytes.len() > 256 * 1024 {
+                    return Err(StatusCode::BAD_REQUEST);
+                }
+                bytes
+            }
+        };
+        (parsed.budget.unwrap_or(512), arch, name, bin)
     };
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
-    let session = Session::new(id.clone(), budget, program);
+    let session = Session::new(id.clone(), budget, arch, name, &bin);
     let snap = session.snapshot();
     app.sessions
         .lock()
@@ -148,6 +180,8 @@ mod http_tests {
         let router = app(new_state());
         let (status, created) = call(&router, "POST", "/api/session", br#"{"budget":2}"#).await;
         assert_eq!(status, StatusCode::OK);
+        assert_eq!(created["arch"], "rv32imc");
+        assert_eq!(created["program"], "esp32c3.bin");
         let id = created["id"].as_str().expect("id");
         let (status, done) = call(
             &router,
@@ -174,5 +208,18 @@ mod http_tests {
         let router = app(new_state());
         let (status, _) = call(&router, "POST", "/api/session/missing/run", b"{}").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_arch() {
+        let router = app(new_state());
+        let (status, _) = call(
+            &router,
+            "POST",
+            "/api/session",
+            br#"{"budget":2,"arch":"ebpf"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

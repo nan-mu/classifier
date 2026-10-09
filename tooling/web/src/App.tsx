@@ -9,13 +9,20 @@ import {
   type EdgeMouseHandler,
   type NodeMouseHandler,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import "@xyflow/react/dist/style.css";
 import { createSession, runSession, stepSession } from "./api";
 import { insnIndexForNode, localExprs, splitExprs } from "./exprs";
 import { kindLabel, parseReg, parseTerm, termToPlain } from "./parse";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
-import type { ExprRow, PredRow, ProgramKind, SessionSnapshot } from "./types";
+import type { ArchKind, ExprRow, PredRow, SessionSnapshot } from "./types";
 import { useForceLayout } from "./useForceLayout";
 import {
   countBranchEdges,
@@ -136,35 +143,59 @@ function DebugScreen() {
     panel: "node",
   });
   const [budget, setBudget] = useState(512);
-  const [program, setProgram] = useState<ProgramKind>("esp32c3");
+  const [arch, setArch] = useState<ArchKind>("rv32imc");
+  const [firmwareName, setFirmwareName] = useState("esp32c3.bin");
+  const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const flow = useReactFlow();
 
-  const boot = useCallback(async (prog: ProgramKind, b: number) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const next = await createSession({ budget: b, program: prog });
-      setSnap(next);
-      setSel((s) => ({
-        ...s,
-        focus: next.focus,
-        compare: null,
-        edgeKey: null,
-      }));
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "session failed");
-    } finally {
-      setBusy(false);
-    }
-  }, []);
+  const boot = useCallback(
+    async (nextArch: ArchKind, b: number, name: string, image: ArrayBuffer | null) => {
+      setBusy(true);
+      setError(null);
+      try {
+        const next = await createSession({
+          budget: b,
+          arch: nextArch,
+          name,
+          image,
+        });
+        setSnap(next);
+        setSel((s) => ({
+          ...s,
+          focus: next.focus,
+          compare: null,
+          edgeKey: null,
+        }));
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "session failed");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    void boot("esp32c3", 512);
+    void boot("rv32imc", 512, "esp32c3.bin", null);
   }, [boot]);
+
+  const onFirmwarePick = useCallback((ev: ChangeEvent<HTMLInputElement>) => {
+    const file = ev.target.files?.[0];
+    if (!file) {
+      setFirmwareName("esp32c3.bin");
+      setFirmwareBytes(null);
+      return;
+    }
+    void file.arrayBuffer().then((buf) => {
+      setFirmwareName(file.name);
+      setFirmwareBytes(buf);
+    });
+  }, []);
 
   const focusedNode = snap?.nodes.find((n) => n.id === sel.focus) ?? null;
   const compareNode =
@@ -376,17 +407,43 @@ function DebugScreen() {
     <Flex className="app-shell" height="100%" flexDirection="column">
       <Flex className="topbar" alignItems="center" gap={10} px={12} pt={10}>
         <Text className="panel__title" p={0}>
-          程序
+          架构
         </Text>
         <select
           className="toolbar__select"
-          value={program}
+          value={arch}
           disabled={busy}
-          onChange={(ev) => setProgram(ev.target.value as ProgramKind)}
+          onChange={(ev) => setArch(ev.target.value as ArchKind)}
         >
-          <option value="esp32c3">esp32c3.bin (RV32)</option>
-          <option value="demo">§18 Demo (Direction)</option>
+          <option value="rv32imc">RV32IMC</option>
         </select>
+        <Text className="muted">固件</Text>
+        <label className="toolbar__file">
+          <input
+            ref={fileRef}
+            type="file"
+            disabled={busy}
+            onChange={onFirmwarePick}
+          />
+          <span className="toolbar__file-btn">选择文件</span>
+        </label>
+        <Text className="mono muted" fontSize={11} title={firmwareName}>
+          {firmwareBytes ? firmwareName : "esp32c3.bin（默认）"}
+        </Text>
+        {firmwareBytes ? (
+          <Button
+            type="button"
+            className="toolbar__btn toolbar__btn--quiet"
+            disabled={busy}
+            onClick={() => {
+              setFirmwareName("esp32c3.bin");
+              setFirmwareBytes(null);
+              if (fileRef.current) fileRef.current.value = "";
+            }}
+          >
+            恢复默认
+          </Button>
+        ) : null}
         <Text className="muted">budget</Text>
         <input
           className="toolbar__input mono"
@@ -401,7 +458,7 @@ function DebugScreen() {
           type="button"
           className="toolbar__btn"
           disabled={busy}
-          onClick={() => void boot(program, budget)}
+          onClick={() => void boot(arch, budget, firmwareName, firmwareBytes)}
         >
           新建运行
         </Button>
@@ -731,9 +788,9 @@ function DebugScreen() {
         </Button>
         <Text className="mono toolbar__status">
           {snap
-            ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  program ${
-                snap.program
-              }${snap.reason ? `  ${snap.reason}` : ""}`
+            ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
+                snap.arch
+              }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}`
             : "连接中"}
         </Text>
       </Flex>

@@ -2,7 +2,7 @@
 
 [项目入口](../../README.md) · [文档索引](../../doc/README.md)
 
-Canvas for the Expand demo. Vite proxies `/api` to the Lean-backed server.
+Canvas for budgeted Expand. Vite proxies `/api` to the Lean-backed server.
 
 ## Run
 
@@ -25,6 +25,7 @@ Open `http://127.0.0.1:5173`.
 
 Click a node to focus it. Click the focused work-head node again, or press **单步调试**, to expand that node. **到底调试** runs until the session is complete or failed.
 
-The UI starts with `esp32c3` and budget 512. The program selector also offers
-the section 18 `demo`; its budget 11 example completes. API request defaults
-are documented in [Server](../server/README.md).
+The UI starts with architecture `RV32IMC`, firmware `esp32c3.bin` (server default),
+and budget 512. Choose a local firmware file to upload; leave the file empty or
+press **恢复默认** to use the embedded fixture. API fields are documented in
+[Server](../server/README.md).

@@ -1,6 +1,7 @@
 export type SessionStatus = "running" | "complete" | "fail";
 
-export type ProgramKind = "esp32c3" | "demo";
+/** Currently only RV32IMC expand is wired through Lean. */
+export type ArchKind = "rv32imc";
 
 export type InsnRow = {
   j: number;
@@ -53,7 +54,9 @@ export type SessionSnapshot = {
   budget: number;
   work: number[];
   focus: number;
-  program: ProgramKind;
+  arch: ArchKind;
+  /** Firmware display name (`esp32c3.bin` by default). */
+  program: string;
   insns: InsnRow[];
   nodes: GraphNode[];
   edges: GraphEdge[];

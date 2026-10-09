@@ -317,6 +317,35 @@ body {
   width: 64px;
 }
 
+.toolbar__file {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+
+.toolbar__file input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.toolbar__file-btn {
+  display: inline-block;
+  padding: 6px 10px;
+  background: rgba(40, 36, 30, 0.9);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.toolbar__btn--quiet {
+  padding: 6px 10px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
 .collapse-toggle {
   display: inline-flex;
   align-items: center;

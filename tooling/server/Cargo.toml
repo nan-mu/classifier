@@ -3,10 +3,11 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Lean-backed Expand HTTP server for the §18 demo"
+description = "Lean-backed Expand HTTP server for RV32IMC firmware images"
 
 [dependencies]
 axum = "0.8"
+base64 = "0.22"
 lean-binding = { path = "../lean-binding" }
 riscv-isa = "0.3"
 serde = { version = "1", features = ["derive"] }
