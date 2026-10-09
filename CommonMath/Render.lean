@@ -52,6 +52,7 @@ def renderOp : Op → String
   | .zext q w _ => s!"zext{q}/{renderWidth w}"
   | .sext q w _ => s!"sext{q}/{renderWidth w}"
   | .bswap q _ => s!"bswap{q}"
+  | .externalResult event lane => s!"externalResult{event}_{lane}"
   | .inputByte => "inputByte"
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
 

@@ -204,20 +204,6 @@ private def ctxBaseAlpha (Eg : ExprSet) : Option Nat := Id.run do
         base := some (match base with | none => α | some b => min b α)
   pure base
 
-/-- Word-only context load. Resolve the access before discarding an x0 destination. -/
-def exprLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat) : Option ExprSet := do
-  if !guardEg Eg || offset % 4 != 0 || offset ≥ 24 then none
-  else
-    let source ← readReg Eg rs1
-    let ctx ← Eg.lookupEq (Reg.real32 10)
-    -- Term has no BEq instance; its derived Repr compares the complete syntax, including widths.
-    if source.width != .w32 || ctx.width != .w32 || reprStr (solve source) != reprStr (solve ctx) then
-      none
-    else
-      let α ← ctxBaseAlpha Eg
-      let t ← Eg.lookupEq (Reg.sw (α + offset / 4))
-      some (assign rd t)
-
 /-- Stack slots use alphas ≥ 2^32; context bindings occupy the lower namespace.
 Normalize only affine 32-bit addresses, without changing symbolic value terms. -/
 private def affineAddress : Term → Option (Option Nat × Nat)
@@ -230,6 +216,21 @@ private def affineAddress : Term → Option (Option Nat × Nat)
       let (root, off) ← affineAddress a
       some (root, MNat 32 (off + (1 <<< 32) - MNat 32 b))
   | _ => none
+
+/-- Word-only context load. Resolve the access before discarding an x0 destination. -/
+def exprLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
+    (boundCtx : Option Term := none) : Option ExprSet := do
+  if !guardEg Eg || offset % 4 != 0 || offset ≥ 24 then none
+  else
+    let source ← readReg Eg rs1
+    let ctx ← boundCtx.orElse (fun _ => Eg.lookupEq (Reg.real32 10))
+    if source.width != .w32 || ctx.width != .w32 ||
+        affineAddress source != affineAddress ctx || (affineAddress source).isNone then
+      none
+    else
+      let α ← ctxBaseAlpha Eg
+      let t ← Eg.lookupEq (Reg.sw (α + offset / 4))
+      some (assign rd t)
 
 /-- SP and its affine aliases bind aligned word slots. Symbolic alignment is an
 entry-contract premise; concrete addresses are checked. No heap is inferred. -/
@@ -253,10 +254,11 @@ def exprStackLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat) : Option ExprS
     let t ← Eg.lookupEq slot
     if t.width != .w32 then none else some (assign rd t)
 
-def exprWordLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat) : Option ExprSet :=
+def exprWordLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
+    (boundCtx : Option Term := none) : Option ExprSet :=
   match exprStackLOAD Eg rs1 rd offset with
   | some Ei => some Ei
-  | none => exprLOAD Eg rs1 rd offset
+  | none => exprLOAD Eg rs1 rd offset boundCtx
 
 /-- Packet provenance follows the data slot, not the mutable a0 register.
 An immutable byte image is an observation model; bounds/permissions are not proved here. -/
@@ -289,12 +291,12 @@ def exprPacketLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
 /-- Narrow loads project the addressed bytes of a known word before extending.
 Cross-word accesses require a separate resource rule and reject. -/
 def exprSizedLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
-    (isUnsigned : Bool) : Option ExprSet := do
+    (isUnsigned : Bool) (boundCtx : Option Term := none) : Option ExprSet := do
   if !(width == 1 || width == 2 || width == 4) then none
   else
     let within := offset % 4
     let known := if within + width ≤ 4 then
-      exprWordLOAD Eg rs1 rd (offset - within) else none
+      exprWordLOAD Eg rs1 rd (offset - within) boundCtx else none
     match known with
     | some Ei =>
       if rd.toNat == 0 then some Ei
@@ -407,7 +409,7 @@ def exprC_JALR (Eg : ExprSet) (rs1 : regidx) : Option ExprSet :=
         | none => none
         | some tπ => some (assign ra (addStar .w32 tπ (Term.C32 2)))
 
-def expr (Eg : ExprSet) (i : Insn) : Option ExprSet :=
+def expr (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option ExprSet :=
   match i with
   | .UTYPE (imm, rd, op) => exprUTYPE Eg imm rd op
   | .ITYPE (imm, rs1, rd, op) => exprITYPE Eg imm rs1 rd op
@@ -421,10 +423,10 @@ def expr (Eg : ExprSet) (i : Insn) : Option ExprSet :=
   | .BTYPE _ => exprEmpty Eg
   | .LOAD (imm, rs1, rd, isUnsigned, width) =>
       if width == 4 then
-        match exprWordLOAD Eg rs1 rd (immI32 imm) with
+        match exprWordLOAD Eg rs1 rd (immI32 imm) boundCtx with
         | some Ei => some Ei
         | none => exprPacketLOAD Eg rs1 rd (immI32 imm) width isUnsigned
-      else exprSizedLOAD Eg rs1 rd (immI32 imm) width isUnsigned
+      else exprSizedLOAD Eg rs1 rd (immI32 imm) width isUnsigned boundCtx
   | .STORE (imm, rs2, rs1, width) => exprSTORE Eg rs1 rs2 (immI32 imm) width
   | .FENCE_TSO _ => exprEmpty Eg
   | .FENCE _ => exprEmpty Eg
@@ -454,7 +456,7 @@ def expr (Eg : ExprSet) (i : Insn) : Option ExprSet :=
       else match readReg Eg rs1 with | none => none | some _ => exprEmpty Eg
   | .C_BEQZ _ | .C_BNEZ _ => exprEmpty Eg
   | .C_LW (uimm, rs1, rd) =>
-      exprWordLOAD Eg (creg2reg_idx rs1) (creg2reg_idx rd) (uimm.toNat <<< 2)
+      exprWordLOAD Eg (creg2reg_idx rs1) (creg2reg_idx rd) (uimm.toNat <<< 2) boundCtx
   | .C_LWSP (uimm, rd) =>
       if isX0 rd then none else exprStackLOAD Eg sp rd (uimm.toNat <<< 2)
   | .C_SW (uimm, rs1, rs2) =>
@@ -464,8 +466,8 @@ def expr (Eg : ExprSet) (i : Insn) : Option ExprSet :=
 
 /-- Single-instruction `value(Eg, i) = Ei`: return the local set from `expr`
 after checking key uniqueness. CommonMath applies the global-state override. -/
-def step (Eg : ExprSet) (i : Insn) : Option ExprSet :=
-  match expr Eg i with
+def step (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option ExprSet :=
+  match expr Eg i boundCtx with
   | none => none
   | some Ei => if Ei.keysUnique then some Ei else none
 

@@ -42,11 +42,14 @@ mod ffi {
         pub fn lean_rv32_value_div(rs1_val: u32, rs2_val: u32) -> u32;
         pub fn lean_rv32_value_ecall_rejects(unused: u32) -> u32;
         pub fn lean_rv32_expand_snapshot(steps: u32, budget: u32) -> LeanObj;
-        pub fn lean_rv32_expand_words_snapshot(
+        pub fn lean_rv32_expand_bound_words_snapshot(
             words: LeanObj,
+            base: u32,
+            helper: u32,
             steps: u32,
             budget: u32,
         ) -> LeanObj;
+        pub fn lean_rv32_expand_words_snapshot(words: LeanObj, steps: u32, budget: u32) -> LeanObj;
     }
 }
 
@@ -190,6 +193,25 @@ pub mod rv32 {
                 .into_owned();
             ffi::lean_binding_dec(obj);
             s
+        }
+    }
+
+    pub fn expand_bound_words_snapshot(
+        words: &[u32],
+        base: u32,
+        helper: u32,
+        steps: u32,
+        budget: u32,
+    ) -> String {
+        init();
+        unsafe {
+            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let obj = ffi::lean_rv32_expand_bound_words_snapshot(arr, base, helper, steps, budget);
+            let result = std::ffi::CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
+                .to_string_lossy()
+                .into_owned();
+            ffi::lean_binding_dec(obj);
+            result
         }
     }
 

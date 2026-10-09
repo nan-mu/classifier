@@ -1,5 +1,6 @@
 import RV32IMC.Initial
 import RV32IMC.Expr
+import RV32IMC.Helper
 import RV32IMC.Encode
 import RV32IMC.Esp32c3Program
 import CommonMath.Expand
@@ -107,7 +108,7 @@ private def valueRejection : Insn → RejectReason
 /-- Static layout/return bindings are captured by the Step closure, never stored in SemState.
 PC is derived from the layout solely for the value call; Candidates contain only its Ei. -/
 def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
-    (j : Nat) (σ : SemState) : StepResult :=
+    (j : Nat) (σ : SemState) (boundCtx : Option Term := none) : StepResult :=
   match I[j]? with
   | none => .reject .unboundTarget
   | some i =>
@@ -119,7 +120,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
         | _, _ => σ.exprs
       if needsPC i && (readPC Eg).isNone then .reject .unboundTarget
       else
-        match RV32IMC.step Eg i with
+        match RV32IMC.step Eg i boundCtx with
         | none => .reject (valueRejection i)
         | some Ei =>
           match i with
@@ -245,12 +246,12 @@ private def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List 
     | some r => s!"\"{reasonTag r}\""
   s!"\{\"status\":\"{status}\",\"reason\":{reasonField},\"fuel\":{fuel},\"work\":[{workStr}],\"nodes\":[{nodeStrs}],\"edges\":[{edgeStrs}]}"
 
-private def snapshotAfter (progLen : Nat) (stepFn : Nat → SemState → StepResult)
+private def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState → StepResult)
     (ws : WorkState) : Nat → String
   | 0 => snapshotJson ws.nodes ws.edges ws.work ws.fuel
       (if ws.work.isEmpty then "complete" else "running") none
   | n + 1 =>
-    match expandOne progLen stepFn ws with
+    match expandOne progLen (stepFn (ws.work.headD 0)) ws with
     | .inr ws' => snapshotAfter progLen stepFn ws' n
     | .inl (.complete g) => snapshotJson g.nodes g.edges [] ws.fuel "complete" none
     | .inl (.fail reason g) =>
@@ -265,7 +266,7 @@ def rv32Snapshot (I : Array Insn) (p : EntryParams) (j0 steps budget : Nat) : St
   match rv32Init I p j0 budget with
   | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
   | .ok ws => snapshotAfter I.size
-      (rv32StepBound I (entryBase I p j0) (const32? p.tReturn)) ws steps
+      (fun _ => rv32StepBound I (entryBase I p j0) (const32? p.tReturn)) ws steps
 
 /-- One instruction per word, with compressed encodings in the low halfword. -/
 def decodeInsnWord (w : UInt32) : Insn :=
@@ -807,5 +808,57 @@ def exportRv32Snapshot (steps budget : UInt32) : String :=
 @[export lean_rv32_expand_words_snapshot]
 def exportRv32WordsSnapshot (words : Array UInt32) (steps budget : UInt32) : String :=
   rv32Snapshot (decodeProgram words) smokeEntryParams 0 steps.toNat budget.toNat
+
+private def helperTarget (i : Insn) (pc : Nat) (Eg : ExprSet) : Option Nat :=
+  match i with
+  | .JAL (imm, rd) =>
+    if rd.toNat != 1 then none
+    else some (Int.toNat ((Int.ofNat pc + s 21 imm.toNat) % (1 <<< 32)))
+  | .C_JAL imm => some (Int.toNat ((Int.ofNat pc + 2 * s 11 imm.toNat) % (1 <<< 32)))
+  | .JALR (imm, rs1, rd) => do
+    if rd.toNat != 1 then none else
+      let t ← readReg Eg rs1
+      let a ← eval (solve t)
+      pure (MNat 32 (a + immI32 imm) &&& ((1 <<< 32) - 2))
+  | .C_JALR rs1 => do
+    let t ← readReg Eg rs1
+    let a ← eval (solve t)
+    pure (MNat 32 a &&& ((1 <<< 32) - 2))
+  | _ => none
+
+private def helperStep (I : Array Insn) (base helper : Nat) (p : EntryParams)
+    (event : NodeId) (j : Nat) (σ : SemState) : StepResult :=
+  let fallback := rv32StepBound I (some base) (some 0x2000) j σ (some p.tCtx)
+  match I[j]?, (programOffsets I)[j]? with
+  | some i, some offset =>
+    if helperTarget i (base + offset) σ.exprs != some helper then fallback
+    else if !guardEg σ.exprs then .reject .localReject
+    else match nextPosition I j with
+      | none => .reject .unboundTarget
+      | some loc =>
+        let Eg := σ.exprs.insertEq (Reg.real32 32) (Term.C32 (base + offset))
+        match RV32IMC.step Eg i (some p.tCtx), parseHelperCall σ.exprs with
+        | some link, .ok call =>
+          let result := helperExpr event call p σ.exprs
+          let Ei := updateExpr link result
+          .candidates [⟨.only, loc, Ei, helperPredicates call σ.exprs result⟩]
+        | _, .error reason => .reject reason
+        | none, _ => .reject .undefinedSrc
+  | _, _ => fallback
+
+@[export lean_rv32_expand_bound_words_snapshot]
+def exportRv32BoundWordsSnapshot (words : Array UInt32) (base helper steps budget : UInt32) : String :=
+  let I := decodeProgram words
+  let b := base.toNat
+  let h := helper.toNat
+  let extent := I.foldl (fun n i => n + insnLength i) 0
+  let p := { smokeEntryParams with tEntry := Term.C32 b }
+  if I.isEmpty || b == 0 || b % 4 != 0 || h == 0 || h % 4 != 0 ||
+      b + extent > (1 <<< 32) || h == 0x2000 ||
+      (b ≤ 0x2000 && 0x2000 < b + extent) || (b ≤ h && h < b + extent) then
+    snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
+  else match rv32Init I p 0 budget.toNat with
+    | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
+    | .ok ws => snapshotAfter I.size (helperStep I b h p) ws steps.toNat
 
 end RV32IMC

@@ -23,6 +23,7 @@ inductive Op where
   | zext (q : Nat) (w : Width) (v : Nat)
   | sext (q : Nat) (w : Width) (v : Nat)
   | bswap (q v : Nat)
+  | externalResult (event lane : Nat)
   /-- Byte in an immutable input image; no concrete image is supplied to eval. -/
   | inputByte
   | mergeLow (q wbits : Nat)
