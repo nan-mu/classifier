@@ -41,8 +41,12 @@ snapshots; it must not become a second implementation of instruction semantics.
   must not silently become Exit, completion, or an empty successful update.
 - Fuel bounds node expansion, not graph size. Exhaustion with pending work is
   failure; an empty work queue is completion, including when fuel is zero.
-- `eval` is partial and `solve` only folds evaluable closed terms. In particular,
-  symbolic packet-byte operations remain uninterpreted even with closed arguments.
+- `eval` is partial and `solve` only folds evaluable closed terms. Packet-byte
+  and external-event operations remain uninterpreted even with closed arguments.
+- A helper result is identified by its dynamic source node, not only its
+  instruction position or arguments. The private RV32 snapshot runner owns
+  this identity; keep shared expansion and `SemState` independent of helpers.
+- ELF context loads use the fixed entry context binding, not mutable `a0`.
 
 ## Current executable scope
 
@@ -63,22 +67,38 @@ semantic correctness proofs. Do not equate `solve` with an SMT solver.
 The executable slice includes mixed 16/32-bit decoding, arithmetic and bitwise
 updates, direct branches and jumps, bound concrete indirect targets, wrapper
 returns, selected context and stack loads, word stack stores, subword extraction,
-and symbolic packet-byte loads. High-half multiplication and division/remainder
-currently require evaluable operands.
+symbolic packet-byte loads, and ELF-bound helper call summaries. High-half
+multiplication and division/remainder currently require evaluable operands.
 
 Packet loads construct symbolic little-endian values; they do not prove packet
 bounds or access permissions. General heap/map semantics, subword stores,
-external/helper-call contracts, symbolic indirect-target resolution, and path
+complete helper contracts, symbolic indirect-target resolution, and path
 constraint solving are unfinished.
 
-The 48-instruction ESP32-C3 fixture is a partial analysis regression. With
-budget 512 it performs 39 successful expansions and reaches 44 nodes before
+`RV32IMC/Helper.lean` follows xpost's dispatcher ABI. It reads helper ID from
+`a0`, summarizes supported helper returns as per-invocation opaque terms, and
+havocs caller-saved registers. Unsupported concrete IDs return max32. Calls
+must target the exact ELF dispatcher binding and write `ra`; tail jumps are
+not summarized as fallthrough. Preserve the original link update. The
+`helperPredicates` hook currently emits no predicates. Helper65 invalidates
+context `data_end`; map and buffer memory semantics remain unfinished.
+
+The old raw 48-instruction ESP32-C3 fixture is an unbound analysis regression.
+With budget 512 it performs 39 successful expansions and reaches 44 nodes before
 failing at position 36: a `C_JAL` at byte offset 104 has displacement -616,
 so its target is outside the supplied image (`UnboundTarget`). An earlier
 branch reaches Exit with return value 2. Preserve this failure until an explicit
 target binding and call semantics justify extending the analysis; increasing
 fuel alone cannot resolve it. See `RV32IMC/Expand.lean` and
 `tooling/lean-binding/tests/lean_modules.rs`.
+
+The default Compact XDP ELF is `tooling/fixtures/just_tx.elf` (copied from
+`/Volumes/SSD/bs/build/just_tx/just_tx.elf`). Its decoded prefix has 79
+instructions. With budget 512 it expands substantially and reaches Exit on some
+paths, then fails with `UndefinedSrc`. The firewall fixture
+`tooling/fixtures/xdp.elf` still completes with budget 512 through dispatcher
+calls and is retained for that regression. Helper-effect unit coverage also
+lives in `tooling/lean-binding/tests/helper_calls.rs`.
 
 ### EBPF
 
@@ -90,9 +110,12 @@ zero-extended, `r10` is read-only, and EXIT observes defined `r0`.
 Loads/stores, branches, LDDW, calls, atomics, and the broader functions described
 in `doc/ebpf-expr-value-functions.md` are not implemented in this slice. There
 is no established RV32/eBPF input correspondence or equivalence theorem.
-The Rust API and web viewer currently expose RV32IMC expand over an uploaded
-firmware image (default `tooling/fixtures/esp32c3.bin`). eBPF analysis is not
-wired through the HTTP session API yet.
+The Rust API and web viewer expose RV32IMC expand over an uploaded Compact XDP
+ELF (default `tooling/fixtures/just_tx.elf`). Rust parses it through the sibling
+`xpost-elf` crate and passes its `slot_address` and `helper_address` to Lean.
+Raw BIN uploads are rejected. The synthetic wrapper return is `0x2000`, not an
+ELF field. Check container extent and binding collisions before analysis.
+eBPF analysis is not wired through the HTTP session API yet.
 
 ## Documentation policy
 
@@ -124,6 +147,7 @@ RV32IMC/Insn.lean               decoded instructions and field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
 RV32IMC/Expr.lean               expr / step and FFI smoke exports
 RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
+RV32IMC/Helper.lean             helper call Expr summaries and empty Predicate hook
 RV32IMC/Expand.lean             rv32Step / rv32Snapshot and snapshot export
 RV32IMC/Esp32c3Program.lean     generated instruction words for the ESP32-C3 fixture
 EBPF.lean                      reexports the executable eBPF slice
@@ -141,7 +165,9 @@ tooling/lean-binding/tests/     Lean export and snapshot regression tests
 tooling/server/                 axum Expand API, instruction text via riscv-isa
 tooling/web/                    Vite, Kuma UI, and xyflow canvas
 tooling/scripts/dev.py          development service lifecycle, invoked by Lake
-tooling/fixtures/esp32c3.bin    XDP image used by the server and generated Lean words
+tooling/fixtures/just_tx.elf    default Compact XDP ELF (from bs/build/just_tx)
+tooling/fixtures/xdp.elf        firewall Compact XDP ELF helper-completion fixture
+tooling/fixtures/esp32c3.bin    raw unbound regression and generated Lean words input
 tooling/scripts/smoke.py        live API checks and migration snapshot comparison
 ```
 
@@ -175,6 +201,8 @@ The server executable path comes from Cargo's artifact output; do not hard-code
 `tooling/target/debug/server` in Lake or lifecycle scripts. Keep the single Rust
 workspace lockfile. Do not hand-edit `RV32IMC/Esp32c3Program.lean`; regenerate
 fixture words using the command documented in `tooling/server/README.md`.
+The server requires the adjacent `../xpost/xpost-elf` checkout. Validate ELF
+uploads with that library rather than duplicating metadata and digest parsing.
 
 Toolchain is `leanprover/lean4:v4.29.0`. After Lean layout changes, run
 **Lean 4: Restart Server** in the editor.

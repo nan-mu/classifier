@@ -23,7 +23,7 @@ lake build
 lake test
 ```
 
-API 检查脚本启动临时服务，验证默认 `esp32c3.bin` 会话的创建、单步、运行及读取结果，结束后停止服务。脚本需要 Python 3。
+API 检查脚本启动临时服务，验证 Compact XDP ELF 会话的创建、单步、运行及读取结果，结束后停止服务。脚本需要 Python 3。
 
 ## 组件
 
@@ -31,6 +31,9 @@ API 检查脚本启动临时服务，验证默认 `esp32c3.bin` 会话的创建�
 - [web](web/README.md) 显示指令、表达式和展开图。
 - `lean-binding` 将 Lean 导出函数接入 Rust，Rust 模块名为 `lean_binding`。
 - `scripts/dev.py` 管理开发服务进程的启动和停止，由 Lake 调用。
-- `fixtures/esp32c3.bin` 是默认固件（客户端未上传时使用），也是 `RV32IMC/Esp32c3Program.lean` 的生成输入。
+- `fixtures/just_tx.elf` 是默认 Compact XDP ELF（来自 `bs/build/just_tx`）。
+- `fixtures/xdp.elf` 是 firewall helper 完成回归用的 Compact XDP ELF。
+- `fixtures/esp32c3.bin` 是无 helper 元数据的回归镜像，也是 `RV32IMC/Esp32c3Program.lean` 的生成输入。
+- Rust 通过相对路径依赖相邻 `../../xpost/xpost-elf`。该库负责解析 ELF 元数据和校验镜像摘要。
 
 项目命令统一由根目录的 `lakefile.lean` 定义。

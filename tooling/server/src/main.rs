@@ -26,9 +26,9 @@ struct CreateBody {
     budget: Option<u32>,
     /// ISA selector. Currently only `rv32imc` (alias `esp32c3` accepted).
     arch: Option<String>,
-    /// Display name for the firmware image. Defaults to `esp32c3.bin`.
+    /// Display name for the firmware image. Defaults to `just_tx.elf`.
     name: Option<String>,
-    /// Optional base64-encoded firmware bytes. Omitted → embedded `esp32c3.bin`.
+    /// Optional base64-encoded compact XDP ELF bytes. Omitted → embedded `just_tx.elf`.
     image_b64: Option<String>,
 }
 
@@ -79,7 +79,7 @@ async fn create_session(
             512,
             Arch::Rv32imc,
             rv32_image::DEFAULT_NAME.to_string(),
-            rv32_image::DEFAULT_BIN.to_vec(),
+            rv32_image::DEFAULT_ELF.to_vec(),
         )
     } else {
         let parsed: CreateBody =
@@ -93,7 +93,7 @@ async fn create_session(
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| rv32_image::DEFAULT_NAME.to_string());
         let bin = match parsed.image_b64.as_deref() {
-            None | Some("") => rv32_image::DEFAULT_BIN.to_vec(),
+            None | Some("") => rv32_image::DEFAULT_ELF.to_vec(),
             Some(b64) => {
                 let bytes = decode_image_b64(b64)?;
                 if bytes.is_empty() || bytes.len() > 256 * 1024 {
@@ -104,13 +104,11 @@ async fn create_session(
         };
         (parsed.budget.unwrap_or(512), arch, name, bin)
     };
+    let program = rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
-    let session = Session::new(id.clone(), budget, arch, name, &bin);
+    let session = Session::new(id.clone(), budget, arch, name, program);
     let snap = session.snapshot();
-    app.sessions
-        .lock()
-        .expect("sessions")
-        .insert(id, session);
+    app.sessions.lock().expect("sessions").insert(id, session);
     Ok(Json(snap))
 }
 
@@ -152,7 +150,12 @@ mod http_tests {
 
     use super::*;
 
-    async fn call(router: &Router, method: &str, uri: &str, body: &'static [u8]) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        router: &Router,
+        method: &str,
+        uri: &str,
+        body: &'static [u8],
+    ) -> (StatusCode, serde_json::Value) {
         let response = router
             .clone()
             .oneshot(
@@ -166,7 +169,12 @@ mod http_tests {
             .await
             .expect("response");
         let status = response.status();
-        let bytes = response.into_body().collect().await.expect("body").to_bytes();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
         let json = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -181,15 +189,9 @@ mod http_tests {
         let (status, created) = call(&router, "POST", "/api/session", br#"{"budget":2}"#).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(created["arch"], "rv32imc");
-        assert_eq!(created["program"], "esp32c3.bin");
+        assert_eq!(created["program"], "just_tx.elf");
         let id = created["id"].as_str().expect("id");
-        let (status, done) = call(
-            &router,
-            "POST",
-            &format!("/api/session/{id}/run"),
-            b"{}",
-        )
-        .await;
+        let (status, done) = call(&router, "POST", &format!("/api/session/{id}/run"), b"{}").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(done["status"], "fail");
         assert_eq!(done["reason"], "LimitExceeded");

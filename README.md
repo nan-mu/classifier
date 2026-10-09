@@ -23,11 +23,18 @@ Lake 构建 Lean 和服务端、安装前端依赖，然后启动 API 和 Vite�
 
 服务接口见 [服务端](tooling/server/README.md)，界面操作与独立启动方式见 [前端](tooling/web/README.md)。
 
+界面接受 xpost 的 Compact XDP ELF。默认使用 `tooling/fixtures/just_tx.elf`
+（来自 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`）。
+服务端通过 `xpost-elf` 提取代码镜像、程序基址和 helper dispatcher 地址。
+Lean 识别 helper 调用，生成寄存器表达式并继续展开。Helper Predicate 接口
+目前返回空列表，map 内存语义尚未实现。
+
 ## 构建与检查
 
 以下命令在仓库根目录运行。
 
 Lean 工具链版本由 `lean-toolchain` 指定；本地需安装 Lean/Lake、Rust/Cargo、Node.js/npm 和 Python 3。
+Rust 服务端还依赖相邻 `../xpost/xpost-elf` 和它的 `xpost-macros` 库。
 
 ```bash
 lake build
@@ -41,6 +48,6 @@ lake test
 - `CommonMath/`：架构无关的数学对象与展开实现。
 - `RV32IMC/`、`EBPF/`：指令集相关源码。
 - `tooling/`：Rust/Cargo 工作区、前后端、FFI 绑定、启动工具与测试镜像。组件说明见 [工具工作区](tooling/README.md)。
-- `doc/`：规范、实现说明与研究文档。
+- `doc/`：数学定义、推导、证明与研究文档。
 
 开发代理的约束与 Lean 工作交接方式见 [AGENTS.md](AGENTS.md)。构建产物和本地代理记录由 `.gitignore` 管理。

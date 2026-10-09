@@ -25,7 +25,9 @@ Open `http://127.0.0.1:5173`.
 
 Click a node to focus it. Click the focused work-head node again, or press **单步调试**, to expand that node. **到底调试** runs until the session is complete or failed.
 
-The UI starts with architecture `RV32IMC`, firmware `esp32c3.bin` (server default),
-and budget 512. Choose a local firmware file to upload; leave the file empty or
-press **恢复默认** to use the embedded fixture. API fields are documented in
+The UI starts with architecture `RV32IMC`, compact XDP ELF `just_tx.elf` (server
+default), and budget 512. Choose a local `.elf` file in xpost's Compact ELF V0
+format, then press **新建运行** to upload it. Generic firmware ELF and raw BIN
+files are rejected. Press **恢复默认** and **新建运行** to use the embedded
+fixture again. API fields and helper limitations are documented in
 [Server](../server/README.md).

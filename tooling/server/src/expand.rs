@@ -36,6 +36,8 @@ pub struct Session {
     name: String,
     image: InsnImage,
     words: Vec<u32>,
+    base_address: u32,
+    helper_address: u32,
     budget: u32,
     steps: u32,
     focus: u32,
@@ -43,8 +45,14 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(id: impl Into<String>, budget: u32, arch: Arch, name: String, bin: &[u8]) -> Self {
-        let image = rv32_image::decode_image(bin);
+    pub fn new(
+        id: impl Into<String>,
+        budget: u32,
+        arch: Arch,
+        name: String,
+        program: rv32_image::Rv32Program,
+    ) -> Self {
+        let image = program.image;
         let words = rv32_image::words(&image);
         let mut session = Self {
             id: id.into(),
@@ -52,6 +60,8 @@ impl Session {
             name,
             image,
             words,
+            base_address: program.base_address,
+            helper_address: program.helper_address,
             budget,
             steps: 0,
             focus: 0,
@@ -149,7 +159,13 @@ impl Session {
     }
 
     fn lean_value(&self) -> Value {
-        let raw = rv32::expand_words_snapshot(&self.words, self.steps, self.budget);
+        let raw = rv32::expand_bound_words_snapshot(
+            &self.words,
+            self.base_address,
+            self.helper_address,
+            self.steps,
+            self.budget,
+        );
         serde_json::from_str(&raw).unwrap_or_else(|_| {
             serde_json::json!({
                 "status": "fail",
@@ -178,7 +194,11 @@ impl Session {
             return;
         }
         if let Some(nodes) = nodes {
-            if let Some((id, _)) = nodes.iter().enumerate().rev().find(|(_, n)| n["loc"] == "exit")
+            if let Some((id, _)) = nodes
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, n)| n["loc"] == "exit")
             {
                 self.focus = id as u32;
             }
@@ -187,10 +207,7 @@ impl Session {
 
     fn push_log(&mut self, msg: impl Into<String>) {
         let t = self.log.len() as u32;
-        self.log.push(LogEntry {
-            t,
-            msg: msg.into(),
-        });
+        self.log.push(LogEntry { t, msg: msg.into() });
     }
 }
 
@@ -427,7 +444,7 @@ mod tests {
             budget,
             Arch::Rv32imc,
             rv32_image::DEFAULT_NAME.into(),
-            rv32_image::DEFAULT_BIN,
+            rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF).expect("valid fixture"),
         )
     }
 
@@ -456,17 +473,16 @@ mod tests {
         assert_eq!(snap.nodes[0].exprs.len(), 28);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
-        assert!(snap.log[0].msg.contains("esp32c3.bin"));
+        assert!(snap.log[0].msg.contains("just_tx.elf"));
         assert_eq!(snap.arch, "rv32imc");
-        assert_eq!(snap.program, "esp32c3.bin");
-        assert!(snap.insns[0].text.starts_with("0000 LW "));
-        assert_eq!(snap.insns.len(), 48);
+        assert_eq!(snap.program, "just_tx.elf");
+        assert!(snap.insns[0].text.starts_with("0000 ADDI "));
+        assert_eq!(snap.insns.len(), 79);
         assert!(snap.proof_note.contains("core_result_only"));
     }
 
     #[test]
     fn budget_3_hits_limit_mid_program() {
-        // esp32c3.bin is 48 insns; budget 3 cannot reach Exit.
         let mut session = default_session("s", 3);
         session.run_all();
         let snap = session.snapshot();
@@ -519,8 +535,11 @@ mod tests {
         assert_eq!(snap.edges[0].dst, 1);
         assert_eq!(snap.edges[0].dir, "only");
         assert_eq!(snap.nodes[1].loc, "1");
-        // C_LW a2,0(a0) → SW(αCtx+0) = EntryVar.data.
-        assert_eq!(eq_term(&snap.nodes[1], "real32:12"), Some("v32:4"));
+
+        assert_eq!(
+            eq_term(&snap.nodes[1], "real32:2"),
+            Some("add32(v32:0,4294967280)")
+        );
         assert_eq!(snap.nodes[1].preds, vec![0]);
     }
 
@@ -530,26 +549,34 @@ mod tests {
             "up",
             3,
             Arch::Rv32imc,
-            "upload.bin".into(),
-            rv32_image::DEFAULT_BIN,
+            "upload.elf".into(),
+            rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF).expect("valid fixture"),
         );
         let snap = session.snapshot();
-        assert_eq!(snap.program, "upload.bin");
-        assert_eq!(snap.insns.len(), 48);
+        assert_eq!(snap.program, "upload.elf");
+        assert_eq!(snap.insns.len(), 79);
         assert_eq!(snap.nodes[0].exprs.len(), 28);
     }
 
+    fn firewall_session(id: &str, budget: u32) -> Session {
+        Session::new(
+            id,
+            budget,
+            Arch::Rv32imc,
+            "xdp.elf".into(),
+            rv32_image::parse_xdp_elf(rv32_image::FIREWALL_ELF).expect("firewall fixture"),
+        )
+    }
+
     #[test]
-    fn esp32c3_opening_emits_bltu_taken_and_not_taken() {
-        // Opening reaches symbolic BLTU a1,a3,+116; expand forks Taken then NotTaken.
-        let mut session = default_session("s", 48);
+    fn firewall_opening_emits_bltu_taken_and_not_taken() {
+        let mut session = firewall_session("s", 48);
         for _ in 0..5 {
             session.step_once();
         }
         let snap = session.snapshot();
         assert_ne!(
-            snap.status,
-            "fail",
+            snap.status, "fail",
             "BLTU must not Fail(Unsupported); got {:?}",
             snap.reason
         );
@@ -557,14 +584,19 @@ mod tests {
         let not_taken: Vec<_> = snap.edges.iter().filter(|e| e.dir == "not_taken").collect();
         assert!(!taken.is_empty(), "missing Taken edge");
         assert!(!not_taken.is_empty(), "missing NotTaken edge");
-        // Same branch source (BLTU node) fans out both directions.
-        assert!(taken.iter().any(|t| not_taken.iter().any(|n| n.src == t.src)));
-        let ltu = snap.nodes.iter().flat_map(|n| &n.predicates).find(|p| {
-            p.kind == "cmp" && p.rel.as_deref() == Some("ltu")
-        });
-        let geu = snap.nodes.iter().flat_map(|n| &n.predicates).find(|p| {
-            p.kind == "cmp" && p.rel.as_deref() == Some("geu")
-        });
+        assert!(taken
+            .iter()
+            .any(|t| not_taken.iter().any(|n| n.src == t.src)));
+        let ltu = snap
+            .nodes
+            .iter()
+            .flat_map(|n| &n.predicates)
+            .find(|p| p.kind == "cmp" && p.rel.as_deref() == Some("ltu"));
+        let geu = snap
+            .nodes
+            .iter()
+            .flat_map(|n| &n.predicates)
+            .find(|p| p.kind == "cmp" && p.rel.as_deref() == Some("geu"));
         let ltu = ltu.expect("ltu cmp Predicate on Taken path");
         let geu = geu.expect("geu cmp Predicate on NotTaken path");
         assert_eq!(ltu.width, Some(32));
@@ -619,19 +651,44 @@ mod tests {
     }
 
     #[test]
-    fn esp32c3_fail_preserves_partial_graph_with_bltu_and_ret() {
+    fn just_tx_default_fails_with_undefined_src() {
         let mut session = default_session("s", 512);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
-        assert_eq!(snap.reason.as_deref(), Some("UnboundTarget"));
-        assert!(snap.nodes.len() >= 40, "partial graph nodes={}", snap.nodes.len());
+        assert_eq!(snap.reason.as_deref(), Some("UndefinedSrc"));
+        assert!(
+            snap.nodes.len() >= 40,
+            "partial graph nodes={}",
+            snap.nodes.len()
+        );
+        assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
+    }
+
+    #[test]
+    fn firewall_elf_crosses_helper_and_completes() {
+        let mut session = firewall_session("s", 512);
+        session.run_all();
+        let snap = session.snapshot();
+        assert_eq!(snap.status, "complete");
+        assert_eq!(snap.reason, None);
+        assert!(snap.nodes.iter().any(|n| n
+            .exprs
+            .iter()
+            .any(|e| e.reg == "real32:10" && e.term.contains("externalResult"))));
+        assert!(
+            snap.nodes.len() >= 40,
+            "partial graph nodes={}",
+            snap.nodes.len()
+        );
         assert!(snap.edges.iter().any(|e| e.dir == "taken"));
         assert!(snap.edges.iter().any(|e| e.dir == "not_taken"));
         assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
         assert!(snap.nodes.iter().any(|n| {
             n.loc == "exit"
-                && n.predicates.iter().any(|p| p.kind == "ret" && p.term.is_some())
+                && n.predicates
+                    .iter()
+                    .any(|p| p.kind == "ret" && p.term.is_some())
         }));
         assert!(snap.nodes.iter().any(|n| {
             n.predicates

@@ -144,7 +144,7 @@ function DebugScreen() {
   });
   const [budget, setBudget] = useState(512);
   const [arch, setArch] = useState<ArchKind>("rv32imc");
-  const [firmwareName, setFirmwareName] = useState("esp32c3.bin");
+  const [firmwareName, setFirmwareName] = useState("just_tx.elf");
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -181,13 +181,13 @@ function DebugScreen() {
   );
 
   useEffect(() => {
-    void boot("rv32imc", 512, "esp32c3.bin", null);
+    void boot("rv32imc", 512, "just_tx.elf", null);
   }, [boot]);
 
   const onFirmwarePick = useCallback((ev: ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
     if (!file) {
-      setFirmwareName("esp32c3.bin");
+      setFirmwareName("just_tx.elf");
       setFirmwareBytes(null);
       return;
     }
@@ -417,18 +417,19 @@ function DebugScreen() {
         >
           <option value="rv32imc">RV32IMC</option>
         </select>
-        <Text className="muted">固件</Text>
+        <Text className="muted">XDP ELF</Text>
         <label className="toolbar__file">
           <input
             ref={fileRef}
             type="file"
+            accept=".elf"
             disabled={busy}
             onChange={onFirmwarePick}
           />
           <span className="toolbar__file-btn">选择文件</span>
         </label>
         <Text className="mono muted" fontSize={11} title={firmwareName}>
-          {firmwareBytes ? firmwareName : "esp32c3.bin（默认）"}
+          {firmwareBytes ? firmwareName : "just_tx.elf（默认）"}
         </Text>
         {firmwareBytes ? (
           <Button
@@ -436,7 +437,7 @@ function DebugScreen() {
             className="toolbar__btn toolbar__btn--quiet"
             disabled={busy}
             onClick={() => {
-              setFirmwareName("esp32c3.bin");
+              setFirmwareName("just_tx.elf");
               setFirmwareBytes(null);
               if (fileRef.current) fileRef.current.value = "";
             }}

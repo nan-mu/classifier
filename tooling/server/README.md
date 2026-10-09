@@ -2,15 +2,21 @@
 
 [项目入口](../../README.md) · [文档索引](../../doc/README.md)
 
-HTTP session chrome for budgeted Expand. Expand graphs and SemState
-`exprs` / `predicates` come from Lean `rv32Snapshot` via the `lean-binding` crate.
-Instruction list text is partitioned at runtime from the session firmware bytes
-with the `riscv-isa` crate (strict RV32IMC 2/4-byte lengths). When the client
-omits an image, the server uses `tooling/fixtures/esp32c3.bin`. Regenerate
-`RV32IMC/Esp32c3Program.lean` with
-`UPDATE_ESP32C3_LEAN=1 lake env cargo test --manifest-path tooling/Cargo.toml -p server lean_words`.
-This crate keeps session id, step count, focus, and the append-only log. It does
-not reimplement Expand.
+The server accepts xpost Compact ELF V0 containers. `xpost-elf` validates the
+container and image digest, then supplies the image range, `slot_address`, and
+`helper_address`. RV32 execution starts at the image's first instruction.
+`slot_address` is the actual code base; the format's zero `e_entry` is not used.
+
+Lean produces the graph, register expressions, and predicates through
+`lean_rv32_expand_bound_words_snapshot`. Rust owns session identifiers, replay
+step counts, focus, logs, and instruction text. The server depends on the sibling
+`../../../xpost/xpost-elf` checkout and its `xpost-macros` dependency.
+
+The default `tooling/fixtures/just_tx.elf` is a copy of
+`/Volumes/SSD/bs/build/just_tx/just_tx.elf`. Its image base is `0x40380200` and
+its dispatcher address is `0x40380000`. With budget 512 the current analysis
+fails with `UndefinedSrc` after substantial expansion. The firewall fixture
+`tooling/fixtures/xdp.elf` remains available for helper-completion regressions.
 
 ## Run
 
@@ -37,16 +43,23 @@ The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to overrid
 {
   "arch": "rv32imc",
   "budget": 512,
-  "name": "esp32c3.bin",
+  "name": "just_tx.elf",
   "image_b64": null
 }
 ```
 
 - `arch` is currently only `rv32imc` (alias `esp32c3` accepted). Default `rv32imc`.
 - `budget` defaults to 512.
-- `name` is a display label; default `esp32c3.bin`.
-- `image_b64` is optional base64 firmware. Omitted or empty → embedded
-  `tooling/fixtures/esp32c3.bin`. Rejected when empty after decode or larger than 256 KiB.
+- `name` is a display label; default `just_tx.elf`.
+- `image_b64` contains a base64 Compact XDP ELF. Omitted, null, or an empty
+  string uses `tooling/fixtures/just_tx.elf`. Decoded uploads must be nonempty and
+  at most 256 KiB.
+
+Malformed profiles, truncated containers, invalid image digests, trailing
+bytes, raw BIN files, and empty instruction prefixes return HTTP 400. The server
+also rejects overflowing RV32 image extents and conflicting helper or wrapper
+bindings. The analysis uses the synthetic wrapper return address `0x2000`;
+this address is not read from the ELF.
 
 `POST /api/session/<id>/step` advances the Lean step counter by one and refreshes.
 
@@ -54,6 +67,39 @@ The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to overrid
 
 `GET /api/session/<id>` returns the current snapshot.
 
-The ESP32-C3 fixture has separate binding and target-resolution limits; a larger
-budget does not guarantee completion. Current observations are documented in
-[RV32IMC value functions, section 7.4](../../doc/rv32imc-expr-value-functions.md).
+## Helper effects
+
+Lean intercepts calls to the ELF's exact dispatcher address. Supported call
+forms are JAL with `rd=ra`, C.JAL, JALR with `rd=ra`, and C.JALR. It preserves
+the call's link-register update and resumes at the next instruction. Tail jumps
+and unrelated external targets remain failures.
+
+The dispatcher receives the helper ID in `a0` and arguments in `a1` through
+`a5`. IDs 1, 2, 3, 5, 6, 28, and 65 produce per-invocation opaque return
+expressions in `a0`. Checksum results retain their 16-bit range. Other concrete
+IDs return `0xffffffff`, matching the firmware's unsupported-helper fallback.
+Symbolic helper IDs are not supported.
+
+Caller-saved registers receive opaque values. Callee-saved registers and the
+stack pointer retain their bindings. Context loads use the fixed entry context
+identity, so a helper return value cannot become the context pointer. Adjust
+tail conservatively invalidates the bound `data_end` field.
+
+`helperPredicates` is a Lean extension point that currently emits no new
+predicates. Map memory, pointed buffers, helper safety obligations, and complete
+helper correctness are outside this slice. A program that dereferences a map
+lookup result can still fail at that later access.
+
+## Image and regression limits
+
+Instruction text uses `riscv-isa` to decode a mixed 2-byte and 4-byte prefix of
+the extracted image. The current decoder stops at the first `GPL\0` marker or
+undecodable instruction. This is a prefix heuristic, not an ELF executable-section
+proof. Container parsing and helper binding use `xpost-elf` independently.
+
+`tooling/fixtures/esp32c3.bin` remains an unbound-target regression and the input
+for generated `RV32IMC/Esp32c3Program.lean`. Regenerate those words with:
+
+```bash
+UPDATE_ESP32C3_LEAN=1 lake env cargo test --manifest-path tooling/Cargo.toml -p server lean_words
+```

@@ -55,7 +55,7 @@ export type SessionSnapshot = {
   work: number[];
   focus: number;
   arch: ArchKind;
-  /** Firmware display name (`esp32c3.bin` by default). */
+  /** Compact XDP ELF display name (just_tx.elf by default). */
   program: string;
   insns: InsnRow[];
   nodes: GraphNode[];

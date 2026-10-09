@@ -16,7 +16,7 @@ export type CreateOpts = {
   budget?: number;
   arch?: ArchKind;
   name?: string;
-  /** Raw firmware bytes; omitted → server uses embedded `esp32c3.bin`. */
+  /** Compact XDP ELF bytes; omitted uses the embedded just_tx.elf. */
   image?: ArrayBuffer | null;
 };
 
@@ -34,7 +34,7 @@ export function createSession(opts: CreateOpts = {}): Promise<SessionSnapshot> {
   const body: Record<string, unknown> = {
     budget: opts.budget ?? 512,
     arch: opts.arch ?? "rv32imc",
-    name: opts.name ?? "esp32c3.bin",
+    name: opts.name ?? "just_tx.elf",
   };
   if (opts.image && opts.image.byteLength > 0) {
     body.image_b64 = bytesToBase64(opts.image);

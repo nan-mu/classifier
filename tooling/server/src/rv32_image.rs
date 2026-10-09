@@ -1,5 +1,6 @@
-//! Partition and label `esp32c3.bin` with `riscv-isa` (strict 2/4-byte RV32IMC lengths).
+//! Validate compact XDP ELF bindings and partition its RV32IMC instruction prefix.
 
+#[cfg(test)]
 use std::sync::OnceLock;
 
 use std::str::FromStr;
@@ -7,8 +8,15 @@ use std::str::FromStr;
 use riscv_isa::{decode_le_bytes, Instruction, Target};
 
 /// Default XDP fixture used when the client omits an uploaded image.
-pub const DEFAULT_BIN: &[u8] = include_bytes!("../../fixtures/esp32c3.bin");
-pub const DEFAULT_NAME: &str = "esp32c3.bin";
+/// Copied from `/Volumes/SSD/bs/build/just_tx/just_tx.elf`.
+pub const DEFAULT_ELF: &[u8] = include_bytes!("../../fixtures/just_tx.elf");
+pub const DEFAULT_NAME: &str = "just_tx.elf";
+/// Firewall fixture retained for helper-completion regressions.
+#[cfg(test)]
+pub const FIREWALL_ELF: &[u8] = include_bytes!("../../fixtures/xdp.elf");
+#[cfg(test)]
+const RAW_REGRESSION: &[u8] = include_bytes!("../../fixtures/esp32c3.bin");
+const WRAPPER_RETURN: u32 = 0x2000;
 
 #[derive(Debug, Clone)]
 pub struct DecodedInsn {
@@ -21,6 +29,63 @@ pub struct DecodedInsn {
 #[derive(Debug, Clone)]
 pub struct InsnImage {
     pub insns: Vec<DecodedInsn>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Rv32Program {
+    pub image: InsnImage,
+    pub base_address: u32,
+    pub helper_address: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ImageError {
+    InvalidContainer,
+    TrailingBytes,
+    InvalidRange,
+    BindingCollision,
+    EmptyCode,
+}
+
+pub fn parse_xdp_elf(bytes: &[u8]) -> Result<Rv32Program, ImageError> {
+    let mut source = bytes;
+    let xpost_elf::ScanOutcome::Ok(parsed) = xpost_elf::scan_at(&mut source, 0) else {
+        return Err(ImageError::InvalidContainer);
+    };
+    if parsed.file_len != bytes.len() {
+        return Err(ImageError::TrailingBytes);
+    }
+    let base = u32::try_from(parsed.slot_address).map_err(|_| ImageError::InvalidRange)?;
+    let helper = u32::try_from(parsed.helper_address).map_err(|_| ImageError::InvalidRange)?;
+    let size = u32::try_from(parsed.image_size).map_err(|_| ImageError::InvalidRange)?;
+    let end_address = base.checked_add(size).ok_or(ImageError::InvalidRange)?;
+    if (base..end_address).contains(&WRAPPER_RETURN)
+        || helper == WRAPPER_RETURN
+        || (base..end_address).contains(&helper)
+    {
+        return Err(ImageError::BindingCollision);
+    }
+    let end = parsed
+        .image_offset
+        .checked_add(parsed.image_size)
+        .ok_or(ImageError::InvalidRange)?;
+    let raw = bytes
+        .get(parsed.image_offset..end)
+        .ok_or(ImageError::InvalidRange)?;
+    let image = decode_image(raw);
+    let last = image.insns.last().ok_or(ImageError::EmptyCode)?;
+    if last
+        .offset
+        .checked_add(u32::from(last.size))
+        .is_none_or(|end| end > size)
+    {
+        return Err(ImageError::InvalidRange);
+    }
+    Ok(Rv32Program {
+        image,
+        base_address: base,
+        helper_address: helper,
+    })
 }
 
 fn code_end(bin: &[u8]) -> usize {
@@ -152,15 +217,17 @@ pub fn decode_image(bin: &[u8]) -> InsnImage {
     InsnImage { insns }
 }
 
+#[cfg(test)]
 pub fn esp32c3_image() -> &'static InsnImage {
     static IMAGE: OnceLock<InsnImage> = OnceLock::new();
-    IMAGE.get_or_init(|| decode_image(DEFAULT_BIN))
+    IMAGE.get_or_init(|| decode_image(RAW_REGRESSION))
 }
 
 pub fn words(image: &InsnImage) -> Vec<u32> {
     image.insns.iter().map(|d| d.word).collect()
 }
 
+#[cfg(test)]
 pub fn emit_lean_words(image: &InsnImage) -> String {
     let body = image
         .insns
@@ -179,9 +246,80 @@ pub fn emit_lean_words(image: &InsnImage) -> String {
     )
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_real_compact_elf_bindings() {
+        let program = parse_xdp_elf(DEFAULT_ELF).expect("real compact ELF");
+        assert_eq!(program.base_address, 0x40380200);
+        assert_eq!(program.helper_address, 0x40380000);
+        assert_eq!(program.image.insns.len(), 79);
+        assert!(program.image.insns[0].text.contains("ADDI"));
+        let firewall = parse_xdp_elf(FIREWALL_ELF).expect("firewall compact ELF");
+        assert_eq!(firewall.base_address, 0x40380200);
+        assert_eq!(firewall.helper_address, 0x40380000);
+        assert!(firewall.image.insns.iter().any(|i| i.offset == 0x64));
+    }
+
+    #[test]
+    fn rejects_corrupt_and_noncanonical_containers() {
+        assert_eq!(
+            parse_xdp_elf(RAW_REGRESSION).unwrap_err(),
+            ImageError::InvalidContainer
+        );
+        assert_eq!(
+            parse_xdp_elf(&DEFAULT_ELF[..DEFAULT_ELF.len() - 1]).unwrap_err(),
+            ImageError::InvalidContainer
+        );
+        let mut appended = DEFAULT_ELF.to_vec();
+        appended.push(0);
+        assert_eq!(
+            parse_xdp_elf(&appended).unwrap_err(),
+            ImageError::TrailingBytes
+        );
+        let mut corrupt = DEFAULT_ELF.to_vec();
+        *corrupt.last_mut().unwrap() ^= 1;
+        assert_eq!(
+            parse_xdp_elf(&corrupt).unwrap_err(),
+            ImageError::InvalidContainer
+        );
+        let mut profile = DEFAULT_ELF.to_vec();
+        profile[213] = 2;
+        assert_eq!(
+            parse_xdp_elf(&profile).unwrap_err(),
+            ImageError::InvalidContainer
+        );
+    }
+
+    #[test]
+    fn rejects_empty_instruction_prefix() {
+        let metadata = xpost_elf::ImageMetadataV0 {
+            slot_address: 0x40380200,
+            helper_address: 0x40380000,
+            machine: 1,
+            name: "invalid".try_into().unwrap(),
+            maps: Default::default(),
+        };
+        let bytes = xpost_elf::build_container(b"GPL\0", &metadata, None).unwrap();
+        assert_eq!(parse_xdp_elf(&bytes).unwrap_err(), ImageError::EmptyCode);
+    }
+
+    #[test]
+    fn rejects_invalid_address_bindings() {
+        for (offset, value, expected) in [
+            (144, 0xffff_fffc, ImageError::InvalidRange),
+            (144, 0x2000, ImageError::BindingCollision),
+            (216, 0x2000, ImageError::BindingCollision),
+            (216, 0x40380200, ImageError::BindingCollision),
+        ] {
+            let mut bytes = DEFAULT_ELF.to_vec();
+            bytes[offset..offset + 4].copy_from_slice(&u32::to_le_bytes(value));
+            assert_eq!(parse_xdp_elf(&bytes).unwrap_err(), expected);
+        }
+    }
 
     #[test]
     fn partitions_full_esp32c3_image() {
