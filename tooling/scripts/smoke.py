@@ -30,7 +30,9 @@ def request(base, method, path, body=None):
         payload = b"".join(chunks)
         declared_length = response.headers.get("Content-Length")
         if declared_length is not None:
-            assert len(payload) == int(declared_length), "HTTP response truncated"
+            assert len(payload) == int(declared_length), (
+                f"HTTP response truncated: got {len(payload)}, expected {declared_length} bytes"
+            )
         return json.loads(payload)
 
 
@@ -54,16 +56,22 @@ def snapshots(base):
     done = request(base, "POST", path + "/run", {})
     assert done["status"] == "fail", done["status"]
     assert done["reason"] == "UndefinedSrc", done["reason"]
-    assert done["focus"] == done["failed"] == 227
+    assert done["focus"] == done["failed"] == 244
     rejected = next(n for n in done["nodes"] if n["id"] == done["failed"])
-    assert rejected["loc"] == "48", rejected["loc"]
+    # Position 48 reads the bound first word; LW a3,4(a1) needs an unbound second word.
+    assert rejected["loc"] == "49", rejected["loc"]
+    assert any(e["reg"] == "real32:12" and e["term"] == "regVar166(real32:10)"
+               for e in rejected["exprs"]), "first Map word must have been loaded"
+    assert any(e["from"] == 227 and e["to"] == 244 for e in done["edges"])
+    assert len(done["nodes"]) == 263 and len(done["edges"]) == 262
     assert done["failed"] not in done["work"]
+    assert all(e["from"] != done["failed"] for e in done["edges"])
     assert any(n["loc"] == "exit" for n in done["nodes"]), "partial Exit must survive"
     assert any(
         p.get("kind") == "helper" and p.get("helperId") == 1
         for n in done["nodes"]
         for p in n["predicates"]
-    ), "lookup helper Predicate must appear before map-load failure"
+    ), "lookup helper Predicate must appear before the second-word failure"
     assert any(
         e["reg"].startswith("map32:") and e["term"].startswith("regVar")
         for n in done["nodes"]

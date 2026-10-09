@@ -4,6 +4,31 @@ use serde_json::Value;
 fn addi(rd: u32, rs: u32, imm: u32) -> u32 {
     ((imm & 0xfff) << 20) | (rs << 15) | (rd << 7) | 0x13
 }
+fn load(rd: u32, base: u32, offset: u32, width: u32, unsigned: bool) -> u32 {
+    let funct3 = match (width, unsigned) {
+        (1, false) => 0,
+        (2, false) => 1,
+        (4, _) => 2,
+        (1, true) => 4,
+        (2, true) => 5,
+        _ => panic!("invalid load width"),
+    };
+    ((offset & 0xfff) << 20) | (base << 15) | (funct3 << 12) | (rd << 7) | 0x03
+}
+fn store(base: u32, source: u32, offset: u32, width: u32) -> u32 {
+    let funct3 = match width {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        _ => panic!("invalid store width"),
+    };
+    ((offset & 0xfe0) << 20)
+        | (source << 20)
+        | (base << 15)
+        | (funct3 << 12)
+        | ((offset & 0x1f) << 7)
+        | 0x23
+}
 fn jal(rd: u32, delta: i32) -> u32 {
     let n = delta as u32;
     ((n >> 20 & 1) << 31)
@@ -308,7 +333,7 @@ fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
 
 #[test]
 fn lookup_introduces_helper_predicate_and_map_regvar() {
-    let (words, pos, _) = call_program(1, 0);
+    let (mut words, pos, _) = call_program(1, 0);
     let s = snapshot(&words, pos as u32 + 1);
     assert_eq!(s["status"], "running", "reason {}", s["reason"]);
     let after = &s["nodes"][pos + 1];
@@ -330,4 +355,94 @@ fn lookup_introduces_helper_predicate_and_map_regvar() {
         "{}",
         map["term"]
     );
+    let original = map["term"].as_str().unwrap().to_owned();
+    words.splice(
+        pos + 1..pos + 1,
+        [addi(9, 10, 0), addi(10, 0, 5), load(12, 9, 0, 4, true)],
+    );
+    let s = snapshot(&words, pos as u32 + 4);
+    assert_eq!(s["status"], "running", "{}", s["reason"]);
+    let after = &s["nodes"][pos + 4];
+    assert_eq!(term(after, 12), original);
+    assert_eq!(term(after, 10), "5");
+    let map = after["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["reg"] == format!("map32:{alpha}"))
+        .unwrap();
+    assert_eq!(map["term"], original, "Map LOAD must only write rd");
+    assert_eq!(snapshot(&words, 100)["status"], "complete");
+}
+
+#[test]
+fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
+    let (mut words, pos, _) = call_program(1, 0);
+    words.splice(
+        pos + 1..pos + 1,
+        [
+            addi(9, 10, 0),
+            addi(10, 0, 5),
+            addi(13, 0, 0x123),
+            store(9, 13, 0, 4),
+            addi(9, 9, 3),
+            addi(13, 0, 0x80),
+            store(9, 13, 0, 1),
+            load(14, 9, 0, 1, false),
+            load(15, 9, 0xfff, 2, true),
+            load(12, 9, 0xffd, 4, true),
+            addi(13, 0, 0x456),
+            store(9, 13, 0xfff, 2),
+            load(16, 9, 0xffd, 4, true),
+        ],
+    );
+    let s = snapshot(&words, 100);
+    assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    let exit = s["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["loc"] == "exit")
+        .unwrap();
+    assert_eq!(term(exit, 10), "5");
+    assert_eq!(term(exit, 14), "4294967168");
+    assert_eq!(term(exit, 15), "32768");
+    assert_eq!(term(exit, 12), "2147483939"); // 0x80000123
+    assert_eq!(term(exit, 16), "72745251"); // 0x04560123
+    let maps: Vec<_> = exit["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["reg"].as_str().unwrap().starts_with("map32:"))
+        .collect();
+    assert_eq!(maps.len(), 1);
+    assert_eq!(
+        maps[0]["reg"],
+        format!("map32:{}", map_word_alpha(pos as u64, 0))
+    );
+    assert_eq!(maps[0]["term"], "72745251");
+}
+
+#[test]
+fn unresolved_map_accesses_reject_without_growing_the_graph() {
+    for (id, offset, width) in [(1, 4, 4), (1, 3, 2), (5, 0, 4), (999, 0, 4)] {
+        for writing in [false, true] {
+            let (mut words, pos, _) = call_program(id, 0);
+            let access = if writing {
+                store(10, 11, offset, width)
+            } else {
+                load(12, 10, offset, width, true)
+            };
+            words.insert(pos + 1, access);
+            let before = snapshot(&words, pos as u32 + 1);
+            let failed = snapshot(&words, pos as u32 + 2);
+            assert_eq!(
+                failed["reason"], "UndefinedSrc",
+                "helper {id}, offset {offset}, write {writing}"
+            );
+            assert_eq!(failed["failed"], pos + 1);
+            assert_eq!(failed["nodes"], before["nodes"]);
+            assert_eq!(failed["edges"], before["edges"]);
+        }
+    }
 }

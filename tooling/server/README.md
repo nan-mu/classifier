@@ -15,7 +15,10 @@ step counts, focus, logs, and instruction text. The server depends on the siblin
 The default `tooling/fixtures/just_tx.elf` is a copy of
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`. Its image base is `0x40380200` and
 its dispatcher address is `0x40380000`. With budget 512 the current analysis
-fails with `UndefinedSrc` after substantial expansion. The firewall fixture
+passes position 48's first Map-word load, then fails with `UndefinedSrc` at
+node 244, position 49: `LW a3,4(a1)` needs the unbound second Map word.
+The partial graph has 263 nodes and 262 edges, including some Exit paths.
+The rejected step adds no nodes or edges. The firewall fixture
 `tooling/fixtures/xdp.elf` remains available for helper-completion regressions.
 
 ## Run
@@ -89,9 +92,15 @@ so a helper return value cannot become the context pointer.
 Lean emits a typed `helper` Predicate on each summarized call. The snapshot JSON
 carries `kind`, `event` (dynamic source-node identity), `helperId`, and `args`
 (term strings). Lookup also introduces `map32:α = regVar{event}(real32:10)` for
-the first Map word. Map memory beyond that word, pointed buffers, helper safety
-obligations, and complete helper correctness remain outside this slice. A program
-that dereferences a map lookup result can still fail at that later access.
+the first Map word. LOAD/STORE can resolve copies and constant add/subtract aliases
+of one lookup return within [0,4), provided that Map equality exists. Reads write
+only the real destination; byte/halfword stores preserve the rest of the word
+through CommonMath CellAccess. Changing a0 does not change the lookup identity.
+Null/numeric pointers, other helper returns, symbolic offsets, cross-word accesses
+and later words reject. The event-local association proves neither lookup success
+nor actual contents, ELF Map binding/value size, or alias consistency across calls.
+Map memory beyond that word, pointed buffers, helper safety obligations, and
+complete helper correctness remain outside this slice.
 
 ## Image and regression limits
 

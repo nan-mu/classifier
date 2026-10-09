@@ -76,7 +76,8 @@ The executable slice includes mixed 16/32-bit decoding, arithmetic and bitwise
 updates, direct branches and jumps, bound concrete indirect targets, wrapper
 returns, selected context and stack loads, byte/halfword/word stack stores,
 subword extraction, Packet byte/halfword/word reads and writes, compressed packet
-word accesses, and ELF-bound helper call summaries. High-half
+word accesses, first-word Map byte/halfword/word reads and writes through lookup
+return aliases, and ELF-bound helper call summaries. High-half
 multiplication and division/remainder currently require evaluable operands.
 
 Packet loads assemble current canonical bytes in little-endian order. Fresh
@@ -85,7 +86,15 @@ Constant affine offsets normalize to the same identity across aliases. Symbolic
 offsets reject without a unique binding. Known concrete lengths reject overrun;
 symbolic bounds, permissions, and machine alignment remain unproved premises.
 Stack subword writes preserve the rest of their canonical word and require its
-old value; cross-word stack accesses reject. General heap/ELF Map binding,
+old value; cross-word stack accesses reject. Map accesses require one lookup
+return event, a concrete affine displacement within its introduced [0,4) word,
+and an existing Map equality. They use CommonMath CellAccess; loads write only
+the real destination, and stores overwrite the Map word, preserving other bits
+for subword writes. Copies and constant add/subtract aliases retain that identity
+after a0 changes. Null/numeric pointers, non-lookup returns, symbolic offsets,
+cross-word accesses and later words reject. This event-local association does
+not prove lookup success, actual Map contents, ELF value size, or alias consistency
+between separate lookups. General heap/ELF Map binding,
 complete helper contracts, symbolic indirect-target resolution, and path
 constraint solving are unfinished.
 
@@ -99,7 +108,7 @@ must target the exact ELF dispatcher binding and write `ra`; tail jumps are
 not summarized as fallthrough. Preserve the original link update.
 `RV32IMC.inferStep` is the public single-step entry for bound helper calls and
 ordinary instruction candidates. Full caller-saved-register and resource-effect
-contracts, Map address classification, and buffer memory semantics remain
+contracts, broader Map address classification, and buffer memory semantics remain
 unfinished; the return-only projection does not establish resource preservation.
 
 The old raw 48-instruction ESP32-C3 fixture is an unbound analysis regression.
@@ -113,8 +122,10 @@ nor arbitrary fresh packet names resolve these missing bindings. See
 
 The default Compact XDP ELF is `tooling/fixtures/just_tx.elf` (copied from
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`). Its decoded prefix has 79
-instructions. With budget 512 it expands substantially and reaches Exit on some
-paths, then fails with `UndefinedSrc`. The firewall fixture
+instructions. With budget 512 it passes position 48's first Map-word LW and
+reaches Exit on some paths, then fails at node 244, position 49 (`UndefinedSrc`):
+`LW a3,4(a1)` needs the unbound second Map word. The partial graph has 263 nodes
+and 262 edges; the rejected step adds neither. The firewall fixture
 `tooling/fixtures/xdp.elf` is retained for helper-call regressions; full-program
 completion additionally requires all resource offsets and accesses to be bound.
 Helper-effect unit coverage also lives in
