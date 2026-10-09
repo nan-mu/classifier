@@ -16,17 +16,26 @@ def Insn.mk16 (b : Nat) : Insn := ⟨.w16, MNat 16 b⟩
 def Insn.mk32 (b : Nat) : Insn := ⟨.w32, MNat 32 b⟩
 def Insn.mk64 (b : Nat) : Insn := ⟨.w64, MNat 64 b⟩
 
-/-- A branch condition over Terms fixed from the pre-execution snapshot.
-Comparisons use 32-bit operands (modulo 2^32), with signed relations
-interpreting those bits as two’s complement. Return observations capture a value, rather than a Boolean condition. -/
+inductive HelperKind where
+  | lookup | update | delete | clock | printk | checksum | adjustTail
+  | unsupported (id : Nat)
+  deriving BEq, Repr, Inhabited
+
+def HelperKind.id : HelperKind → Nat
+  | .lookup => 1 | .update => 2 | .delete => 3 | .clock => 5
+  | .printk => 6 | .checksum => 28 | .adjustTail => 65
+  | .unsupported id => id
+
+/-- Comparisons fix their source terms; returns and helper calls are value/event observations. -/
 inductive Predicate where
   | cmp (rel : Rel) (lhs : Term) (rhs : Term)
   | ret (value : Term)
+  | helper (event : NodeId) (kind : HelperKind) (args : List Term)
   deriving BEq, Repr, Inhabited
 
 /-- RV32 condition interpretation. Unknown source values remain unknown. -/
 def Predicate.eval? : Predicate → Option Bool
-  | .ret _ => none
+  | .ret _ | .helper _ _ _ => none
   | .cmp rel lhs rhs => do
     let a ← eval (solve lhs)
     let b ← eval (solve rhs)

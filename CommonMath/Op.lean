@@ -24,8 +24,8 @@ inductive Op where
   | sext (q : Nat) (w : Width) (v : Nat)
   | bswap (q v : Nat)
   | externalResult (event lane : Nat)
-  /-- Byte in an immutable input image; no concrete image is supplied to eval. -/
-  | inputByte
+  /-- Byte in a resource's immutable input image; eval has no concrete image. -/
+  | inputByte (resource : Nat)
   | mergeLow (q wbits : Nat)
   deriving DecidableEq, BEq, Repr
 

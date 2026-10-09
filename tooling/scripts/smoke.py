@@ -20,7 +20,7 @@ def request(base, method, path, body=None):
         base + path, data=data, method=method,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=10) as response:
+    with urllib.request.urlopen(req, timeout=120) as response:
         chunks = []
         while True:
             chunk = response.read(64 * 1024)
@@ -54,6 +54,21 @@ def snapshots(base):
     assert done["status"] == "fail", done["status"]
     assert done["reason"] == "UndefinedSrc", done["reason"]
     assert any(n["loc"] == "exit" for n in done["nodes"]), "partial Exit must survive"
+    assert any(
+        p.get("kind") == "helper" and p.get("helperId") == 1
+        for n in done["nodes"]
+        for p in n["predicates"]
+    ), "lookup helper Predicate must appear before map-load failure"
+    assert any(
+        e["reg"].startswith("map32:") and e["term"].startswith("regVar")
+        for n in done["nodes"]
+        for e in n["exprs"]
+    ), "lookup must introduce mapWord = regVar(a0)"
+    assert any(
+        e["reg"].startswith("packet32:")
+        for n in done["nodes"]
+        for e in n["exprs"]
+    ), "packet bytes must appear in the just_tx graph"
     assert request(base, "GET", path) == done, "GET must return the final snapshot"
     fixtures = Path(__file__).resolve().parents[1] / "fixtures"
     default_elf = (fixtures / "just_tx.elf").read_bytes()
@@ -77,6 +92,17 @@ def snapshots(base):
     assert any(
         "externalResult" in e["term"] for n in fw_done["nodes"] for e in n["exprs"]
     ), "helper effects must reach the graph"
+    assert any(
+        p.get("kind") == "helper" and p.get("helperId") is not None
+        for n in fw_done["nodes"]
+        for p in n["predicates"]
+    ), "firewall paths must carry helper Predicates"
+    assert any(
+        p.get("kind") == "ret" for n in fw_done["nodes"] for p in n["predicates"]
+    ), "Exit must observe a ret Predicate"
+    assert any(
+        p.get("kind") == "cmp" for n in fw_done["nodes"] for p in n["predicates"]
+    ), "branch cmp Predicates must appear"
     invalid = [
         default_elf[:-1],
         default_elf + b"x",

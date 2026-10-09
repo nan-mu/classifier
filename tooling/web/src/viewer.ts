@@ -79,11 +79,29 @@ export function diffExprs(a: ExprRow[], b: ExprRow[]): ExprDiff {
   return { added, removed, changed, same };
 }
 
+export const HELPER_NAMES: Record<number, string> = {
+  1: "lookup",
+  2: "update",
+  3: "delete",
+  5: "clock",
+  6: "printk",
+  28: "checksum",
+  65: "adjustTail",
+};
+
+export function helperName(id: number | undefined): string {
+  if (id == null) return "helper?";
+  return HELPER_NAMES[id] ?? `helper${id}`;
+}
+
 function predKey(p: PredRow): string {
   if (p.kind === "cmp") {
     return `cmp:${p.rel ?? ""}:${p.width ?? ""}:${p.lhs ?? ""}:${p.rhs ?? ""}`;
   }
   if (p.kind === "ret") return `ret:${p.term ?? ""}`;
+  if (p.kind === "helper") {
+    return `helper:${p.event ?? ""}:${p.helperId ?? ""}:${(p.args ?? []).join(",")}`;
+  }
   if (p.kind === "tag") return `tag:${p.tag ?? ""}`;
   return `unknown:${JSON.stringify(p)}`;
 }
@@ -106,6 +124,12 @@ export function formatPred(p: PredRow): string {
     return `cmp/${w} [${p.rel ?? "?"}] ${p.lhs ?? "?"} ⋈ ${p.rhs ?? "?"}`;
   }
   if (p.kind === "ret") return `ret ${p.term ?? "?"}`;
+  if (p.kind === "helper") {
+    const name = helperName(p.helperId);
+    const ev = p.event != null ? `@e${p.event}` : "";
+    const args = (p.args ?? []).join(", ");
+    return `helper ${name}${ev}(${args})`;
+  }
   if (p.kind === "tag") return `tag ${p.tag ?? "?"}`;
   return "unknown predicate";
 }

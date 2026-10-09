@@ -63,8 +63,7 @@ inductive StepResult where
 def updateExpr (E Ei : ExprSet) : ExprSet :=
   ExprSet.override E Ei
 
-/-- cmp merges append structurally new conditions, retaining complements.
-Return observations use the same append/dedup rule.
+/-- Accumulate structurally new observations, retaining complements and distinct helper events.
 An empty local effect is identity. -/
 def mergePredicate (P Pi : List Predicate) : Except RejectReason (List Predicate) :=
   match Pi with

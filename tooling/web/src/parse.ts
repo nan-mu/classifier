@@ -4,13 +4,17 @@
  * Numeric leaves stay as decimal/hex strings (never JS number) for 64-bit safety.
  */
 
-export type RegKind = "real" | "stack" | "map" | "unknown";
+export type RegKind = "real" | "stack" | "map" | "packet" | "unknown";
 
 export type ParsedReg = {
   raw: string;
   kind: RegKind;
   width: 32 | 64 | null;
   alpha: string | null;
+  /** Packet identity κ from Cantor unpair; only set for `packet`. */
+  resource: number | null;
+  /** Packet byte offset from Cantor unpair; only set for `packet`. */
+  offset: number | null;
 };
 
 export type TermView =
@@ -19,16 +23,52 @@ export type TermView =
   | { kind: "app"; op: string; args: TermView[] }
   | { kind: "raw"; text: string };
 
-const REG_RE = /^(real|stack|map)(32|64):(\d+)$/;
+const REG_RE = /^(real|stack|map|packet)(32|64):(\d+)$/;
+
+/** Inverse of Lean `Reg.packet` Cantor pairing: α = T_{κ+off} + off. */
+export function cantorUnpair(alpha: number): { first: number; second: number } | null {
+  if (!Number.isInteger(alpha) || alpha < 0 || !Number.isSafeInteger(alpha)) {
+    return null;
+  }
+  const w = Math.floor((Math.sqrt(8 * alpha + 1) - 1) / 2);
+  const triangle = (w * (w + 1)) / 2;
+  const second = alpha - triangle;
+  const first = w - second;
+  if (!Number.isInteger(second) || second < 0 || first < 0) return null;
+  if ((first + second) * (first + second + 1) / 2 + second !== alpha) return null;
+  return { first, second };
+}
 
 export function parseReg(raw: string): ParsedReg {
   const m = REG_RE.exec(raw);
-  if (!m) return { raw, kind: "unknown", width: null, alpha: null };
+  if (!m || (m[1] === "packet" && m[2] !== "32")) {
+    return {
+      raw,
+      kind: "unknown",
+      width: null,
+      alpha: null,
+      resource: null,
+      offset: null,
+    };
+  }
+  const kind = m[1] as RegKind;
+  const alpha = m[3]!;
+  let resource: number | null = null;
+  let offset: number | null = null;
+  if (kind === "packet") {
+    const pair = cantorUnpair(Number(alpha));
+    if (pair) {
+      resource = pair.first;
+      offset = pair.second;
+    }
+  }
   return {
     raw,
-    kind: m[1] as RegKind,
+    kind,
     width: Number(m[2]) as 32 | 64,
-    alpha: m[3]!,
+    alpha,
+    resource,
+    offset,
   };
 }
 
@@ -59,6 +99,16 @@ export function parseTerm(text: string): TermView {
   if (varM) {
     return { kind: "var", width: Number(varM[1]) as 32 | 64, name: varM[2]! };
   }
+  // regVar{event}(reg) — event is part of the op name; arg is a Reg string.
+  const regVarM = /^regVar(\d+)\((.+)\)$/.exec(t);
+  if (regVarM) {
+    const regArg = regVarM[2]!;
+    return {
+      kind: "app",
+      op: `regVar${regVarM[1]}`,
+      args: [REG_RE.test(regArg) ? { kind: "raw", text: regArg } : parseTerm(regArg)],
+    };
+  }
   const open = t.indexOf("(");
   if (open > 0 && t.endsWith(")")) {
     const op = t.slice(0, open);
@@ -85,5 +135,32 @@ export const kindLabel: Record<RegKind, string> = {
   real: "Real",
   stack: "Stack(SW)",
   map: "Map",
+  packet: "Packet",
   unknown: "?",
 };
+
+/** Display label for a parsed register, including Packet (κ, offset). */
+export function formatRegLabel(reg: ParsedReg): string {
+  const kind = kindLabel[reg.kind];
+  const w = reg.width ?? "?";
+  if (reg.kind === "packet" && reg.resource != null && reg.offset != null) {
+    return `${kind}${w} κ=${reg.resource} off=${reg.offset}`;
+  }
+  return `${kind}${w} α=${reg.alpha ?? "?"}`;
+}
+
+export const REG_KIND_ORDER: RegKind[] = ["real", "stack", "map", "packet", "unknown"];
+
+export function groupExprsByKind<T extends { reg: string }>(
+  exprs: T[],
+): { kind: RegKind; rows: T[] }[] {
+  const buckets = new Map<RegKind, T[]>();
+  for (const kind of REG_KIND_ORDER) buckets.set(kind, []);
+  for (const row of exprs) {
+    const kind = parseReg(row.reg).kind;
+    buckets.get(kind)!.push(row);
+  }
+  return REG_KIND_ORDER.filter((kind) => (buckets.get(kind)?.length ?? 0) > 0).map(
+    (kind) => ({ kind, rows: buckets.get(kind)! }),
+  );
+}

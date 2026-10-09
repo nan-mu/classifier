@@ -374,10 +374,21 @@ body {
 }
 
 .expr-card,
-.path-card {
+.path-card,
+.pred-card {
   margin: 6px 0 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid rgba(80, 72, 60, 0.35);
+}
+
+.expr-group {
+  margin-bottom: 8px;
+}
+
+.expr-group__title {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 8px 0 2px;
 }
 
 .term-leaf,
@@ -417,6 +428,10 @@ body {
 
 .pred-ret {
   color: #b8d4c8;
+}
+
+.pred-helper {
+  color: #c4b5e0;
 }
 
 .meta-strip {

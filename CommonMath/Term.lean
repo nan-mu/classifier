@@ -1,11 +1,14 @@
 import CommonMath.Bits
 import CommonMath.Op
+import CommonMath.Reg
 
 namespace CommonMath
 
 inductive Term where
   | const (w : Width) (c : Nat)
   | var (w : Width) (ξ : Nat)
+  /-- Value of a register at a fixed dynamic event, rather than a live register lookup. -/
+  | regVar (event : Nat) (reg : Reg)
   | app (w : Width) (op : Op) (args : List Term)
   deriving BEq, Repr, Inhabited
 
@@ -13,6 +16,7 @@ inductive Term where
 def Term.width : Term → Width
   | .const w _ => w
   | .var w _ => w
+  | .regVar _ r => r.width
   | .app w _ _ => w
 
 def Term.C (w : Width) (c : Nat) : Term := .const w (MNat w.bits c)
@@ -25,11 +29,13 @@ def Term.V64 (ξ : Nat) : Term := .V .w64 ξ
 structure Var where
   width : Width
   name  : Nat
+  register : Option (Nat × Reg) := none
   deriving DecidableEq, BEq, Repr
 
 def FV : Term → List Var
   | .const _ _ => []
-  | .var w ξ => [⟨w, ξ⟩]
+  | .var w ξ => [⟨w, ξ, none⟩]
+  | .regVar event r => [⟨r.width, r.alpha, some (event, r)⟩]
   | .app _ _ args => args.foldl (fun acc t => acc ++ FV t) []
 
 def FV.isEmpty (t : Term) : Bool := (FV t).isEmpty
@@ -38,6 +44,7 @@ mutual
   def eval : Term → Option Nat
     | .const _ c => some c
     | .var _ _ => none
+    | .regVar _ _ => none
     | .app _ op args =>
         match evalArgs args with
         | some vs => interpretOp op vs

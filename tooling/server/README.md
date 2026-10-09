@@ -80,15 +80,18 @@ expressions in `a0`. Checksum results retain their 16-bit range. Other concrete
 IDs return `0xffffffff`, matching the firmware's unsupported-helper fallback.
 Symbolic helper IDs are not supported.
 
-Caller-saved registers receive opaque values. Callee-saved registers and the
-stack pointer retain their bindings. Context loads use the fixed entry context
-identity, so a helper return value cannot become the context pointer. Adjust
-tail conservatively invalidates the bound `data_end` field.
+The helper value projection currently writes only `a0` (plus the lookup Map-word
+binding). Other registers, including caller-saved ones and the bound `data_end`
+field, retain their pre-call bindings; full caller-saved and resource-effect
+contracts remain unfinished. Context loads use the fixed entry context identity,
+so a helper return value cannot become the context pointer.
 
-`helperPredicates` is a Lean extension point that currently emits no new
-predicates. Map memory, pointed buffers, helper safety obligations, and complete
-helper correctness are outside this slice. A program that dereferences a map
-lookup result can still fail at that later access.
+Lean emits a typed `helper` Predicate on each summarized call. The snapshot JSON
+carries `kind`, `event` (dynamic source-node identity), `helperId`, and `args`
+(term strings). Lookup also introduces `map32:α = regVar{event}(real32:10)` for
+the first Map word. Map memory beyond that word, pointed buffers, helper safety
+obligations, and complete helper correctness remain outside this slice. A program
+that dereferences a map lookup result can still fail at that later access.
 
 ## Image and regression limits
 
@@ -97,8 +100,10 @@ the extracted image. The current decoder stops at the first `GPL\0` marker or
 undecodable instruction. This is a prefix heuristic, not an ELF executable-section
 proof. Container parsing and helper binding use `xpost-elf` independently.
 
-`tooling/fixtures/esp32c3.bin` remains an unbound-target regression and the input
-for generated `RV32IMC/Esp32c3Program.lean`. Regenerate those words with:
+`tooling/fixtures/esp32c3.bin` supplies the generated
+`RV32IMC/Esp32c3Program.lean`. Its analysis now rejects the symbolic packet offset
+at position 25 before the queued out-of-image jump at position 36. It remains a
+partial-graph rejection regression. Regenerate those words with:
 
 ```bash
 UPDATE_ESP32C3_LEAN=1 lake env cargo test --manifest-path tooling/Cargo.toml -p server lean_words

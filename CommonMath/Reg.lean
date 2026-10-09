@@ -6,6 +6,7 @@ inductive RegKind where
   | real
   | stack
   | map
+  | packet
   deriving DecidableEq, BEq, Repr, Inhabited
 
 /-- \(\mathrm{Reg}_{k,w}=(k,w,\alpha)\). Alpha assignment is architecture-specific. -/
@@ -25,5 +26,15 @@ def Reg.sw (α : Nat) : Reg := .stack .w32 α
 def Reg.sr (α : Nat) : Reg := .stack .w64 α
 def Reg.map32 (α : Nat) : Reg := .map .w32 α
 def Reg.map64 (α : Nat) : Reg := .map .w64 α
+
+/-- A four-byte Map word at a byte offset in a lookup-result namespace. -/
+def Reg.mapWord (resource byteOffset : Nat) : Reg :=
+  .map32 ((resource + byteOffset) * (resource + byteOffset + 1) / 2 + byteOffset)
+
+/-- Cantor pairing keeps resource identity and byte offset distinct, without a fixed stride. -/
+def Reg.packet (κ offset : Nat) : Reg :=
+  ⟨.packet, .w32, (κ + offset) * (κ + offset + 1) / 2 + offset⟩
+
+def Reg.valid (r : Reg) : Bool := r.kind != .packet || r.width == .w32
 
 end CommonMath

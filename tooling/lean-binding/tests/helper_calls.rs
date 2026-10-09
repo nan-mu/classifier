@@ -41,6 +41,19 @@ fn term<'a>(node: &'a Value, reg: u32) -> &'a str {
         .as_str()
         .unwrap()
 }
+
+fn helper_pred<'a>(node: &'a Value) -> &'a Value {
+    node["predicates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "helper")
+        .expect("helper Predicate")
+}
+
+fn map_word_alpha(resource: u64, byte_offset: u64) -> u64 {
+    (resource + byte_offset) * (resource + byte_offset + 1) / 2 + byte_offset
+}
 fn call_program(id: u32, form: usize) -> (Vec<u32>, usize, u32) {
     let mut words = vec![addi(8, 1, 0), addi(10, 0, id)];
     for reg in 11..=15 {
@@ -73,11 +86,28 @@ fn all_link_call_forms_resume_and_preserve_abi() {
         assert_eq!(term(after, 1), next.to_string());
         assert_eq!(term(after, 8), "8192");
         assert_eq!(term(after, 2), term(before, 2));
+        // Return-only projection: only a0 is overwritten.
         assert!(term(after, 10).contains(&format!("externalResult{pos}_0")));
         for r in [5, 6, 7, 11, 12, 13, 14, 15, 16, 17, 28, 29, 30, 31] {
-            assert!(term(after, r).contains(&format!("externalResult{pos}_{r}")));
+            let before_t = before["exprs"].as_array().unwrap().iter().find(|e| {
+                e["reg"] == format!("real32:{r}") && e["rel"] == "eq"
+            });
+            let after_t = after["exprs"].as_array().unwrap().iter().find(|e| {
+                e["reg"] == format!("real32:{r}") && e["rel"] == "eq"
+            });
+            match (before_t, after_t) {
+                (Some(b), Some(a)) => assert_eq!(a["term"], b["term"], "form {form} r{r}"),
+                (None, None) => {}
+                (None, Some(a)) => panic!(
+                    "form {form} invented r{r} binding {}",
+                    a["term"]
+                ),
+                (Some(_), None) => panic!("form {form} dropped r{r} binding"),
+            }
         }
-        assert!(after["predicates"].as_array().unwrap().is_empty());
+        let pred = helper_pred(after);
+        assert_eq!(pred["helperId"], 5);
+        assert_eq!(pred["event"], pos);
         assert_eq!(snapshot(&words, 100)["status"], "complete");
     }
 }
@@ -146,7 +176,7 @@ fn required_arguments_and_symbolic_helper_id_reject() {
 }
 
 #[test]
-fn context_identity_survives_returns_and_adjust_tail_invalidates_end() {
+fn context_identity_survives_returns_and_adjust_tail_keeps_data_end() {
     let mut words = vec![
         addi(9, 10, 0),
         addi(8, 1, 0),
@@ -160,17 +190,25 @@ fn context_identity_survives_returns_and_adjust_tail_invalidates_end() {
     words[4] = 0x00052603;
     assert_eq!(snapshot(&words, 100)["reason"], "UndefinedSrc");
     let (words, pos, _) = call_program(65, 0);
+    let before = snapshot(&words, pos as u32);
     let s = snapshot(&words, pos as u32 + 1);
-    let field = s["nodes"][pos + 1]["exprs"]
+    assert!(term(&s["nodes"][pos + 1], 10).contains(&format!("externalResult{pos}_0")));
+    // Return-only projection does not rewrite data_end; stack SW bindings are unchanged.
+    let before_end = before["nodes"][pos]["exprs"]
         .as_array()
         .unwrap()
         .iter()
         .find(|e| e["reg"] == "stack32:1")
-        .unwrap();
-    assert!(field["term"]
-        .as_str()
+        .unwrap()["term"]
+        .clone();
+    let after_end = s["nodes"][pos + 1]["exprs"]
+        .as_array()
         .unwrap()
-        .contains(&format!("externalResult{pos}_33")));
+        .iter()
+        .find(|e| e["reg"] == "stack32:1")
+        .unwrap()["term"]
+        .clone();
+    assert_eq!(after_end, before_end);
 }
 
 #[test]
@@ -192,8 +230,8 @@ fn a_loop_revisiting_the_same_helper_gets_new_events() {
 fn saved_context_is_used_by_compressed_and_narrow_loads() {
     for (load, reg, expected) in [
         (0x408c, 11, "v32:4"),
-        (0x0004c603, 12, "extract0,8(v32:4)"),
-        (0x0004d603, 12, "extract0,16(v32:4)"),
+        (0x0004c603, 12, "zext8/32(extract0,8(v32:4))"),
+        (0x0004d603, 12, "zext16/32(extract0,16(v32:4))"),
     ] {
         let words = vec![
             addi(9, 10, 0),
@@ -235,7 +273,7 @@ fn bound_ffi_rejects_colliding_or_invalid_metadata() {
 }
 
 #[test]
-fn branch_predicates_survive_helper_calls_without_new_contracts() {
+fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
     let words = vec![
         addi(8, 1, 0),
         0x00051263,
@@ -247,10 +285,49 @@ fn branch_predicates_survive_helper_calls_without_new_contracts() {
     let s = snapshot(&words, 6);
     assert_eq!(s["status"], "running");
     for (before, after, rel) in [(4, 6, "ne"), (5, 7, "eq")] {
-        let predicate =
-            serde_json::json!([{"kind":"cmp","rel":rel,"width":32,"lhs":"v32:1","rhs":"0"}]);
-        assert_eq!(s["nodes"][before]["predicates"], predicate);
-        assert_eq!(s["nodes"][after]["predicates"], predicate);
+        let before_preds = s["nodes"][before]["predicates"].as_array().unwrap();
+        assert_eq!(before_preds.len(), 1);
+        assert_eq!(before_preds[0]["kind"], "cmp");
+        assert_eq!(before_preds[0]["rel"], rel);
+        let after_preds = s["nodes"][after]["predicates"].as_array().unwrap();
+        assert!(
+            after_preds
+                .iter()
+                .any(|p| p["kind"] == "cmp" && p["rel"] == rel),
+            "cmp/{rel} must survive helper"
+        );
+        let helper = after_preds
+            .iter()
+            .find(|p| p["kind"] == "helper")
+            .expect("helper Predicate after call");
+        assert_eq!(helper["helperId"], 5);
+        assert_eq!(helper["event"], before);
         assert!(term(&s["nodes"][after], 10).contains(&format!("externalResult{before}_0")));
     }
+}
+
+#[test]
+fn lookup_introduces_helper_predicate_and_map_regvar() {
+    let (words, pos, _) = call_program(1, 0);
+    let s = snapshot(&words, pos as u32 + 1);
+    assert_eq!(s["status"], "running", "reason {}", s["reason"]);
+    let after = &s["nodes"][pos + 1];
+    let pred = helper_pred(after);
+    assert_eq!(pred["helperId"], 1);
+    assert_eq!(pred["event"], pos);
+    let alpha = map_word_alpha(pos as u64, 0);
+    let map = after["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["reg"] == format!("map32:{alpha}"))
+        .expect("mapWord binding");
+    assert!(
+        map["term"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("regVar{pos}(")),
+        "{}",
+        map["term"]
+    );
 }

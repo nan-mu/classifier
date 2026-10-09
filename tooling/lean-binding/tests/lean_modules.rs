@@ -188,24 +188,25 @@ fn rv32_expand_esp32c3_root_and_opening() {
 }
 
 #[test]
-fn rv32_out_of_image_cjal_preserves_partial_graph() {
+fn rv32_symbolic_packet_offset_preserves_partial_graph() {
     let snapshot = |steps| -> serde_json::Value {
         serde_json::from_str(&rv32::expand_snapshot(steps, 512)).expect("json")
     };
-    let before = snapshot(39);
-    let failed = snapshot(40);
+    let before = snapshot(38);
+    let failed = snapshot(39);
     assert_eq!(before["status"], "running");
-    assert_eq!(before["work"], serde_json::json!([41, 42, 43]));
-    assert_eq!(before["fuel"], 473);
+    assert_eq!(before["work"], serde_json::json!([40, 41, 42]));
+    assert_eq!(before["fuel"], 474);
     assert_eq!(failed["status"], "fail");
-    assert_eq!(failed["reason"], "UnboundTarget");
+    assert_eq!(failed["reason"], "UndefinedSrc");
     // Includes every pre-instruction expression and predicate: BLTU forks,
     // successful STORE effects, and the short-side return survive rejection.
     assert_eq!(failed["nodes"], before["nodes"]);
     assert_eq!(failed["edges"], before["edges"]);
     let nodes = failed["nodes"].as_array().expect("nodes");
     let edges = failed["edges"].as_array().expect("edges");
-    assert_eq!(nodes.len(), 44);
+    assert_eq!(nodes.len(), 43);
+    assert_eq!(nodes[40]["loc"], "25");
     assert_eq!(nodes[41]["id"], 41);
     assert_eq!(nodes[41]["loc"], "36");
     assert!(edges.iter().any(|e| e["dst"] == 41));
@@ -213,7 +214,7 @@ fn rv32_out_of_image_cjal_preserves_partial_graph() {
     assert!(edges.iter().any(|e| e["dir"] == "Taken"));
     assert!(edges.iter().any(|e| e["dir"] == "NotTaken"));
     assert!(nodes.iter().any(|n| n["loc"] == "exit"));
-    assert_eq!(failed["work"], serde_json::json!([42, 43]));
-    assert_eq!(failed["fuel"], 472);
+    assert_eq!(failed["work"], serde_json::json!([41, 42]));
+    assert_eq!(failed["fuel"], 473);
     assert_eq!(snapshot(512), failed);
 }

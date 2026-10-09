@@ -25,6 +25,17 @@ Open `http://127.0.0.1:5173`.
 
 Click a node to focus it. Click the focused work-head node again, or press **单步调试**, to expand that node. **到底调试** runs until the session is complete or failed.
 
+The node panel groups expressions by `RegKind` (Real / Stack / Map / Packet),
+shows arrival and expansion deltas (`eiIn` / `eiOut`), and expands cmp / ret /
+helper Predicates with term trees. Packet alphas decode to `(κ, offset)`. Graph
+nodes mark helper (`H`), packet (`Pk`), and return (`R`) presence.
+
+```bash
+npm --prefix tooling/web test
+```
+
+runs Vitest unit checks for register/term parsing and Predicate formatting.
+
 The UI starts with architecture `RV32IMC`, compact XDP ELF `just_tx.elf` (server
 default), and budget 512. Choose a local `.elf` file in xpost's Compact ELF V0
 format, then press **新建运行** to upload it. Generic firmware ELF and raw BIN

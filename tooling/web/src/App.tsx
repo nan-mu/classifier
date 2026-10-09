@@ -20,7 +20,14 @@ import {
 import "@xyflow/react/dist/style.css";
 import { createSession, runSession, stepSession } from "./api";
 import { insnIndexForNode, localExprs, splitExprs } from "./exprs";
-import { kindLabel, parseReg, parseTerm, termToPlain } from "./parse";
+import {
+  formatRegLabel,
+  groupExprsByKind,
+  kindLabel,
+  parseReg,
+  parseTerm,
+  termToPlain,
+} from "./parse";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
 import type { ArchKind, ExprRow, PredRow, SessionSnapshot } from "./types";
 import { useForceLayout } from "./useForceLayout";
@@ -80,6 +87,14 @@ function TermTree({ view, depth = 0 }: { view: ReturnType<typeof parseTerm>; dep
       </Box>
     );
   }
+  const asReg = parseReg(view.text);
+  if (asReg.kind !== "unknown") {
+    return (
+      <Text className="mono term-leaf" style={pad} display="block">
+        {formatRegLabel(asReg)} · {view.text}
+      </Text>
+    );
+  }
   return (
     <Text className="mono term-leaf" style={pad} display="block">
       {view.text}
@@ -93,13 +108,73 @@ function ExprDetail({ e }: { e: ExprRow }) {
   return (
     <Box className="expr-card">
       <Text className="mono sem-line" display="block">
-        {kindLabel[reg.kind]}
-        {reg.width ?? "?"} α={reg.alpha ?? "?"} · {e.rel}
+        {formatRegLabel(reg)} · {e.rel}
       </Text>
       <Text className="mono muted" display="block" fontSize={11}>
         raw {e.reg} · view {termToPlain(term)}
       </Text>
       <TermTree view={term} />
+    </Box>
+  );
+}
+
+function ExprGroups({ exprs }: { exprs: ExprRow[] }) {
+  if (exprs.length === 0) {
+    return <Text className="mono muted">∅</Text>;
+  }
+  return (
+    <>
+      {groupExprsByKind(exprs).map(({ kind, rows }) => (
+        <Box key={kind} className="expr-group">
+          <Text className="expr-group__title mono" display="block">
+            {kindLabel[kind]} · {rows.length}
+          </Text>
+          {rows.map((expr, index) => (
+            <ExprDetail key={`${kind}-${expr.reg}-${index}`} e={expr} />
+          ))}
+        </Box>
+      ))}
+    </>
+  );
+}
+
+function PredDetail({ p }: { p: PredRow }) {
+  const kindClass =
+    p.kind === "cmp"
+      ? " pred-cmp"
+      : p.kind === "ret"
+        ? " pred-ret"
+        : p.kind === "helper"
+          ? " pred-helper"
+          : "";
+  return (
+    <Box className={`pred-card${kindClass}`}>
+      <Text className={`mono sem-line${kindClass}`} display="block">
+        {formatPred(p)}
+      </Text>
+      {p.kind === "cmp" ? (
+        <>
+          <Text className="mono muted" display="block" fontSize={11}>
+            lhs
+          </Text>
+          <TermTree view={parseTerm(p.lhs ?? "")} />
+          <Text className="mono muted" display="block" fontSize={11}>
+            rhs
+          </Text>
+          <TermTree view={parseTerm(p.rhs ?? "")} />
+        </>
+      ) : null}
+      {p.kind === "ret" ? <TermTree view={parseTerm(p.term ?? "")} /> : null}
+      {p.kind === "helper"
+        ? (p.args ?? []).map((arg, i) => (
+            <Box key={i}>
+              <Text className="mono muted" display="block" fontSize={11}>
+                arg{i}
+              </Text>
+              <TermTree view={parseTerm(arg)} />
+            </Box>
+          ))
+        : null}
     </Box>
   );
 }
@@ -111,15 +186,7 @@ function PredList({ preds }: { preds: PredRow[] }) {
   return (
     <>
       {preds.map((p, i) => (
-        <Text
-          key={i}
-          className={`mono sem-line${p.kind === "cmp" ? " pred-cmp" : ""}${
-            p.kind === "ret" ? " pred-ret" : ""
-          }`}
-          display="block"
-        >
-          {formatPred(p)}
-        </Text>
+        <PredDetail key={i} p={p} />
       ))}
     </>
   );
@@ -350,6 +417,9 @@ function DebugScreen() {
           head: node.id === headId,
           entry: node.id === 0,
           processed: done.has(node.id),
+          hasHelper: node.predicates.some((p) => p.kind === "helper"),
+          hasPacket: node.exprs.some((e) => parseReg(e.reg).kind === "packet"),
+          hasRet: node.predicates.some((p) => p.kind === "ret"),
         },
         draggable: false,
       });
@@ -518,7 +588,7 @@ function DebugScreen() {
                 onClick={focusBranchSource}
               >
                 分支 Taken×{branchStats.taken} / NotTaken×{branchStats.notTaken}
-                （点此跳到 BLTU 源）
+                （点此跳到分支源）
               </button>
             ) : null}
             {snap?.status === "fail" ? (
@@ -584,14 +654,20 @@ function DebugScreen() {
                   执行前快照 · #{focusedNode.id} ·{" "}
                   {focusedNode.loc === "exit" ? "exit（终态）" : `pos ${focusedNode.loc}`}
                 </Text>
-                <Text className="sem-sub">Expr</Text>
-                {focusedSplit.eg.length === 0 ? (
-                  <Text className="mono muted">∅</Text>
-                ) : (
-                  focusedSplit.eg.map((expr, index) => (
-                    <ExprDetail key={`eg-${expr.reg}-${index}`} e={expr} />
-                  ))
-                )}
+                <Text className="sem-sub">Expr（按 RegKind）</Text>
+                <ExprGroups exprs={focusedSplit.eg} />
+                {focusedSplit.eiIn.length > 0 ? (
+                  <>
+                    <Text className="sem-sub sem-sub--gap">到达 Δ（eiIn）</Text>
+                    <ExprGroups exprs={focusedSplit.eiIn} />
+                  </>
+                ) : null}
+                {focusedSplit.eiOut.length > 0 ? (
+                  <>
+                    <Text className="sem-sub sem-sub--gap">展开写出（eiOut）</Text>
+                    <ExprGroups exprs={focusedSplit.eiOut} />
+                  </>
+                ) : null}
                 <Text className="sem-sub sem-sub--gap">Predicate</Text>
                 <PredList preds={focusedNode.predicates} />
                 {dualTakenNotTaken ? (
@@ -628,11 +704,7 @@ function DebugScreen() {
                         <>
                           <Text className="sem-sub">源执行前 Expr 条数 {src.exprs.length}</Text>
                           <Text className="sem-sub">目标执行前（到达后）Δ</Text>
-                          {delta.length === 0 ? (
-                            <Text className="mono muted">∅</Text>
-                          ) : (
-                            delta.map((e, i) => <ExprDetail key={i} e={e} />)
-                          )}
+                          <ExprGroups exprs={delta} />
                           <Text className="sem-sub sem-sub--gap">目标 Predicate</Text>
                           <PredList preds={dst.predicates} />
                         </>
@@ -718,14 +790,20 @@ function DebugScreen() {
                             Predicate +{pd.added.length} / −{pd.removed.length}
                           </Text>
                           {pd.added.map((p, i) => (
-                            <Text key={`pa${i}`} className="mono sem-line" display="block">
-                              + {formatPred(p)}
-                            </Text>
+                            <Box key={`pa${i}`}>
+                              <Text className="mono muted" display="block">
+                                +
+                              </Text>
+                              <PredDetail p={p} />
+                            </Box>
                           ))}
                           {pd.removed.map((p, i) => (
-                            <Text key={`pr${i}`} className="mono sem-line" display="block">
-                              − {formatPred(p)}
-                            </Text>
+                            <Box key={`pr${i}`}>
+                              <Text className="mono muted" display="block">
+                                −
+                              </Text>
+                              <PredDetail p={p} />
+                            </Box>
                           ))}
                         </>
                       );

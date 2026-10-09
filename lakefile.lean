@@ -61,5 +61,8 @@ script check do
   let tests ← IO.Process.spawn {cmd := "cargo", args := #["test", "--manifest-path", "tooling/Cargo.toml", "--workspace"], cwd := root}
   let result ← tests.wait
   if result != 0 then return result
+  let webTests ← IO.Process.spawn {cmd := "npm", args := #["test"], cwd := root / "tooling/web"}
+  let webResult ← webTests.wait
+  if webResult != 0 then return webResult
   let smoke ← IO.Process.spawn {cmd := "python3", args := #["tooling/scripts/smoke.py", "--server", executable.toString, "--parent-pid", toString (← IO.Process.getPID)], cwd := root}
   smoke.wait

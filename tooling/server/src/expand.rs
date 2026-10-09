@@ -246,6 +246,7 @@ fn parse_exprs(n: &Value) -> Vec<ExprOut> {
 /// Lean `renderPredicateJson`:
 /// - `{"kind":"cmp","rel","width","lhs","rhs"}`
 /// - `{"kind":"ret","term"}`
+/// - `{"kind":"helper","event","helperId","args"}`
 fn parse_predicates(n: &Value) -> Vec<PredOut> {
     n["predicates"]
         .as_array()
@@ -262,6 +263,9 @@ fn parse_predicates(n: &Value) -> Vec<PredOut> {
                     lhs: p["lhs"].as_str().map(str::to_string),
                     rhs: p["rhs"].as_str().map(str::to_string),
                     term: None,
+                    event: None,
+                    helper_id: None,
+                    args: None,
                 },
                 Some("ret") => PredOut {
                     kind: "ret".into(),
@@ -271,6 +275,25 @@ fn parse_predicates(n: &Value) -> Vec<PredOut> {
                     lhs: None,
                     rhs: None,
                     term: p["term"].as_str().map(str::to_string),
+                    event: None,
+                    helper_id: None,
+                    args: None,
+                },
+                Some("helper") => PredOut {
+                    kind: "helper".into(),
+                    tag: None,
+                    rel: None,
+                    width: None,
+                    lhs: None,
+                    rhs: None,
+                    term: None,
+                    event: p["event"].as_u64(),
+                    helper_id: p["helperId"].as_u64(),
+                    args: p["args"].as_array().map(|xs| {
+                        xs.iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect()
+                    }),
                 },
                 _ if p.get("rel").is_some() && p.get("lhs").is_some() => PredOut {
                     kind: "cmp".into(),
@@ -280,6 +303,9 @@ fn parse_predicates(n: &Value) -> Vec<PredOut> {
                     lhs: p["lhs"].as_str().map(str::to_string),
                     rhs: p["rhs"].as_str().map(str::to_string),
                     term: None,
+                    event: None,
+                    helper_id: None,
+                    args: None,
                 },
                 _ if p["tag"].as_u64().is_some() => PredOut {
                     kind: "tag".into(),
@@ -289,6 +315,9 @@ fn parse_predicates(n: &Value) -> Vec<PredOut> {
                     lhs: None,
                     rhs: None,
                     term: None,
+                    event: None,
+                    helper_id: None,
+                    args: None,
                 },
                 _ => PredOut {
                     kind: "unknown".into(),
@@ -298,6 +327,9 @@ fn parse_predicates(n: &Value) -> Vec<PredOut> {
                     lhs: None,
                     rhs: None,
                     term: None,
+                    event: None,
+                    helper_id: None,
+                    args: None,
                 },
             }
         })
@@ -393,6 +425,7 @@ pub struct ExprOut {
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct PredOut {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -408,6 +441,12 @@ pub struct PredOut {
     /// Return observation term (`kind=ret`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub term: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub helper_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -651,6 +690,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_helper_predicate_json() {
+        let lean = serde_json::json!({
+            "nodes": [{
+                "loc": "12",
+                "exprs": [],
+                "predicates": [{
+                    "kind": "helper",
+                    "event": 166,
+                    "helperId": 1,
+                    "args": ["1077412584", "id32(add32(v32:0,4294967280))"]
+                }]
+            }],
+            "edges": []
+        });
+        let (nodes, _) = graph_from_lean(&lean);
+        let p = &nodes[0].predicates[0];
+        assert_eq!(p.kind, "helper");
+        assert_eq!(p.event, Some(166));
+        assert_eq!(p.helper_id, Some(1));
+        assert_eq!(
+            p.args.as_deref(),
+            Some(
+                [
+                    "1077412584".to_string(),
+                    "id32(add32(v32:0,4294967280))".to_string()
+                ]
+                .as_slice()
+            )
+        );
+    }
+
+    #[test]
     fn just_tx_default_fails_with_undefined_src() {
         let mut session = default_session("s", 512);
         session.run_all();
@@ -663,6 +734,37 @@ mod tests {
             snap.nodes.len()
         );
         assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
+        assert!(
+            snap.nodes.iter().any(|n| {
+                n.predicates
+                    .iter()
+                    .any(|p| p.kind == "helper" && p.helper_id == Some(1))
+            }),
+            "lookup helper Predicate must appear before map-load failure"
+        );
+        assert!(
+            snap.nodes.iter().any(|n| {
+                n.exprs.iter().any(|e| {
+                    e.reg.starts_with("map32:") && e.term.starts_with("regVar")
+                })
+            }),
+            "lookup must introduce mapWord = regVar(a0)"
+        );
+        let fail_node = snap.focus;
+        let fail_loc = snap
+            .nodes
+            .iter()
+            .find(|n| n.id == fail_node)
+            .map(|n| n.loc.as_str());
+        assert_eq!(
+            fail_loc,
+            Some("45"),
+            "failure should be LW through opaque map pointer"
+        );
+        assert!(
+            snap.nodes.iter().any(|n| n.exprs.iter().any(|e| e.reg.starts_with("packet32:"))),
+            "packet bytes must appear in the just_tx graph"
+        );
     }
 
     #[test]
@@ -676,6 +778,11 @@ mod tests {
             .exprs
             .iter()
             .any(|e| e.reg == "real32:10" && e.term.contains("externalResult"))));
+        assert!(snap.nodes.iter().any(|n| {
+            n.predicates
+                .iter()
+                .any(|p| p.kind == "helper" && p.helper_id.is_some())
+        }));
         assert!(
             snap.nodes.len() >= 40,
             "partial graph nodes={}",

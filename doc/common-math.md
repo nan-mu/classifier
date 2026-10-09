@@ -2,7 +2,7 @@
 
 本文建立指令分析所需的共同数学对象，并证明符号求解、关系更新及有预算展开的基本性质。具体指令的数值函数见 [RV32IMC 值函数](rv32imc-expr-value-functions.md)和 [eBPF 值函数](ebpf-expr-value-functions.md)；入口赋值见 [RV32 初态](rv32-initial-expr.zh.md)。
 
-全文区分三种陈述：定义规定模型对象；命题给出从定义推出的结论；假设说明结论成立所需的外部条件。Predicate 的完整观察语义、资源绑定和跨指令集行为等价性尚未确定，不能由本文的局部性质直接推出。
+全文区分三种陈述：定义规定模型对象；命题给出从定义推出的结论；假设说明结论成立所需的外部条件。Predicate 的完整观察语义、资源绑定的可靠性和跨指令集行为等价性尚未确定，不能由本文的局部性质直接推出。
 
 ## 1. 记号与位向量
 
@@ -67,7 +67,7 @@ M_q(M_q(z))=M_q(z),
 
 ### 2.2 历史与观察
 
-设 \(\mathrm{Predicate}\) 为观察谓词集合。其完整定义作为模型参数保留；在比较两种架构的行为前，还需指定观察的选取与解释。
+设 \(\mathrm{Predicate}\) 为观察域。比较、返回与 helper 调用观察的类型、解释和累积规则集中定义于[Predicate 文档](predicates.md)；访问与完整外部调用契约仍待定义。在比较两种架构的行为前，还需指定观察的选取与对应。
 
 一项历史记录属于
 
@@ -97,35 +97,9 @@ Expr 描述中间寄存器关系。不同架构可以产生不同 Expr；这些�
 
 ## 3. 寄存器标记
 
-令
+寄存器类别、标识集合、位宽组合及别名规则统一在[寄存器抽象与 Expr 分类规则](registers.md)第 1 节定义。本文采用其中的 \(\mathrm{Reg}_{k,w}\) 与 \(\mathrm{Reg}_w\)，并保持项位宽集合 \(W=\{32,64\}\)。
 
-\[
-K=\{\mathrm{Real},\mathrm{Stack},\mathrm{Map}\},
-\qquad W=\{32,64\}.
-\]
-
-给定各类标识集合 \(\mathcal I_k\)，定义
-
-\[
-\mathrm{Reg}_{k,w}=\{(k,w,\alpha):\alpha\in\mathcal I_k\},
-\qquad
-\mathrm{Reg}_w=\bigsqcup_{k\in K}\mathrm{Reg}_{k,w}.
-\]
-
-Real 表示真实寄存器，Stack、Map 表示虚拟栈单元与虚拟 Map 单元。统一使用以下名称：
-
-\[
-\begin{aligned}
-\mathrm{Real}_{32}(\alpha)&=(\mathrm{Real},32,\alpha),&
-\mathrm{Real}_{64}(\alpha)&=(\mathrm{Real},64,\alpha),\\
-\mathrm{SW}(\alpha)&=(\mathrm{Stack},32,\alpha),&
-\mathrm{SR}(\alpha)&=(\mathrm{Stack},64,\alpha),\\
-\mathrm{Map}_{32}(\alpha)&=(\mathrm{Map},32,\alpha),&
-\mathrm{Map}_{64}(\alpha)&=(\mathrm{Map},64,\alpha).
-\end{aligned}
-\]
-
-PC、SP 与通用寄存器名称属于真实寄存器标识。不同别名若指向同一寄存器，就采用同一个标记。虚拟标记表示已经绑定的单元；单凭地址表达式不能推出绑定存在、唯一或访问有效。
+Real、Stack、Map、Packet 是四个不交类别。虚拟包寄存器以 32 位项承载一个字节，其合法值域为 \(\mathbb B_8\)。指令分类与源项要求见该文第 2 节，四类 Expr 规则见第 3—6 节；单凭地址表达式不能推出资源绑定存在、唯一或访问有效。
 
 ## 4. 常元、变元与符号项
 
@@ -136,10 +110,11 @@ PC、SP 与通用寄存器名称属于真实寄存器标识。不同别名若指
 \[
 \mathrm{Const}_w=\{C_w(c):c\in\mathbb B_w\},
 \qquad
-\mathrm{Var}_w=\{V_w(\xi):\xi\in\Xi_w\}.
+\mathrm{Var}_w=\{V_w(\xi):\xi\in\Xi_w\}
+\sqcup\{R_w^{\varepsilon}(r):r\in\mathrm{Reg}_{\mathrm{Real},w},\ \varepsilon\in\mathcal I_{\mathrm{call}}\}.
 \]
 
-常元表示确定值，变元表示固定的符号输入。同名但位宽不同的变元是不同元素。变元不引用执行过程中变化的寄存器；未定义寄存器也不自动对应一个新变元。
+常元表示确定值，\(V_w(\xi)\) 表示固定的符号输入；\(R_w^{\varepsilon}(r)\) 表示指定调用返回时刻由真实寄存器承载的值，见[lookup 关联规则](registers.md#52-map-lookup-的返回位置与虚拟寄存器)。两类变元不交，后者的身份包括事件及完整寄存器标记。同名但位宽不同的变元是不同元素。变元不查询后续可变的寄存器；未定义寄存器也不自动对应一个新变元。
 
 对 \(n\in\mathbb N_{>0}\) 及 \(w_1,\ldots,w_n,w\in W\)，形式运算符及其数值解释满足
 
@@ -156,7 +131,7 @@ f\in\mathrm{Op}_{(w_1,\ldots,w_n)\to w},
 \(\mathrm{Term}_w\) 是由以下规则生成的有限项集合：
 
 \[
-t_w::=C_w(c)\mid V_w(\xi)\mid f(t_{w_1},\ldots,t_{w_n}).
+t_w::=C_w(c)\mid V_w(\xi)\mid R_w^{\varepsilon}(r)\mid f(t_{w_1},\ldots,t_{w_n}).
 \]
 
 函数应用必须与输入、输出位宽签名一致。常元、变元是叶子，应用记录运算结构。8 位或 16 位的辅助数值步骤可合成为输出为 32 位或 64 位的运算符，无需引入新的 Term 位宽。
@@ -173,6 +148,8 @@ FV(C_w(c))=\varnothing,
 \qquad
 FV(f(t_1,\ldots,t_n))=\bigcup_{j=1}^{n}FV(t_j).
 \]
+
+真实寄存器变元同样满足 \(FV(R_w^{\varepsilon}(r))=\{R_w^{\varepsilon}(r)\}\)，其解释为 \(\nu_w(R_w^{\varepsilon}(r))\)，由相应调用结果契约约束，而不是取后续寄存器赋值 \(\rho_w(r)\)。
 
 **引理 2（有限性）。** 每个项的 \(FV\) 都是有限集合。
 
@@ -200,6 +177,8 @@ FV(f(t_1,\ldots,t_n))=\bigcup_{j=1}^{n}FV(t_j).
 **命题 3（闭项求值良定义）。** 在假设 A 下，每个闭项具有唯一的同位宽求值结果。
 
 **证明。** 闭项中不出现变元，故其叶子均为常元。对项结构归纳，子项的结果唯一且满足输入位宽；\(\widehat f\) 的确定性、全定义性与输出签名给出唯一的同位宽结果。项结构有限，递归求值结束。\(\square\)
+
+本节的全求值只适用于假设 A 的纯数值子域。含未解释资源或调用运算的项采用部分求值；其闭项未必具有确定数值，相应的 solve 扩展见[Predicate 文档第 2.3 节](predicates.md#23-可判定与未知)。
 
 ### 5.3 整项求解
 
@@ -476,7 +455,7 @@ TQ 是向零截断的商，TR 是对应余数。\(|x|\) 表示绝对值。除零
 
 若虚拟单元 \(r_v\in\mathrm{Reg}_w\) 已有完整等式 \(r_v=t\)，读取该单元到真实寄存器 \(r_d\) 的局部关系为 \(r_d=t\)。反向写入则使用源真实寄存器的旧项，产生 \(r_v=t_s\)。
 
-目标必须是实际绑定的一个单元。Stack 与 Map 标记不因公式相同而成为同一目标；源项也不是对随后可变寄存器的引用。
+目标必须是实际绑定的一个单元，且源值满足目标类别的值域约束。不同类别标记不因公式相同而成为同一目标；源项也不是对随后可变寄存器的引用。Stack/Map 字段与 Packet 字节的访问分别采用[寄存器分类规则](registers.md)第 4—6 节，不能将整个宽值直接赋给一个包字节。
 
 ### 8.2 宽度转换与局部约束
 
@@ -526,27 +505,27 @@ TQ 是向零截断的商，TR 是对应余数。\(|x|\) 表示绝对值。除零
 给定变元赋值族 \(\nu_w:\mathrm{Var}_w\to\mathbb B_w\)，定义
 
 \[
-\llbracket C_w(c)\rrbracket_\nu=c,
+\left[\!\left[ C_w(c)\right]\!\right]_\nu=c,
 \qquad
-\llbracket V_w(\xi)\rrbracket_\nu=\nu_w(V_w(\xi)),
+\left[\!\left[ V_w(\xi)\right]\!\right]_\nu=\nu_w(V_w(\xi)),
 \]
 
 \[
-\llbracket f(t_1,\ldots,t_n)\rrbracket_\nu
-=\widehat f(\llbracket t_1\rrbracket_\nu,\ldots,
-\llbracket t_n\rrbracket_\nu).
+\left[\!\left[ f(t_1,\ldots,t_n)\right]\!\right]_\nu
+=\widehat f(\left[\!\left[ t_1\right]\!\right]_\nu,\ldots,
+\left[\!\left[ t_n\right]\!\right]_\nu).
 \]
 
 **引理 6。** 若 \(FV(t)=\varnothing\)，则
-\(\llbracket t\rrbracket_\nu=\operatorname{eval}_w(t)\)，且结果与 \(\nu\) 无关。
+\(\left[\!\left[ t\right]\!\right]_\nu=\operatorname{eval}_w(t)\)，且结果与 \(\nu\) 无关。
 
 **证明。** 对闭项结构归纳。常元情形直接成立；应用情形对每个子项使用归纳假设，再代入同一个 \(\widehat f\)。\(\square\)
 
 **命题 7。** 对任意项与赋值，
 
 \[
-\llbracket\operatorname{solve}_w(t)\rrbracket_\nu
-=\llbracket t\rrbracket_\nu.
+\left[\!\left[\operatorname{solve}_w(t)\right]\!\right]_\nu
+=\left[\!\left[ t\right]\!\right]_\nu.
 \]
 
 **证明。** 闭项情形由引理 6 与常元解释得到；非闭项情形由 solve 返回原项得到。\(\square\)
@@ -556,15 +535,15 @@ TQ 是向零截断的商，TR 是对应余数。\(|x|\) 表示绝对值。除零
 给定寄存器赋值族 \(\rho_w:\mathrm{Reg}_w\to\mathbb B_w\)，定义
 
 \[
-\llbracket(r_w,\bowtie,t_w)\rrbracket_{\rho,\nu}
-=\widehat{\bowtie}(\rho_w(r_w),\llbracket t_w\rrbracket_\nu).
+\left[\!\left[(r_w,\bowtie,t_w)\right]\!\right]_{\rho,\nu}
+=\widehat{\bowtie}(\rho_w(r_w),\left[\!\left[ t_w\right]\!\right]_\nu).
 \]
 
 **推论 8。**
 
 \[
-\llbracket\operatorname{solve}_{\mathrm{Expr}}(e)\rrbracket_{\rho,\nu}
-=\llbracket e\rrbracket_{\rho,\nu}.
+\left[\!\left[\operatorname{solve}_{\mathrm{Expr}}(e)\right]\!\right]_{\rho,\nu}
+=\left[\!\left[ e\right]\!\right]_{\rho,\nu}.
 \]
 
 **证明。** 左侧寄存器与关系符号不变，右侧解释由命题 7 保持。\(\square\)
@@ -598,7 +577,7 @@ TQ 是向零截断的商，TR 是对应余数。\(|x|\) 表示绝对值。除零
 
 \(\mathcal E\) 是当前关系集合，\(\mathcal P\) 是当前观察集合。位置、节点引用、方向和预算是结构信息。既定路径条件或观察若为后续语义所需，须在这两部分中表达。
 
-Predicate 采用集合语义，不在该分量内部记录重复次数或事件顺序。需要顺序时应由执行路径及逐次快照表达；该选择是否满足最终观察需求，仍取决于 Predicate 的定义。
+Predicate 采用结构相等下的集合语义，不在该分量内部记录重复次数或事件顺序。执行路径及逐次快照保留步骤顺序，但不能仅由观察集合的变化恢复重复事件；需要事件轨迹时还须另行定义，见[Predicate 文档第 5 节](predicates.md#5-示例与历史顺序)。
 
 ### 12.2 关系键与覆写
 
@@ -645,7 +624,7 @@ E\times\varnothing=E,
 
 ### 12.3 Predicate 合并
 
-设 \(\operatorname{mergePredicate}\) 为给定的部分合并规则。其成功结果为有限集合；本文不预设交换性或幂等性。局部状态更新定义为
+对[Predicate 文档](predicates.md)定义的比较、返回与 helper 调用观察，合并为结构相等下的集合并集：\(\operatorname{mergePredicate}(\mathcal P,\mathcal P_i)=\mathcal P\cup\mathcal P_i\)。局部状态更新定义为
 
 \[
 \sigma'=
@@ -653,7 +632,7 @@ E\times\varnothing=E,
 \operatorname{mergePredicate}(\mathcal P,\mathcal P_i)\bigr).
 \]
 
-未给定的合并规则不能由集合并集代替。各候选都从同一个输入 \(\sigma\) 更新，互不使用另一候选的结果。
+该合并满足有限性、单位元、幂等、交换与结合性质，证明见[Predicate 文档第 4 节](predicates.md#4-累积与状态更新)。合并不判断路径条件是否可满足；扩展观察的合并规则仍须独立规定。各候选都从同一个输入 \(\sigma\) 更新，互不使用另一候选的结果。
 
 ## 13. 位置、节点与后继
 
@@ -830,9 +809,9 @@ S_k=\bigl(\mathbf I[j_k],\mathcal P_{k+1},\mathcal E_{k+1},
 
 ## 18. 有界循环例证
 
-给定入口等式 \(r=C_w(0)\)，考虑四个位置：位置 0 判断 \(r\ge_u C_w(3)\)，成立时到 3，否则到 1；位置 1 令 \(r\leftarrow\mathrm{ADD}_w^\star(r,C_w(1))\) 后到 2；位置 2 到 0；位置 3 正常返回并观察 \(r\)。此处右侧的 \(r\) 表示从执行前等式取得的项。
+取 \(w=32\)，给定入口等式 \(r=C_w(0)\)，考虑四个位置：位置 0 判断 \(r\ge_u C_w(3)\)，成立时到 3，否则到 1；位置 1 令 \(r\leftarrow\mathrm{ADD}_w^\star(r,C_w(1))\) 后到 2；位置 2 到 0；位置 3 正常返回并观察 \(r\)。此处右侧的 \(r\) 表示从执行前等式取得的项，分支与返回采用 Predicate 文档的观察规则。
 
-因为 \(w\in\{32,64\}\)，数值 0、1、2、3 的加法不发生回绕。四次判断分别读取常元 0、1、2、3；前三次走 NotTaken，第四次走 Taken。
+这些 32 位常元的加法不发生回绕。四次判断分别读取常元 0、1、2、3；前三次走 NotTaken，第四次走 Taken。
 
 若每次到达都按创建顺序编号，判断节点引用为 0、3、6、9，位置 3 的引用为 10，Exit 的引用为 11。Step 次数为
 

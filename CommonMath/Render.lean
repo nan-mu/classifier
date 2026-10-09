@@ -18,6 +18,7 @@ def renderRegKind : RegKind → String
   | .real => "real"
   | .stack => "stack"
   | .map => "map"
+  | .packet => "packet"
 
 def renderReg (r : Reg) : String :=
   s!"{renderRegKind r.kind}{renderWidth r.width}:{r.alpha}"
@@ -53,12 +54,13 @@ def renderOp : Op → String
   | .sext q w _ => s!"sext{q}/{renderWidth w}"
   | .bswap q _ => s!"bswap{q}"
   | .externalResult event lane => s!"externalResult{event}_{lane}"
-  | .inputByte => "inputByte"
+  | .inputByte resource => s!"inputByte{resource}"
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
 
 partial def renderTerm : Term → String
   | .const _ c => toString c
   | .var w ξ => s!"v{renderWidth w}:{ξ}"
+  | .regVar event reg => s!"regVar{event}({renderReg reg})"
   | .app _ op args =>
       let body := String.intercalate "," (args.map renderTerm)
       s!"{renderOp op}({body})"
@@ -67,6 +69,9 @@ def renderExprJson (e : Expr) : String :=
   s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\"}"
 
 def renderPredicateJson : Predicate → String
+  | .helper event kind args =>
+    let args := String.intercalate "," (args.map fun t => s!"\"{renderTerm t}\"")
+    s!"\{\"kind\":\"helper\",\"event\":{event},\"helperId\":{kind.id},\"args\":[{args}]}"
   | .ret value =>
     s!"\{\"kind\":\"ret\",\"term\":\"{renderTerm value}\"}"
   | .cmp rel lhs rhs =>

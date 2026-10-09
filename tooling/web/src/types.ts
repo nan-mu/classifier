@@ -15,9 +15,9 @@ export type ExprRow = {
   term: string;
 };
 
-/** Lean cmp/ret JSON; term strings stay opaque (64-bit safe). */
+/** Lean cmp/ret/helper JSON; term strings stay opaque (64-bit safe). */
 export type PredRow = {
-  kind: "cmp" | "ret" | "tag" | "unknown";
+  kind: "cmp" | "ret" | "helper" | "tag" | "unknown";
   tag?: number;
   rel?: string;
   width?: number;
@@ -25,6 +25,9 @@ export type PredRow = {
   rhs?: string;
   /** `kind=ret` observation term. */
   term?: string;
+  event?: number;
+  helperId?: number;
+  args?: string[];
 };
 
 export type GraphNode = {

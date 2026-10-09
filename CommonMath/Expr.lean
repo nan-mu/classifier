@@ -88,7 +88,8 @@ def solveExpr (e : Expr) : Expr := { e with term := solve e.term }
 def interpretExpr (ρ : Reg → Nat) (ν : Var → Nat) (e : Expr) : Bool :=
   let rec termVal : Term → Nat
     | .const _ c => c
-    | .var w ξ => ν ⟨w, ξ⟩
+    | .var w ξ => ν ⟨w, ξ, none⟩
+    | .regVar event r => ν ⟨r.width, r.alpha, some (event, r)⟩
     | .app _ op args =>
         match interpretOp op (args.map termVal) with
         | some v => v
@@ -105,6 +106,9 @@ structure ExprSet where
 def ExprSet.empty : ExprSet := ⟨[]⟩
 
 def ExprSet.toList (E : ExprSet) : List Expr := E.entries
+
+def ExprSet.wellTyped (E : ExprSet) : Bool :=
+  E.entries.all (fun e => e.reg.valid && e.reg.width == e.term.width)
 
 def ExprSet.keysUnique (E : ExprSet) : Bool :=
   Id.run do

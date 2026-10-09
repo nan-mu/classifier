@@ -51,7 +51,39 @@ mod ffi {
         ) -> LeanObj;
         pub fn lean_rv32_expand_words_snapshot(words: LeanObj, steps: u32, budget: u32) -> LeanObj;
     }
+
+    #[cfg(test)]
+    unsafe extern "C" {
+        pub fn lean_virtual_cell_access(
+            kind: u32,
+            width: u32,
+            has_old: u32,
+            bit_offset: u32,
+            bits: u32,
+            source_width: u32,
+            is_unsigned: u32,
+            write: u32,
+            old: u64,
+            source: u64,
+        ) -> LeanObj;
+        pub fn lean_virtual_packet_access(
+            values: LeanObj,
+            resource: u32,
+            offset: u32,
+            bytes: u32,
+            width: u32,
+            big_endian: u32,
+            is_unsigned: u32,
+            allow_input: u32,
+            write: u32,
+            source: u64,
+        ) -> LeanObj;
+        pub fn lean_rv32_register_effects(case_id: u32, value: u32) -> LeanObj;
+    }
 }
+
+#[cfg(test)]
+mod register_tests;
 
 /// Initialize the Lean runtime and classifier modules once per process.
 pub fn init() {

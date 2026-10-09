@@ -98,7 +98,7 @@ private def needsPC : Insn → Bool
 
 private def valueRejection : Insn → RejectReason
   | .ILLEGAL _ | .C_ILLEGAL _ => .localReject
-  | .LOAD _ | .STORE (_, _, _, 4)
+  | .LOAD _ | .STORE (_, _, _, 1) | .STORE (_, _, _, 2) | .STORE (_, _, _, 4)
   | .C_LW _ | .C_SW _ | .C_LWSP _ | .C_SWSP _ => .undefinedSrc
   | .STORE _
   | .ECALL _ | .EBREAK _ | .MRET _ | .SRET _ | .WFI _ | .SFENCE_VMA _
@@ -700,53 +700,39 @@ private def compressedBranchesCheck : Bool :=
 /-! Explored instruction support (indices in esp32c3Program):
 0–1 C.LW context; 2/11/23/27/31 ADDI; 3/17/32–35 C.LI;
 4/24 BLTU, 18 BNE, 28 BEQ; 5/10/29/46 C.ADDI;
-6–7 C.SWSP; 8 C.ADDI4SPN; 9/25 LHU, 16/19 LBU;
+6–7 C.SWSP; 8 C.ADDI4SPN; 9 LHU, 16/19 LBU;
 12–13 SLTU; 14 C.OR; 15 C.BNEZ; 20 C.SLLI; 21 C.SRLI;
 22 C.ADD; 26 C.LUI; 30 LUI; 44–45 C.LWSP; 47 C.JR + return observation.
+25 LHU has a symbolic packet offset and lacks a unique byte binding.
 36 C.JAL has its link-value semantics, but target offset 104 - 616 = -512
 is outside this image. External call/result contracts are required to reach 37–43;
 we retain UnboundTarget rather than fabricate a helper result or fallthrough.
 -/
 
-/-- 512 fuel exposes the first remaining blocker after 39 successful expansions.
-All earlier reachable value functions succeed; the short BLTU side observes return 2. -/
+/-- The data-dependent packet offset at position 25 lacks a unique byte binding.
+The earlier return path succeeds; the queued external jump still has no target binding. -/
 private def esp32c3DeepFrontierCheck : Bool :=
   let I := esp32c3Program
   let stepFn := rv32StepBound I (some 0x1000) (some 0x2000)
   match rv32Init I smokeEntryParams 0 512 with
   | .error _ => false
-  | .ok ws0 => match expandN I.size stepFn ws0 39 with
+  | .ok ws0 => match expandN I.size stepFn ws0 38 with
     | .inl _ => false
     | .inr ws =>
-      ws.nodes.size == 44 && ws.fuel == 473 && ws.work == [41, 42, 43] &&
-      ws.nodes.any (fun n => n.loc == .pos 25) &&
-      ws.nodes.any (fun n => n.loc == .pos 46) &&
-      ws.nodes.all (fun n => match n.loc with
-        | .exit => n.state.predicates.getLast? == some (.ret (Term.C32 2))
-        | .pos j => match I[j]? with
-          | some i => (RV32IMC.step (n.state.exprs.insertEq (Reg.real32 32)
-              (Term.C32 (0x1000 + ((programOffsets I)[j]?.getD 0)))) i).isSome
-          | none => false) &&
-      (match ws.nodes[5]?, ws.nodes[7]? with
-        | some taken, some returned =>
-          returned.loc == .exit && returned.state.predicates ==
-            taken.state.predicates ++ [.ret (Term.C32 2)]
+      ws.nodes.size == 43 && ws.fuel == 474 && ws.work == [40, 41, 42] &&
+      ws.nodes.any (fun n => n.loc == .exit && n.state.predicates.getLast? ==
+        some (.ret (Term.C32 2))) &&
+      (match ws.nodes[40]?, expandOne I.size stepFn ws with
+        | some blocked, .inl (.fail .undefinedSrc g) =>
+          blocked.loc == .pos 25 && g.nodes.size == ws.nodes.size &&
+          g.edges.size == ws.edges.size
         | _, _ => false) &&
-      (match ws.nodes[41]?, I[36]?, expandOne I.size stepFn ws with
-        | some blocked, some (Insn.C_JAL imm), .inl (.fail .unboundTarget g) =>
-          blocked.loc == .pos 36 && (programOffsets I)[36]? == some 104 &&
-          2 * s 11 imm.toNat == -616 && g.nodes.size == ws.nodes.size
-        | _, _, _ => false) &&
-      -- The queued packet-success side also supports C.LUI/ADDI/BEQ,
-      -- beyond the first globally blocking external-call node.
-      (match ws.nodes[43]? with
-        | none => false
-        | some n => match expandInit I.size 26 n.state 8 with
-          | .error _ => false
-          | .ok tail => match expandN I.size stepFn tail 3 with
-            | .inr w => w.nodes.any (fun node => node.loc == .pos 44) &&
-                w.nodes.any (fun node => node.loc == .pos 29)
+      (match ws.nodes[41]? with
+        | some blocked => blocked.loc == .pos 36 &&
+          (match stepFn 36 blocked.state with
+            | .reject .unboundTarget => true
             | _ => false)
+        | _ => false)
 
 private def returnObservationMergeCheck : Bool :=
   let p := Predicate.ret (Term.V32 123)
@@ -779,7 +765,7 @@ private def packetLoadsCheck : Bool :=
       [false, true].all fun unsigned =>
         let i := Insn.LOAD (12#12, .Regidx 12#5, .Regidx 14#5, unsigned, width)
         match step E i, step E i with
-        | some a, some b => a.entries.length == 1 && a.keysUnique &&
+        | some a, some b => a.entries.length == width + 1 && a.keysUnique &&
           a.lookupEq (Reg.real32 14) == b.lookupEq (Reg.real32 14) &&
           (match a.lookupEq (Reg.real32 14) with
             | some t => (eval t).isNone
@@ -791,7 +777,7 @@ private def packetLoadsCheck : Bool :=
     (match exprPacketLOAD E (.Regidx 12#5) zreg 0 1 true with
       | some Ei => Ei.entries.isEmpty
       | none => false) &&
-    (eval (star .w32 .inputByte [Term.C32 4096, Term.C32 4108])).isNone
+    (eval (star .w32 (.inputByte 0) [Term.C32 4096, Term.C32 4108])).isNone
 
 #guard packetLoadsCheck
 
@@ -826,25 +812,36 @@ private def helperTarget (i : Insn) (pc : Nat) (Eg : ExprSet) : Option Nat :=
     pure (MNat 32 a &&& ((1 <<< 32) - 2))
   | _ => none
 
-private def helperStep (I : Array Insn) (base helper : Nat) (p : EntryParams)
+structure StepContext where
+  imageBase : Option Nat := none
+  returnAddress : Option Nat := none
+  helperAddress : Option Nat := none
+  boundContext : Option Term := none
+  deriving Inhabited, Repr
+
+/-- One ISA step: inspect the instruction, generate its observations, then its local values.
+Static bindings stay outside SemState; event identifies this dynamic source node. -/
+def inferStep (I : Array Insn) (context : StepContext)
     (event : NodeId) (j : Nat) (σ : SemState) : StepResult :=
-  let fallback := rv32StepBound I (some base) (some 0x2000) j σ (some p.tCtx)
-  match I[j]?, (programOffsets I)[j]? with
-  | some i, some offset =>
+  let fallback := rv32StepBound I context.imageBase context.returnAddress j σ context.boundContext
+  match I[j]?, (programOffsets I)[j]?, context.imageBase, context.helperAddress with
+  | some i, some offset, some base, some helper =>
     if helperTarget i (base + offset) σ.exprs != some helper then fallback
     else if !guardEg σ.exprs then .reject .localReject
     else match nextPosition I j with
       | none => .reject .unboundTarget
       | some loc =>
         let Eg := σ.exprs.insertEq (Reg.real32 32) (Term.C32 (base + offset))
-        match RV32IMC.step Eg i (some p.tCtx), parseHelperCall σ.exprs with
-        | some link, .ok call =>
-          let result := helperExpr event call p σ.exprs
-          let Ei := updateExpr link result
-          .candidates [⟨.only, loc, Ei, helperPredicates call σ.exprs result⟩]
+        match RV32IMC.step Eg i context.boundContext, helperPredicate event σ.exprs with
+        | some link, .ok predicate =>
+          match helperExpr predicate with
+          | .error reason => .reject reason
+          | .ok result =>
+            let Ei := updateExpr link result
+            .candidates [⟨.only, loc, Ei, [predicate]⟩]
         | _, .error reason => .reject reason
         | none, _ => .reject .undefinedSrc
-  | _, _ => fallback
+  | _, _, _, _ => fallback
 
 @[export lean_rv32_expand_bound_words_snapshot]
 def exportRv32BoundWordsSnapshot (words : Array UInt32) (base helper steps budget : UInt32) : String :=
@@ -859,6 +856,8 @@ def exportRv32BoundWordsSnapshot (words : Array UInt32) (base helper steps budge
     snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
   else match rv32Init I p 0 budget.toNat with
     | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-    | .ok ws => snapshotAfter I.size (helperStep I b h p) ws steps.toNat
+    | .ok ws =>
+      let context : StepContext := ⟨some b, some 0x2000, some h, some p.tCtx⟩
+      snapshotAfter I.size (inferStep I context) ws steps.toNat
 
 end RV32IMC

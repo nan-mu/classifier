@@ -10,6 +10,9 @@ export type StateNodeData = {
   head: boolean;
   entry: boolean;
   processed: boolean;
+  hasHelper: boolean;
+  hasPacket: boolean;
+  hasRet: boolean;
 };
 
 export type StateFlowNode = Node<StateNodeData, "state">;
@@ -32,6 +35,9 @@ export function StateNodeView({ data }: NodeProps<StateFlowNode>) {
       </div>
       <div className="state-node__meta">
         E={data.egCount} · P={data.predCount}
+        {data.hasHelper ? " · H" : ""}
+        {data.hasPacket ? " · Pk" : ""}
+        {data.hasRet ? " · R" : ""}
       </div>
       {data.entry ? <div className="state-node__badge">入口</div> : null}
       {data.head ? <div className="state-node__head">Work 首</div> : null}
