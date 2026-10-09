@@ -10,7 +10,12 @@ interpreter or a verified cross-ISA equivalence checker.
 `CommonMath` owns architecture-independent registers, numeric operations,
 terms, expression sets, predicates, semantic states, paths, budgeted expansion,
 history structures, rendering, and shared FFI exports. Read
-`doc/common-math.md` and the relevant source before changing shared math.
+`doc/common-math.md`, `doc/registers.md`, and the relevant source before changing
+shared math. Executable `RegKind` contains real, stack, map, and packet.
+Packet identities pair a resource namespace with a canonical byte offset; each
+byte uses a 32-bit term. `CommonMath/Virtual.lean` owns resolved Stack/Map field
+accesses and 32/64-bit Packet assembly/splitting. Address classification remains
+in the ISA layer; a resolved Map cell does not establish an ELF Map binding.
 
 `RV32IMC` and `EBPF` are ISA layers that reuse `CommonMath.Reg`, `Term`,
 `ExprSet`, `SemState`, and expansion. Keep shared math and register ADTs in
@@ -26,6 +31,9 @@ snapshots; it must not become a second implementation of instruction semantics.
 
 - `SemState` contains expressions and predicates. Static program layout and
   wrapper return bindings belong to the ISA step closure.
+- `ExprEffect.inputs` materializes untouched packet inputs; `updates` contains
+  instruction writes. RV32 `expr` returns writes, while `step` transports both
+  in a delta. Previously written bytes must never revert to the entry input.
 - Expression keys are `(Reg, Rel)`. Apply a local update by replacing the
   matching global keys, preserving other bindings. Validate key uniqueness;
   the list-backed representation does not enforce it by construction.
@@ -66,39 +74,51 @@ semantic correctness proofs. Do not equate `solve` with an SMT solver.
 
 The executable slice includes mixed 16/32-bit decoding, arithmetic and bitwise
 updates, direct branches and jumps, bound concrete indirect targets, wrapper
-returns, selected context and stack loads, word stack stores, subword extraction,
-symbolic packet-byte loads, and ELF-bound helper call summaries. High-half
+returns, selected context and stack loads, byte/halfword/word stack stores,
+subword extraction, Packet byte/halfword/word reads and writes, compressed packet
+word accesses, and ELF-bound helper call summaries. High-half
 multiplication and division/remainder currently require evaluable operands.
 
-Packet loads construct symbolic little-endian values; they do not prove packet
-bounds or access permissions. General heap/map semantics, subword stores,
+Packet loads assemble current canonical bytes in little-endian order. Fresh
+input bytes remain symbolic; Packet stores overwrite only their addressed bytes.
+Constant affine offsets normalize to the same identity across aliases. Symbolic
+offsets reject without a unique binding. Known concrete lengths reject overrun;
+symbolic bounds, permissions, and machine alignment remain unproved premises.
+Stack subword writes preserve the rest of their canonical word and require its
+old value; cross-word stack accesses reject. General heap/ELF Map binding,
 complete helper contracts, symbolic indirect-target resolution, and path
 constraint solving are unfinished.
 
 `RV32IMC/Helper.lean` follows xpost's dispatcher ABI. It reads helper ID from
-`a0`, summarizes supported helper returns as per-invocation opaque terms, and
-havocs caller-saved registers. Unsupported concrete IDs return max32. Calls
+`a0`, validates the required argument equalities, and creates a typed helper
+Predicate with the dynamic source-node identity and captured arguments. Its
+current value projection writes only `a0`; lookup additionally introduces the
+first Map-word relation to an event-bound `Term.regVar` of the return register.
+Unsupported concrete IDs return max32. Calls
 must target the exact ELF dispatcher binding and write `ra`; tail jumps are
-not summarized as fallthrough. Preserve the original link update. The
-`helperPredicates` hook currently emits no predicates. Helper65 invalidates
-context `data_end`; map and buffer memory semantics remain unfinished.
+not summarized as fallthrough. Preserve the original link update.
+`RV32IMC.inferStep` is the public single-step entry for bound helper calls and
+ordinary instruction candidates. Full caller-saved-register and resource-effect
+contracts, Map address classification, and buffer memory semantics remain
+unfinished; the return-only projection does not establish resource preservation.
 
 The old raw 48-instruction ESP32-C3 fixture is an unbound analysis regression.
-With budget 512 it performs 39 successful expansions and reaches 44 nodes before
-failing at position 36: a `C_JAL` at byte offset 104 has displacement -616,
-so its target is outside the supplied image (`UnboundTarget`). An earlier
-branch reaches Exit with return value 2. Preserve this failure until an explicit
-target binding and call semantics justify extending the analysis; increasing
-fuel alone cannot resolve it. See `RV32IMC/Expand.lean` and
-`tooling/lean-binding/tests/lean_modules.rs`.
+With budget 512 it performs 38 successful expansions and reaches 43 nodes before
+failing at position 25 (`UndefinedSrc`): its packet offset depends on a packet
+byte and has no unique canonical byte binding. An earlier branch reaches Exit
+with return value 2. The queued position 36 `C_JAL` still targets outside the
+image (byte offset 104, displacement -616, `UnboundTarget`). Neither extra fuel
+nor arbitrary fresh packet names resolve these missing bindings. See
+`RV32IMC/Expand.lean` and `tooling/lean-binding/tests/lean_modules.rs`.
 
 The default Compact XDP ELF is `tooling/fixtures/just_tx.elf` (copied from
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`). Its decoded prefix has 79
 instructions. With budget 512 it expands substantially and reaches Exit on some
 paths, then fails with `UndefinedSrc`. The firewall fixture
-`tooling/fixtures/xdp.elf` still completes with budget 512 through dispatcher
-calls and is retained for that regression. Helper-effect unit coverage also
-lives in `tooling/lean-binding/tests/helper_calls.rs`.
+`tooling/fixtures/xdp.elf` is retained for helper-call regressions; full-program
+completion additionally requires all resource offsets and accesses to be bound.
+Helper-effect unit coverage also lives in
+`tooling/lean-binding/tests/helper_calls.rs`.
 
 ### EBPF
 
@@ -142,13 +162,15 @@ The repository root is the Lean workspace. Non-Lean tools live in `tooling/`.
 ```text
 CommonMath.lean                 shared math root reexports
 CommonMath/                     shared math, states, paths, expansion, rendering, FFI
+CommonMath/Virtual.lean         resolved cell fields, Packet bytes, input/write effects
 RV32IMC.lean                    imports Insn + Encode + Expr + Initial + Expand
 RV32IMC/Insn.lean               decoded instructions and field tags
 RV32IMC/Encode.lean             encode / encodeCompressed
 RV32IMC/Expr.lean               expr / step and FFI smoke exports
 RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
-RV32IMC/Helper.lean             helper call Expr summaries and empty Predicate hook
-RV32IMC/Expand.lean             rv32Step / rv32Snapshot and snapshot export
+RV32IMC/Helper.lean             helper Predicate generation and result/Map Expr projections
+RV32IMC/RegisterFfi.lean        local register-effect probes for binding unit tests
+RV32IMC/Expand.lean             inferStep / rv32Step / rv32Snapshot and snapshot export
 RV32IMC/Esp32c3Program.lean     generated instruction words for the ESP32-C3 fixture
 EBPF.lean                      reexports the executable eBPF slice
 EBPF/Insn.lean                 MOV / ADD / EXIT instruction types
@@ -186,11 +208,19 @@ Start both services from the repository root.
 lake run dev
 ```
 
+For local register-effect checks without integration tests:
+
+```bash
+lake build CommonMath RV32IMC EBPF
+lake env cargo test --manifest-path tooling/Cargo.toml -p lean-binding --lib register_tests
+```
+
 `lake build` builds all three Lean shared libraries, the Rust server, and the
 web app. Lean `#guard` checks execute when their modules compile.
-`lake test` builds the server and web app, runs Rust workspace tests, and runs
-live API smoke checks against an isolated server. Its server dependency covers
-CommonMath and RV32IMC, so run `lake build` as well when changing EBPF.
+`lake test` builds the server and web app, runs Rust workspace tests, runs web
+Vitest unit checks (`tooling/web`), and runs live API smoke checks against an
+isolated server. Its server dependency covers CommonMath and RV32IMC, so run
+`lake build` as well when changing EBPF.
 `lake run dev` builds the server, installs frontend dependencies, and starts
 the API on `8788` (overridable with `PORT`) and Vite on `5173`. The development
 supervisor checks ports and cleans up service process groups on shutdown.
