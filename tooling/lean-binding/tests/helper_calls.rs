@@ -59,7 +59,7 @@ fn snapshot(words: &[u32], steps: u32) -> Value {
     ))
     .unwrap()
 }
-fn term<'a>(node: &'a Value, reg: u32) -> &'a str {
+fn term(node: &Value, reg: u32) -> &str {
     node["exprs"]
         .as_array()
         .unwrap()
@@ -70,7 +70,7 @@ fn term<'a>(node: &'a Value, reg: u32) -> &'a str {
         .unwrap()
 }
 
-fn helper_pred<'a>(node: &'a Value) -> &'a Value {
+fn helper_pred(node: &Value) -> &Value {
     node["predicates"]
         .as_array()
         .unwrap()
@@ -117,19 +117,20 @@ fn all_link_call_forms_resume_and_preserve_abi() {
         // Return-only projection: only a0 is overwritten.
         assert!(term(after, 10).contains(&format!("externalResult{pos}_0")));
         for r in [5, 6, 7, 11, 12, 13, 14, 15, 16, 17, 28, 29, 30, 31] {
-            let before_t = before["exprs"].as_array().unwrap().iter().find(|e| {
-                e["reg"] == format!("real32:{r}") && e["rel"] == "eq"
-            });
-            let after_t = after["exprs"].as_array().unwrap().iter().find(|e| {
-                e["reg"] == format!("real32:{r}") && e["rel"] == "eq"
-            });
+            let before_t = before["exprs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["reg"] == format!("real32:{r}") && e["rel"] == "eq");
+            let after_t = after["exprs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["reg"] == format!("real32:{r}") && e["rel"] == "eq");
             match (before_t, after_t) {
                 (Some(b), Some(a)) => assert_eq!(a["term"], b["term"], "form {form} r{r}"),
                 (None, None) => {}
-                (None, Some(a)) => panic!(
-                    "form {form} invented r{r} binding {}",
-                    a["term"]
-                ),
+                (None, Some(a)) => panic!("form {form} invented r{r} binding {}", a["term"]),
                 (Some(_), None) => panic!("form {form} dropped r{r} binding"),
             }
         }

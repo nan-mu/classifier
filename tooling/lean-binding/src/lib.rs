@@ -111,7 +111,7 @@ pub fn init() {
 }
 
 pub mod common_math {
-    use super::{LEAN_LOCK, ffi, init};
+    use super::{ffi, init, LEAN_LOCK};
 
     pub fn add32(a: u32, b: u32) -> u32 {
         init();
@@ -173,7 +173,7 @@ pub mod common_math {
 }
 
 pub mod rv32 {
-    use super::{LEAN_LOCK, ffi, init};
+    use super::{ffi, init, LEAN_LOCK};
     use std::ffi::CStr;
 
     /// Instruction tags matching `RV32IMC.insnTag`.

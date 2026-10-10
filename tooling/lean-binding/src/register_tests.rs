@@ -153,11 +153,9 @@ fn packet_bytes_pack_and_split_in_both_orders_without_packet64() {
         );
         let updates = write["updates"].as_array().unwrap();
         assert_eq!(updates.len(), 8);
-        assert!(
-            updates
-                .iter()
-                .all(|e| e["reg"].as_str().unwrap().starts_with("packet32:"))
-        );
+        assert!(updates
+            .iter()
+            .all(|e| e["reg"].as_str().unwrap().starts_with("packet32:")));
         assert_eq!(
             term(&write["updates"], "packet32:58"),
             if big_endian { "136" } else { "17" }
@@ -202,12 +200,10 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
             .len(),
         4
     );
-    assert!(
-        result["compressedRead"]["inputs"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(result["compressedRead"]["inputs"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         term(&result["compressedRead"]["updates"], "real32:9"),
         "33023"

@@ -258,6 +258,28 @@ lake build CommonMath RV32IMC EBPF
 lake env cargo test --manifest-path tooling/Cargo.toml -p lean-binding --lib register_tests
 ```
 
+### Rust CI (required after Rust edits)
+
+After changing anything under `tooling/**/*.rs`, `tooling/**/Cargo.toml`,
+`tooling/Cargo.lock`, `tooling/clippy.toml`, `tooling/rustfmt.toml`, or
+`tooling/scripts/rust-ci.sh`, run the Rust CI gate and fix failures before
+reporting completion:
+
+```bash
+lake build   # once if Lean libs are stale; not part of rust-ci.sh
+./tooling/scripts/rust-ci.sh
+```
+
+`rust-ci.sh` only runs nightly `cargo fmt --check` on workspace crates
+(`lean-binding`, `server` — never path deps like `../xpost`) then nightly
+`cargo clippy` (`-D warnings`, deny `dbg_macro` / `todo` / `unimplemented`;
+see `tooling/clippy.toml`). It does not install toolchains or invoke Lake.
+Artifacts go to `tooling/target-nightly/` so they do not thrash Lake/stable
+`tooling/target/`. First clippy is a cold compile; later runs reuse that dir.
+Needs `rustup` nightly with `rustc`/`cargo`/`rustfmt`/`clippy`, built Lean
+libs, and sibling `../xpost`. GitHub Actions mirrors this in
+`.github/workflows/rust.yml`.
+
 `lake build` builds all three Lean shared libraries, the Rust server, and the
 web app. Lean `#guard` checks execute when their modules compile.
 `lake test` builds the server and web app, runs Rust workspace tests, runs web

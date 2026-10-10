@@ -115,15 +115,7 @@ async fn create_session(
     let id_for_store = id.clone();
     let session = app
         .pool
-        .run(move || {
-            Arc::new(Mutex::new(Session::new(
-                id,
-                budget,
-                arch,
-                name,
-                program,
-            )))
-        })
+        .run(move || Arc::new(Mutex::new(Session::new(id, budget, arch, name, program))))
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let snap = session.lock().expect("session").snapshot();
@@ -134,10 +126,7 @@ async fn create_session(
     Ok(Json(snap))
 }
 
-fn session_handle(
-    app: &AppState,
-    id: &str,
-) -> Result<Arc<Mutex<Session>>, StatusCode> {
+fn session_handle(app: &AppState, id: &str) -> Result<Arc<Mutex<Session>>, StatusCode> {
     app.sessions
         .lock()
         .expect("sessions")

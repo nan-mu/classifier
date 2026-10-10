@@ -358,12 +358,13 @@ pub struct PredOut {
     pub fields: serde_json::Map<String, Value>,
 }
 
+#[cfg(test)]
 impl PredOut {
-    pub fn get_u64(&self, key: &str) -> Option<u64> {
+    fn get_u64(&self, key: &str) -> Option<u64> {
         self.fields.get(key).and_then(Value::as_u64)
     }
 
-    pub fn get_str(&self, key: &str) -> Option<&str> {
+    fn get_str(&self, key: &str) -> Option<&str> {
         self.fields.get(key).and_then(Value::as_str)
     }
 }

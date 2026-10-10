@@ -246,7 +246,6 @@ pub fn emit_lean_words(image: &InsnImage) -> String {
     )
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

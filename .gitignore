@@ -2,6 +2,7 @@
 /lake-manifest.json
 *.pre_session_restore
 /tooling/target/
+/tooling/target-nightly/
 /tooling/*/target/
 /tooling/web/node_modules/
 /tooling/web/dist/

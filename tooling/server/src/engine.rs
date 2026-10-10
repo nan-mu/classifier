@@ -2,7 +2,7 @@
 //! Lean FFI stays thin and stateless in `lean-binding`.
 
 use lean_binding::rv32::{self, Meta};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -150,7 +150,8 @@ impl ExpandSession {
         self.snapshot.to_string()
     }
 
-    pub fn run_to_completion(&mut self, budget: u32) {
+    #[cfg(test)]
+    fn run_to_completion(&mut self, budget: u32) {
         for _ in 0..budget.saturating_add(1) {
             if !self.is_running() {
                 break;
@@ -161,7 +162,8 @@ impl ExpandSession {
 }
 
 /// Overlap independent expands via the inference pool (Lean calls still serialize in binding).
-pub async fn run_many_to_completion(
+#[cfg(test)]
+async fn run_many_to_completion(
     pool: &InferencePool,
     jobs: Vec<(Vec<u32>, Meta, u32)>,
 ) -> Result<Vec<String>, PoolError> {
@@ -189,7 +191,7 @@ pub async fn run_many_to_completion(
 mod tests {
     use super::*;
     use lean_binding::rv32::Meta;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     fn snap(session: &ExpandSession) -> Value {
         serde_json::from_str(&session.snapshot_json()).expect("session JSON")
@@ -285,8 +287,7 @@ mod tests {
             let failed = snap(&session);
             assert_eq!(failed["reason"], "InvalidEntry");
         }
-        let mut session =
-            ExpandSession::create(&[0x00008067], Meta::new(0xffff_fffc, 0x100), 0);
+        let mut session = ExpandSession::create(&[0x00008067], Meta::new(0xffff_fffc, 0x100), 0);
         assert!(session.is_running());
         assert_eq!(snap(&session)["fuel"], 0);
         session.step();

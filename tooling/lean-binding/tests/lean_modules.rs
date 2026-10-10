@@ -158,7 +158,9 @@ fn rv32_expand_esp32c3_root_and_opening() {
     assert_eq!(nodes[0]["loc"], "0");
     let exprs = nodes[0]["exprs"].as_array().expect("exprs");
     assert_eq!(exprs.len(), 28);
-    assert!(exprs.iter().any(|e| e["reg"] == "real32:0" && e["term"] == "0"));
+    assert!(exprs
+        .iter()
+        .any(|e| e["reg"] == "real32:0" && e["term"] == "0"));
     assert!(exprs.iter().any(|e| e["reg"] == "stack32:0"));
 
     // After first C_LW a2,0(a0): real32:12 = EntryVar.data (v32:4).

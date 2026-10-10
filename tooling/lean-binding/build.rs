@@ -36,7 +36,13 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lean_lib.display());
     }
 
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("shim.c").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("shim.c").display()
+    );
     println!("cargo:rerun-if-changed={}", lake_lib.display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("lakefile.lean").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        lean_root.join("lakefile.lean").display()
+    );
 }
