@@ -18,7 +18,7 @@ import {
   type ChangeEvent,
 } from "react";
 import "@xyflow/react/dist/style.css";
-import { createSession, runSession, stepSession } from "./api";
+import { createSession, runSessionStream, stepSession } from "./api";
 import { insnIndexForNode, localExprs, splitExprs } from "./exprs";
 import {
   formatRegLabel,
@@ -218,15 +218,20 @@ function DebugScreen() {
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runRate, setRunRate] = useState<string | null>(null);
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
   const flow = useReactFlow();
 
   const boot = useCallback(
     async (nextArch: ArchKind, b: number, name: string, image: ArrayBuffer | null) => {
+      runAbortRef.current?.abort();
+      runAbortRef.current = null;
       setBusy(true);
       setError(null);
+      setRunRate(null);
       try {
         const next = await createSession({
           budget: b,
@@ -365,13 +370,31 @@ function DebugScreen() {
 
   const onRun = useCallback(async () => {
     if (!snap || snap.status !== "running") return;
+    runAbortRef.current?.abort();
+    const ac = new AbortController();
+    runAbortRef.current = ac;
     setBusy(true);
     setError(null);
+    setRunRate(null);
     try {
-      apply(await runSession(snap.id));
+      await runSessionStream(
+        snap.id,
+        (next, stats) => {
+          apply(next);
+          setRunRate(
+            `${stats.stepsPerSec.toFixed(1)} step/s  ${stats.steps} steps  ${(
+              stats.elapsedMs / 1000
+            ).toFixed(2)}s`,
+          );
+        },
+        ac.signal,
+      );
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "run failed");
+      if (!ac.signal.aborted) {
+        setError(err instanceof Error ? err.message : "run failed");
+      }
     } finally {
+      if (runAbortRef.current === ac) runAbortRef.current = null;
       setBusy(false);
     }
   }, [apply, snap]);
@@ -877,7 +900,9 @@ function DebugScreen() {
           {snap
             ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
                 snap.arch
-              }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}`
+              }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}${
+                runRate ? `  ${runRate}` : ""
+              }`
             : "连接中"}
         </Text>
       </Flex>

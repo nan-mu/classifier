@@ -5,16 +5,21 @@ mod rv32_image;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use axum::body::Bytes;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use engine::InferencePool;
 use expand::{Arch, Session, Snapshot};
-use serde::Deserialize;
+use futures_util::future::FutureExt;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
@@ -42,9 +47,23 @@ fn app(state: AppState) -> Router {
         .route("/api/session", post(create_session))
         .route("/api/session/{id}/step", post(step_session))
         .route("/api/session/{id}/run", post(run_session))
+        .route("/api/session/{id}/run/ws", get(run_session_ws))
         .route("/api/session/{id}", get(get_session))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+/// One expand tick streamed to the UI. `snapshot` is the full graph after the step.
+#[derive(Serialize)]
+struct RunEvent<'a> {
+    kind: &'a str,
+    elapsed_ms: u64,
+    steps: u32,
+    nodes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<Snapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
 }
 
 fn new_state() -> AppState {
@@ -167,6 +186,92 @@ async fn run_session(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(snap))
+}
+
+/// Stream one expand step per WebSocket text frame until the session leaves `running`.
+async fn run_session_ws(
+    ws: WebSocketUpgrade,
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let session = session_handle(&app, &id)?;
+    let pool = app.pool.clone();
+    Ok(ws.on_upgrade(move |socket| run_ws_loop(socket, session, pool)))
+}
+
+async fn run_ws_loop(mut socket: WebSocket, session: Arc<Mutex<Session>>, pool: InferencePool) {
+    let started = Instant::now();
+    loop {
+        // Drain any client control frames without awaiting (do not cancel in-flight Lean work).
+        while let Some(ready) = socket.next().now_or_never() {
+            match ready {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                Some(Ok(Message::Ping(p))) => {
+                    if socket.send(Message::Pong(p)).await.is_err() {
+                        return;
+                    }
+                }
+                Some(Ok(_)) => {}
+            }
+        }
+
+        let stepped = pool
+            .run({
+                let session = Arc::clone(&session);
+                move || {
+                    let mut session = session.lock().expect("session");
+                    if !session.is_running() {
+                        return (false, session.steps(), session.snapshot());
+                    }
+                    session.step_once();
+                    let cont = session.is_running();
+                    (cont, session.steps(), session.snapshot())
+                }
+            })
+            .await;
+
+        let (cont, steps, snap) = match stepped {
+            Ok(v) => v,
+            Err(_) => {
+                let err = RunEvent {
+                    kind: "error",
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                    steps: 0,
+                    nodes: 0,
+                    snapshot: None,
+                    message: Some("inference pool failed".into()),
+                };
+                let _ = socket
+                    .send(Message::Text(
+                        serde_json::to_string(&err).unwrap_or_default().into(),
+                    ))
+                    .await;
+                return;
+            }
+        };
+
+        let kind = if cont { "step" } else { "done" };
+        let event = RunEvent {
+            kind,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+            steps,
+            nodes: snap.nodes.len(),
+            snapshot: Some(snap),
+            message: None,
+        };
+        let payload = match serde_json::to_string(&event) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        if socket.send(Message::Text(payload.into())).await.is_err() {
+            return;
+        }
+        if !cont {
+            let _ = socket.send(Message::Close(None)).await;
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
 }
 
 async fn get_session(

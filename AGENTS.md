@@ -167,7 +167,12 @@ stateless and fuel-free; `lean-binding` is only the FFI surface (`Meta`,
 The server expand engine (`tooling/server/src/engine.rs`) owns `ExpandSession`
 (`insns`, work queue, edges, `fuel`/budget) and an `InferencePool` of 10
 Tokio semaphore permits that gate `spawn_blocking` expand jobs. HTTP sessions
-wrap that engine; `/create`, `/step`, `/run`, and `/get` acquire a pool permit.
+wrap that engine; `/create`, `/step`, `/run`, `/run/ws`, and `/get` acquire a
+pool permit. UI “运行到结束” opens `GET /api/session/{id}/run/ws` and receives
+one full snapshot JSON frame after each expand step (plus a final `done`);
+POST `/run` remains for smoke/tests. Async Tokio only overlaps session chrome:
+every Lean FFI call still serializes on `LEAN_LOCK`, so a single run will not
+saturate all CPU cores.
 `Meta` carries `base`, `helperAddress` (dispatcher — not a Predicate),
 `returnAddress` default `0x2000`, plus ignored unknown fields. Predicates follow
 `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` (`doc/predicates.md`); Helper is one

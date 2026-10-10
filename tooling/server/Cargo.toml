@@ -6,8 +6,9 @@ publish = false
 description = "Lean-backed Expand HTTP server for RV32IMC firmware images"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 lean-binding = { path = "../lean-binding" }
 riscv-isa = "0.3"
 xpost-elf = { path = "../../../xpost/xpost-elf" }

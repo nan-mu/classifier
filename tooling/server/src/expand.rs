@@ -91,6 +91,14 @@ impl Session {
         }
     }
 
+    pub fn is_running(&self) -> bool {
+        self.expand.is_running()
+    }
+
+    pub fn steps(&self) -> u32 {
+        self.steps
+    }
+
     pub fn step_once(&mut self) {
         if !self.expand.is_running() {
             return;
