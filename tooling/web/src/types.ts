@@ -15,19 +15,14 @@ export type ExprRow = {
   term: string;
 };
 
-/** Lean cmp/ret/helper JSON; term strings stay opaque (64-bit safe). */
+/**
+ * One Predicate observation (doc: Cmp ⊔ Ret ⊔ Helper ⊔ …).
+ * `kind` is the disjoint-union tag; other fields are kind-specific and opaque.
+ * New Lean Predicate variants must not require TS shape changes.
+ */
 export type PredRow = {
-  kind: "cmp" | "ret" | "helper" | "tag" | "unknown";
-  tag?: number;
-  rel?: string;
-  width?: number;
-  lhs?: string;
-  rhs?: string;
-  /** `kind=ret` observation term. */
-  term?: string;
-  event?: number;
-  helperId?: number;
-  args?: string[];
+  kind: string;
+  [field: string]: unknown;
 };
 
 export type GraphNode = {

@@ -237,95 +237,20 @@ fn parse_exprs(n: &Value) -> Vec<ExprOut> {
         .collect()
 }
 
-/// Lean `renderPredicateJson`:
-/// - `{"kind":"cmp","rel","width","lhs","rhs"}`
-/// - `{"kind":"ret","term"}`
-/// - `{"kind":"helper","event","helperId","args"}`
+/// Pass through Lean Predicate JSON (`kind` + kind-specific fields).
+/// `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` — new variants must not require Rust field changes.
 fn parse_predicates(n: &Value) -> Vec<PredOut> {
     n["predicates"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|p| {
-            let kind = p.get("kind").and_then(|k| k.as_str());
-            match kind {
-                Some("cmp") => PredOut {
-                    kind: "cmp".into(),
-                    tag: None,
-                    rel: p["rel"].as_str().map(str::to_string),
-                    width: p["width"].as_u64().map(|w| w as u32),
-                    lhs: p["lhs"].as_str().map(str::to_string),
-                    rhs: p["rhs"].as_str().map(str::to_string),
-                    term: None,
-                    event: None,
-                    helper_id: None,
-                    args: None,
-                },
-                Some("ret") => PredOut {
-                    kind: "ret".into(),
-                    tag: None,
-                    rel: None,
-                    width: None,
-                    lhs: None,
-                    rhs: None,
-                    term: p["term"].as_str().map(str::to_string),
-                    event: None,
-                    helper_id: None,
-                    args: None,
-                },
-                Some("helper") => PredOut {
-                    kind: "helper".into(),
-                    tag: None,
-                    rel: None,
-                    width: None,
-                    lhs: None,
-                    rhs: None,
-                    term: None,
-                    event: p["event"].as_u64(),
-                    helper_id: p["helperId"].as_u64(),
-                    args: p["args"].as_array().map(|xs| {
-                        xs.iter()
-                            .filter_map(|x| x.as_str().map(str::to_string))
-                            .collect()
-                    }),
-                },
-                _ if p.get("rel").is_some() && p.get("lhs").is_some() => PredOut {
-                    kind: "cmp".into(),
-                    tag: None,
-                    rel: p["rel"].as_str().map(str::to_string),
-                    width: p["width"].as_u64().map(|w| w as u32),
-                    lhs: p["lhs"].as_str().map(str::to_string),
-                    rhs: p["rhs"].as_str().map(str::to_string),
-                    term: None,
-                    event: None,
-                    helper_id: None,
-                    args: None,
-                },
-                _ if p["tag"].as_u64().is_some() => PredOut {
-                    kind: "tag".into(),
-                    tag: p["tag"].as_u64(),
-                    rel: None,
-                    width: None,
-                    lhs: None,
-                    rhs: None,
-                    term: None,
-                    event: None,
-                    helper_id: None,
-                    args: None,
-                },
-                _ => PredOut {
-                    kind: "unknown".into(),
-                    tag: None,
-                    rel: None,
-                    width: None,
-                    lhs: None,
-                    rhs: None,
-                    term: None,
-                    event: None,
-                    helper_id: None,
-                    args: None,
-                },
-            }
+            let mut fields = p.as_object().cloned().unwrap_or_default();
+            let kind = fields
+                .remove("kind")
+                .and_then(|k| k.as_str().map(str::to_string))
+                .unwrap_or_else(|| "unknown".into());
+            PredOut { kind, fields }
         })
         .collect()
 }
@@ -420,29 +345,23 @@ pub struct ExprOut {
     pub term: String,
 }
 
-#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+/// One Predicate observation. `kind` is the disjoint-union tag; remaining fields
+/// stay opaque so Cmp / Ret / Helper / future variants share one wire type.
+#[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct PredOut {
     pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tag: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rel: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub width: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lhs: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rhs: Option<String>,
-    /// Return observation term (`kind=ret`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub term: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub helper_id: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub fields: serde_json::Map<String, Value>,
+}
+
+impl PredOut {
+    pub fn get_u64(&self, key: &str) -> Option<u64> {
+        self.fields.get(key).and_then(Value::as_u64)
+    }
+
+    pub fn get_str(&self, key: &str) -> Option<&str> {
+        self.fields.get(key).and_then(Value::as_str)
+    }
 }
 
 #[derive(Serialize)]
@@ -628,20 +547,20 @@ mod tests {
             .nodes
             .iter()
             .flat_map(|n| &n.predicates)
-            .find(|p| p.kind == "cmp" && p.rel.as_deref() == Some("ltu"));
+            .find(|p| p.kind == "cmp" && p.get_str("rel") == Some("ltu"));
         let geu = snap
             .nodes
             .iter()
             .flat_map(|n| &n.predicates)
-            .find(|p| p.kind == "cmp" && p.rel.as_deref() == Some("geu"));
+            .find(|p| p.kind == "cmp" && p.get_str("rel") == Some("geu"));
         let ltu = ltu.expect("ltu cmp Predicate on Taken path");
         let geu = geu.expect("geu cmp Predicate on NotTaken path");
-        assert_eq!(ltu.width, Some(32));
-        assert_eq!(geu.width, Some(32));
-        assert!(ltu.lhs.as_ref().is_some_and(|s| !s.is_empty()));
-        assert!(ltu.rhs.as_ref().is_some_and(|s| !s.is_empty()));
-        assert_eq!(ltu.lhs, geu.lhs);
-        assert_eq!(ltu.rhs, geu.rhs);
+        assert_eq!(ltu.get_u64("width"), Some(32));
+        assert_eq!(geu.get_u64("width"), Some(32));
+        assert!(ltu.get_str("lhs").is_some_and(|s| !s.is_empty()));
+        assert!(ltu.get_str("rhs").is_some_and(|s| !s.is_empty()));
+        assert_eq!(ltu.get_str("lhs"), geu.get_str("lhs"));
+        assert_eq!(ltu.get_str("rhs"), geu.get_str("rhs"));
     }
 
     #[test]
@@ -664,12 +583,12 @@ mod tests {
         assert_eq!(nodes[0].predicates.len(), 1);
         let p = &nodes[0].predicates[0];
         assert_eq!(p.kind, "cmp");
-        assert_eq!(p.rel.as_deref(), Some("ltu"));
-        assert_eq!(p.width, Some(32));
-        assert_eq!(p.lhs.as_deref(), Some("v32:4"));
-        assert_eq!(p.rhs.as_deref(), Some("add32(v32:4,v32:5)"));
-        assert!(p.tag.is_none());
-        assert!(p.term.is_none());
+        assert_eq!(p.get_str("rel"), Some("ltu"));
+        assert_eq!(p.get_u64("width"), Some(32));
+        assert_eq!(p.get_str("lhs"), Some("v32:4"));
+        assert_eq!(p.get_str("rhs"), Some("add32(v32:4,v32:5)"));
+        assert!(!p.fields.contains_key("tag"));
+        assert!(!p.fields.contains_key("term"));
     }
 
     #[test]
@@ -684,7 +603,7 @@ mod tests {
         });
         let (nodes, _) = graph_from_lean(&lean);
         assert_eq!(nodes[0].predicates[0].kind, "ret");
-        assert_eq!(nodes[0].predicates[0].term.as_deref(), Some("8"));
+        assert_eq!(nodes[0].predicates[0].get_str("term"), Some("8"));
     }
 
     #[test]
@@ -705,17 +624,14 @@ mod tests {
         let (nodes, _) = graph_from_lean(&lean);
         let p = &nodes[0].predicates[0];
         assert_eq!(p.kind, "helper");
-        assert_eq!(p.event, Some(166));
-        assert_eq!(p.helper_id, Some(1));
+        assert_eq!(p.get_u64("event"), Some(166));
+        assert_eq!(p.get_u64("helperId"), Some(1));
         assert_eq!(
-            p.args.as_deref(),
-            Some(
-                [
-                    "1077412584".to_string(),
-                    "id32(add32(v32:0,4294967280))".to_string()
-                ]
-                .as_slice()
-            )
+            p.fields.get("args"),
+            Some(&serde_json::json!([
+                "1077412584",
+                "id32(add32(v32:0,4294967280))"
+            ]))
         );
     }
 
@@ -739,7 +655,7 @@ mod tests {
         assert!(snap.nodes.iter().any(|n| n
             .predicates
             .iter()
-            .any(|p| p.kind == "helper" && p.helper_id == Some(1))));
+            .any(|p| p.kind == "helper" && p.get_u64("helperId") == Some(1))));
         let first_load = snap.nodes.iter().find(|n| n.id == 227).unwrap();
         assert_eq!(first_load.loc, "48");
         let second_load = snap.nodes.iter().find(|n| n.id == 244).unwrap();
@@ -816,7 +732,7 @@ mod tests {
         assert!(snap.nodes.iter().any(|n| {
             n.predicates
                 .iter()
-                .any(|p| p.kind == "helper" && p.helper_id.is_some())
+                .any(|p| p.kind == "helper" && p.get_u64("helperId").is_some())
         }));
         assert!(
             snap.nodes.len() >= 40,
@@ -830,12 +746,12 @@ mod tests {
             n.loc == "exit"
                 && n.predicates
                     .iter()
-                    .any(|p| p.kind == "ret" && p.term.is_some())
+                    .any(|p| p.kind == "ret" && p.get_str("term").is_some())
         }));
         assert!(snap.nodes.iter().any(|n| {
             n.predicates
                 .iter()
-                .any(|p| p.kind == "cmp" && p.rel.as_deref() == Some("ltu"))
+                .any(|p| p.kind == "cmp" && p.get_str("rel") == Some("ltu"))
         }));
     }
 }

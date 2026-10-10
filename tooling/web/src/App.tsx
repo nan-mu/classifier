@@ -158,21 +158,23 @@ function PredDetail({ p }: { p: PredRow }) {
           <Text className="mono muted" display="block" fontSize={11}>
             lhs
           </Text>
-          <TermTree view={parseTerm(p.lhs ?? "")} />
+          <TermTree view={parseTerm(typeof p.lhs === "string" ? p.lhs : "")} />
           <Text className="mono muted" display="block" fontSize={11}>
             rhs
           </Text>
-          <TermTree view={parseTerm(p.rhs ?? "")} />
+          <TermTree view={parseTerm(typeof p.rhs === "string" ? p.rhs : "")} />
         </>
       ) : null}
-      {p.kind === "ret" ? <TermTree view={parseTerm(p.term ?? "")} /> : null}
-      {p.kind === "helper"
-        ? (p.args ?? []).map((arg, i) => (
+      {p.kind === "ret" ? (
+        <TermTree view={parseTerm(typeof p.term === "string" ? p.term : "")} />
+      ) : null}
+      {p.kind === "helper" && Array.isArray(p.args)
+        ? p.args.map((arg, i) => (
             <Box key={i}>
               <Text className="mono muted" display="block" fontSize={11}>
                 arg{i}
               </Text>
-              <TermTree view={parseTerm(arg)} />
+              <TermTree view={parseTerm(String(arg))} />
             </Box>
           ))
         : null}

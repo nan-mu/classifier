@@ -49,7 +49,7 @@ mod ffi {
         pub fn lean_rv32_expand_bound_words_snapshot(
             words: LeanObj,
             base: u32,
-            helper: u32,
+            helper_address: u32,
             steps: u32,
             budget: u32,
         ) -> LeanObj;
@@ -57,13 +57,13 @@ mod ffi {
         pub fn lean_rv32_expand_create(
             words: LeanObj,
             base: u32,
-            helper: u32,
+            helper_address: u32,
             budget: u32,
         ) -> LeanObj;
         pub fn lean_rv32_expand_step(
             words: LeanObj,
             base: u32,
-            helper: u32,
+            helper_address: u32,
             event: u32,
             j: u32,
             fuel: u32,
@@ -264,7 +264,7 @@ pub mod rv32 {
     pub fn expand_bound_words_snapshot(
         words: &[u32],
         base: u32,
-        helper: u32,
+        helper_address: u32,
         steps: u32,
         budget: u32,
     ) -> String {
@@ -272,7 +272,9 @@ pub mod rv32 {
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
             let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
-            let obj = ffi::lean_rv32_expand_bound_words_snapshot(arr, base, helper, steps, budget);
+            let obj = ffi::lean_rv32_expand_bound_words_snapshot(
+                arr, base, helper_address, steps, budget,
+            );
             take_string(obj)
         }
     }
@@ -297,20 +299,22 @@ pub mod rv32 {
     }
 
     /// Initial graph snapshot; the returned String has no retained Lean state.
-    pub fn expand_create(words: &[u32], base: u32, helper: u32, budget: u32) -> String {
+    /// `helper_address` is the ELF dispatcher binding, not a Predicate.
+    pub fn expand_create(words: &[u32], base: u32, helper_address: u32, budget: u32) -> String {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
             let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
-            take_string(ffi::lean_rv32_expand_create(arr, base, helper, budget))
+            take_string(ffi::lean_rv32_expand_create(arr, base, helper_address, budget))
         }
     }
 
     /// Stateless head expansion. Lean returns complete successor states after applyLocal.
+    /// Predicates (Cmp / Ret / Helper / …) appear only inside `preds_json`.
     pub fn expand_step(
         words: &[u32],
         base: u32,
-        helper: u32,
+        helper_address: u32,
         event: u32,
         j: u32,
         fuel: u32,
@@ -327,7 +331,7 @@ pub mod rv32 {
             let exprs = ffi::lean_binding_mk_string(exprs.as_ptr());
             let preds = ffi::lean_binding_mk_string(preds.as_ptr());
             take_string(ffi::lean_rv32_expand_step(
-                arr, base, helper, event, j, fuel, exprs, preds,
+                arr, base, helper_address, event, j, fuel, exprs, preds,
             ))
         }
     }
@@ -336,17 +340,17 @@ pub mod rv32 {
     pub struct ExpandSession {
         words: Vec<u32>,
         base: u32,
-        helper: u32,
+        helper_address: u32,
         snapshot: serde_json::Value,
     }
 
     impl ExpandSession {
-        pub fn create(words: &[u32], base: u32, helper: u32, budget: u32) -> Self {
+        pub fn create(words: &[u32], base: u32, helper_address: u32, budget: u32) -> Self {
             Self {
                 words: words.to_vec(),
                 base,
-                helper,
-                snapshot: serde_json::from_str(&expand_create(words, base, helper, budget))
+                helper_address,
+                snapshot: serde_json::from_str(&expand_create(words, base, helper_address, budget))
                     .expect("Lean create snapshot JSON"),
             }
         }
@@ -370,7 +374,7 @@ pub mod rv32 {
             let result: Value = serde_json::from_str(&expand_step(
                 &self.words,
                 self.base,
-                self.helper,
+                self.helper_address,
                 event as u32,
                 j,
                 fuel,
@@ -442,9 +446,9 @@ pub mod rv32 {
         use std::thread;
 
         let mut handles = Vec::with_capacity(jobs.len());
-        for (words, base, helper, budget) in jobs {
+        for (words, base, helper_address, budget) in jobs {
             handles.push(thread::spawn(move || {
-                let mut session = ExpandSession::create(&words, base, helper, budget);
+                let mut session = ExpandSession::create(&words, base, helper_address, budget);
                 session.run_to_completion(budget);
                 session.snapshot_json()
             }));

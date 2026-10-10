@@ -98,16 +98,30 @@ export function helperName(id: number | undefined): string {
   return HELPER_NAMES[id] ?? `helper${id}`;
 }
 
+function predStr(p: PredRow, key: string): string {
+  const v = p[key];
+  return typeof v === "string" ? v : v == null ? "" : String(v);
+}
+
+function predNum(p: PredRow, key: string): number | undefined {
+  const v = p[key];
+  return typeof v === "number" ? v : undefined;
+}
+
+function predArgs(p: PredRow): string[] {
+  const v = p.args;
+  return Array.isArray(v) ? v.map((x) => String(x)) : [];
+}
+
 function predKey(p: PredRow): string {
   if (p.kind === "cmp") {
-    return `cmp:${p.rel ?? ""}:${p.width ?? ""}:${p.lhs ?? ""}:${p.rhs ?? ""}`;
+    return `cmp:${predStr(p, "rel")}:${predStr(p, "width")}:${predStr(p, "lhs")}:${predStr(p, "rhs")}`;
   }
-  if (p.kind === "ret") return `ret:${p.term ?? ""}`;
+  if (p.kind === "ret") return `ret:${predStr(p, "term")}`;
   if (p.kind === "helper") {
-    return `helper:${p.event ?? ""}:${p.helperId ?? ""}:${(p.args ?? []).join(",")}`;
+    return `helper:${predStr(p, "event")}:${predStr(p, "helperId")}:${predArgs(p).join(",")}`;
   }
-  if (p.kind === "tag") return `tag:${p.tag ?? ""}`;
-  return `unknown:${JSON.stringify(p)}`;
+  return `${p.kind}:${JSON.stringify(p)}`;
 }
 
 export function diffPredicates(a: PredRow[], b: PredRow[]): {
@@ -124,18 +138,16 @@ export function diffPredicates(a: PredRow[], b: PredRow[]): {
 
 export function formatPred(p: PredRow): string {
   if (p.kind === "cmp") {
-    const w = p.width != null ? `${p.width}` : "?";
-    return `cmp/${w} [${p.rel ?? "?"}] ${p.lhs ?? "?"} ⋈ ${p.rhs ?? "?"}`;
+    const w = predNum(p, "width") != null ? `${predNum(p, "width")}` : "?";
+    return `cmp/${w} [${predStr(p, "rel") || "?"}] ${predStr(p, "lhs") || "?"} ⋈ ${predStr(p, "rhs") || "?"}`;
   }
-  if (p.kind === "ret") return `ret ${p.term ?? "?"}`;
+  if (p.kind === "ret") return `ret ${predStr(p, "term") || "?"}`;
   if (p.kind === "helper") {
-    const name = helperName(p.helperId);
-    const ev = p.event != null ? `@e${p.event}` : "";
-    const args = (p.args ?? []).join(", ");
-    return `helper ${name}${ev}(${args})`;
+    const name = helperName(predNum(p, "helperId"));
+    const ev = predNum(p, "event") != null ? `@e${predNum(p, "event")}` : "";
+    return `helper ${name}${ev}(${predArgs(p).join(", ")})`;
   }
-  if (p.kind === "tag") return `tag ${p.tag ?? "?"}`;
-  return "unknown predicate";
+  return `${p.kind} predicate`;
 }
 
 export function countBranchEdges(snap: SessionSnapshot): {

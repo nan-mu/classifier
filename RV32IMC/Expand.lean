@@ -846,11 +846,12 @@ def inferStep (I : Array Insn) (context : StepContext)
         | none, _ => .reject .undefinedSrc
   | _, _, _, _ => fallback
 
-private def boundProgram (words : Array UInt32) (base helper : UInt32) :
+/-- `helperAddress` is the ELF dispatcher binding, not a `Predicate.helper` observation. -/
+private def boundProgram (words : Array UInt32) (base helperAddress : UInt32) :
     Except RejectReason (Array Insn × EntryParams × StepContext) :=
   let I := decodeProgram words
   let b := base.toNat
-  let h := helper.toNat
+  let h := helperAddress.toNat
   let extent := I.foldl (fun n i => n + insnLength i) 0
   let p := { smokeEntryParams with tEntry := Term.C32 b }
   let context : StepContext := ⟨some b, some 0x2000, some h, some p.tCtx⟩
@@ -861,8 +862,8 @@ private def boundProgram (words : Array UInt32) (base helper : UInt32) :
   else .ok (I, p, context)
 
 @[export lean_rv32_expand_create]
-def exportRv32ExpandCreate (words : Array UInt32) (base helper budget : UInt32) : String :=
-  match boundProgram words base helper with
+def exportRv32ExpandCreate (words : Array UInt32) (base helperAddress budget : UInt32) : String :=
+  match boundProgram words base helperAddress with
   | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
   | .ok (I, p, _) =>
     match rv32Init I p 0 budget.toNat with
@@ -901,8 +902,9 @@ def exportRv32ExpandStep
             s!"\{\"status\":\"ok\",\"fuel\":{fuel.toNat - 1},\"reason\":null,\"successors\":[{successors}]}"
 
 @[export lean_rv32_expand_bound_words_snapshot]
-def exportRv32BoundWordsSnapshot (words : Array UInt32) (base helper steps budget : UInt32) : String :=
-  match boundProgram words base helper with
+def exportRv32BoundWordsSnapshot
+    (words : Array UInt32) (base helperAddress steps budget : UInt32) : String :=
+  match boundProgram words base helperAddress with
   | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
   | .ok (I, p, context) =>
     match rv32Init I p 0 budget.toNat with
