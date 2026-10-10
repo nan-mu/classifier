@@ -279,8 +279,8 @@ def decodeInsnWord (w : UInt32) : Insn :=
   else encode (BitVec.ofNat 32 n)
 
 /-- Decode mixed 16/32-bit instruction arrays without changing their sequence indices. -/
-def decodeProgram (words : Array UInt32) : Array Insn :=
-  words.map decodeInsnWord
+def decodeProgram (insns : Array UInt32) : Array Insn :=
+  insns.map decodeInsnWord
 
 def esp32c3Program : Array Insn := decodeProgram esp32c3Words
 
@@ -793,10 +793,10 @@ private def packetLoadsCheck : Bool :=
 def exportRv32Snapshot (steps budget : UInt32) : String :=
   rv32Snapshot esp32c3Program smokeEntryParams 0 steps.toNat budget.toNat
 
--- Parent Rust glue: words is a boxed Lean Array UInt32; steps/budget are uint32_t, result Lean String.
+-- Parent Rust glue: insns is a boxed Lean Array UInt32; steps/budget are uint32_t, result Lean String.
 @[export lean_rv32_expand_words_snapshot]
-def exportRv32WordsSnapshot (words : Array UInt32) (steps budget : UInt32) : String :=
-  rv32Snapshot (decodeProgram words) smokeEntryParams 0 steps.toNat budget.toNat
+def exportRv32WordsSnapshot (insns : Array UInt32) (steps budget : UInt32) : String :=
+  rv32Snapshot (decodeProgram insns) smokeEntryParams 0 steps.toNat budget.toNat
 
 private def helperTarget (i : Insn) (pc : Nat) (Eg : ExprSet) : Option Nat :=
   match i with
@@ -866,9 +866,9 @@ private def parseMetaJson (s : String) : Option Meta := do
   let returnAddress := (parseMetaU32 j "returnAddress").getD 0x2000
   some { base, helperAddress, returnAddress }
 
-private def boundProgram (words : Array UInt32) (m : Meta) :
+private def boundProgram (insns : Array UInt32) (m : Meta) :
     Except RejectReason (Array Insn × EntryParams × StepContext) :=
-  let I := decodeProgram words
+  let I := decodeProgram insns
   let b := m.base.toNat
   let h := m.helperAddress.toNat
   let ret := m.returnAddress.toNat
@@ -888,10 +888,11 @@ private def withMeta (metaJson : String)
   | none => snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
   | some m => k m
 
+/-- `insns`: instruction encodings (one UInt32 slot per program index; compressed in the low halfword). -/
 @[export lean_rv32_expand_create]
-def exportRv32ExpandCreate (words : Array UInt32) (metaJson : String) (budget : UInt32) : String :=
+def exportRv32ExpandCreate (insns : Array UInt32) (metaJson : String) (budget : UInt32) : String :=
   withMeta metaJson fun m =>
-    match boundProgram words m with
+    match boundProgram insns m with
     | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
     | .ok (I, p, _) =>
       match rv32Init I p 0 budget.toNat with
@@ -911,14 +912,14 @@ private def successorJson (row : Direction × Location × SemState) : String :=
 /-- Stateless head step. Predicates (including `helper`) travel only inside SemState JSON. -/
 @[export lean_rv32_expand_step]
 def exportRv32ExpandStep
-    (words : Array UInt32) (metaJson : String) (event j fuel : UInt32)
+    (insns : Array UInt32) (metaJson : String) (event j fuel : UInt32)
     (exprsJson predsJson : String) : String :=
   -- Failures echo input fuel; Rust owns the attempted-head work/fuel bookkeeping.
   if fuel == 0 then headFailJson .limitExceeded 0 else
     match parseMetaJson metaJson with
     | none => headFailJson .invalidEntry fuel.toNat
     | some m =>
-      match boundProgram words m with
+      match boundProgram insns m with
       | .error reason => headFailJson reason fuel.toNat
       | .ok (I, _, context) =>
         match parseSemStateJson exprsJson predsJson with
@@ -935,9 +936,9 @@ def exportRv32ExpandStep
 
 @[export lean_rv32_expand_bound_words_snapshot]
 def exportRv32BoundWordsSnapshot
-    (words : Array UInt32) (metaJson : String) (steps budget : UInt32) : String :=
+    (insns : Array UInt32) (metaJson : String) (steps budget : UInt32) : String :=
   withMeta metaJson fun m =>
-    match boundProgram words m with
+    match boundProgram insns m with
     | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
     | .ok (I, p, context) =>
       match rv32Init I p 0 budget.toNat with

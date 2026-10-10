@@ -158,7 +158,8 @@ ELF field. Check container extent and binding collisions before analysis.
 eBPF analysis is not wired through the HTTP session API yet.
 
 Expand graph ownership: Lean exports `lean_rv32_expand_create` /
-`lean_rv32_expand_step` as stateless String FFI. Static bindings travel in one
+`lean_rv32_expand_step` as stateless String FFI. Program `insns` are the instruction-encoding array (one UInt32 slot per index).
+Static bindings travel in one
 `Meta` JSON blob (`base`, `helperAddress` dispatcher — not a Predicate,
 `returnAddress` default `0x2000`, plus ignored unknown fields for forward
 growth). Do not grow create/step arity for new bindings; extend `Meta`.

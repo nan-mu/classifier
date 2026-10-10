@@ -47,19 +47,19 @@ mod ffi {
         #[link_name = "lean_rv32_expand_builtin_snapshot"]
         pub fn lean_rv32_expand_builtin_snapshot(steps: u32, budget: u32) -> LeanObj;
         pub fn lean_rv32_expand_bound_words_snapshot(
-            words: LeanObj,
+            insns: LeanObj,
             meta_json: LeanObj,
             steps: u32,
             budget: u32,
         ) -> LeanObj;
-        pub fn lean_rv32_expand_words_snapshot(words: LeanObj, steps: u32, budget: u32) -> LeanObj;
+        pub fn lean_rv32_expand_words_snapshot(insns: LeanObj, steps: u32, budget: u32) -> LeanObj;
         pub fn lean_rv32_expand_create(
-            words: LeanObj,
+            insns: LeanObj,
             meta_json: LeanObj,
             budget: u32,
         ) -> LeanObj;
         pub fn lean_rv32_expand_step(
-            words: LeanObj,
+            insns: LeanObj,
             meta_json: LeanObj,
             event: u32,
             j: u32,
@@ -259,11 +259,11 @@ pub mod rv32 {
     }
 
     /// JSON after `steps` expandOne calls on a caller-supplied instruction word list.
-    pub fn expand_words_snapshot(words: &[u32], steps: u32, budget: u32) -> String {
+    pub fn expand_words_snapshot(insns: &[u32], steps: u32, budget: u32) -> String {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
-            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
             let obj = ffi::lean_rv32_expand_words_snapshot(arr, steps, budget);
             take_string(obj)
         }
@@ -319,7 +319,7 @@ pub mod rv32 {
     }
 
     pub fn expand_bound_words_snapshot(
-        words: &[u32],
+        insns: &[u32],
         meta: &Meta,
         steps: u32,
         budget: u32,
@@ -327,7 +327,7 @@ pub mod rv32 {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
-            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
             let meta = lean_string(&meta.to_json());
             let obj = ffi::lean_rv32_expand_bound_words_snapshot(arr, meta, steps, budget);
             take_string(obj)
@@ -335,11 +335,12 @@ pub mod rv32 {
     }
 
     /// Initial graph snapshot; the returned String has no retained Lean state.
-    pub fn expand_create(words: &[u32], meta: &Meta, budget: u32) -> String {
+    /// `insns`: instruction encodings (one UInt32 slot per program index).
+    pub fn expand_create(insns: &[u32], meta: &Meta, budget: u32) -> String {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
-            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
             let meta = lean_string(&meta.to_json());
             take_string(ffi::lean_rv32_expand_create(arr, meta, budget))
         }
@@ -348,7 +349,7 @@ pub mod rv32 {
     /// Stateless head expansion. Lean returns complete successor states after applyLocal.
     /// Predicates (Cmp / Ret / Helper / …) appear only inside `preds_json`.
     pub fn expand_step(
-        words: &[u32],
+        insns: &[u32],
         meta: &Meta,
         event: u32,
         j: u32,
@@ -359,7 +360,7 @@ pub mod rv32 {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
-            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
             let meta = lean_string(&meta.to_json());
             let exprs = lean_string(exprs_json);
             let preds = lean_string(preds_json);
@@ -371,17 +372,17 @@ pub mod rv32 {
 
     /// Rust owns the graph and work queue. Each Lean call consumes and returns JSON.
     pub struct ExpandSession {
-        words: Vec<u32>,
+        insns: Vec<u32>,
         meta: Meta,
         snapshot: serde_json::Value,
     }
 
     impl ExpandSession {
-        pub fn create(words: &[u32], meta: Meta, budget: u32) -> Self {
-            let snapshot = serde_json::from_str(&expand_create(words, &meta, budget))
+        pub fn create(insns: &[u32], meta: Meta, budget: u32) -> Self {
+            let snapshot = serde_json::from_str(&expand_create(insns, &meta, budget))
                 .expect("Lean create snapshot JSON");
             Self {
-                words: words.to_vec(),
+                insns: insns.to_vec(),
                 meta,
                 snapshot,
             }
@@ -404,7 +405,7 @@ pub mod rv32 {
                 .parse()
                 .expect("head position");
             let result: Value = serde_json::from_str(&expand_step(
-                &self.words,
+                &self.insns,
                 &self.meta,
                 event as u32,
                 j,
@@ -475,9 +476,9 @@ pub mod rv32 {
         use std::thread;
 
         let mut handles = Vec::with_capacity(jobs.len());
-        for (words, meta, budget) in jobs {
+        for (insns, meta, budget) in jobs {
             handles.push(thread::spawn(move || {
-                let mut session = ExpandSession::create(&words, meta, budget);
+                let mut session = ExpandSession::create(&insns, meta, budget);
                 session.run_to_completion(budget);
                 session.snapshot_json()
             }));

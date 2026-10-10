@@ -52,10 +52,10 @@ impl Session {
         program: rv32_image::Rv32Program,
     ) -> Self {
         let image = program.image;
-        let words = rv32_image::words(&image);
+        let insns = rv32_image::words(&image);
         let expand =
             rv32::ExpandSession::create(
-                &words,
+                &insns,
                 rv32::Meta::new(program.base_address, program.helper_address),
                 budget,
             );
@@ -74,7 +74,7 @@ impl Session {
             "init root pre-state arch={} image={} insns={} budget={}",
             arch.as_str(),
             session.name,
-            words.len(),
+            insns.len(),
             budget
         ));
         session.sync_focus_from_lean();
