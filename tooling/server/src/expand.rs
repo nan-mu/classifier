@@ -87,7 +87,7 @@ impl Session {
             if !self.expand.is_running() {
                 break;
             }
-            self.step_once();
+            self.step_wave();
         }
     }
 
@@ -99,12 +99,27 @@ impl Session {
         self.steps
     }
 
+    /// UI single-step: expand only the current work head.
     pub fn step_once(&mut self) {
         if !self.expand.is_running() {
             return;
         }
-        self.steps = self.steps.saturating_add(1);
-        self.expand.step();
+        let n = self.expand.step_wave(1);
+        self.steps = self.steps.saturating_add(n.max(1));
+        self.after_expand();
+    }
+
+    /// Run-to-end / WS: expand a wave of pending work heads in parallel.
+    pub fn step_wave(&mut self) {
+        if !self.expand.is_running() {
+            return;
+        }
+        let n = self.expand.step_wave(lean_binding::LEAN_WORKERS);
+        self.steps = self.steps.saturating_add(n.max(1));
+        self.after_expand();
+    }
+
+    fn after_expand(&mut self) {
         let lean = self.lean_value();
         let status = lean["status"].as_str().unwrap_or("fail");
         match status {
@@ -535,6 +550,39 @@ mod tests {
             "xdp.elf".into(),
             rv32_image::parse_xdp_elf(rv32_image::FIREWALL_ELF).expect("firewall fixture"),
         )
+    }
+
+    #[test]
+    fn step_wave_expands_multiple_work_heads_after_branch() {
+        let mut session = firewall_session("s", 64);
+        for _ in 0..16 {
+            if session.snapshot().work.len() >= 2 {
+                break;
+            }
+            if !session.is_running() {
+                break;
+            }
+            session.step_once();
+        }
+        let before = session.snapshot();
+        assert!(
+            before.work.len() >= 2,
+            "expected branched work, got {:?}",
+            before.work
+        );
+        let nodes_before = before.nodes.len();
+        let steps_before = session.steps();
+        let fuel_before = before.fuel;
+        session.step_wave();
+        let after = session.snapshot();
+        assert!(
+            session.steps() >= steps_before + 2,
+            "wave should burn ≥2 expands; steps {} → {}",
+            steps_before,
+            session.steps()
+        );
+        assert!(after.fuel <= fuel_before.saturating_sub(2));
+        assert!(after.nodes.len() >= nodes_before + 2);
     }
 
     #[test]

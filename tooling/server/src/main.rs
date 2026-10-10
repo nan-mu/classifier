@@ -223,7 +223,7 @@ async fn run_ws_loop(mut socket: WebSocket, session: Arc<Mutex<Session>>, pool: 
                     if !session.is_running() {
                         return (false, session.steps(), session.snapshot());
                     }
-                    session.step_once();
+                    session.step_wave();
                     let cont = session.is_running();
                     (cont, session.steps(), session.snapshot())
                 }

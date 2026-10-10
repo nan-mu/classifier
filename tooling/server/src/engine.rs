@@ -78,69 +78,124 @@ impl ExpandSession {
         }
     }
 
-    pub fn step(&mut self) {
+    /// Expand up to `max_heads` work-queue heads in parallel on the Lean worker pool.
+    /// Returns how many heads were successfully expanded (0 if idle/limit/reject-before-commit).
+    pub fn step_wave(&mut self, max_heads: usize) -> u32 {
         if !self.is_running() {
-            return;
+            return 0;
         }
         let fuel = self.snapshot["fuel"].as_u64().unwrap_or(0) as u32;
-        let Some(event) = self.snapshot["work"][0].as_u64() else {
+        let work_len = self.snapshot["work"]
+            .as_array()
+            .map(|w| w.len())
+            .unwrap_or(0);
+        if work_len == 0 {
             self.snapshot["status"] = json!("complete");
-            return;
-        };
+            return 0;
+        }
         if fuel == 0 {
             self.snapshot["status"] = json!("fail");
             self.snapshot["reason"] = json!("LimitExceeded");
             self.snapshot["failed"] = Value::Null;
-            return;
+            return 0;
         }
-        let node = &self.snapshot["nodes"][event as usize];
-        let j = node["loc"]
-            .as_str()
-            .expect("head location")
-            .parse()
-            .expect("head position");
-        let result: Value = serde_json::from_str(&rv32::expand_step(
-            &self.insns,
-            &self.meta,
-            event as u32,
-            j,
-            &node["exprs"].to_string(),
-            &node["predicates"].to_string(),
-        ))
-        .expect("Lean step JSON");
-        self.snapshot["work"]
-            .as_array_mut()
-            .expect("work queue")
-            .remove(0);
-        self.snapshot["fuel"] = json!(fuel - 1);
-        if result["status"] == "fail" {
-            self.snapshot["status"] = json!("fail");
-            self.snapshot["reason"] = result["reason"].clone();
-            self.snapshot["failed"] = json!(event);
-            return;
+
+        let k = max_heads
+            .max(1)
+            .min(work_len)
+            .min(fuel as usize)
+            .min(lean_binding::LEAN_WORKERS);
+        let work = self.snapshot["work"].as_array().expect("work queue");
+        let nodes = self.snapshot["nodes"].as_array().expect("nodes");
+        let mut heads = Vec::with_capacity(k);
+        for slot in work.iter().take(k) {
+            let event = slot.as_u64().expect("work event");
+            let node = &nodes[event as usize];
+            let j: u32 = node["loc"]
+                .as_str()
+                .expect("head location")
+                .parse()
+                .expect("head position");
+            heads.push((
+                event,
+                j,
+                node["exprs"].to_string(),
+                node["predicates"].to_string(),
+            ));
         }
-        for successor in result["successors"].as_array().expect("successors") {
-            let id = self.snapshot["nodes"].as_array().expect("nodes").len();
-            self.snapshot["nodes"].as_array_mut().unwrap().push(json!({
-                "id": id, "loc": successor["loc"],
-                "exprs": successor["exprs"], "predicates": successor["predicates"],
-            }));
-            self.snapshot["edges"]
-                .as_array_mut()
-                .expect("edges")
-                .push(json!({
-                    "src": event, "dir": successor["dir"], "dst": id,
+
+        let insns = self.insns.clone();
+        let meta = self.meta.clone();
+        let results: Vec<(u64, Value)> = std::thread::scope(|scope| {
+            let mut joins = Vec::with_capacity(heads.len());
+            for (event, j, exprs, preds) in &heads {
+                let insns = &insns;
+                let meta = &meta;
+                let event = *event;
+                let j = *j;
+                joins.push(scope.spawn(move || {
+                    let raw = rv32::expand_step(insns, meta, event as u32, j, exprs, preds);
+                    let result: Value = serde_json::from_str(&raw).expect("Lean step JSON");
+                    (event, result)
                 }));
-            if successor["loc"] != "exit" {
-                self.snapshot["work"]
+            }
+            joins
+                .into_iter()
+                .map(|j| j.join().expect("wave worker"))
+                .collect()
+        });
+
+        // Drop the K heads up front; re-queue any not committed on mid-wave reject.
+        {
+            let work = self.snapshot["work"].as_array_mut().expect("work queue");
+            work.drain(0..k);
+        }
+
+        let mut expanded = 0u32;
+        let mut fuel_left = fuel;
+        for (i, (event, result)) in results.into_iter().enumerate() {
+            fuel_left -= 1;
+            self.snapshot["fuel"] = json!(fuel_left);
+            if result["status"] == "fail" {
+                // Put uncommitted heads back at the front of the work queue.
+                if i + 1 < heads.len() {
+                    let rest: Vec<Value> =
+                        heads[i + 1..].iter().map(|(e, _, _, _)| json!(e)).collect();
+                    let work = self.snapshot["work"].as_array_mut().expect("work queue");
+                    for (offset, ev) in rest.into_iter().enumerate() {
+                        work.insert(offset, ev);
+                    }
+                }
+                self.snapshot["status"] = json!("fail");
+                self.snapshot["reason"] = result["reason"].clone();
+                self.snapshot["failed"] = json!(event);
+                return expanded;
+            }
+            expanded += 1;
+            for successor in result["successors"].as_array().expect("successors") {
+                let id = self.snapshot["nodes"].as_array().expect("nodes").len();
+                self.snapshot["nodes"].as_array_mut().unwrap().push(json!({
+                    "id": id, "loc": successor["loc"],
+                    "exprs": successor["exprs"], "predicates": successor["predicates"],
+                }));
+                self.snapshot["edges"]
                     .as_array_mut()
-                    .unwrap()
-                    .push(json!(id));
+                    .expect("edges")
+                    .push(json!({
+                        "src": event, "dir": successor["dir"], "dst": id,
+                    }));
+                if successor["loc"] != "exit" {
+                    self.snapshot["work"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(id));
+                }
             }
         }
         if self.snapshot["work"].as_array().unwrap().is_empty() {
             self.snapshot["status"] = json!("complete");
         }
+        expanded
     }
 
     pub fn is_running(&self) -> bool {
@@ -157,12 +212,12 @@ impl ExpandSession {
             if !self.is_running() {
                 break;
             }
-            self.step();
+            let _ = self.step_wave(lean_binding::LEAN_WORKERS);
         }
     }
 }
 
-/// Overlap independent expands via the inference pool (Lean calls still serialize in binding).
+/// Overlap independent expands via the inference pool.
 #[cfg(test)]
 async fn run_many_to_completion(
     pool: &InferencePool,
@@ -223,7 +278,7 @@ mod tests {
                     );
                     assert_eq!(snapshot["fuel"], budget - steps);
                 }
-                session.step();
+                let _ = session.step_wave(1);
             }
         }
         let done = snap(&complete);
@@ -241,9 +296,9 @@ mod tests {
     fn rejection_preserves_graph_and_stops_at_terminal() {
         let mut session =
             ExpandSession::create(&[0x00700513, 0xffffffff], Meta::new(0x400, 0x100), 5);
-        session.step();
+        let _ = session.step_wave(1);
         let before = snap(&session);
-        session.step();
+        let _ = session.step_wave(1);
         let failed = snap(&session);
         assert_eq!(failed["status"], "fail");
         assert_eq!(failed["reason"], "LocalReject");
@@ -252,7 +307,7 @@ mod tests {
         assert_eq!(failed["edges"], before["edges"]);
         assert_eq!(failed["fuel"], 3);
         assert_eq!(failed["work"], json!([]));
-        session.step();
+        let _ = session.step_wave(1);
         assert_eq!(snap(&session), failed);
     }
 
@@ -272,7 +327,7 @@ mod tests {
             assert_eq!(failed["reason"], "InvalidEntry");
             assert_eq!(failed["nodes"], json!([]));
             assert!(!session.is_running());
-            session.step();
+            let _ = session.step_wave(1);
             assert_eq!(snap(&session), failed);
         }
         for insns in [vec![], vec![0x00008067, 0x00008067]] {
@@ -284,14 +339,14 @@ mod tests {
             let mut session = ExpandSession::create(&insns, meta, 10);
             assert!(session.is_running(), "create is Meta-only");
             assert_eq!(snap(&session)["fuel"], 10);
-            session.step();
+            let _ = session.step_wave(1);
             let failed = snap(&session);
             assert_eq!(failed["reason"], "InvalidEntry");
         }
         let mut session = ExpandSession::create(&[0x00008067], Meta::new(0xffff_fffc, 0x100), 0);
         assert!(session.is_running());
         assert_eq!(snap(&session)["fuel"], 0);
-        session.step();
+        let _ = session.step_wave(1);
         let failed = snap(&session);
         assert_eq!(failed["reason"], "LimitExceeded");
         assert_eq!(failed["failed"], Value::Null);
@@ -323,7 +378,7 @@ mod tests {
                     assert!(term.contains(&format!("externalResult{event}_0")), "{term}");
                 }
             }
-            session.step();
+            let _ = session.step_wave(1);
         }
     }
 

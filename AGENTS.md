@@ -169,13 +169,17 @@ The server expand engine (`tooling/server/src/engine.rs`) owns `ExpandSession`
 Tokio semaphore permits that gate `spawn_blocking` expand jobs. HTTP sessions
 wrap that engine; `/create`, `/step`, `/run`, `/run/ws`, and `/get` acquire a
 pool permit. UI “运行到结束” opens `GET /api/session/{id}/run/ws` and receives
-one full snapshot JSON frame after each expand step (plus a final `done`);
+one snapshot frame after each **work-queue wave** (plus a final `done`);
 POST `/run` remains for smoke/tests. `lean-binding` owns a fixed pool of 10
 OS threads (`LEAN_WORKERS`), each calling `lean_initialize_thread` after a
 single process-wide runtime init; FFI jobs run on those workers with no global
-Lean mutex. The server `InferencePool` permit count matches that size. One
-session’s expand steps remain sequential (graph dependence); up to 10 sessions
-or jobs can execute Lean FFI in parallel and use multiple cores.
+Lean mutex. The server `InferencePool` permit count matches that size.
+
+Concurrency model: a linear path (`work` length 1) uses one Lean worker per
+wave. When the queue holds multiple pending heads (typical after a symbolic
+branch), `step_wave` expands up to 10 heads in parallel, then merges successors
+in work-queue order. UI `/step` still expands a single head. Separate HTTP
+sessions can also overlap on the same Lean pool.
 `Meta` carries `base`, `helperAddress` (dispatcher — not a Predicate),
 `returnAddress` default `0x2000`, plus ignored unknown fields. Predicates follow
 `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` (`doc/predicates.md`); Helper is one

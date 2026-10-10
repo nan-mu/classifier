@@ -217,21 +217,56 @@ function DebugScreen() {
   const [firmwareName, setFirmwareName] = useState("just_tx.elf");
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
   const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runRate, setRunRate] = useState<string | null>(null);
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
+  const pendingSnapRef = useRef<SessionSnapshot | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const fitOnceRef = useRef(true);
   const flow = useReactFlow();
+
+  const flushPendingSnap = useCallback(() => {
+    rafRef.current = null;
+    const next = pendingSnapRef.current;
+    if (!next) return;
+    pendingSnapRef.current = null;
+    setSnap(next);
+    setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+  }, []);
+
+  const apply = useCallback(
+    (next: SessionSnapshot, opts?: { immediate?: boolean }) => {
+      if (opts?.immediate) {
+        pendingSnapRef.current = null;
+        if (rafRef.current != null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        setSnap(next);
+        setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+        return;
+      }
+      pendingSnapRef.current = next;
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(flushPendingSnap);
+      }
+    },
+    [flushPendingSnap],
+  );
 
   const boot = useCallback(
     async (nextArch: ArchKind, b: number, name: string, image: ArrayBuffer | null) => {
       runAbortRef.current?.abort();
       runAbortRef.current = null;
       setBusy(true);
+      setStreaming(false);
       setError(null);
       setRunRate(null);
+      fitOnceRef.current = true;
       try {
         const next = await createSession({
           budget: b,
@@ -239,7 +274,7 @@ function DebugScreen() {
           name,
           image,
         });
-        setSnap(next);
+        apply(next, { immediate: true });
         setSel((s) => ({
           ...s,
           focus: next.focus,
@@ -252,7 +287,7 @@ function DebugScreen() {
         setBusy(false);
       }
     },
-    [],
+    [apply],
   );
 
   useEffect(() => {
@@ -281,12 +316,14 @@ function DebugScreen() {
   );
 
   useEffect(() => {
+    if (streaming) return;
     insnRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [highlightJ, snap?.insns.length]);
+  }, [highlightJ, snap?.insns.length, streaming]);
 
   useEffect(() => {
+    if (streaming) return;
     logRef.current?.scrollIntoView({ block: "end" });
-  }, [snap?.log.length]);
+  }, [snap?.log.length, streaming]);
 
   const visible = useMemo(() => {
     if (!snap) return new Set<number>();
@@ -305,27 +342,17 @@ function DebugScreen() {
     [snap, visible],
   );
 
-  const positions = useForceLayout(layoutNodes, layoutEdges);
+  const positions = useForceLayout(layoutNodes, layoutEdges, snap?.id ?? "");
   const positionCount = Object.keys(positions).length;
-  const structureKey = useMemo(() => {
-    if (!snap) return "";
-    return `${layoutNodes.map((n) => n.id).join(",")}|${layoutEdges
-      .map((e) => `${e.from}->${e.to}:${e.dir}`)
-      .join(",")}|${sel.collapseSameLoc}`;
-  }, [layoutEdges, layoutNodes, sel.collapseSameLoc, snap]);
 
   useEffect(() => {
-    if (positionCount === 0 || !structureKey) return;
+    if (streaming || !fitOnceRef.current || positionCount === 0) return;
+    fitOnceRef.current = false;
     const frame = requestAnimationFrame(() => {
       void flow.fitView({ padding: 0.28, duration: 240 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [flow, positionCount, structureKey]);
-
-  const apply = useCallback((next: SessionSnapshot) => {
-    setSnap(next);
-    setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
-  }, []);
+  }, [flow, positionCount, streaming]);
 
   const head = snap?.work[0];
   const canStep = Boolean(
@@ -360,7 +387,7 @@ function DebugScreen() {
     setBusy(true);
     setError(null);
     try {
-      apply(await stepSession(snap.id));
+      apply(await stepSession(snap.id), { immediate: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "step failed");
     } finally {
@@ -374,10 +401,11 @@ function DebugScreen() {
     const ac = new AbortController();
     runAbortRef.current = ac;
     setBusy(true);
+    setStreaming(true);
     setError(null);
     setRunRate(null);
     try {
-      await runSessionStream(
+      const final = await runSessionStream(
         snap.id,
         (next, stats) => {
           apply(next);
@@ -389,15 +417,18 @@ function DebugScreen() {
         },
         ac.signal,
       );
+      apply(final, { immediate: true });
     } catch (err: unknown) {
       if (!ac.signal.aborted) {
         setError(err instanceof Error ? err.message : "run failed");
       }
+      flushPendingSnap();
     } finally {
       if (runAbortRef.current === ac) runAbortRef.current = null;
+      setStreaming(false);
       setBusy(false);
     }
-  }, [apply, snap]);
+  }, [apply, flushPendingSnap, snap]);
 
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
     const id = Number(node.id);
@@ -424,6 +455,7 @@ function DebugScreen() {
   const flowNodes = useMemo<StateFlowNode[]>(() => {
     if (!snap) return EMPTY_FLOW_NODES;
     const headId = snap.work[0];
+    const failedId = snap.status === "fail" ? snap.failed : null;
     const out: StateFlowNode[] = [];
     for (const node of layoutNodes) {
       const id = String(node.id);
@@ -443,7 +475,7 @@ function DebugScreen() {
           head: node.id === headId,
           entry: node.id === 0,
           processed: done.has(node.id),
-          failed: snap.status === "fail" && node.id === snap.failed,
+          failed: failedId != null && node.id === failedId,
           hasHelper: node.predicates.some((p) => p.kind === "helper"),
           hasPacket: node.exprs.some((e) => parseReg(e.reg).kind === "packet"),
           hasRet: node.predicates.some((p) => p.kind === "ret"),
@@ -452,7 +484,7 @@ function DebugScreen() {
       });
     }
     return out.length === 0 ? EMPTY_FLOW_NODES : out;
-  }, [done, layoutNodes, positions, sel.compare, sel.focus, snap]);
+  }, [done, layoutNodes, positions, sel.compare, sel.focus, snap?.failed, snap?.status, snap?.work]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     if (!snap || flowNodes.length === 0) return EMPTY_FLOW_EDGES;
