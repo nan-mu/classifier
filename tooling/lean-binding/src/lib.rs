@@ -53,11 +53,7 @@ mod ffi {
             budget: u32,
         ) -> LeanObj;
         pub fn lean_rv32_expand_words_snapshot(insns: LeanObj, steps: u32, budget: u32) -> LeanObj;
-        pub fn lean_rv32_expand_create(
-            insns: LeanObj,
-            meta_json: LeanObj,
-            budget: u32,
-        ) -> LeanObj;
+        pub fn lean_rv32_expand_create(meta_json: LeanObj) -> LeanObj;
         pub fn lean_rv32_expand_step(
             insns: LeanObj,
             meta_json: LeanObj,
@@ -334,15 +330,13 @@ pub mod rv32 {
         }
     }
 
-    /// Initial graph snapshot; the returned String has no retained Lean state.
-    /// `insns`: instruction encodings (one UInt32 slot per program index).
-    pub fn expand_create(insns: &[u32], meta: &Meta, budget: u32) -> String {
+    /// Entry SemState + root node. Program image and fuel stay on the Rust side.
+    pub fn expand_create(meta: &Meta) -> String {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
-            let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
             let meta = lean_string(&meta.to_json());
-            take_string(ffi::lean_rv32_expand_create(arr, meta, budget))
+            take_string(ffi::lean_rv32_expand_create(meta))
         }
     }
 
@@ -379,8 +373,13 @@ pub mod rv32 {
 
     impl ExpandSession {
         pub fn create(insns: &[u32], meta: Meta, budget: u32) -> Self {
-            let snapshot = serde_json::from_str(&expand_create(insns, &meta, budget))
-                .expect("Lean create snapshot JSON");
+            use serde_json::json;
+            let mut snapshot: serde_json::Value =
+                serde_json::from_str(&expand_create(&meta)).expect("Lean create snapshot JSON");
+            // Fuel is Rust-owned; Lean create always emits fuel 0 on success.
+            if snapshot["status"] == "running" {
+                snapshot["fuel"] = json!(budget);
+            }
             Self {
                 insns: insns.to_vec(),
                 meta,

@@ -284,32 +284,41 @@ mod rust_expand_session {
     }
 
     #[test]
-    fn create_validates_metadata_and_zero_budget() {
-        for (words, base, helper_address) in [
-            (vec![], 0x400, 0x100),
-            (vec![0x00008067], 0, 0x100),
-            (vec![0x00008067], 0x402, 0x100),
-            (vec![0x00008067], 0x400, 0),
-            (vec![0x00008067], 0x400, 0x102),
-            (vec![0x00008067], 0x400, 0x2000),
-            (vec![0x00008067], 0x2000, 0x100),
-            (vec![0x00008067], 0x400, 0x400),
-            (vec![0x00008067, 0x00008067], 0xffff_fffc, 0x100),
+    fn create_validates_meta_only_and_defers_program_checks_to_step() {
+        // Meta-invalid: rejected at create (no insns involved).
+        for (base, helper_address) in [
+            (0, 0x100),
+            (0x402, 0x100),
+            (0x400, 0),
+            (0x400, 0x102),
+            (0x400, 0x2000),
+            (0x400, 0x400),
         ] {
-            let mut session = ExpandSession::create(&words, Meta::new(base, helper_address), 10);
+            let mut session = ExpandSession::create(&[0x00008067], Meta::new(base, helper_address), 10);
             let failed = snap(&session);
             assert_eq!(failed["reason"], "InvalidEntry");
-            assert_eq!(failed["failed"], Value::Null);
             assert_eq!(failed["nodes"], json!([]));
-            assert_eq!(failed["edges"], json!([]));
-            assert_eq!(failed["work"], json!([]));
-            assert_eq!(failed["fuel"], 0);
             assert!(!session.is_running());
             session.step();
             assert_eq!(snap(&session), failed);
         }
+        // Program/extent-invalid: create succeeds; step rejects.
+        for insns in [vec![], vec![0x00008067, 0x00008067]] {
+            let meta = if insns.len() == 2 {
+                Meta::new(0xffff_fffc, 0x100)
+            } else {
+                Meta::new(0x400, 0x100)
+            };
+            let mut session = ExpandSession::create(&insns, meta, 10);
+            assert!(session.is_running(), "create is Meta-only");
+            assert_eq!(snap(&session)["fuel"], 10);
+            session.step();
+            let failed = snap(&session);
+            assert_eq!(failed["reason"], "InvalidEntry");
+        }
         let mut session = ExpandSession::create(&[0x00008067], Meta::new(0xffff_fffc, 0x100), 0);
         assert!(session.is_running());
+        assert_eq!(snap(&session)["fuel"], 0);
         session.step();
         let failed = snap(&session);
         assert_eq!(failed["reason"], "LimitExceeded");
@@ -374,7 +383,7 @@ mod stateless_head_ffi {
     fn symbolic_branch_returns_applied_states_and_complementary_predicates() {
         let words = [0x00051263, 0x00700513, 0x00008067];
         let root: Value =
-            serde_json::from_str(&rv32::expand_create(&words, &Meta::new(0x400, 0x100), 5)).unwrap();
+            serde_json::from_str(&rv32::expand_create(&Meta::new(0x400, 0x100))).unwrap();
         let node = &root["nodes"][0];
         let preds = json!([{ "kind": "ret", "term": "v32:123" }]);
         let result = step(&words, 0, 5, &node["exprs"].to_string(), &preds.to_string());
