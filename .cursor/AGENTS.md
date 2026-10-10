@@ -1,6 +1,29 @@
-# Classifier repository guide for AI agents
+# Cursor harness guide (tooling)
 
-## Freeze: `doc/` and Lean4 are read-only
+This file is the **Cursor** project guide. Canonical path is `.cursor/AGENTS.md`.
+There is no repo-root `AGENTS.md`. Do not treat `.omp/AGENTS.md` as Cursor policy.
+
+## Two harnesses (do not mix)
+
+| Harness | Guide | Owns writes | Must refuse writes |
+| --- | --- | --- | --- |
+| **Cursor** (this chat) | `.cursor/AGENTS.md` | `tooling/`, `.cursor/`, `README.md`, `.github/` | `doc/`, Lean4 / Lake sources |
+| **omp** | `.omp/AGENTS.md` | `doc/`, Lean4 / Lake sources | `tooling/` |
+
+**注意事项.**
+
+1. Cursor and omp are separate. Never import the other harness's write scope.
+2. omp may edit `doc/` and Lean4. Cursor must not, even if the operator asks
+   casually. Refuse and point them at omp / a human.
+3. Cursor may edit `tooling/`. omp must not. If a task needs both sides, split
+   it. Do not "helpfully" touch the frozen side.
+4. `.omp/` is local (gitignored). Cursor may read it for context but must not
+   treat it as authorization to edit Lean or `doc/`.
+5. Nested `AGENTS.md` under `.cursor/` alone is not enough for every chat.
+   Always-on loading is via `.cursor/rules/cursor-harness.mdc`
+   (`alwaysApply: true`). Keep that rule's freeze text aligned with this file.
+
+## Freeze: `doc/` and Lean4 are read-only for Cursor
 
 Cursor agents and any subagent they spawn must **refuse** tasks that create,
 edit, delete, rename, move, regenerate, or format anything under these paths.
@@ -11,21 +34,18 @@ edit, delete, rename, move, regenerate, or format anything under these paths.
   present
 
 **Allowed.** Read, search, cite, and answer questions from those paths.
-Running `lake build` / `lake test` for verification of non-Lean work is fine
+Running `lake build` / `lake test` for verification of tooling work is fine
 when it does not rewrite Lean or `doc/` outputs.
 
 **Required reply when a task needs a write there.** Decline in a few short
 sentences. Do not apply a partial edit, leave a draft, open a PR that touches
 those paths, or route the write through MCP / Codex / another agent. Tell the
-operator that only a human (or an explicit later policy change in this file)
-may modify `doc/` and Lean4.
+operator that Lean and `doc/` writes belong to the **omp** harness
+(`.omp/AGENTS.md`), or to a human.
 
-**Still writable.** `AGENTS.md`, `README.md`, `tooling/` (Rust, web, scripts,
-fixtures that are not Lean sources), and CI under `.github/`, unless another
-rule says otherwise.
-
-This freeze overrides older wording in this guide that assumed agents would
-edit Lean or co-author `doc/`.
+**Still writable for Cursor.** `.cursor/AGENTS.md`, `.cursor/rules/`,
+`README.md`, `tooling/` (Rust, web, scripts, fixtures that are not Lean
+sources), and CI under `.github/`, unless another rule says otherwise.
 
 ## Architecture
 
@@ -236,16 +256,15 @@ assumptions, expressions, propositions, derivations, and proofs. Keep programmin
 details, build commands, APIs, FFI, fixture diagnostics, and implementation-status
 reports in this guide, source comments, or the root/tooling READMEs.
 
-Use `doc/README.md` as the mathematical reading index. Agents may only **read**
-`doc/`; they must refuse create/edit/delete/rename/move of any file under it
-(see **Freeze: `doc/` and Lean4 are read-only**). When citing math, state proof
-assumptions and distinguish proved results from open proof obligations. A
-mathematical specification must not imply executable support or a Lean
-formalization that does not exist.
+Use `doc/README.md` as the mathematical reading index. Cursor agents may only
+**read** `doc/`; they must refuse create/edit/delete/rename/move under it (see
+freeze above). Spec authorship lives in the **omp** harness. When citing math,
+state proof assumptions and distinguish proved results from open proof
+obligations. A mathematical specification must not imply executable support or
+a Lean formalization that does not exist.
 
-Do not run `.agents/skills/doc-coauthoring/SKILL.md` or any other workflow that
-writes under `doc/`. That skill remains for human authors only while the freeze
-is in effect.
+Do not run `.agents/skills/doc-coauthoring/SKILL.md`, omp skills, or any other
+workflow that writes under `doc/` from a Cursor session.
 
 ## Layout
 
@@ -273,7 +292,8 @@ EBPF/Initial.lean              logical context and stack entry bindings
 EBPF/Expand.lean               shared expansion adapter and compilation guards
 lakefile.lean, lean-toolchain   Lean package and pinned toolchain
 doc/                           mathematical specifications and proofs
-.agents/skills/doc-coauthoring/ project-local documentation skill
+.cursor/AGENTS.md               Cursor harness guide (this file)
+.omp/AGENTS.md                  omp harness guide (local; Lean/doc writes)
 tooling/Cargo.toml              Rust workspace, with one shared Cargo.lock
 tooling/lean-binding/           Rust FFI binding to Lean exports
 tooling/lean-binding/tests/     Lean export and snapshot regression tests

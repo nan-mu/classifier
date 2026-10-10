@@ -11,3 +11,5 @@
 
 # Local Codex / agent handoff prompts (never commit)
 /.codex/
+# Local omp harness (skills + .omp/AGENTS.md); Cursor guide is .cursor/AGENTS.md
+/.omp/

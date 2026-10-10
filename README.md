@@ -51,4 +51,4 @@ lake test
 - `tooling/`：Rust/Cargo 工作区、前后端、FFI 绑定、启动工具与测试镜像。组件说明见 [工具工作区](tooling/README.md)。
 - `doc/`：数学定义、推导、证明与研究文档。
 
-开发代理的约束与 Lean 工作交接方式见 [AGENTS.md](AGENTS.md)。构建产物和本地代理记录由 `.gitignore` 管理。
+代理约束分两个 harness。Cursor（`tooling/`）见 [.cursor/AGENTS.md](.cursor/AGENTS.md)；omp（`doc/` 与 Lean4）见本地 `.omp/AGENTS.md`。构建产物和本地代理记录由 `.gitignore` 管理。

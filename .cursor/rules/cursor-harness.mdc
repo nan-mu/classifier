@@ -1,0 +1,29 @@
+---
+description: Cursor tooling harness — freezes doc/ and Lean4; points at .cursor/AGENTS.md
+alwaysApply: true
+---
+
+# Cursor harness (always on)
+
+You are in the **Cursor** harness for this repo. Full guide: `.cursor/AGENTS.md`.
+
+## Split from omp
+
+- **Cursor** writes `tooling/`, `.cursor/`, `README.md`, `.github/` only.
+- **omp** (`.omp/AGENTS.md`) writes `doc/` and Lean4 / Lake sources.
+- Never mix write scopes. Never follow `.omp/AGENTS.md` write permissions in Cursor.
+
+## Refuse writes here
+
+Refuse create/edit/delete/rename/move/regenerate/format of:
+
+- `doc/**`
+- `*.lean`, `CommonMath/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, `lake-manifest.json`
+
+Allowed on those paths: read, search, cite. `lake build` / `lake test` only as verification that does not rewrite them.
+
+If the task needs Lean or `doc/` edits, decline and point the operator to the omp harness.
+
+## Before non-trivial tooling work
+
+Read `.cursor/AGENTS.md` for architecture, expand FFI ownership, Rust CI, and session API notes.
