@@ -329,7 +329,7 @@ pub mod rv32 {
         }
     }
 
-    /// Entry SemState + root node. Program image and fuel stay on the Rust side.
+    /// Entry SemState + root node. Program image and fuel stay in the server engine.
     pub fn expand_create(meta: &Meta) -> String {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
@@ -340,6 +340,7 @@ pub mod rv32 {
     }
 
     /// Stateless head inference. Lean returns successors or reject; no fuel field.
+    /// Graph / fuel / work-queue ownership lives in the server expand engine.
     pub fn expand_step(
         insns: &[u32],
         meta: &Meta,
@@ -359,131 +360,5 @@ pub mod rv32 {
                 arr, meta, event, j, exprs, preds,
             ))
         }
-    }
-
-    /// Rust owns the graph and work queue. Each Lean call consumes and returns JSON.
-    pub struct ExpandSession {
-        insns: Vec<u32>,
-        meta: Meta,
-        snapshot: serde_json::Value,
-    }
-
-    impl ExpandSession {
-        pub fn create(insns: &[u32], meta: Meta, budget: u32) -> Self {
-            use serde_json::json;
-            let mut snapshot: serde_json::Value =
-                serde_json::from_str(&expand_create(&meta)).expect("Lean create snapshot JSON");
-            // Lean create has no fuel; Rust attaches the budget.
-            if snapshot["status"] == "running" {
-                snapshot["fuel"] = json!(budget);
-            }
-            Self {
-                insns: insns.to_vec(),
-                meta,
-                snapshot,
-            }
-        }
-
-        pub fn step(&mut self) {
-            use serde_json::{json, Value};
-            if !self.is_running() {
-                return;
-            }
-            let fuel = self.snapshot["fuel"].as_u64().unwrap_or(0) as u32;
-            let Some(event) = self.snapshot["work"][0].as_u64() else {
-                self.snapshot["status"] = json!("complete");
-                return;
-            };
-            if fuel == 0 {
-                self.snapshot["status"] = json!("fail");
-                self.snapshot["reason"] = json!("LimitExceeded");
-                self.snapshot["failed"] = Value::Null;
-                return;
-            }
-            let node = &self.snapshot["nodes"][event as usize];
-            let j = node["loc"]
-                .as_str()
-                .expect("head location")
-                .parse()
-                .expect("head position");
-            let result: Value = serde_json::from_str(&expand_step(
-                &self.insns,
-                &self.meta,
-                event as u32,
-                j,
-                &node["exprs"].to_string(),
-                &node["predicates"].to_string(),
-            ))
-            .expect("Lean step JSON");
-            self.snapshot["work"]
-                .as_array_mut()
-                .expect("work queue")
-                .remove(0);
-            self.snapshot["fuel"] = json!(fuel - 1);
-            if result["status"] == "fail" {
-                self.snapshot["status"] = json!("fail");
-                self.snapshot["reason"] = result["reason"].clone();
-                self.snapshot["failed"] = json!(event);
-                return;
-            }
-            for successor in result["successors"].as_array().expect("successors") {
-                let id = self.snapshot["nodes"].as_array().expect("nodes").len();
-                self.snapshot["nodes"].as_array_mut().unwrap().push(json!({
-                    "id": id, "loc": successor["loc"],
-                    "exprs": successor["exprs"], "predicates": successor["predicates"],
-                }));
-                self.snapshot["edges"]
-                    .as_array_mut()
-                    .expect("edges")
-                    .push(json!({
-                        "src": event, "dir": successor["dir"], "dst": id,
-                    }));
-                if successor["loc"] != "exit" {
-                    self.snapshot["work"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(json!(id));
-                }
-            }
-            if self.snapshot["work"].as_array().unwrap().is_empty() {
-                self.snapshot["status"] = json!("complete");
-            }
-        }
-
-        pub fn is_running(&self) -> bool {
-            self.snapshot["status"] == "running"
-        }
-
-        pub fn snapshot_json(&self) -> String {
-            self.snapshot.to_string()
-        }
-
-        pub fn run_to_completion(&mut self, budget: u32) {
-            for _ in 0..budget.saturating_add(1) {
-                if !self.is_running() {
-                    break;
-                }
-                self.step();
-            }
-        }
-    }
-
-    /// Run several independent expands to completion, overlapping work across threads.
-    /// Lean calls still serialize on `LEAN_LOCK`; this overlaps Rust-side session chrome.
-    pub fn run_many_to_completion(jobs: Vec<(Vec<u32>, Meta, u32)>) -> Vec<String> {
-        use std::thread;
-
-        let mut handles = Vec::with_capacity(jobs.len());
-        for (insns, meta, budget) in jobs {
-            handles.push(thread::spawn(move || {
-                let mut session = ExpandSession::create(&insns, meta, budget);
-                session.run_to_completion(budget);
-                session.snapshot_json()
-            }));
-        }
-        handles
-            .into_iter()
-            .map(|h| h.join().expect("expand worker"))
-            .collect()
     }
 }

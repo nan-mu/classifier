@@ -2,6 +2,7 @@ use lean_binding::rv32;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::engine::ExpandSession;
 use crate::rv32_image::{self, InsnImage};
 
 struct LogEntry {
@@ -29,7 +30,7 @@ impl Arch {
     }
 }
 
-/// HTTP session metadata around the graph owned by Rust `rv32::ExpandSession`.
+/// HTTP session metadata around the server-owned expand engine.
 /// Rust owns step/run-to-completion; each `step_once` calls Lean stateless head expansion.
 pub struct Session {
     id: String,
@@ -40,7 +41,7 @@ pub struct Session {
     steps: u32,
     focus: u32,
     log: Vec<LogEntry>,
-    expand: rv32::ExpandSession,
+    expand: ExpandSession,
 }
 
 impl Session {
@@ -53,12 +54,11 @@ impl Session {
     ) -> Self {
         let image = program.image;
         let insns = rv32_image::words(&image);
-        let expand =
-            rv32::ExpandSession::create(
-                &insns,
-                rv32::Meta::new(program.base_address, program.helper_address),
-                budget,
-            );
+        let expand = ExpandSession::create(
+            &insns,
+            rv32::Meta::new(program.base_address, program.helper_address),
+            budget,
+        );
         let mut session = Self {
             id: id.into(),
             arch,

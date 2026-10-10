@@ -158,22 +158,26 @@ ELF field. Check container extent and binding collisions before analysis.
 eBPF analysis is not wired through the HTTP session API yet.
 
 Expand graph ownership: Lean exports `lean_rv32_expand_create` /
-`lean_rv32_expand_step` as stateless String FFI. Core Lean expand FFI is stateless and fuel-free:
+`lean_rv32_expand_step` as stateless String FFI. Core Lean expand FFI is
+stateless and fuel-free; `lean-binding` is only the FFI surface (`Meta`,
+`expand_create`, `expand_step`, plus legacy snapshots):
 - `create(metaJson)` → root SemState snapshot (no `fuel` field)
 - `step(insns, metaJson, event, j, exprsJson, predsJson)` →
   `{status, reason, successors}` (applied SemStates) or fail
-Rust `ExpandSession` owns `insns`, work queue, edges, and `fuel`/budget.
+The server expand engine (`tooling/server/src/engine.rs`) owns `ExpandSession`
+(`insns`, work queue, edges, `fuel`/budget) and an `InferencePool` of 10
+Tokio semaphore permits that gate `spawn_blocking` expand jobs. HTTP sessions
+wrap that engine; `/create`, `/step`, `/run`, and `/get` acquire a pool permit.
 `Meta` carries `base`, `helperAddress` (dispatcher — not a Predicate),
 `returnAddress` default `0x2000`, plus ignored unknown fields. Predicates follow
 `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` (`doc/predicates.md`); Helper is one
 Predicate variant carrying `(ε, h, args)`. Lean returns applied successor
-states or a rejection. Rust `rv32::Meta` / `ExpandSession` own bindings and the
-graph. Snapshot Predicate rows keep `kind` plus flattened fields. No expand
-object remains in the Lean heap across FFI calls. All Lean calls serialize on a
-process mutex; HTTP `/step` and `/run` use per-session locks and
-`spawn_blocking`. Legacy `expand_bound_words_snapshot` keeps an ephemeral
-WorkState inside one call. Builtin fixture replay is
-`lean_rv32_expand_builtin_snapshot`.
+states or a rejection. Snapshot Predicate rows keep `kind` plus flattened
+fields. No expand object remains in the Lean heap across FFI calls. All Lean
+calls serialize on a process mutex inside `lean-binding`; the 10-permit pool
+caps concurrent blocking jobs, not concurrent Lean runtime entry. Legacy
+`expand_bound_words_snapshot` keeps an ephemeral WorkState inside one call.
+Builtin fixture replay is `lean_rv32_expand_builtin_snapshot`.
 
 ## Documentation policy
 

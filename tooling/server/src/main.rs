@@ -1,3 +1,4 @@
+mod engine;
 mod expand;
 mod rv32_image;
 
@@ -11,6 +12,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
+use engine::InferencePool;
 use expand::{Arch, Session, Snapshot};
 use serde::Deserialize;
 use tower_http::cors::CorsLayer;
@@ -18,8 +20,9 @@ use tower_http::cors::CorsLayer;
 #[derive(Clone)]
 struct AppState {
     /// Per-session locks so `/run` on one id does not block other sessions.
-    /// Lean FFI itself still serializes inside `lean-binding`.
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
+    /// Caps concurrent blocking expand jobs (Lean FFI still serializes in binding).
+    pool: InferencePool,
     next_id: Arc<AtomicU64>,
 }
 
@@ -47,6 +50,7 @@ fn app(state: AppState) -> Router {
 fn new_state() -> AppState {
     AppState {
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        pool: InferencePool::new(),
         next_id: Arc::new(AtomicU64::new(1)),
     }
 }
@@ -108,15 +112,25 @@ async fn create_session(
     };
     let program = rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
-    let session = Arc::new(Mutex::new(Session::new(
-        id.clone(),
-        budget,
-        arch,
-        name,
-        program,
-    )));
+    let id_for_store = id.clone();
+    let session = app
+        .pool
+        .run(move || {
+            Arc::new(Mutex::new(Session::new(
+                id,
+                budget,
+                arch,
+                name,
+                program,
+            )))
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let snap = session.lock().expect("session").snapshot();
-    app.sessions.lock().expect("sessions").insert(id, session);
+    app.sessions
+        .lock()
+        .expect("sessions")
+        .insert(id_for_store, session);
     Ok(Json(snap))
 }
 
@@ -137,13 +151,15 @@ async fn step_session(
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, StatusCode> {
     let session = session_handle(&app, &id)?;
-    let snap = tokio::task::spawn_blocking(move || {
-        let mut session = session.lock().expect("session");
-        session.step_once();
-        session.snapshot()
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snap = app
+        .pool
+        .run(move || {
+            let mut session = session.lock().expect("session");
+            session.step_once();
+            session.snapshot()
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(snap))
 }
 
@@ -152,13 +168,15 @@ async fn run_session(
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, StatusCode> {
     let session = session_handle(&app, &id)?;
-    let snap = tokio::task::spawn_blocking(move || {
-        let mut session = session.lock().expect("session");
-        session.run_all();
-        session.snapshot()
-    })
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snap = app
+        .pool
+        .run(move || {
+            let mut session = session.lock().expect("session");
+            session.run_all();
+            session.snapshot()
+        })
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(snap))
 }
 
@@ -167,7 +185,9 @@ async fn get_session(
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, StatusCode> {
     let session = session_handle(&app, &id)?;
-    let snap = tokio::task::spawn_blocking(move || session.lock().expect("session").snapshot())
+    let snap = app
+        .pool
+        .run(move || session.lock().expect("session").snapshot())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(snap))
