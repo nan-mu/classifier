@@ -1,5 +1,32 @@
 # Classifier repository guide for AI agents
 
+## Freeze: `doc/` and Lean4 are read-only
+
+Cursor agents and any subagent they spawn must **refuse** tasks that create,
+edit, delete, rename, move, regenerate, or format anything under these paths.
+
+- `doc/` (the whole tree)
+- Lean4 sources and Lake package files: `*.lean`, `CommonMath/`, `RV32IMC/`,
+  `EBPF/`, `lakefile.lean`, `lean-toolchain`, and `lake-manifest.json` when
+  present
+
+**Allowed.** Read, search, cite, and answer questions from those paths.
+Running `lake build` / `lake test` for verification of non-Lean work is fine
+when it does not rewrite Lean or `doc/` outputs.
+
+**Required reply when a task needs a write there.** Decline in a few short
+sentences. Do not apply a partial edit, leave a draft, open a PR that touches
+those paths, or route the write through MCP / Codex / another agent. Tell the
+operator that only a human (or an explicit later policy change in this file)
+may modify `doc/` and Lean4.
+
+**Still writable.** `AGENTS.md`, `README.md`, `tooling/` (Rust, web, scripts,
+fixtures that are not Lean sources), and CI under `.github/`, unless another
+rule says otherwise.
+
+This freeze overrides older wording in this guide that assumed agents would
+edit Lean or co-author `doc/`.
+
 ## Architecture
 
 The project is a Lean-based symbolic program-analysis prototype with a Rust
@@ -11,8 +38,9 @@ interpreter or a verified cross-ISA equivalence checker.
 terms, expression sets, predicates, semantic states, paths, budgeted expansion,
 history structures, rendering, and shared FFI exports. Read
 `doc/Expr/位向量与共同数值函数.md`,
-`doc/寄存器定义.md`, and the relevant source before
-changing shared math. Expr and Predicate rules are indexed in `doc/Expr/表达式阅读索引.md`
+`doc/寄存器定义.md`, and the relevant source when
+discussing shared math (read-only under the freeze above). Expr and Predicate
+rules are indexed in `doc/Expr/表达式阅读索引.md`
 and `doc/Predicate/谓词阅读索引.md`; node inference is indexed in
 `doc/NodeInference/节点推理阅读索引.md`. Executable `RegKind` contains real, stack, map,
 and packet.
@@ -208,16 +236,16 @@ assumptions, expressions, propositions, derivations, and proofs. Keep programmin
 details, build commands, APIs, FFI, fixture diagnostics, and implementation-status
 reports in this guide, source comments, or the root/tooling READMEs.
 
-Use `doc/README.md` as the mathematical reading index. Preserve existing document
-filenames. State proof assumptions and distinguish proved results from open proof
-obligations. A mathematical specification must not imply executable support or
-a Lean formalization that does not exist.
+Use `doc/README.md` as the mathematical reading index. Agents may only **read**
+`doc/`; they must refuse create/edit/delete/rename/move of any file under it
+(see **Freeze: `doc/` and Lean4 are read-only**). When citing math, state proof
+assumptions and distinguish proved results from open proof obligations. A
+mathematical specification must not imply executable support or a Lean
+formalization that does not exist.
 
-For substantial documentation work, use the project-local
-`.agents/skills/doc-coauthoring/SKILL.md`: gather context, rewrite and refine,
-then check the result from an independent reader's perspective. Follow the
-user's established audience and scope without asking for the same preferences
-again. Use concise prose or lists, not tables, for Markdown plans.
+Do not run `.agents/skills/doc-coauthoring/SKILL.md` or any other workflow that
+writes under `doc/`. That skill remains for human authors only while the freeze
+is in effect.
 
 ## Layout
 
@@ -316,12 +344,13 @@ Use Lake as the project entrypoint. Cargo and npm are component build tools.
 
 The server executable path comes from Cargo's artifact output; do not hard-code
 `tooling/target/debug/server` in Lake or lifecycle scripts. Keep the single Rust
-workspace lockfile. Do not hand-edit `RV32IMC/Esp32c3Program.lean`; regenerate
-fixture words using the command documented in `tooling/server/README.md`.
+workspace lockfile. Agents must not edit or regenerate `RV32IMC/Esp32c3Program.lean`
+(Lean freeze). Humans regenerate fixture words using the command in
+`tooling/server/README.md`.
 The server requires the adjacent `../xpost/xpost-elf` checkout. Validate ELF
 uploads with that library rather than duplicating metadata and digest parsing.
 
-Toolchain is `leanprover/lean4:v4.29.0`. After Lean layout changes, run
+Toolchain is `leanprover/lean4:v4.29.0`. After a human changes Lean layout, run
 **Lean 4: Restart Server** in the editor.
 
 Before reporting completion, inspect `git status` and `git diff`, preserve
@@ -342,35 +371,35 @@ Change it only when the user explicitly revises it.
 
 ## Optional Cursor MCP workflow
 
-This section describes an optional delegation path in Cursor. It does not
-require native Codex sessions to invoke MCP or delegate Lean work. Native
-Codex sessions may edit Lean and FFI sources and run builds directly under
-the architecture and model policies above.
+This section describes an optional delegation path in Cursor for **read-only**
+Lean or math investigation. It does not authorize writes under `doc/` or Lean4
+paths. Refuse any brief whose deliverable would modify those trees (see freeze).
 
 - The model policy above also applies to Cursor delegation. Use an inherited
   model only when it resolves to `gpt-6.1-sol`; do not configure automatic
   selection that can choose another model.
-- For Lean work, prefer the Cursor MCP namespace `user-codex-subagent` with
-  `gpt-6.1-sol`. This includes Lean sources, Lake configuration, theorem work,
-  builds, and FFI that exposes Lean exports.
+- For read-only Lean questions, the Cursor MCP namespace `user-codex-subagent`
+  with `gpt-6.1-sol` may be used. Scope is limited to reading Lean sources,
+  Lake configuration, theorems, and FFI that exposes Lean exports. Builds are
+  allowed only as verification that does not rewrite Lean or `doc/`.
 - Defaults are maintained in `~/.codex/config.toml` and
   `~/.cursor/rules/model-access.mdc`. Do not reset settings to bypass caps.
 
-When using this MCP delegation path:
+When using this MCP delegation path for a read-only investigation:
 
 1. Write a self-contained brief to `.codex/lean-handoff.md`. This directory is
-   gitignored. Never commit `.codex/`.
-2. Include the absolute repository root and cwd, goal, architecture constraints,
-   files to read first, pass/fail checks, and deliverables. Do not commit unless
-   asked. Do not include unrelated refactors.
+   gitignored. Never commit `.codex/`. State explicitly that the agent must not
+   modify `doc/` or any Lean/Lake file.
+2. Include the absolute repository root and cwd, the question, architecture
+   constraints, files to read first, and the cited answer expected. Do not
+   commit unless asked. Do not include write deliverables for frozen paths.
 3. Call `user-codex-subagent` → `spawn_agent` with the brief as `prompt`.
-   For independent Lean tasks, use `spawn_agents_parallel` with one prompt per
-   task. Give each writer separate file ownership.
-4. Inspect `git status` and `git diff`, then run the brief's build and test
-   checks. Continue from that evidence. Rust, TS, and documentation work can
-   proceed independently when it does not depend on unfinished Lean APIs.
+   Do not spawn writers against Lean or `doc/` file ownership.
+4. Inspect `git status` and `git diff`. If the delegate touched a frozen path,
+   discard that work and report the freeze violation. Rust and TS work may
+   proceed when it does not require new Lean or `doc/` edits.
 
-If this MCP is unavailable in Cursor, report the limitation and use an available
-execution path within the user's authorization and model policy. The file-backed
-MCP brief replaces the older copy-paste or operator-reported completion handoff
-for this workflow.
+If this MCP is unavailable in Cursor, report the limitation and answer from
+local reads within the freeze and model policy. The file-backed MCP brief
+replaces the older copy-paste or operator-reported completion handoff for this
+workflow.
