@@ -1,26 +1,29 @@
 ---
-description: Cursor harness — freeze doc/Lean; focus create and step APIs
+description: Cursor tooling harness — freezes doc/ and Lean4; points at .cursor/AGENTS.md
 alwaysApply: true
 ---
 
 # Cursor harness (always on)
 
-Full guide: `.cursor/AGENTS.md`.
+You are in the **Cursor** harness. Full guide: `.cursor/AGENTS.md`.
 
 ## Split from omp
 
-- Cursor writes `tooling/`, `.cursor/`, `README.md`, `.github/` only.
-- omp (`.omp/AGENTS.md`) writes `doc/` and Lean4 / Lake sources.
+- **Cursor** writes `tooling/`, `.cursor/`, `README.md`, `.github/` only.
+- **omp** (`.omp/AGENTS.md`) writes `doc/` and Lean4 / Lake sources.
 - Never mix write scopes.
 
-## Refuse writes
+## Refuse writes here
 
-Refuse edits under `doc/**` and Lean/Lake paths (`*.lean`, `CommonMath/`,
-`RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, `lake-manifest.json`).
-Read only. Point Lean/`doc/` write tasks to omp.
+Refuse create/edit/delete/rename/move/regenerate/format of:
 
-## API focus
+- `doc/**`
+- `*.lean`, `CommonMath/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, `lake-manifest.json`
 
-Primary work is the expand FFI pair `create` and `step` (and the Rust engine
-around them). Read `.cursor/AGENTS.md` for inputs, outputs, and ownership.
-Do not reimplement instruction semantics in Rust.
+Allowed: read/search/cite. `lake build` / `lake test` only as verification.
+
+If the task needs Lean or `doc/` edits, decline and point to omp.
+
+## Lean for tooling
+
+Only the create/step expand FFI matters. Do not grow product code on other Lean APIs. Details in `.cursor/AGENTS.md`.

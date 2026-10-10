@@ -1,72 +1,138 @@
-# Cursor harness guide
+# Cursor harness guide (tooling)
 
 Canonical path: `.cursor/AGENTS.md`. There is no repo-root `AGENTS.md`.
 Do not treat `.omp/AGENTS.md` as Cursor policy.
 
-## Two harnesses
+## Two harnesses (do not mix)
 
-| Harness | Guide | Owns writes | Refuse writes |
+| Harness | Guide | Owns writes | Must refuse writes |
 | --- | --- | --- | --- |
-| **Cursor** | `.cursor/AGENTS.md` | `tooling/`, `.cursor/`, `README.md`, `.github/` | `doc/`, Lean4 / Lake |
-| **omp** | `.omp/AGENTS.md` | `doc/`, Lean4 / Lake | `tooling/` |
+| **Cursor** (this chat) | `.cursor/AGENTS.md` | `tooling/`, `.cursor/`, `README.md`, `.github/` | `doc/`, Lean4 / Lake sources |
+| **omp** | `.omp/AGENTS.md` | `doc/`, Lean4 / Lake sources | `tooling/` |
 
-Do not mix write scopes. Lean or `doc/` edits belong to omp. Tooling edits belong here.
-`.omp/` is gitignored. Always-on Cursor loading is `.cursor/rules/cursor-harness.mdc`.
+**注意事项.**
 
-## Freeze (Cursor)
+1. Never import the other harness's write scope.
+2. Lean / `doc/` edits belong to omp or a human. Cursor refuses them.
+3. `tooling/` edits belong to Cursor. omp refuses them.
+4. Split cross-harness tasks. Do not touch the frozen side "to help".
+5. Always-on freeze text lives in `.cursor/rules/cursor-harness.mdc`
+   (`alwaysApply: true`). Keep it aligned with this file.
 
-Refuse create/edit/delete/rename/move/regenerate/format of `doc/**`, `*.lean`,
-`CommonMath/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, and
-`lake-manifest.json`. Read and cite only. `lake build` / `lake test` are fine
-when they do not rewrite those paths.
+## Freeze: `doc/` and Lean4 are read-only
 
-## Focus: `create` and `step`
+Refuse create/edit/delete/rename/move/regenerate/format of:
 
-Cursor work centers on the two Lean expand FFI entry points and the Rust engine
-that owns the graph around them. Do not grow a second instruction semantics layer
-in Rust. Call Lean for head inference; keep session state in the server.
+- `doc/**`
+- `*.lean`, `CommonMath/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`,
+  `lean-toolchain`, `lake-manifest.json` when present
 
-### `create`
+Allowed on those paths: read, search, cite. `lake build` / `lake test` only
+as verification that does not rewrite them.
 
-- Binding: `lean_rv32_expand_create` → Rust `rv32::expand_create`.
-- Input: `Meta` JSON only (`base`, `helperAddress`, `returnAddress` default
-  `0x2000`; unknown fields ignored). No `fuel`, no instruction image.
-- Output: root SemState snapshot (expressions + predicates). No expand object
-  remains in the Lean heap.
-- HTTP: creating a session calls this once, then the engine attaches `fuel` /
-  budget and the decoded `insns` image on the Rust side.
+**Writable.** `.cursor/`, `README.md`, `tooling/`, `.github/`.
 
-### `step`
+## What Cursor owns
 
-- Binding: `lean_rv32_expand_step` → Rust `rv32::expand_step`.
-- Input: `insns` (u32 words), `Meta`, dynamic helper `event`, head index `j`,
-  `exprsJson`, `predsJson` for the current SemState.
-- Output: `{status, reason, successors}` with applied successor SemStates, or a
-  rejection. No `fuel` field from Lean.
-- Contract: Lean is stateless and fuel-free. A rejected step must not mutate the
-  Rust graph. Prepare successors before appending nodes or edges.
-- Expr rows may include `role: "constraint"` for comparisons. Predicates are
-  `Ret ⊔ Helper` only. Legacy `kind: "cmp"` Predicate input is rejected.
+Rust/Cargo workspace under `tooling/`: Lean FFI binding, Expand HTTP API,
+web graph viewer, fixtures, scripts, and CI.
 
-### Rust ownership around the two calls
+```text
+tooling/Cargo.toml              Rust workspace (one Cargo.lock)
+tooling/lean-binding/           FFI to Lean create/step (+ legacy test helpers)
+tooling/lean-binding/tests/     binding and snapshot regressions
+tooling/server/                 axum Expand API, ExpandSession, InferencePool
+tooling/web/                    Vite + Kuma + xyflow viewer
+tooling/scripts/dev.py          lake run dev supervisor
+tooling/scripts/smoke.py        live API smoke
+tooling/scripts/rust-ci.sh      nightly fmt + clippy gate
+tooling/fixtures/just_tx.elf    default Compact XDP ELF
+tooling/fixtures/xdp.elf        firewall / helper-call fixture
+.github/workflows/rust.yml      mirrors rust-ci.sh
+```
 
-`tooling/server` `ExpandSession` owns `insns`, work queue, edges, and `fuel`.
-HTTP `/create`, `/step`, `/run`, `/run/ws`, `/get` go through that engine.
-`lean-binding` runs FFI on a fixed pool of 10 Lean worker threads; the server
-`InferencePool` permit count matches. UI `/step` expands one head; a work-queue
-wave may expand up to 10 heads in parallel, then merge in queue order.
+Use Lake as the repo entrypoint (`lake build`, `lake test`, `lake run dev`).
+Cargo and npm are component tools. Do not hard-code
+`tooling/target/debug/server`; take the path from Cargo artifacts.
+Keep one workspace lockfile. Validate Compact XDP ELF uploads via sibling
+`../xpost/xpost-elf` (need that checkout). Reject raw BIN uploads.
 
-Legacy snapshot exports (`expand_bound_words_snapshot`, builtin fixture replay)
-are not the primary API. Prefer `create` + `step`.
+Default fixture budget notes used by tests/UI: HTTP/WebUI default budget
+1024; budget 512 remains a fuel-exhaustion regression on `just_tx`.
+Synthetic wrapper return address is `0x2000` (not an ELF field).
 
-## Checks after tooling edits
+## Lean surface for tooling: create and step only
 
-From the repository root, when you change `tooling/**/*.rs` or related Cargo /
-clippy / rustfmt / `rust-ci.sh` files:
+Rust must not reimplement instruction semantics. Against Lean, tooling's
+supported expand contract is two stateless String FFI calls (via
+`lean-binding`):
+
+- `expand_create(metaJson)` → root SemState snapshot JSON (no `fuel` field)
+- `expand_step(insns, metaJson, event, j, exprsJson, predsJson)` →
+  `{status, reason, successors}` (applied SemStates) or a rejection
+
+Exports: `lean_rv32_expand_create` / `lean_rv32_expand_step`. No Lean expand
+object stays alive across calls. Legacy snapshot helpers may exist for tests;
+do not grow new product paths on them.
+
+**Rust owns** session graph, work queue, edges, `fuel`/budget, and concurrency
+(`tooling/server/src/engine.rs`):
+
+- `ExpandSession` holds `insns`, work queue, edges, fuel.
+- `InferencePool` has 10 Tokio permits gating `spawn_blocking` Lean jobs.
+- `lean-binding` runs a fixed pool of 10 OS threads (`LEAN_WORKERS`) after
+  one process-wide Lean init. Permit count matches worker count.
+- HTTP `/create`, `/step`, `/run`, `/run/ws`, `/get` take a pool permit.
+- UI “运行到结束” uses `GET /api/session/{id}/run/ws` (one snapshot per
+  work-queue wave, then `done`). POST `/run` is for smoke/tests.
+- Linear work (`work` length 1): one Lean worker per wave. Multiple pending
+  heads: `step_wave` expands up to 10 in parallel, merges in queue order.
+  UI `/step` expands a single head.
+
+**Wire facts tooling must honor** (consume, do not redefine semantics):
+
+- `Meta`: `base`, `helperAddress` (dispatcher), `returnAddress` default
+  `0x2000`; ignore unknown fields.
+- Expr rows: value bindings plus optional `role: "constraint"` for
+  comparisons. Legacy Predicate `kind: "cmp"` is rejected.
+- Predicate rows: `Ret ⊔ Helper` only (`kind` + flattened fields).
+- A rejected step must not mutate the graph. Unknown target / missing source
+  must not become a silent Exit or empty success.
+
+If create/step behavior looks wrong, fix tooling adapters/tests first. Changing
+Lean belongs to omp.
+
+## Build and check
+
+From repo root:
 
 ```bash
 lake build
+lake test
+lake run dev          # API :8788 (PORT overrides), Vite :5173
+```
+
+After any change under `tooling/**/*.rs`, `tooling/**/Cargo.toml`,
+`tooling/Cargo.lock`, `tooling/clippy.toml`, `tooling/rustfmt.toml`, or
+`tooling/scripts/rust-ci.sh`:
+
+```bash
+lake build            # if Lean libs are stale; not part of rust-ci.sh
 ./tooling/scripts/rust-ci.sh
 ```
 
-Do not commit unless asked. Never commit `.codex/` or `.omp/`.
+`rust-ci.sh` runs nightly `cargo fmt --check` on workspace crates
+(`lean-binding`, `server` only) then nightly `clippy -D warnings`
+(deny `dbg_macro` / `todo` / `unimplemented`; see `tooling/clippy.toml`).
+Artifacts go to `tooling/target-nightly/`. Needs nightly rustup components,
+built Lean libs, and sibling `../xpost`.
+
+Before reporting done: `git status` / `git diff`, preserve unrelated dirty
+files, run checks that match what you edited. Do not commit unless asked.
+Never commit `.codex/` or `.omp/`.
+
+## Model policy
+
+Use only `gpt-6.1-sol` for Cursor tasks and subagents. Reasoning effort
+`low` | `medium` | `high` only. No `xhigh` / `max` / `ultra` / Fast tier /
+automatic fallback. Change only when the operator revises this policy.
