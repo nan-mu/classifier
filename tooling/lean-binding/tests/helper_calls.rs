@@ -1,4 +1,4 @@
-use lean_binding::rv32;
+use lean_binding::rv32::{self, Meta};
 use serde_json::Value;
 
 fn addi(rd: u32, rs: u32, imm: u32) -> u32 {
@@ -51,11 +51,10 @@ fn cj(delta: i32, link: bool) -> u32 {
     bits | if link { 0x2001 } else { 0xa001 }
 }
 fn snapshot(words: &[u32], steps: u32) -> Value {
-    let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-        words, 0x400, 0x100, steps, 100,
+    let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(words, &Meta::new(0x400, 0x100), steps, 100,
     ))
     .unwrap();
-    let mut session = rv32::ExpandSession::create(words, 0x400, 0x100, 100);
+    let mut session = rv32::ExpandSession::create(words, Meta::new(0x400, 0x100), 100);
     for _ in 0..steps {
         if !session.is_running() {
             break;
@@ -296,8 +295,7 @@ fn bound_ffi_rejects_colliding_or_invalid_metadata() {
     ] {
         let s: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
             &[0x00008067],
-            base,
-            helper,
+            &Meta::new(base, helper),
             0,
             10,
         ))

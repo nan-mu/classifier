@@ -54,7 +54,11 @@ impl Session {
         let image = program.image;
         let words = rv32_image::words(&image);
         let expand =
-            rv32::ExpandSession::create(&words, program.base_address, program.helper_address, budget);
+            rv32::ExpandSession::create(
+                &words,
+                rv32::Meta::new(program.base_address, program.helper_address),
+                budget,
+            );
         let mut session = Self {
             id: id.into(),
             arch,

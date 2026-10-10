@@ -48,22 +48,19 @@ mod ffi {
         pub fn lean_rv32_expand_builtin_snapshot(steps: u32, budget: u32) -> LeanObj;
         pub fn lean_rv32_expand_bound_words_snapshot(
             words: LeanObj,
-            base: u32,
-            helper_address: u32,
+            meta_json: LeanObj,
             steps: u32,
             budget: u32,
         ) -> LeanObj;
         pub fn lean_rv32_expand_words_snapshot(words: LeanObj, steps: u32, budget: u32) -> LeanObj;
         pub fn lean_rv32_expand_create(
             words: LeanObj,
-            base: u32,
-            helper_address: u32,
+            meta_json: LeanObj,
             budget: u32,
         ) -> LeanObj;
         pub fn lean_rv32_expand_step(
             words: LeanObj,
-            base: u32,
-            helper_address: u32,
+            meta_json: LeanObj,
             event: u32,
             j: u32,
             fuel: u32,
@@ -261,24 +258,6 @@ pub mod rv32 {
         }
     }
 
-    pub fn expand_bound_words_snapshot(
-        words: &[u32],
-        base: u32,
-        helper_address: u32,
-        steps: u32,
-        budget: u32,
-    ) -> String {
-        init();
-        let _g = LEAN_LOCK.lock().expect("lean lock");
-        unsafe {
-            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
-            let obj = ffi::lean_rv32_expand_bound_words_snapshot(
-                arr, base, helper_address, steps, budget,
-            );
-            take_string(obj)
-        }
-    }
-
     /// JSON after `steps` expandOne calls on a caller-supplied instruction word list.
     pub fn expand_words_snapshot(words: &[u32], steps: u32, budget: u32) -> String {
         init();
@@ -298,14 +277,71 @@ pub mod rv32 {
         s
     }
 
-    /// Initial graph snapshot; the returned String has no retained Lean state.
-    /// `helper_address` is the ELF dispatcher binding, not a Predicate.
-    pub fn expand_create(words: &[u32], base: u32, helper_address: u32, budget: u32) -> String {
+    /// Static program bindings outside SemState / Predicate.
+    /// Extend fields here; create/step FFI takes one Meta JSON blob.
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Meta {
+        pub base: u32,
+        /// ELF dispatcher binding — not a Predicate.
+        pub helper_address: u32,
+        /// Synthetic wrapper return; default `0x2000`.
+        #[serde(default = "Meta::default_return_address")]
+        pub return_address: u32,
+        /// Forward-compatible bag for future bindings.
+        #[serde(flatten)]
+        pub extra: serde_json::Map<String, serde_json::Value>,
+    }
+
+    impl Meta {
+        const fn default_return_address() -> u32 {
+            0x2000
+        }
+
+        pub fn new(base: u32, helper_address: u32) -> Self {
+            Self {
+                base,
+                helper_address,
+                return_address: Self::default_return_address(),
+                extra: serde_json::Map::new(),
+            }
+        }
+
+        pub fn to_json(&self) -> String {
+            serde_json::to_string(self).expect("Meta JSON")
+        }
+    }
+
+    unsafe fn lean_string(s: &str) -> ffi::LeanObj {
+        use std::ffi::CString;
+        let c = CString::new(s).expect("JSON contains NUL");
+        ffi::lean_binding_mk_string(c.as_ptr())
+    }
+
+    pub fn expand_bound_words_snapshot(
+        words: &[u32],
+        meta: &Meta,
+        steps: u32,
+        budget: u32,
+    ) -> String {
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
             let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
-            take_string(ffi::lean_rv32_expand_create(arr, base, helper_address, budget))
+            let meta = lean_string(&meta.to_json());
+            let obj = ffi::lean_rv32_expand_bound_words_snapshot(arr, meta, steps, budget);
+            take_string(obj)
+        }
+    }
+
+    /// Initial graph snapshot; the returned String has no retained Lean state.
+    pub fn expand_create(words: &[u32], meta: &Meta, budget: u32) -> String {
+        init();
+        let _g = LEAN_LOCK.lock().expect("lean lock");
+        unsafe {
+            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let meta = lean_string(&meta.to_json());
+            take_string(ffi::lean_rv32_expand_create(arr, meta, budget))
         }
     }
 
@@ -313,25 +349,22 @@ pub mod rv32 {
     /// Predicates (Cmp / Ret / Helper / …) appear only inside `preds_json`.
     pub fn expand_step(
         words: &[u32],
-        base: u32,
-        helper_address: u32,
+        meta: &Meta,
         event: u32,
         j: u32,
         fuel: u32,
         exprs_json: &str,
         preds_json: &str,
     ) -> String {
-        use std::ffi::CString;
-        let exprs = CString::new(exprs_json).expect("expression JSON contains NUL");
-        let preds = CString::new(preds_json).expect("predicate JSON contains NUL");
         init();
         let _g = LEAN_LOCK.lock().expect("lean lock");
         unsafe {
             let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
-            let exprs = ffi::lean_binding_mk_string(exprs.as_ptr());
-            let preds = ffi::lean_binding_mk_string(preds.as_ptr());
+            let meta = lean_string(&meta.to_json());
+            let exprs = lean_string(exprs_json);
+            let preds = lean_string(preds_json);
             take_string(ffi::lean_rv32_expand_step(
-                arr, base, helper_address, event, j, fuel, exprs, preds,
+                arr, meta, event, j, fuel, exprs, preds,
             ))
         }
     }
@@ -339,19 +372,18 @@ pub mod rv32 {
     /// Rust owns the graph and work queue. Each Lean call consumes and returns JSON.
     pub struct ExpandSession {
         words: Vec<u32>,
-        base: u32,
-        helper_address: u32,
+        meta: Meta,
         snapshot: serde_json::Value,
     }
 
     impl ExpandSession {
-        pub fn create(words: &[u32], base: u32, helper_address: u32, budget: u32) -> Self {
+        pub fn create(words: &[u32], meta: Meta, budget: u32) -> Self {
+            let snapshot = serde_json::from_str(&expand_create(words, &meta, budget))
+                .expect("Lean create snapshot JSON");
             Self {
                 words: words.to_vec(),
-                base,
-                helper_address,
-                snapshot: serde_json::from_str(&expand_create(words, base, helper_address, budget))
-                    .expect("Lean create snapshot JSON"),
+                meta,
+                snapshot,
             }
         }
 
@@ -373,8 +405,7 @@ pub mod rv32 {
                 .expect("head position");
             let result: Value = serde_json::from_str(&expand_step(
                 &self.words,
-                self.base,
-                self.helper_address,
+                &self.meta,
                 event as u32,
                 j,
                 fuel,
@@ -440,15 +471,13 @@ pub mod rv32 {
 
     /// Run several independent expands to completion, overlapping work across threads.
     /// Lean calls still serialize on `LEAN_LOCK`; this overlaps Rust-side session chrome.
-    pub fn run_many_to_completion(
-        jobs: Vec<(Vec<u32>, u32, u32, u32)>,
-    ) -> Vec<String> {
+    pub fn run_many_to_completion(jobs: Vec<(Vec<u32>, Meta, u32)>) -> Vec<String> {
         use std::thread;
 
         let mut handles = Vec::with_capacity(jobs.len());
-        for (words, base, helper_address, budget) in jobs {
+        for (words, meta, budget) in jobs {
             handles.push(thread::spawn(move || {
-                let mut session = ExpandSession::create(&words, base, helper_address, budget);
+                let mut session = ExpandSession::create(&words, meta, budget);
                 session.run_to_completion(budget);
                 session.snapshot_json()
             }));

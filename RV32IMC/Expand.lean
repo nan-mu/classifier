@@ -846,30 +846,58 @@ def inferStep (I : Array Insn) (context : StepContext)
         | none, _ => .reject .undefinedSrc
   | _, _, _, _ => fallback
 
-/-- `helperAddress` is the ELF dispatcher binding, not a `Predicate.helper` observation. -/
-private def boundProgram (words : Array UInt32) (base helperAddress : UInt32) :
+/-- Static program bindings outside SemState / Predicate.
+Extend fields here (and in Meta JSON); do not grow create/step FFI arity.
+`helperAddress` is the ELF dispatcher binding, not a `Predicate.helper`. -/
+structure Meta where
+  base : UInt32
+  helperAddress : UInt32
+  returnAddress : UInt32 := 0x2000
+  deriving Inhabited, Repr
+
+private def parseMetaU32 (j : Lean.Json) (key : String) : Option UInt32 := do
+  let n ← (j.getObjVal? key >>= Lean.Json.getNat?).toOption
+  if n ≥ (1 <<< 32) then none else some n.toUInt32
+
+private def parseMetaJson (s : String) : Option Meta := do
+  let j ← (Lean.Json.parse s).toOption
+  let base ← parseMetaU32 j "base"
+  let helperAddress ← parseMetaU32 j "helperAddress"
+  let returnAddress := (parseMetaU32 j "returnAddress").getD 0x2000
+  some { base, helperAddress, returnAddress }
+
+private def boundProgram (words : Array UInt32) (m : Meta) :
     Except RejectReason (Array Insn × EntryParams × StepContext) :=
   let I := decodeProgram words
-  let b := base.toNat
-  let h := helperAddress.toNat
+  let b := m.base.toNat
+  let h := m.helperAddress.toNat
+  let ret := m.returnAddress.toNat
   let extent := I.foldl (fun n i => n + insnLength i) 0
-  let p := { smokeEntryParams with tEntry := Term.C32 b }
-  let context : StepContext := ⟨some b, some 0x2000, some h, some p.tCtx⟩
+  let p := { smokeEntryParams with tEntry := Term.C32 b, tReturn := Term.C32 ret }
+  let context : StepContext := ⟨some b, some ret, some h, some p.tCtx⟩
   if I.isEmpty || b == 0 || b % 4 != 0 || h == 0 || h % 4 != 0 ||
-      b + extent > (1 <<< 32) || h == 0x2000 ||
-      (b ≤ 0x2000 && 0x2000 < b + extent) || (b ≤ h && h < b + extent) then
+      ret == 0 || ret % 4 != 0 ||
+      b + extent > (1 <<< 32) || h == ret ||
+      (b ≤ ret && ret < b + extent) || (b ≤ h && h < b + extent) then
     .error .invalidEntry
   else .ok (I, p, context)
 
+private def withMeta (metaJson : String)
+    (k : Meta → String) : String :=
+  match parseMetaJson metaJson with
+  | none => snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
+  | some m => k m
+
 @[export lean_rv32_expand_create]
-def exportRv32ExpandCreate (words : Array UInt32) (base helperAddress budget : UInt32) : String :=
-  match boundProgram words base helperAddress with
-  | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-  | .ok (I, p, _) =>
-    match rv32Init I p 0 budget.toNat with
+def exportRv32ExpandCreate (words : Array UInt32) (metaJson : String) (budget : UInt32) : String :=
+  withMeta metaJson fun m =>
+    match boundProgram words m with
     | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-    | .ok ws => snapshotJson ws.nodes ws.edges ws.work ws.fuel
-        (if ws.work.isEmpty then "complete" else "running") none
+    | .ok (I, p, _) =>
+      match rv32Init I p 0 budget.toNat with
+      | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
+      | .ok ws => snapshotJson ws.nodes ws.edges ws.work ws.fuel
+          (if ws.work.isEmpty then "complete" else "running") none
 
 private def headFailJson (reason : RejectReason) (fuel : Nat) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"fuel\":{fuel},\"successors\":[]}"
@@ -880,56 +908,65 @@ private def successorJson (row : Direction × Location × SemState) : String :=
   let (exprs, preds) := renderSemStateJson state
   s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
 
+/-- Stateless head step. Predicates (including `helper`) travel only inside SemState JSON. -/
 @[export lean_rv32_expand_step]
 def exportRv32ExpandStep
-    (words : Array UInt32) (base helper event j fuel : UInt32)
+    (words : Array UInt32) (metaJson : String) (event j fuel : UInt32)
     (exprsJson predsJson : String) : String :=
-  -- Failures echo input fuel; Rust owns the attempted-head queue/fuel bookkeeping.
+  -- Failures echo input fuel; Rust owns the attempted-head work/fuel bookkeeping.
   if fuel == 0 then headFailJson .limitExceeded 0 else
-    match boundProgram words base helper with
-    | .error reason => headFailJson reason fuel.toNat
-    | .ok (I, _, context) =>
-      match parseSemStateJson exprsJson predsJson with
-      | none => headFailJson .localReject fuel.toNat
-      | some state =>
-        match inferStep I context event.toNat j.toNat state with
-        | .reject reason => headFailJson reason fuel.toNat
-        | .candidates cs =>
-          match prepareAll state I.size cs with
-          | .error reason => headFailJson reason fuel.toNat
-          | .ok prepared =>
-            let successors := String.intercalate "," (prepared.map successorJson)
-            s!"\{\"status\":\"ok\",\"fuel\":{fuel.toNat - 1},\"reason\":null,\"successors\":[{successors}]}"
+    match parseMetaJson metaJson with
+    | none => headFailJson .invalidEntry fuel.toNat
+    | some m =>
+      match boundProgram words m with
+      | .error reason => headFailJson reason fuel.toNat
+      | .ok (I, _, context) =>
+        match parseSemStateJson exprsJson predsJson with
+        | none => headFailJson .localReject fuel.toNat
+        | some state =>
+          match inferStep I context event.toNat j.toNat state with
+          | .reject reason => headFailJson reason fuel.toNat
+          | .candidates cs =>
+            match prepareAll state I.size cs with
+            | .error reason => headFailJson reason fuel.toNat
+            | .ok prepared =>
+              let successors := String.intercalate "," (prepared.map successorJson)
+              s!"\{\"status\":\"ok\",\"fuel\":{fuel.toNat - 1},\"reason\":null,\"successors\":[{successors}]}"
 
 @[export lean_rv32_expand_bound_words_snapshot]
 def exportRv32BoundWordsSnapshot
-    (words : Array UInt32) (base helperAddress steps budget : UInt32) : String :=
-  match boundProgram words base helperAddress with
-  | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-  | .ok (I, p, context) =>
-    match rv32Init I p 0 budget.toNat with
+    (words : Array UInt32) (metaJson : String) (steps budget : UInt32) : String :=
+  withMeta metaJson fun m =>
+    match boundProgram words m with
     | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-    | .ok ws => snapshotAfter I.size (inferStep I context) ws steps.toNat
+    | .ok (I, p, context) =>
+      match rv32Init I p 0 budget.toNat with
+      | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
+      | .ok ws => snapshotAfter I.size (inferStep I context) ws steps.toNat
+
+private def testMeta (base helperAddress : UInt32) : String :=
+  s!"\{\"base\":{base},\"helperAddress\":{helperAddress}}"
 
 private def statelessStepCheck : Bool :=
   let words := #[0x00700513, 0x00150513, 0x00008067]
-  match boundProgram words 0x400 0x100 with
-  | .error _ => false
-  | .ok (I, p, context) =>
+  let metaJson := testMeta 0x400 0x100
+  match parseMetaJson metaJson, boundProgram words { base := 0x400, helperAddress := 0x100 } with
+  | some _, .ok (I, p, context) =>
     match rv32Init I p 0 3 with
     | .error _ => false
     | .ok ws =>
       let state := ws.nodes[0]!.state
       let (exprs, preds) := renderSemStateJson state
       (match expandOne I.size (inferStep I context 0) ws with
-       | .inr next => exportRv32ExpandStep words 0x400 0x100 0 0 3
+       | .inr next => exportRv32ExpandStep words metaJson 0 0 3
            s!"[{exprs}]" s!"[{preds}]" ==
            s!"\{\"status\":\"ok\",\"fuel\":2,\"reason\":null,\"successors\":[{successorJson (.only, next.nodes[1]!.loc, next.nodes[1]!.state)}]}"
        | _ => false) &&
-      exportRv32ExpandStep words 0x400 0x100 0 0 0 "[]" "[]" ==
+      exportRv32ExpandStep words metaJson 0 0 0 "[]" "[]" ==
         headFailJson .limitExceeded 0 &&
-      exportRv32ExpandCreate words 0x400 0x100 3 ==
-        exportRv32BoundWordsSnapshot words 0x400 0x100 0 3
+      exportRv32ExpandCreate words metaJson 3 ==
+        exportRv32BoundWordsSnapshot words metaJson 0 3
+  | _, _ => false
 
 #guard statelessStepCheck
 

@@ -223,7 +223,7 @@ fn rv32_symbolic_packet_offset_preserves_partial_graph() {
 
 mod rust_expand_session {
     use super::rv32;
-    use lean_binding::rv32::ExpandSession;
+    use lean_binding::rv32::{ExpandSession, Meta};
     use serde_json::{Value, json};
 
     fn snap(session: &ExpandSession) -> Value {
@@ -233,15 +233,14 @@ mod rust_expand_session {
     #[test]
     fn rust_graph_steps_once_snapshots_repeatedly_and_stops_at_terminal() {
         let words = [0x00700513, 0x00150513, 0x00008067];
-        let mut complete = ExpandSession::create(&words, 0x400, 0x100, 3);
-        let mut limited = ExpandSession::create(&words, 0x400, 0x100, 1);
+        let mut complete = ExpandSession::create(&words, Meta::new(0x400, 0x100), 3);
+        let mut limited = ExpandSession::create(&words, Meta::new(0x400, 0x100), 1);
         for steps in 0..6 {
             for (session, budget) in [(&mut complete, 3), (&mut limited, 1)] {
                 let snapshot = snap(session);
                 assert_eq!(snap(session), snapshot);
                 assert_eq!(session.is_running(), snapshot["status"] == "running");
-                let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-                    &words, 0x400, 0x100, steps, budget,
+                let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(&words, &Meta::new(0x400, 0x100), steps, budget,
                 ))
                 .unwrap();
                 assert_eq!(snapshot, replay);
@@ -268,7 +267,7 @@ mod rust_expand_session {
 
     #[test]
     fn rejection_preserves_graph_and_stops_at_terminal() {
-        let mut session = ExpandSession::create(&[0x00700513, 0xffffffff], 0x400, 0x100, 5);
+        let mut session = ExpandSession::create(&[0x00700513, 0xffffffff], Meta::new(0x400, 0x100), 5);
         session.step();
         let before = snap(&session);
         session.step();
@@ -286,7 +285,7 @@ mod rust_expand_session {
 
     #[test]
     fn create_validates_metadata_and_zero_budget() {
-        for (words, base, helper) in [
+        for (words, base, helper_address) in [
             (vec![], 0x400, 0x100),
             (vec![0x00008067], 0, 0x100),
             (vec![0x00008067], 0x402, 0x100),
@@ -297,7 +296,7 @@ mod rust_expand_session {
             (vec![0x00008067], 0x400, 0x400),
             (vec![0x00008067, 0x00008067], 0xffff_fffc, 0x100),
         ] {
-            let mut session = ExpandSession::create(&words, base, helper, 10);
+            let mut session = ExpandSession::create(&words, Meta::new(base, helper_address), 10);
             let failed = snap(&session);
             assert_eq!(failed["reason"], "InvalidEntry");
             assert_eq!(failed["failed"], Value::Null);
@@ -309,7 +308,7 @@ mod rust_expand_session {
             session.step();
             assert_eq!(snap(&session), failed);
         }
-        let mut session = ExpandSession::create(&[0x00008067], 0xffff_fffc, 0x100, 0);
+        let mut session = ExpandSession::create(&[0x00008067], Meta::new(0xffff_fffc, 0x100), 0);
         assert!(session.is_running());
         session.step();
         let failed = snap(&session);
@@ -323,10 +322,9 @@ mod rust_expand_session {
     fn helper_loop_keeps_dynamic_event_identity_across_steps() {
         // addi a0,zero,5; jal ra,-772 (dispatcher); addi s1,a0,0; jal zero,-12.
         let words = [0x00500513, 0xcfdff0ef, 0x00050493, 0xff5ff06f];
-        let mut session = ExpandSession::create(&words, 0x400, 0x100, 10);
+        let mut session = ExpandSession::create(&words, Meta::new(0x400, 0x100), 10);
         for steps in 0..7 {
-            let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-                &words, 0x400, 0x100, steps, 10,
+            let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(&words, &Meta::new(0x400, 0x100), steps, 10,
             ))
             .unwrap();
             assert_eq!(snap(&session), replay);
@@ -349,7 +347,7 @@ mod rust_expand_session {
     fn run_many_to_completion_overlaps_independent_sessions() {
         let words = [0x00700513, 0x00150513, 0x00008067];
         let jobs = (0..4)
-            .map(|_| (words.to_vec(), 0x400u32, 0x100u32, 3u32))
+            .map(|_| (words.to_vec(), Meta::new(0x400, 0x100), 3u32))
             .collect::<Vec<_>>();
         let results = rv32::run_many_to_completion(jobs);
         assert_eq!(results.len(), 4);
@@ -363,11 +361,11 @@ mod rust_expand_session {
 
 mod stateless_head_ffi {
     use super::rv32;
+    use lean_binding::rv32::Meta;
     use serde_json::{json, Value};
 
     fn step(words: &[u32], j: u32, fuel: u32, exprs: &str, preds: &str) -> Value {
-        serde_json::from_str(&rv32::expand_step(
-            words, 0x400, 0x100, 42, j, fuel, exprs, preds,
+        serde_json::from_str(&rv32::expand_step(words, &Meta::new(0x400, 0x100), 42, j, fuel, exprs, preds,
         ))
         .unwrap()
     }
@@ -376,7 +374,7 @@ mod stateless_head_ffi {
     fn symbolic_branch_returns_applied_states_and_complementary_predicates() {
         let words = [0x00051263, 0x00700513, 0x00008067];
         let root: Value =
-            serde_json::from_str(&rv32::expand_create(&words, 0x400, 0x100, 5)).unwrap();
+            serde_json::from_str(&rv32::expand_create(&words, &Meta::new(0x400, 0x100), 5)).unwrap();
         let node = &root["nodes"][0];
         let preds = json!([{ "kind": "ret", "term": "v32:123" }]);
         let result = step(&words, 0, 5, &node["exprs"].to_string(), &preds.to_string());

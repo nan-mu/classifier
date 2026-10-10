@@ -157,22 +157,21 @@ Raw BIN uploads are rejected. The synthetic wrapper return is `0x2000`, not an
 ELF field. Check container extent and binding collisions before analysis.
 eBPF analysis is not wired through the HTTP session API yet.
 
-Expand graph ownership: Lean exports `lean_rv32_expand_create` for an initial
-snapshot String and `lean_rv32_expand_step` for stateless head expansion. Rust
-passes program words, `base`, ELF `helperAddress` (dispatcher binding — not a
-Predicate), dynamic source event, instruction position, fuel, and SemState
-expression/predicate JSON arrays. Predicates follow
+Expand graph ownership: Lean exports `lean_rv32_expand_create` /
+`lean_rv32_expand_step` as stateless String FFI. Static bindings travel in one
+`Meta` JSON blob (`base`, `helperAddress` dispatcher — not a Predicate,
+`returnAddress` default `0x2000`, plus ignored unknown fields for forward
+growth). Do not grow create/step arity for new bindings; extend `Meta`.
+Step also takes dynamic source event, instruction position, fuel, and SemState
+expression/predicate JSON. Predicates follow
 `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` (`doc/predicates.md`); Helper is one
-Predicate variant carrying `(ε, h, args)`, never a separate FFI argument.
-Lean returns already applied successor states or a rejection. Rust
-`rv32::ExpandSession` owns all nodes, edges, work, fuel, and status. Snapshot
-Predicate rows keep `kind` plus flattened kind-specific fields so new variants
-do not require Rust/TS struct edits. No expand object remains in the Lean heap
-across FFI calls. Rejected head calls echo input fuel; Rust applies diagnostic
-work/fuel rules. All Lean calls serialize on a process mutex. The HTTP server
-keeps per-session locks and runs `/step` and `/run` on `spawn_blocking`.
-Legacy `expand_bound_words_snapshot(steps, budget)` keeps an ephemeral WorkState
-inside one call for regression replay. Builtin fixture replay C export is
+Predicate variant carrying `(ε, h, args)`. Lean returns applied successor
+states or a rejection. Rust `rv32::Meta` / `ExpandSession` own bindings and the
+graph. Snapshot Predicate rows keep `kind` plus flattened fields. No expand
+object remains in the Lean heap across FFI calls. All Lean calls serialize on a
+process mutex; HTTP `/step` and `/run` use per-session locks and
+`spawn_blocking`. Legacy `expand_bound_words_snapshot` keeps an ephemeral
+WorkState inside one call. Builtin fixture replay is
 `lean_rv32_expand_builtin_snapshot`.
 
 ## Documentation policy
@@ -209,7 +208,7 @@ RV32IMC/Expr.lean               expr / step and FFI smoke exports
 RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
 RV32IMC/Helper.lean             helper Predicate generation and result/Map Expr projections
 RV32IMC/RegisterFfi.lean        local register-effect probes for binding unit tests
-RV32IMC/Expand.lean             inferStep / stateless create·head-step JSON FFI
+RV32IMC/Expand.lean             Meta bindings + inferStep / create·step JSON FFI
 RV32IMC/Esp32c3Program.lean     generated instruction words for the ESP32-C3 fixture
 EBPF.lean                      reexports the executable eBPF slice
 EBPF/Insn.lean                 MOV / ADD / EXIT instruction types
