@@ -26,7 +26,7 @@ use tower_http::cors::CorsLayer;
 struct AppState {
     /// Per-session locks so `/run` on one id does not block other sessions.
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
-    /// Caps concurrent blocking expand jobs (Lean FFI still serializes in binding).
+    /// Caps concurrent expand jobs at 10 (aligned with Lean worker threads).
     pool: InferencePool,
     next_id: Arc<AtomicU64>,
 }

@@ -6,10 +6,10 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-/// At most this many inference jobs may occupy blocking workers at once.
-pub const INFERENCE_PERMITS: usize = 10;
+/// Matches `lean_binding::LEAN_WORKERS`: at most this many expand jobs in flight.
+pub const INFERENCE_PERMITS: usize = lean_binding::LEAN_WORKERS;
 
-/// Tokio token pool for Lean-backed expand work.
+/// Tokio gate aligned with the 10 Lean worker threads in `lean-binding`.
 #[derive(Clone)]
 pub struct InferencePool {
     permits: Arc<Semaphore>,
@@ -23,6 +23,7 @@ impl InferencePool {
     }
 
     /// Acquire a permit, then run `f` on a blocking thread.
+    /// Lean FFI inside `f` is further executed on the fixed Lean worker pool.
     pub async fn run<F, T>(&self, f: F) -> Result<T, PoolError>
     where
         F: FnOnce() -> T + Send + 'static,

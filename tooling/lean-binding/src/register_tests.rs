@@ -1,4 +1,4 @@
-use super::{ffi, init};
+use super::{ffi, lean_call};
 use serde_json::Value;
 use std::ffi::CStr;
 
@@ -21,8 +21,7 @@ fn cell(
     unsigned: bool,
     source: Option<u64>,
 ) -> Value {
-    init();
-    unsafe {
+    lean_call(move || unsafe {
         json_result(ffi::lean_virtual_cell_access(
             kind,
             width,
@@ -35,7 +34,7 @@ fn cell(
             old.unwrap_or(0),
             source.unwrap_or(0),
         ))
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -50,8 +49,8 @@ fn packet(
     input: bool,
     source: Option<u64>,
 ) -> Value {
-    init();
-    unsafe {
+    let values = values.to_vec();
+    lean_call(move || unsafe {
         let values = ffi::lean_binding_mk_uint32_array(values.as_ptr(), values.len());
         json_result(ffi::lean_virtual_packet_access(
             values,
@@ -65,12 +64,11 @@ fn packet(
             u32::from(source.is_some()),
             source.unwrap_or(0),
         ))
-    }
+    })
 }
 
 fn rv32_case(case_id: u32, value: u32) -> Value {
-    init();
-    unsafe { json_result(ffi::lean_rv32_register_effects(case_id, value)) }
+    lean_call(move || unsafe { json_result(ffi::lean_rv32_register_effects(case_id, value)) })
 }
 
 fn term<'a>(exprs: &'a Value, reg: &str) -> &'a str {
