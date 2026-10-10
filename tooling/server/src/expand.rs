@@ -29,19 +29,18 @@ impl Arch {
     }
 }
 
-/// Session chrome only. Graph comes from Lean expand snapshots over decoded words.
+/// HTTP session chrome around a persistent Lean `ExpandSession` handle.
+/// Rust owns step/run-to-completion; each `step_once` is one Lean `expandOne`.
 pub struct Session {
     id: String,
     arch: Arch,
     name: String,
     image: InsnImage,
-    words: Vec<u32>,
-    base_address: u32,
-    helper_address: u32,
     budget: u32,
     steps: u32,
     focus: u32,
     log: Vec<LogEntry>,
+    expand: rv32::ExpandSession,
 }
 
 impl Session {
@@ -54,24 +53,24 @@ impl Session {
     ) -> Self {
         let image = program.image;
         let words = rv32_image::words(&image);
+        let expand =
+            rv32::ExpandSession::create(&words, program.base_address, program.helper_address, budget);
         let mut session = Self {
             id: id.into(),
             arch,
             name,
             image,
-            words,
-            base_address: program.base_address,
-            helper_address: program.helper_address,
             budget,
             steps: 0,
             focus: 0,
             log: Vec::new(),
+            expand,
         };
         session.push_log(format!(
             "init root pre-state arch={} image={} insns={} budget={}",
             arch.as_str(),
             session.name,
-            session.words.len(),
+            words.len(),
             budget
         ));
         session.sync_focus_from_lean();
@@ -81,7 +80,7 @@ impl Session {
     pub fn run_all(&mut self) {
         let cap = self.budget.saturating_add(1);
         for _ in 0..cap {
-            if self.lean_status() != "running" {
+            if !self.expand.is_running() {
                 break;
             }
             self.step_once();
@@ -89,10 +88,11 @@ impl Session {
     }
 
     pub fn step_once(&mut self) {
-        if self.lean_status() != "running" {
+        if !self.expand.is_running() {
             return;
         }
         self.steps = self.steps.saturating_add(1);
+        self.expand.step();
         let lean = self.lean_value();
         let status = lean["status"].as_str().unwrap_or("fail");
         match status {
@@ -160,14 +160,7 @@ impl Session {
     }
 
     fn lean_value(&self) -> Value {
-        let raw = rv32::expand_bound_words_snapshot(
-            &self.words,
-            self.base_address,
-            self.helper_address,
-            self.steps,
-            self.budget,
-        );
-        serde_json::from_str(&raw).unwrap_or_else(|_| {
+        serde_json::from_str(&self.expand.snapshot_json()).unwrap_or_else(|_| {
             serde_json::json!({
                 "status": "fail",
                 "reason": "LeanJson",
@@ -178,13 +171,6 @@ impl Session {
                 "edges": [],
             })
         })
-    }
-
-    fn lean_status(&self) -> String {
-        self.lean_value()["status"]
-            .as_str()
-            .unwrap_or("fail")
-            .to_string()
     }
 
     fn sync_focus_from_lean(&mut self) {
@@ -793,26 +779,19 @@ mod tests {
 
     #[test]
     fn just_tx_larger_budget_completes_with_lookup_update_exit_paths() {
-        let session = default_session("s", 1024);
-        let raw = rv32::expand_bound_words_snapshot(
-            &session.words,
-            session.base_address,
-            session.helper_address,
-            1025,
-            1024,
-        );
-        let s: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(s["status"], "complete");
-        assert_eq!(s["reason"], Value::Null);
-        assert_eq!(s["failed"], Value::Null);
-        assert_eq!(s["fuel"], 187, "837 expansions finish the fixture");
-        assert!(s["work"].as_array().unwrap().is_empty());
-        let (nodes, edges) = graph_from_lean(&s);
-        assert_eq!(nodes.len(), 882);
-        assert_eq!(edges.len(), 881);
-        assert_eq!(nodes.iter().filter(|n| n.loc == "exit").count(), 45);
+        let mut session = default_session("s", 1024);
+        session.run_all();
+        let snap = session.snapshot();
+        assert_eq!(snap.status, "complete");
+        assert_eq!(snap.reason, None);
+        assert_eq!(snap.failed, None);
+        assert_eq!(snap.fuel, 187, "837 expansions finish the fixture");
+        assert!(snap.work.is_empty());
+        assert_eq!(snap.nodes.len(), 882);
+        assert_eq!(snap.edges.len(), 881);
+        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 45);
         assert_eq!(
-            nodes
+            snap.nodes
                 .iter()
                 .filter(|n| n.loc == "exit"
                     && n.exprs.iter().any(|e| e.reg.starts_with("map32:")

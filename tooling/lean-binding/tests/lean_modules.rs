@@ -220,3 +220,143 @@ fn rv32_symbolic_packet_offset_preserves_partial_graph() {
     assert_eq!(failed["fuel"], 473);
     assert_eq!(snapshot(512), failed);
 }
+
+mod expand_session_ffi {
+    use super::rv32;
+    use lean_binding::rv32::ExpandSession;
+    use serde_json::{Value, json};
+
+    fn snap(session: &ExpandSession) -> Value {
+        serde_json::from_str(&session.snapshot_json()).expect("session JSON")
+    }
+
+    #[test]
+    fn persistent_handles_step_once_snapshot_repeatedly_and_stop_at_terminal() {
+        let words = [0x00700513, 0x00150513, 0x00008067];
+        let mut complete = ExpandSession::create(&words, 0x400, 0x100, 3);
+        let mut limited = ExpandSession::create(&words, 0x400, 0x100, 1);
+        for steps in 0..6 {
+            for (session, budget) in [(&mut complete, 3), (&mut limited, 1)] {
+                let snapshot = snap(session);
+                assert_eq!(snap(session), snapshot);
+                assert_eq!(session.is_running(), snapshot["status"] == "running");
+                let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
+                    &words, 0x400, 0x100, steps, budget,
+                ))
+                .unwrap();
+                assert_eq!(snapshot, replay);
+                if steps <= budget {
+                    assert_eq!(
+                        snapshot["nodes"].as_array().unwrap().len(),
+                        steps as usize + 1
+                    );
+                    assert_eq!(snapshot["fuel"], budget - steps);
+                }
+                session.step();
+            }
+        }
+        let done = snap(&complete);
+        assert_eq!(done["status"], "complete");
+        assert_eq!(done["fuel"], 0);
+        assert_eq!(done["work"], json!([]));
+        assert_eq!(done["nodes"][3]["loc"], "exit");
+        let failed = snap(&limited);
+        assert_eq!(failed["reason"], "LimitExceeded");
+        assert_eq!(failed["failed"], Value::Null);
+        assert_eq!(failed["work"], json!([1]));
+    }
+
+    #[test]
+    fn rejection_preserves_graph_and_stops_at_terminal() {
+        let mut session = ExpandSession::create(&[0x00700513, 0xffffffff], 0x400, 0x100, 5);
+        session.step();
+        let before = snap(&session);
+        session.step();
+        let failed = snap(&session);
+        assert_eq!(failed["status"], "fail");
+        assert_eq!(failed["reason"], "LocalReject");
+        assert_eq!(failed["failed"], 1);
+        assert_eq!(failed["nodes"], before["nodes"]);
+        assert_eq!(failed["edges"], before["edges"]);
+        assert_eq!(failed["fuel"], 3);
+        assert_eq!(failed["work"], json!([]));
+        session.step();
+        assert_eq!(snap(&session), failed);
+    }
+
+    #[test]
+    fn create_validates_metadata_and_zero_budget() {
+        for (words, base, helper) in [
+            (vec![], 0x400, 0x100),
+            (vec![0x00008067], 0, 0x100),
+            (vec![0x00008067], 0x402, 0x100),
+            (vec![0x00008067], 0x400, 0),
+            (vec![0x00008067], 0x400, 0x102),
+            (vec![0x00008067], 0x400, 0x2000),
+            (vec![0x00008067], 0x2000, 0x100),
+            (vec![0x00008067], 0x400, 0x400),
+            (vec![0x00008067, 0x00008067], 0xffff_fffc, 0x100),
+        ] {
+            let mut session = ExpandSession::create(&words, base, helper, 10);
+            let failed = snap(&session);
+            assert_eq!(failed["reason"], "InvalidEntry");
+            assert_eq!(failed["failed"], Value::Null);
+            assert_eq!(failed["nodes"], json!([]));
+            assert_eq!(failed["edges"], json!([]));
+            assert_eq!(failed["work"], json!([]));
+            assert_eq!(failed["fuel"], 0);
+            assert!(!session.is_running());
+            session.step();
+            assert_eq!(snap(&session), failed);
+        }
+        let mut session = ExpandSession::create(&[0x00008067], 0xffff_fffc, 0x100, 0);
+        assert!(session.is_running());
+        session.step();
+        let failed = snap(&session);
+        assert_eq!(failed["reason"], "LimitExceeded");
+        assert_eq!(failed["failed"], Value::Null);
+        assert_eq!(failed["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(failed["work"], json!([0]));
+    }
+
+    #[test]
+    fn helper_loop_keeps_dynamic_event_identity_across_steps() {
+        // addi a0,zero,5; jal ra,-772 (dispatcher); addi s1,a0,0; jal zero,-12.
+        let words = [0x00500513, 0xcfdff0ef, 0x00050493, 0xff5ff06f];
+        let mut session = ExpandSession::create(&words, 0x400, 0x100, 10);
+        for steps in 0..7 {
+            let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
+                &words, 0x400, 0x100, steps, 10,
+            ))
+            .unwrap();
+            assert_eq!(snap(&session), replay);
+            assert!(session.is_running());
+            if steps == 6 {
+                let snapshot = snap(&session);
+                let exprs = snapshot["nodes"][6]["exprs"].as_array().unwrap();
+                for (reg, event) in [("real32:9", 1), ("real32:10", 5)] {
+                    let term = exprs.iter().find(|e| e["reg"] == reg).unwrap()["term"]
+                        .as_str()
+                        .unwrap();
+                    assert!(term.contains(&format!("externalResult{event}_0")), "{term}");
+                }
+            }
+            session.step();
+        }
+    }
+
+    #[test]
+    fn run_many_to_completion_overlaps_independent_sessions() {
+        let words = [0x00700513, 0x00150513, 0x00008067];
+        let jobs = (0..4)
+            .map(|_| (words.to_vec(), 0x400u32, 0x100u32, 3u32))
+            .collect::<Vec<_>>();
+        let results = rv32::run_many_to_completion(jobs);
+        assert_eq!(results.len(), 4);
+        for raw in results {
+            let done: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(done["status"], "complete");
+            assert_eq!(done["nodes"][3]["loc"], "exit");
+        }
+    }
+}

@@ -157,6 +157,18 @@ Raw BIN uploads are rejected. The synthetic wrapper return is `0x2000`, not an
 ELF field. Check container extent and binding collisions before analysis.
 eBPF analysis is not wired through the HTTP session API yet.
 
+Expand session ownership: Lean exports `lean_rv32_expand_create` /
+`lean_rv32_expand_step` / `lean_rv32_expand_snapshot` (plus `is_running`).
+Each step is one `expandOne` via `inferStep`; `WorkState` lives in the Lean
+heap behind an opaque handle. Rust `rv32::ExpandSession` owns that handle,
+drives run-to-completion, and serializes all Lean FFI on a process mutex
+(Lean runtime is not reentrant). The HTTP server keeps per-session locks and
+runs `/step` and `/run` on `spawn_blocking` so distinct sessions can progress
+concurrently. Legacy `expand_bound_words_snapshot(steps, budget)` remains as a
+create-then-replay helper for tests; the server no longer re-expands from step 0
+on every call. Builtin fixture replay C export is
+`lean_rv32_expand_builtin_snapshot`.
+
 ## Documentation policy
 
 `doc/` is for paper readers and must focus on mathematical definitions,
@@ -190,7 +202,7 @@ RV32IMC/Expr.lean               expr / step and FFI smoke exports
 RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
 RV32IMC/Helper.lean             helper Predicate generation and result/Map Expr projections
 RV32IMC/RegisterFfi.lean        local register-effect probes for binding unit tests
-RV32IMC/Expand.lean             inferStep / rv32Step / rv32Snapshot and snapshot export
+RV32IMC/Expand.lean             inferStep / ExpandSession create·step·snapshot FFI
 RV32IMC/Esp32c3Program.lean     generated instruction words for the ESP32-C3 fixture
 EBPF.lean                      reexports the executable eBPF slice
 EBPF/Insn.lean                 MOV / ADD / EXIT instruction types

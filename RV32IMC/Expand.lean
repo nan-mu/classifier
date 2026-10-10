@@ -788,8 +788,7 @@ private def packetLoadsCheck : Bool :=
 #guard returnObservationMergeCheck
 #guard boundReturnObservationCheck
 
--- Parent Rust glue: lean_rv32_expand_snapshot(uint32_t steps, uint32_t budget) -> Lean String.
-@[export lean_rv32_expand_snapshot]
+@[export lean_rv32_expand_builtin_snapshot]
 def exportRv32Snapshot (steps budget : UInt32) : String :=
   rv32Snapshot esp32c3Program smokeEntryParams 0 steps.toNat budget.toNat
 
@@ -846,21 +845,94 @@ def inferStep (I : Array Insn) (context : StepContext)
         | none, _ => .reject .undefinedSrc
   | _, _, _, _ => fallback
 
-@[export lean_rv32_expand_bound_words_snapshot]
-def exportRv32BoundWordsSnapshot (words : Array UInt32) (base helper steps budget : UInt32) : String :=
+inductive ExpandStatus where
+  | running
+  | complete
+  | fail (reason : RejectReason) (failed : Option NodeId)
+  deriving Inhabited, Repr
+
+structure ExpandSession where
+  I : Array Insn
+  context : StepContext
+  ws : WorkState
+  status : ExpandStatus
+  deriving Inhabited, Repr
+
+@[export lean_rv32_expand_create]
+def exportRv32ExpandCreate (words : Array UInt32) (base helper budget : UInt32) : ExpandSession :=
   let I := decodeProgram words
   let b := base.toNat
   let h := helper.toNat
   let extent := I.foldl (fun n i => n + insnLength i) 0
   let p := { smokeEntryParams with tEntry := Term.C32 b }
+  let context : StepContext := ⟨some b, some 0x2000, some h, some p.tCtx⟩
+  let failed := fun reason =>
+    { I, context, ws := ⟨#[], #[], [], 0⟩, status := .fail reason none : ExpandSession }
   if I.isEmpty || b == 0 || b % 4 != 0 || h == 0 || h % 4 != 0 ||
       b + extent > (1 <<< 32) || h == 0x2000 ||
       (b ≤ 0x2000 && 0x2000 < b + extent) || (b ≤ h && h < b + extent) then
-    snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
+    failed .invalidEntry
   else match rv32Init I p 0 budget.toNat with
-    | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
+    | .error reason => failed reason
     | .ok ws =>
-      let context : StepContext := ⟨some b, some 0x2000, some h, some p.tCtx⟩
-      snapshotAfter I.size (inferStep I context) ws steps.toNat
+      { I, context, ws, status := if ws.work.isEmpty then .complete else .running }
+
+@[export lean_rv32_expand_step]
+def exportRv32ExpandStep (session : ExpandSession) : ExpandSession :=
+  match session.status with
+  | .complete | .fail _ _ => session
+  | .running =>
+    let ws := session.ws
+    match expandOne session.I.size (inferStep session.I session.context (ws.work.headD 0)) ws with
+    | .inr ws' =>
+      { session with ws := ws', status := if ws'.work.isEmpty then .complete else .running }
+    | .inl (.complete g) =>
+      { session with ws := ⟨g.nodes, g.edges, [], ws.fuel⟩, status := .complete }
+    | .inl (.fail reason g) =>
+      -- Match snapshotAfter's diagnostic queue/fuel when an expansion was attempted.
+      let attempted := !ws.work.isEmpty && ws.fuel > 0
+      { session with
+        ws := ⟨g.nodes, g.edges, if attempted then ws.work.tail else ws.work,
+          if attempted then ws.fuel - 1 else ws.fuel⟩
+        status := .fail reason (if attempted then ws.work.head? else none) }
+
+@[export lean_rv32_expand_snapshot]
+def exportRv32ExpandSnapshot (session : ExpandSession) : String :=
+  let ws := session.ws
+  match session.status with
+  | .running => snapshotJson ws.nodes ws.edges ws.work ws.fuel "running" none
+  | .complete => snapshotJson ws.nodes ws.edges ws.work ws.fuel "complete" none
+  | .fail reason failed => snapshotJson ws.nodes ws.edges ws.work ws.fuel "fail" (some reason) failed
+
+@[export lean_rv32_expand_is_running]
+def exportRv32ExpandIsRunning (session : ExpandSession) : UInt32 :=
+  match session.status with
+  | .running => 1
+  | _ => 0
+
+private def sessionAfter (session : ExpandSession) : Nat → ExpandSession
+  | 0 => session
+  | n + 1 =>
+    match session.status with
+    | .running => sessionAfter (exportRv32ExpandStep session) n
+    | _ => session
+
+@[export lean_rv32_expand_bound_words_snapshot]
+def exportRv32BoundWordsSnapshot (words : Array UInt32) (base helper steps budget : UInt32) : String :=
+  exportRv32ExpandSnapshot (sessionAfter (exportRv32ExpandCreate words base helper budget) steps.toNat)
+
+private def expandSessionReplayCheck : Bool :=
+  [#[0x00700513, 0x00150513, 0x00008067],
+   #[0xffffffff, 0x00008067],
+   #[0x00700513, 0x00150513],
+   #[0x000e0513, 0x00008067],
+   #[0x00051263, 0x00700513, 0x00008067]].all fun words =>
+    [0, 1, 2, 3, 6].all fun budget =>
+      let session := exportRv32ExpandCreate words 0x400 0x100 budget
+      (List.range 8).all fun steps =>
+        exportRv32ExpandSnapshot (sessionAfter session steps) ==
+          snapshotAfter session.I.size (inferStep session.I session.context) session.ws steps
+
+#guard expandSessionReplayCheck
 
 end RV32IMC

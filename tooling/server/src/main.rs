@@ -17,7 +17,9 @@ use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 struct AppState {
-    sessions: Arc<Mutex<HashMap<String, Session>>>,
+    /// Per-session locks so `/run` on one id does not block other sessions.
+    /// Lean FFI itself still serializes inside `lean-binding`.
+    sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -106,39 +108,69 @@ async fn create_session(
     };
     let program = rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
-    let session = Session::new(id.clone(), budget, arch, name, program);
-    let snap = session.snapshot();
+    let session = Arc::new(Mutex::new(Session::new(
+        id.clone(),
+        budget,
+        arch,
+        name,
+        program,
+    )));
+    let snap = session.lock().expect("session").snapshot();
     app.sessions.lock().expect("sessions").insert(id, session);
     Ok(Json(snap))
+}
+
+fn session_handle(
+    app: &AppState,
+    id: &str,
+) -> Result<Arc<Mutex<Session>>, StatusCode> {
+    app.sessions
+        .lock()
+        .expect("sessions")
+        .get(id)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 async fn step_session(
     State(app): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, StatusCode> {
-    let mut sessions = app.sessions.lock().expect("sessions");
-    let session = sessions.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
-    session.step_once();
-    Ok(Json(session.snapshot()))
+    let session = session_handle(&app, &id)?;
+    let snap = tokio::task::spawn_blocking(move || {
+        let mut session = session.lock().expect("session");
+        session.step_once();
+        session.snapshot()
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(snap))
 }
 
 async fn run_session(
     State(app): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, StatusCode> {
-    let mut sessions = app.sessions.lock().expect("sessions");
-    let session = sessions.get_mut(&id).ok_or(StatusCode::NOT_FOUND)?;
-    session.run_all();
-    Ok(Json(session.snapshot()))
+    let session = session_handle(&app, &id)?;
+    let snap = tokio::task::spawn_blocking(move || {
+        let mut session = session.lock().expect("session");
+        session.run_all();
+        session.snapshot()
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(snap))
 }
 
 async fn get_session(
     State(app): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Snapshot>, StatusCode> {
-    let sessions = app.sessions.lock().expect("sessions");
-    let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
-    Ok(Json(session.snapshot()))
+    let session = session_handle(&app, &id)?;
+    let snap = tokio::task::spawn_blocking(move || session.lock().expect("session").snapshot())
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(snap))
 }
 
 #[cfg(test)]
@@ -223,5 +255,31 @@ mod http_tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn concurrent_runs_on_distinct_sessions() {
+        let router = app(new_state());
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            let (status, created) = call(&router, "POST", "/api/session", br#"{"budget":4}"#).await;
+            assert_eq!(status, StatusCode::OK);
+            ids.push(created["id"].as_str().expect("id").to_string());
+        }
+        let mut tasks = Vec::new();
+        for id in &ids {
+            let router = router.clone();
+            let uri = format!("/api/session/{id}/run");
+            tasks.push(tokio::spawn(async move {
+                call(&router, "POST", &uri, b"{}").await
+            }));
+        }
+        for task in tasks {
+            let (status, done) = task.await.expect("join");
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(done["status"], "fail");
+            assert_eq!(done["reason"], "LimitExceeded");
+            assert_eq!(done["nodes"].as_array().expect("nodes").len(), 5);
+        }
     }
 }
