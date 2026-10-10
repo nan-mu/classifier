@@ -32,7 +32,7 @@ function bytesToBase64(buf: ArrayBuffer): string {
 
 export function createSession(opts: CreateOpts = {}): Promise<SessionSnapshot> {
   const body: Record<string, unknown> = {
-    budget: opts.budget ?? 512,
+    budget: opts.budget ?? 1024,
     arch: opts.arch ?? "rv32imc",
     name: opts.name ?? "just_tx.elf",
   };

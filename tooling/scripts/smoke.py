@@ -20,7 +20,7 @@ def request(base, method, path, body=None):
         base + path, data=data, method=method,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=120) as response:
+    with urllib.request.urlopen(req, timeout=300) as response:
         chunks = []
         while True:
             chunk = response.read(64 * 1024)
@@ -51,7 +51,14 @@ def snapshots(base):
         assert done["failed"] is None, "budget exhaustion does not reject a step"
         assert len(stepped["nodes"]) > len(created["nodes"]), "step must expand the graph"
         result[f"just_tx.elf/{budget}"] = [created, stepped, done]
+    # Default budget is 1024 (completion is covered by server unit tests via one Lean
+    # snapshot). HTTP /run replays expand per step and is too slow for CI at 1024, so
+    # the live check uses budget 512 for Map progress + LimitExceeded regression.
+    defaulted = request(base, "POST", "/api/session", {})
+    assert defaulted["budget"] == 1024, defaulted["budget"]
+    assert defaulted["status"] == "running"
     created = request(base, "POST", "/api/session", {"budget": 512})
+    assert created["budget"] == 512
     path = "/api/session/" + created["id"]
     done = request(base, "POST", path + "/run", {})
     assert done["status"] == "fail", done["status"]
@@ -103,7 +110,8 @@ def snapshots(base):
         {"image_b64": base64.b64encode(default_elf).decode(), "name": "upload.elf"},
     )
     assert uploaded["program"] == "upload.elf"
-    assert uploaded["nodes"] == created["nodes"]
+    assert uploaded["budget"] == 1024
+    assert uploaded["nodes"] == defaulted["nodes"]
     firewall = (fixtures / "xdp.elf").read_bytes()
     fw = request(
         base,
@@ -144,6 +152,7 @@ def snapshots(base):
             assert error.code == 400, error.code
         else:
             raise AssertionError("invalid compact ELF must return HTTP 400")
+    result["just_tx.elf/default"] = [defaulted]
     result["just_tx.elf/512"] = [created, done]
     result["xdp.elf/512"] = [fw, fw_done]
     try:

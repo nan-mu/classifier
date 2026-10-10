@@ -210,7 +210,7 @@ function DebugScreen() {
     collapseSameLoc: false,
     panel: "node",
   });
-  const [budget, setBudget] = useState(512);
+  const [budget, setBudget] = useState(1024);
   const [arch, setArch] = useState<ArchKind>("rv32imc");
   const [firmwareName, setFirmwareName] = useState("just_tx.elf");
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
@@ -249,7 +249,7 @@ function DebugScreen() {
   );
 
   useEffect(() => {
-    void boot("rv32imc", 512, "just_tx.elf", null);
+    void boot("rv32imc", 1024, "just_tx.elf", null);
   }, [boot]);
 
   const onFirmwarePick = useCallback((ev: ChangeEvent<HTMLInputElement>) => {
@@ -522,7 +522,7 @@ function DebugScreen() {
           className="toolbar__input mono"
           type="number"
           min={0}
-          max={512}
+          max={2048}
           value={budget}
           disabled={busy}
           onChange={(ev) => setBudget(Number(ev.target.value) || 0)}

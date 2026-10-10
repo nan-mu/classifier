@@ -129,14 +129,12 @@ nor arbitrary fresh packet names resolve these missing bindings. See
 
 The default Compact XDP ELF is `tooling/fixtures/just_tx.elf` (copied from
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`). Its decoded prefix has 79
-instructions. With budget 512 it crosses both Map loads at positions 48–49 and
-both stores at 53–54, then exhausts fuel (`LimitExceeded`) without rejecting an
-instruction. The graph has 552 nodes, 551 edges, 10 Exits and 30 pending nodes;
-`failed` is null, focus is node 521 at position 75, and fuel is zero. Completion
-needs 837 expansions under the current unmerged path model. A direct bound
-snapshot with budget 1024 completes with 882 nodes, 881 edges and 45 Exits,
-including 21 carrying lookup-region Map updates. Compressed LW/SW use matching
-word-offset decoding, so position 54 updates the same offset-4 word loaded at 49.
+instructions. The HTTP and WebUI default budget is 1024. With that budget the
+bound snapshot completes with 882 nodes, 881 edges and 45 Exits, including 21
+carrying lookup-region Map updates. Budget 512 still exhausts fuel after the
+Map loads/stores (`LimitExceeded`, 552 nodes, 10 Exits, 30 pending) and remains
+a fuel regression. Compressed LW/SW use matching word-offset decoding, so
+position 54 updates the same offset-4 word loaded at 49.
 The firewall fixture `tooling/fixtures/xdp.elf` is retained for helper-call regressions; full-program
 completion additionally requires all resource offsets and accesses to be bound.
 Helper-effect unit coverage also lives in

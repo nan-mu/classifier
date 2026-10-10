@@ -76,7 +76,7 @@ async fn create_session(
 ) -> Result<Json<Snapshot>, StatusCode> {
     let (budget, arch, name, bin) = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
         (
-            512,
+            1024,
             Arch::Rv32imc,
             rv32_image::DEFAULT_NAME.to_string(),
             rv32_image::DEFAULT_ELF.to_vec(),
@@ -102,7 +102,7 @@ async fn create_session(
                 bytes
             }
         };
-        (parsed.budget.unwrap_or(512), arch, name, bin)
+        (parsed.budget.unwrap_or(1024), arch, name, bin)
     };
     let program = rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));

@@ -14,13 +14,11 @@ step counts, focus, logs, and instruction text. The server depends on the siblin
 
 The default `tooling/fixtures/just_tx.elf` is a copy of
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`. Its image base is `0x40380200` and
-its dispatcher address is `0x40380000`. With budget 512 the current analysis
-crosses the lookup, both Map loads at positions 48–49, and both stores at 53–54.
-It exhausts fuel with `LimitExceeded`: 552 nodes, 551 edges, 10 Exits, and 30
-pending nodes. No instruction rejects (`failed` is null); focus is node 521 at
-position 75. The current path model needs 837 expansions to finish. A direct
-Lean snapshot with budget 1024 completes with 882 nodes, 881 edges, and 45 Exits;
-21 Exits carry lookup-region Map updates.
+its dispatcher address is `0x40380000`. The default session budget is 1024.
+With that budget the analysis completes: 882 nodes, 881 edges, and 45 Exits;
+21 Exits carry lookup-region Map updates. Budget 512 still crosses the lookup
+and Map loads/stores, then exhausts fuel with `LimitExceeded` (552 nodes,
+10 Exits, 30 pending) and is retained as a fuel-regression case.
 
 Map word zero remains helper-introduced `regVar`; untouched later words
 materialize on demand through `ExprEffect.inputs` as opaque event-bound content.
@@ -58,14 +56,14 @@ The process listens on `http://127.0.0.1:8788` by default. Set `PORT` to overrid
 ```json
 {
   "arch": "rv32imc",
-  "budget": 512,
+  "budget": 1024,
   "name": "just_tx.elf",
   "image_b64": null
 }
 ```
 
 - `arch` is currently only `rv32imc` (alias `esp32c3` accepted). Default `rv32imc`.
-- `budget` defaults to 512.
+- `budget` defaults to 1024.
 - `name` is a display label; default `just_tx.elf`.
 - `image_b64` contains a base64 Compact XDP ELF. Omitted, null, or an empty
   string uses `tooling/fixtures/just_tx.elf`. Decoded uploads must be nonempty and
