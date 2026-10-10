@@ -133,6 +133,6 @@ Never commit `.codex/` or `.omp/`.
 
 ## Model policy
 
-Use only `gpt-6.1-sol` for Cursor tasks and subagents. Reasoning effort
-`low` | `medium` | `high` only. No `xhigh` / `max` / `ultra` / Fast tier /
-automatic fallback. Change only when the operator revises this policy.
+Follow `~/.cursor/rules/model-access.mdc`. Cursor parent and Task subagents use
+**Auto** only. Do not pin paid Task model slugs. Do not open Codex/MCP write
+handoffs for Lean or `doc/` (omp owns those).
