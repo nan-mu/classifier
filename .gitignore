@@ -1,5 +1,12 @@
-/target
-/out
-/rocq/build
+/.lake/
+/lake-manifest.json
 *.pre_session_restore
-/decisions.tsv
+/tooling/target/
+/tooling/*/target/
+/tooling/web/node_modules/
+/tooling/web/dist/
+/tooling/**/__pycache__/
+/.audit/
+
+# Local Codex / agent handoff prompts (never commit)
+/.codex/

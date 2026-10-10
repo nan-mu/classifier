@@ -1,0 +1,16 @@
+[package]
+name = "lean-binding"
+version = "0.1.0"
+edition = "2021"
+description = "Rust FFI binding to Lean CommonMath / LeanRV32IMC @[export]s"
+publish = false
+
+[lib]
+name = "lean_binding"
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+serde_json = "1"
