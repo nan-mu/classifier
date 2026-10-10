@@ -901,20 +901,25 @@ private def validateMeta (m : Meta) : Except RejectReason Unit :=
 private def entryParamsOf (m : Meta) : EntryParams :=
   { smokeEntryParams with tEntry := Term.C32 m.base.toNat, tReturn := Term.C32 m.returnAddress.toNat }
 
-/-- Entry SemState + root node. Fuel and program image are Rust-owned (`insns` / budget). -/
+/-- Fail create without a fuel field (budget is Rust-owned). -/
+private def createFailJson (reason : RejectReason) : String :=
+  s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"failed\":null,\"work\":[],\"nodes\":[],\"edges\":[]}"
+
+/-- Entry SemState + root. No fuel — Rust binding owns the expansion budget. -/
 @[export lean_rv32_expand_create]
 def exportRv32ExpandCreate (metaJson : String) : String :=
   withMeta metaJson fun m =>
     match validateMeta m with
-    | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
+    | .error reason => createFailJson reason
     | .ok () =>
       match entrySemState (entryParamsOf m) with
-      | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
+      | .error reason => createFailJson reason
       | .ok σ0 =>
-        snapshotJson #[⟨.pos 0, σ0⟩] #[] [0] 0 "running" none
+        let (ej, pj) := renderSemStateJson σ0
+        s!"\{\"status\":\"running\",\"reason\":null,\"failed\":null,\"work\":[0],\"nodes\":[\{\"id\":0,\"loc\":\"0\",\"exprs\":[{ej}],\"predicates\":[{pj}]}],\"edges\":[]}"
 
-private def headFailJson (reason : RejectReason) (fuel : Nat) : String :=
-  s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"fuel\":{fuel},\"successors\":[]}"
+private def headFailJson (reason : RejectReason) : String :=
+  s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"successors\":[]}"
 
 private def successorJson (row : Direction × Location × SemState) : String :=
   let (dir, loc, state) := row
@@ -922,30 +927,29 @@ private def successorJson (row : Direction × Location × SemState) : String :=
   let (exprs, preds) := renderSemStateJson state
   s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
 
-/-- Stateless head step. Predicates (including `helper`) travel only inside SemState JSON. -/
+/-- Stateless head inference: program + Meta + head SemState → successors or reject.
+Fuel / work-queue updates are Rust-only. -/
 @[export lean_rv32_expand_step]
 def exportRv32ExpandStep
-    (insns : Array UInt32) (metaJson : String) (event j fuel : UInt32)
+    (insns : Array UInt32) (metaJson : String) (event j : UInt32)
     (exprsJson predsJson : String) : String :=
-  -- Failures echo input fuel; Rust owns the attempted-head work/fuel bookkeeping.
-  if fuel == 0 then headFailJson .limitExceeded 0 else
-    match parseMetaJson metaJson with
-    | none => headFailJson .invalidEntry fuel.toNat
-    | some m =>
-      match boundProgram insns m with
-      | .error reason => headFailJson reason fuel.toNat
-      | .ok (I, _, context) =>
-        match parseSemStateJson exprsJson predsJson with
-        | none => headFailJson .localReject fuel.toNat
-        | some state =>
-          match inferStep I context event.toNat j.toNat state with
-          | .reject reason => headFailJson reason fuel.toNat
-          | .candidates cs =>
-            match prepareAll state I.size cs with
-            | .error reason => headFailJson reason fuel.toNat
-            | .ok prepared =>
-              let successors := String.intercalate "," (prepared.map successorJson)
-              s!"\{\"status\":\"ok\",\"fuel\":{fuel.toNat - 1},\"reason\":null,\"successors\":[{successors}]}"
+  match parseMetaJson metaJson with
+  | none => headFailJson .invalidEntry
+  | some m =>
+    match boundProgram insns m with
+    | .error reason => headFailJson reason
+    | .ok (I, _, context) =>
+      match parseSemStateJson exprsJson predsJson with
+      | none => headFailJson .localReject
+      | some state =>
+        match inferStep I context event.toNat j.toNat state with
+        | .reject reason => headFailJson reason
+        | .candidates cs =>
+          match prepareAll state I.size cs with
+          | .error reason => headFailJson reason
+          | .ok prepared =>
+            let successors := String.intercalate "," (prepared.map successorJson)
+            s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successors}]}"
 
 @[export lean_rv32_expand_bound_words_snapshot]
 def exportRv32BoundWordsSnapshot
@@ -971,17 +975,15 @@ private def statelessStepCheck : Bool :=
     | .ok ws =>
       let state := ws.nodes[0]!.state
       let (exprs, preds) := renderSemStateJson state
-      let created := exportRv32ExpandCreate metaJson
-      let bound0 := exportRv32BoundWordsSnapshot insns metaJson 0 3
       (match expandOne I.size (inferStep I context 0) ws with
-       | .inr next => exportRv32ExpandStep insns metaJson 0 0 3
+       | .inr next => exportRv32ExpandStep insns metaJson 0 0
            s!"[{exprs}]" s!"[{preds}]" ==
-           s!"\{\"status\":\"ok\",\"fuel\":2,\"reason\":null,\"successors\":[{successorJson (.only, next.nodes[1]!.loc, next.nodes[1]!.state)}]}"
+           s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.only, next.nodes[1]!.loc, next.nodes[1]!.state)}]}"
        | _ => false) &&
-      exportRv32ExpandStep insns metaJson 0 0 0 "[]" "[]" ==
-        headFailJson .limitExceeded 0 &&
-      -- create is Meta-only with fuel 0; bound(0,budget=3) matches except fuel.
-      created.replace "\"fuel\":0" "\"fuel\":3" == bound0
+      exportRv32ExpandStep #[] metaJson 0 0 "[]" "[]" ==
+        headFailJson .invalidEntry &&
+      !(exportRv32ExpandCreate metaJson).contains "\"fuel\":" &&
+      (exportRv32ExpandCreate metaJson).contains "\"status\":\"running\""
   | _, _ => false
 
 #guard statelessStepCheck

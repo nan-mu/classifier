@@ -59,7 +59,6 @@ mod ffi {
             meta_json: LeanObj,
             event: u32,
             j: u32,
-            fuel: u32,
             exprs_json: LeanObj,
             preds_json: LeanObj,
         ) -> LeanObj;
@@ -340,14 +339,12 @@ pub mod rv32 {
         }
     }
 
-    /// Stateless head expansion. Lean returns complete successor states after applyLocal.
-    /// Predicates (Cmp / Ret / Helper / …) appear only inside `preds_json`.
+    /// Stateless head inference. Lean returns successors or reject; no fuel field.
     pub fn expand_step(
         insns: &[u32],
         meta: &Meta,
         event: u32,
         j: u32,
-        fuel: u32,
         exprs_json: &str,
         preds_json: &str,
     ) -> String {
@@ -359,7 +356,7 @@ pub mod rv32 {
             let exprs = lean_string(exprs_json);
             let preds = lean_string(preds_json);
             take_string(ffi::lean_rv32_expand_step(
-                arr, meta, event, j, fuel, exprs, preds,
+                arr, meta, event, j, exprs, preds,
             ))
         }
     }
@@ -376,7 +373,7 @@ pub mod rv32 {
             use serde_json::json;
             let mut snapshot: serde_json::Value =
                 serde_json::from_str(&expand_create(&meta)).expect("Lean create snapshot JSON");
-            // Fuel is Rust-owned; Lean create always emits fuel 0 on success.
+            // Lean create has no fuel; Rust attaches the budget.
             if snapshot["status"] == "running" {
                 snapshot["fuel"] = json!(budget);
             }
@@ -392,11 +389,17 @@ pub mod rv32 {
             if !self.is_running() {
                 return;
             }
-            let fuel = self.snapshot["fuel"].as_u64().expect("snapshot fuel") as u32;
+            let fuel = self.snapshot["fuel"].as_u64().unwrap_or(0) as u32;
             let Some(event) = self.snapshot["work"][0].as_u64() else {
                 self.snapshot["status"] = json!("complete");
                 return;
             };
+            if fuel == 0 {
+                self.snapshot["status"] = json!("fail");
+                self.snapshot["reason"] = json!("LimitExceeded");
+                self.snapshot["failed"] = Value::Null;
+                return;
+            }
             let node = &self.snapshot["nodes"][event as usize];
             let j = node["loc"]
                 .as_str()
@@ -408,25 +411,21 @@ pub mod rv32 {
                 &self.meta,
                 event as u32,
                 j,
-                fuel,
                 &node["exprs"].to_string(),
                 &node["predicates"].to_string(),
             ))
             .expect("Lean step JSON");
-            if fuel > 0 {
-                self.snapshot["work"]
-                    .as_array_mut()
-                    .expect("work queue")
-                    .remove(0);
-                self.snapshot["fuel"] = json!(fuel - 1);
-            }
+            self.snapshot["work"]
+                .as_array_mut()
+                .expect("work queue")
+                .remove(0);
+            self.snapshot["fuel"] = json!(fuel - 1);
             if result["status"] == "fail" {
                 self.snapshot["status"] = json!("fail");
                 self.snapshot["reason"] = result["reason"].clone();
-                self.snapshot["failed"] = if fuel > 0 { json!(event) } else { Value::Null };
+                self.snapshot["failed"] = json!(event);
                 return;
             }
-            self.snapshot["fuel"] = result["fuel"].clone();
             for successor in result["successors"].as_array().expect("successors") {
                 let id = self.snapshot["nodes"].as_array().expect("nodes").len();
                 self.snapshot["nodes"].as_array_mut().unwrap().push(json!({

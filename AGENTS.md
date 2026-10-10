@@ -158,12 +158,13 @@ ELF field. Check container extent and binding collisions before analysis.
 eBPF analysis is not wired through the HTTP session API yet.
 
 Expand graph ownership: Lean exports `lean_rv32_expand_create` /
-`lean_rv32_expand_step` as stateless String FFI. `create` takes only `Meta` JSON and returns the entry SemState root (`fuel` 0);
-Rust owns `insns` (instruction encodings) and sets fuel from its budget.
-`step` takes `insns` + `Meta` plus event/j/fuel and SemState JSON.
+`lean_rv32_expand_step` as stateless String FFI. Core Lean expand FFI is stateless and fuel-free:
+- `create(metaJson)` → root SemState snapshot (no `fuel` field)
+- `step(insns, metaJson, event, j, exprsJson, predsJson)` →
+  `{status, reason, successors}` (applied SemStates) or fail
+Rust `ExpandSession` owns `insns`, work queue, edges, and `fuel`/budget.
 `Meta` carries `base`, `helperAddress` (dispatcher — not a Predicate),
-`returnAddress` default `0x2000`, plus ignored unknown fields. Extend `Meta`
-instead of growing FFI arity. Predicates follow
+`returnAddress` default `0x2000`, plus ignored unknown fields. Predicates follow
 `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` (`doc/predicates.md`); Helper is one
 Predicate variant carrying `(ε, h, args)`. Lean returns applied successor
 states or a rejection. Rust `rv32::Meta` / `ExpandSession` own bindings and the

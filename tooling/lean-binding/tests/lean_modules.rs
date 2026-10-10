@@ -373,8 +373,14 @@ mod stateless_head_ffi {
     use lean_binding::rv32::Meta;
     use serde_json::{json, Value};
 
-    fn step(words: &[u32], j: u32, fuel: u32, exprs: &str, preds: &str) -> Value {
-        serde_json::from_str(&rv32::expand_step(words, &Meta::new(0x400, 0x100), 42, j, fuel, exprs, preds,
+    fn step(words: &[u32], j: u32, exprs: &str, preds: &str) -> Value {
+        serde_json::from_str(&rv32::expand_step(
+            words,
+            &Meta::new(0x400, 0x100),
+            42,
+            j,
+            exprs,
+            preds,
         ))
         .unwrap()
     }
@@ -386,10 +392,10 @@ mod stateless_head_ffi {
             serde_json::from_str(&rv32::expand_create(&Meta::new(0x400, 0x100))).unwrap();
         let node = &root["nodes"][0];
         let preds = json!([{ "kind": "ret", "term": "v32:123" }]);
-        let result = step(&words, 0, 5, &node["exprs"].to_string(), &preds.to_string());
+        let result = step(&words, 0, &node["exprs"].to_string(), &preds.to_string());
         assert_eq!(result["status"], "ok");
-        assert_eq!(result["fuel"], 4);
         assert_eq!(result["reason"], Value::Null);
+        assert!(result.get("fuel").is_none());
         let successors = result["successors"].as_array().unwrap();
         assert_eq!(successors.len(), 2);
         for (successor, dir, rel) in [
@@ -403,13 +409,13 @@ mod stateless_head_ffi {
             assert_eq!(successor["predicates"][1]["rel"], rel);
         }
         assert_eq!(
-            step(&words, 0, 5, &node["exprs"].to_string(), &preds.to_string()),
+            step(&words, 0, &node["exprs"].to_string(), &preds.to_string()),
             result
         );
     }
 
     #[test]
-    fn failures_echo_fuel_and_have_no_successors() {
+    fn failures_have_no_successors_and_no_fuel_field() {
         let words = [0x00700513, 0x00008067];
         for (exprs, preds) in [
             ("{}", "[]"),
@@ -424,23 +430,17 @@ mod stateless_head_ffi {
             ("[]", r#"[{"kind":"unknown"}]"#),
         ] {
             assert_eq!(
-                step(&words, 0, 7, exprs, preds),
+                step(&words, 0, exprs, preds),
                 json!({
-                    "status":"fail", "reason":"LocalReject", "fuel":7, "successors":[],
+                    "status":"fail", "reason":"LocalReject", "successors":[],
                 })
             );
         }
+        assert_eq!(step(&[], 0, "[]", "[]")["reason"], "InvalidEntry");
         assert_eq!(
-            step(&words, 0, 0, "[]", "[]"),
+            step(&[0x000e0513, 0x00008067], 0, "[]", "[]"),
             json!({
-                "status":"fail", "reason":"LimitExceeded", "fuel":0, "successors":[],
-            })
-        );
-        assert_eq!(step(&[], 0, 7, "[]", "[]")["reason"], "InvalidEntry");
-        assert_eq!(
-            step(&[0x000e0513, 0x00008067], 0, 7, "[]", "[]"),
-            json!({
-                "status":"fail", "reason":"UndefinedSrc", "fuel":7, "successors":[],
+                "status":"fail", "reason":"UndefinedSrc", "successors":[],
             })
         );
     }
