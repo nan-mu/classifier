@@ -221,7 +221,7 @@ fn rv32_symbolic_packet_offset_preserves_partial_graph() {
     assert_eq!(snapshot(512), failed);
 }
 
-mod expand_session_ffi {
+mod rust_expand_session {
     use super::rv32;
     use lean_binding::rv32::ExpandSession;
     use serde_json::{Value, json};
@@ -231,7 +231,7 @@ mod expand_session_ffi {
     }
 
     #[test]
-    fn persistent_handles_step_once_snapshot_repeatedly_and_stop_at_terminal() {
+    fn rust_graph_steps_once_snapshots_repeatedly_and_stops_at_terminal() {
         let words = [0x00700513, 0x00150513, 0x00008067];
         let mut complete = ExpandSession::create(&words, 0x400, 0x100, 3);
         let mut limited = ExpandSession::create(&words, 0x400, 0x100, 1);
@@ -358,5 +358,83 @@ mod expand_session_ffi {
             assert_eq!(done["status"], "complete");
             assert_eq!(done["nodes"][3]["loc"], "exit");
         }
+    }
+}
+
+mod stateless_head_ffi {
+    use super::rv32;
+    use serde_json::{json, Value};
+
+    fn step(words: &[u32], j: u32, fuel: u32, exprs: &str, preds: &str) -> Value {
+        serde_json::from_str(&rv32::expand_step(
+            words, 0x400, 0x100, 42, j, fuel, exprs, preds,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn symbolic_branch_returns_applied_states_and_complementary_predicates() {
+        let words = [0x00051263, 0x00700513, 0x00008067];
+        let root: Value =
+            serde_json::from_str(&rv32::expand_create(&words, 0x400, 0x100, 5)).unwrap();
+        let node = &root["nodes"][0];
+        let preds = json!([{ "kind": "ret", "term": "v32:123" }]);
+        let result = step(&words, 0, 5, &node["exprs"].to_string(), &preds.to_string());
+        assert_eq!(result["status"], "ok");
+        assert_eq!(result["fuel"], 4);
+        assert_eq!(result["reason"], Value::Null);
+        let successors = result["successors"].as_array().unwrap();
+        assert_eq!(successors.len(), 2);
+        for (successor, dir, rel) in [
+            (&successors[0], "Taken", "ne"),
+            (&successors[1], "NotTaken", "eq"),
+        ] {
+            assert_eq!(successor["dir"], dir);
+            assert_eq!(successor["loc"], "1");
+            assert_eq!(successor["exprs"], node["exprs"]);
+            assert_eq!(successor["predicates"][0], preds[0]);
+            assert_eq!(successor["predicates"][1]["rel"], rel);
+        }
+        assert_eq!(
+            step(&words, 0, 5, &node["exprs"].to_string(), &preds.to_string()),
+            result
+        );
+    }
+
+    #[test]
+    fn failures_echo_fuel_and_have_no_successors() {
+        let words = [0x00700513, 0x00008067];
+        for (exprs, preds) in [
+            ("{}", "[]"),
+            ("[]", "{}"),
+            ("[", "[]"),
+            (r#"[{"reg":"real32:1","rel":"eq","term":"bad"}]"#, "[]"),
+            (r#"[{"reg":"packet64:1","rel":"eq","term":"0"}]"#, "[]"),
+            (
+                r#"[{"reg":"real32:1","rel":"eq","term":"0"},{"reg":"real32:1","rel":"eq","term":"1"}]"#,
+                "[]",
+            ),
+            ("[]", r#"[{"kind":"unknown"}]"#),
+        ] {
+            assert_eq!(
+                step(&words, 0, 7, exprs, preds),
+                json!({
+                    "status":"fail", "reason":"LocalReject", "fuel":7, "successors":[],
+                })
+            );
+        }
+        assert_eq!(
+            step(&words, 0, 0, "[]", "[]"),
+            json!({
+                "status":"fail", "reason":"LimitExceeded", "fuel":0, "successors":[],
+            })
+        );
+        assert_eq!(step(&[], 0, 7, "[]", "[]")["reason"], "InvalidEntry");
+        assert_eq!(
+            step(&[0x000e0513, 0x00008067], 0, 7, "[]", "[]"),
+            json!({
+                "status":"fail", "reason":"UndefinedSrc", "fuel":7, "successors":[],
+            })
+        );
     }
 }

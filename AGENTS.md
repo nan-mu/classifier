@@ -157,16 +157,17 @@ Raw BIN uploads are rejected. The synthetic wrapper return is `0x2000`, not an
 ELF field. Check container extent and binding collisions before analysis.
 eBPF analysis is not wired through the HTTP session API yet.
 
-Expand session ownership: Lean exports `lean_rv32_expand_create` /
-`lean_rv32_expand_step` / `lean_rv32_expand_snapshot` (plus `is_running`).
-Each step is one `expandOne` via `inferStep`; `WorkState` lives in the Lean
-heap behind an opaque handle. Rust `rv32::ExpandSession` owns that handle,
-drives run-to-completion, and serializes all Lean FFI on a process mutex
-(Lean runtime is not reentrant). The HTTP server keeps per-session locks and
-runs `/step` and `/run` on `spawn_blocking` so distinct sessions can progress
-concurrently. Legacy `expand_bound_words_snapshot(steps, budget)` remains as a
-create-then-replay helper for tests; the server no longer re-expands from step 0
-on every call. Builtin fixture replay C export is
+Expand graph ownership: Lean exports `lean_rv32_expand_create` for an initial
+snapshot String and `lean_rv32_expand_step` for stateless head expansion. Rust
+passes the program bindings, dynamic source event, instruction position, fuel,
+and expression/predicate JSON arrays; Lean returns already applied successor
+states or a rejection. Rust `rv32::ExpandSession` owns all nodes, edges, work,
+fuel, and status. No expand object remains in the Lean heap across FFI calls.
+Rejected head calls echo input fuel; Rust applies diagnostic work/fuel rules.
+All Lean calls serialize on a process mutex. The HTTP server keeps per-session
+locks and runs `/step` and `/run` on `spawn_blocking`.
+Legacy `expand_bound_words_snapshot(steps, budget)` keeps an ephemeral WorkState
+inside one call for regression replay. Builtin fixture replay C export is
 `lean_rv32_expand_builtin_snapshot`.
 
 ## Documentation policy
@@ -194,6 +195,7 @@ The repository root is the Lean workspace. Non-Lean tools live in `tooling/`.
 ```text
 CommonMath.lean                 shared math root reexports
 CommonMath/                     shared math, states, paths, expansion, rendering, FFI
+CommonMath/Parse.lean           JSON term/expr/predicate parsers for head-step FFI
 CommonMath/Virtual.lean         resolved cell fields, Packet bytes, input/write effects
 RV32IMC.lean                    imports Insn + Encode + Expr + Initial + Expand
 RV32IMC/Insn.lean               decoded instructions and field tags
@@ -202,7 +204,7 @@ RV32IMC/Expr.lean               expr / step and FFI smoke exports
 RV32IMC/Initial.lean            EntryParams + E0 (real ∪ xdp_md SW slots)
 RV32IMC/Helper.lean             helper Predicate generation and result/Map Expr projections
 RV32IMC/RegisterFfi.lean        local register-effect probes for binding unit tests
-RV32IMC/Expand.lean             inferStep / ExpandSession create·step·snapshot FFI
+RV32IMC/Expand.lean             inferStep / stateless create·head-step JSON FFI
 RV32IMC/Esp32c3Program.lean     generated instruction words for the ESP32-C3 fixture
 EBPF.lean                      reexports the executable eBPF slice
 EBPF/Insn.lean                 MOV / ADD / EXIT instruction types

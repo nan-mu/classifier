@@ -22,7 +22,7 @@ mod ffi {
 
         // Inlines from lean.h, exported by shim.c
         pub fn lean_binding_string_cstr(o: LeanObj) -> *const c_char;
-        pub fn lean_binding_inc(o: LeanObj);
+        pub fn lean_binding_mk_string(utf8: *const c_char) -> LeanObj;
         pub fn lean_binding_dec(o: LeanObj);
         pub fn lean_binding_mk_uint32_array(data: *const u32, len: usize) -> LeanObj;
 
@@ -60,9 +60,16 @@ mod ffi {
             helper: u32,
             budget: u32,
         ) -> LeanObj;
-        pub fn lean_rv32_expand_step(session: LeanObj) -> LeanObj;
-        pub fn lean_rv32_expand_snapshot(session: LeanObj) -> LeanObj;
-        pub fn lean_rv32_expand_is_running(session: LeanObj) -> u32;
+        pub fn lean_rv32_expand_step(
+            words: LeanObj,
+            base: u32,
+            helper: u32,
+            event: u32,
+            j: u32,
+            fuel: u32,
+            exprs_json: LeanObj,
+            preds_json: LeanObj,
+        ) -> LeanObj;
     }
 
     #[cfg(test)]
@@ -289,65 +296,141 @@ pub mod rv32 {
         s
     }
 
-    /// Persistent Lean expand session. Rust owns the handle and drives true single-step
-    /// `expandOne` calls; graph/`WorkState` live in the Lean heap behind this pointer.
-    /// All methods take the process-wide Lean lock (runtime is not reentrant).
-    pub struct ExpandSession {
-        handle: ffi::LeanObj,
+    /// Initial graph snapshot; the returned String has no retained Lean state.
+    pub fn expand_create(words: &[u32], base: u32, helper: u32, budget: u32) -> String {
+        init();
+        let _g = LEAN_LOCK.lock().expect("lean lock");
+        unsafe {
+            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            take_string(ffi::lean_rv32_expand_create(arr, base, helper, budget))
+        }
     }
 
-    // Safe to move across threads only because every Lean touch goes through `LEAN_LOCK`.
-    unsafe impl Send for ExpandSession {}
+    /// Stateless head expansion. Lean returns complete successor states after applyLocal.
+    pub fn expand_step(
+        words: &[u32],
+        base: u32,
+        helper: u32,
+        event: u32,
+        j: u32,
+        fuel: u32,
+        exprs_json: &str,
+        preds_json: &str,
+    ) -> String {
+        use std::ffi::CString;
+        let exprs = CString::new(exprs_json).expect("expression JSON contains NUL");
+        let preds = CString::new(preds_json).expect("predicate JSON contains NUL");
+        init();
+        let _g = LEAN_LOCK.lock().expect("lean lock");
+        unsafe {
+            let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
+            let exprs = ffi::lean_binding_mk_string(exprs.as_ptr());
+            let preds = ffi::lean_binding_mk_string(preds.as_ptr());
+            take_string(ffi::lean_rv32_expand_step(
+                arr, base, helper, event, j, fuel, exprs, preds,
+            ))
+        }
+    }
+
+    /// Rust owns the graph and work queue. Each Lean call consumes and returns JSON.
+    pub struct ExpandSession {
+        words: Vec<u32>,
+        base: u32,
+        helper: u32,
+        snapshot: serde_json::Value,
+    }
 
     impl ExpandSession {
         pub fn create(words: &[u32], base: u32, helper: u32, budget: u32) -> Self {
-            init();
-            let _g = LEAN_LOCK.lock().expect("lean lock");
-            unsafe {
-                let arr = ffi::lean_binding_mk_uint32_array(words.as_ptr(), words.len());
-                Self {
-                    handle: ffi::lean_rv32_expand_create(arr, base, helper, budget),
-                }
+            Self {
+                words: words.to_vec(),
+                base,
+                helper,
+                snapshot: serde_json::from_str(&expand_create(words, base, helper, budget))
+                    .expect("Lean create snapshot JSON"),
             }
         }
 
         pub fn step(&mut self) {
-            let _g = LEAN_LOCK.lock().expect("lean lock");
-            self.handle = unsafe { ffi::lean_rv32_expand_step(self.handle) };
+            use serde_json::{json, Value};
+            if !self.is_running() {
+                return;
+            }
+            let fuel = self.snapshot["fuel"].as_u64().expect("snapshot fuel") as u32;
+            let Some(event) = self.snapshot["work"][0].as_u64() else {
+                self.snapshot["status"] = json!("complete");
+                return;
+            };
+            let node = &self.snapshot["nodes"][event as usize];
+            let j = node["loc"]
+                .as_str()
+                .expect("head location")
+                .parse()
+                .expect("head position");
+            let result: Value = serde_json::from_str(&expand_step(
+                &self.words,
+                self.base,
+                self.helper,
+                event as u32,
+                j,
+                fuel,
+                &node["exprs"].to_string(),
+                &node["predicates"].to_string(),
+            ))
+            .expect("Lean step JSON");
+            if fuel > 0 {
+                self.snapshot["work"]
+                    .as_array_mut()
+                    .expect("work queue")
+                    .remove(0);
+                self.snapshot["fuel"] = json!(fuel - 1);
+            }
+            if result["status"] == "fail" {
+                self.snapshot["status"] = json!("fail");
+                self.snapshot["reason"] = result["reason"].clone();
+                self.snapshot["failed"] = if fuel > 0 { json!(event) } else { Value::Null };
+                return;
+            }
+            self.snapshot["fuel"] = result["fuel"].clone();
+            for successor in result["successors"].as_array().expect("successors") {
+                let id = self.snapshot["nodes"].as_array().expect("nodes").len();
+                self.snapshot["nodes"].as_array_mut().unwrap().push(json!({
+                    "id": id, "loc": successor["loc"],
+                    "exprs": successor["exprs"], "predicates": successor["predicates"],
+                }));
+                self.snapshot["edges"]
+                    .as_array_mut()
+                    .expect("edges")
+                    .push(json!({
+                        "src": event, "dir": successor["dir"], "dst": id,
+                    }));
+                if successor["loc"] != "exit" {
+                    self.snapshot["work"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(id));
+                }
+            }
+            if self.snapshot["work"].as_array().unwrap().is_empty() {
+                self.snapshot["status"] = json!("complete");
+            }
         }
 
         pub fn is_running(&self) -> bool {
-            let _g = LEAN_LOCK.lock().expect("lean lock");
-            unsafe {
-                ffi::lean_binding_inc(self.handle);
-                ffi::lean_rv32_expand_is_running(self.handle) == 1
-            }
+            self.snapshot["status"] == "running"
         }
 
         pub fn snapshot_json(&self) -> String {
-            let _g = LEAN_LOCK.lock().expect("lean lock");
-            unsafe {
-                ffi::lean_binding_inc(self.handle);
-                take_string(ffi::lean_rv32_expand_snapshot(self.handle))
-            }
+            self.snapshot.to_string()
         }
 
-        /// Step until terminal or `budget + 1` steps (safety cap matching prior server loop).
         pub fn run_to_completion(&mut self, budget: u32) {
-            let cap = budget.saturating_add(1);
-            for _ in 0..cap {
+            for _ in 0..budget.saturating_add(1) {
                 if !self.is_running() {
                     break;
                 }
                 self.step();
             }
-        }
-    }
-
-    impl Drop for ExpandSession {
-        fn drop(&mut self) {
-            let _g = LEAN_LOCK.lock().expect("lean lock");
-            unsafe { ffi::lean_binding_dec(self.handle) };
         }
     }
 

@@ -23,3 +23,7 @@ lean_object * lean_binding_mk_uint32_array(uint32_t const * data, size_t len) {
     }
     return arr;
 }
+
+lean_object * lean_binding_mk_string(char const * utf8) {
+    return lean_mk_string(utf8);
+}

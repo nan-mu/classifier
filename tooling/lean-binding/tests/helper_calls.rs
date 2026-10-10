@@ -51,10 +51,20 @@ fn cj(delta: i32, link: bool) -> u32 {
     bits | if link { 0x2001 } else { 0xa001 }
 }
 fn snapshot(words: &[u32], steps: u32) -> Value {
-    serde_json::from_str(&rv32::expand_bound_words_snapshot(
+    let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
         words, 0x400, 0x100, steps, 100,
     ))
-    .unwrap()
+    .unwrap();
+    let mut session = rv32::ExpandSession::create(words, 0x400, 0x100, 100);
+    for _ in 0..steps {
+        if !session.is_running() {
+            break;
+        }
+        session.step();
+    }
+    let stateless: Value = serde_json::from_str(&session.snapshot_json()).unwrap();
+    assert_eq!(stateless, replay, "stateless helper replay at step {steps}");
+    stateless
 }
 fn term<'a>(node: &'a Value, reg: u32) -> &'a str {
     node["exprs"]

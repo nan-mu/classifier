@@ -47,7 +47,7 @@ private def prepareCandidate (σ : SemState) (c : Candidate) (progLen : Nat) :
           let state ← σ.applyLocal c.exprs c.predicates
           pure (c.dir, .pos k, state)
 
-private def prepareAll (σ : SemState) (progLen : Nat) :
+def prepareAll (σ : SemState) (progLen : Nat) :
     List Candidate → Except RejectReason (List (Direction × Location × SemState))
   | [] => Except.ok []
   | c :: cs =>

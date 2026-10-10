@@ -29,8 +29,8 @@ impl Arch {
     }
 }
 
-/// HTTP session chrome around a persistent Lean `ExpandSession` handle.
-/// Rust owns step/run-to-completion; each `step_once` is one Lean `expandOne`.
+/// HTTP session metadata around the graph owned by Rust `rv32::ExpandSession`.
+/// Rust owns step/run-to-completion; each `step_once` calls Lean stateless head expansion.
 pub struct Session {
     id: String,
     arch: Arch,
