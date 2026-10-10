@@ -58,17 +58,6 @@ private def emitIndirect (loc : Option Location) (Eg Ei : ExprSet) : StepResult 
     | none => .reject .undefinedSrc
   | _ => emit .only loc Ei
 
-private def branchHolds (op : bop) (a b : Nat) : Bool :=
-  let a := MNat 32 a
-  let b := MNat 32 b
-  match op with
-  | .BEQ => a == b
-  | .BNE => a != b
-  | .BLT => s 32 a < s 32 b
-  | .BGE => s 32 a ≥ s 32 b
-  | .BLTU => a < b
-  | .BGEU => a ≥ b
-
 private def branchRel : bop → Rel
   | .BEQ => .eq
   | .BNE => .ne
@@ -77,10 +66,10 @@ private def branchRel : bop → Rel
   | .BLTU => .ltu
   | .BGEU => .geu
 
-private def emitCmp (dir : Direction) (loc : Option Location) (Ei : ExprSet)
-    (p : Predicate) : StepResult :=
+private def emitComparison (dir : Direction) (loc : Option Location) (Ei : ExprSet)
+    (e : Expr) : StepResult :=
   match loc with
-  | some k => .candidates [⟨dir, k, Ei, [p]⟩]
+  | some k => .candidates [⟨dir, k, Ei.insertConstraint e, []⟩]
   | none => .reject .unboundTarget
 
 private def indirectTarget (offsets : Array Nat) (base returnAddr : Option Nat)
@@ -134,17 +123,16 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
               let rel := branchRel op
               let takenLoc := directTarget offsets j (s 13 imm.toNat)
               let fallLoc := nextPosition I j
-              let takenP := Predicate.cmp rel t1 t2
-              let fallP := Predicate.cmp rel.compl t1 t2
-              match eval t1, eval t2 with
-              | some a, some b =>
-                if branchHolds op a b then emitCmp .taken takenLoc Ei takenP
-                else emitCmp .notTaken fallLoc Ei fallP
-              | _, _ =>
+              let takenE := Expr.mkRel (Reg.real32 rs1.toNat) rel t2
+              let fallE := Expr.mkRel (Reg.real32 rs1.toNat) rel.compl t2
+              match takenE.decideWith t1 with
+              | some true => emitComparison .taken takenLoc Ei takenE
+              | some false => emitComparison .notTaken fallLoc Ei fallE
+              | none =>
                 match takenLoc, fallLoc with
                 | some taken, some fall => .candidates [
-                    ⟨.taken, taken, Ei, [takenP]⟩,
-                    ⟨.notTaken, fall, Ei, [fallP]⟩]
+                    ⟨.taken, taken, Ei.insertConstraint takenE, []⟩,
+                    ⟨.notTaken, fall, Ei.insertConstraint fallE, []⟩]
                 | _, _ => .reject .unboundTarget
             | _, _ => .reject .undefinedSrc
           | .JALR (imm, rs1, rd) =>
@@ -177,19 +165,19 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
               let t1 := solve ta
               let t2 := Term.C32 0
               let rel := branchRel op
-              let takenP := Predicate.cmp rel t1 t2
-              let fallP := Predicate.cmp rel.compl t1 t2
+              let reg := Reg.real32 (creg2reg_idx rs1).toNat
+              let takenE := Expr.mkRel reg rel t2
+              let fallE := Expr.mkRel reg rel.compl t2
               let takenLoc := directTarget offsets j (2 * s 8 imm.toNat)
               let fallLoc := nextPosition I j
-              match eval t1 with
-              | some a =>
-                if branchHolds op a 0 then emitCmp .taken takenLoc Ei takenP
-                else emitCmp .notTaken fallLoc Ei fallP
+              match takenE.decideWith t1 with
+              | some true => emitComparison .taken takenLoc Ei takenE
+              | some false => emitComparison .notTaken fallLoc Ei fallE
               | none =>
                 match takenLoc, fallLoc with
                 | some taken, some fall => .candidates [
-                    ⟨.taken, taken, Ei, [takenP]⟩,
-                    ⟨.notTaken, fall, Ei, [fallP]⟩]
+                    ⟨.taken, taken, Ei.insertConstraint takenE, []⟩,
+                    ⟨.notTaken, fall, Ei.insertConstraint fallE, []⟩]
                 | _, _ => .reject .unboundTarget
           | _ => emit .only (nextPosition I j) Ei
 
@@ -471,8 +459,8 @@ private def contextLoadRejectionCheck : Bool :=
   match buildE0 smokeEntryParams with
   | .error _ => false
   | .ok σ =>
-    let incomplete : ExprSet := ⟨σ.exprs.entries.filter
-      (fun e => e.reg != Reg.sw (smokeEntryParams.αCtx + 5))⟩
+    let incomplete : ExprSet := { entries := (σ.exprs.entries.filter
+      (fun e => e.reg != Reg.sw (smokeEntryParams.αCtx + 5))) }
     let bad := [
       Insn.LOAD (2#12, .Regidx 10#5, .Regidx 12#5, false, 4),
       .LOAD (24#12, .Regidx 10#5, .Regidx 12#5, false, 4),
@@ -518,13 +506,15 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
     taken.dir == .taken && taken.loc == .pos 2 &&
       fall.dir == .notTaken && fall.loc == .pos 1 &&
       taken.exprs.entries.isEmpty && fall.exprs.entries.isEmpty &&
-      taken.predicates == [.cmp .ltu lhs rhs] &&
-      fall.predicates == [.cmp .geu lhs rhs] &&
+      taken.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
+      fall.exprs.constraints == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
+      taken.predicates.isEmpty && fall.predicates.isEmpty &&
       match (SemState.mk E []).applyLocal taken.exprs taken.predicates with
       | .ok child =>
-        -- A later register overwrite leaves the captured comparison unchanged.
         match child.applyLocal (ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0)) [] with
-        | .ok overwritten => overwritten.predicates == [.cmp .ltu lhs rhs]
+        | .ok overwritten => overwritten.exprs.constraints.isEmpty &&
+            child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
+            child.exprs.lookupEq (Reg.real32 1) == some lhs
         | _ => false
       | _ => false
   | _ => false
@@ -542,8 +532,12 @@ private def symbolicBtypeRelationsCheck : Bool :=
       decodeInsnWord 0x00100513, decodeInsnWord 0x00008067]
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [taken, fall] => taken.dir == .taken && fall.dir == .notTaken &&
-        taken.predicates == [.cmp rel lhs rhs] &&
-        fall.predicates == [.cmp rel.compl lhs rhs]
+        taken.exprs.constraints == [Expr.mkRel (Reg.real32 1) rel rhs] &&
+        fall.exprs.constraints == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
+        taken.predicates.isEmpty && fall.predicates.isEmpty &&
+        match (SemState.mk E []).applyLocal taken.exprs [] with
+        | .ok child => child.exprs.lookupEq (Reg.real32 1) == some lhs && child.exprs.keysUnique
+        | _ => false
     | _ => false
 
 /-- Concrete evaluation retains just the feasible side and its comparison. -/
@@ -556,7 +550,7 @@ private def concreteBltuFeasibleSideCheck : Bool :=
       |>.insertEq (Reg.real32 2) (Term.C32 b)
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [c] => c.dir == dir && c.loc == loc &&
-        c.predicates == [.cmp rel (Term.C32 a) (Term.C32 b)]
+        c.exprs.constraints == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] && c.predicates.isEmpty
     | _ => false
 
 /-- A symbolic branch cannot bind to the middle of a full-width instruction. -/
@@ -598,12 +592,11 @@ private def esp32c3OpeningCheck : Bool :=
         ws.nodes.size == 8 && ws.edges.size == 7 && ws.work == [6] && ws.fuel == 42 &&
         taken.loc == .pos 47 && fall.loc == .pos 5 && returned.loc == .exit &&
         (programOffsets esp32c3Program)[47]? == some 126 &&
-        taken.state.predicates == [.cmp .ltu
-          (solve (addStar .w32 p.tData p.tLen))
+        taken.state.exprs.constraints == [Expr.mkRel (Reg.real32 11) .ltu
           (solve (addStar .w32 p.tData (Term.C32 14)))] &&
-        fall.state.predicates == [.cmp .geu
-          (solve (addStar .w32 p.tData p.tLen))
+        fall.state.exprs.constraints == [Expr.mkRel (Reg.real32 11) .geu
           (solve (addStar .w32 p.tData (Term.C32 14)))] &&
+        taken.state.predicates.isEmpty && fall.state.predicates.isEmpty &&
         returned.state.predicates == taken.state.predicates ++ [.ret (Term.C32 2)] &&
         match ws.edges[4]?, ws.edges[5]? with
         | some te, some fe => te.src == 4 && fe.src == 4 &&
@@ -665,8 +658,9 @@ private def symbolicBranchesCheck : Bool :=
       a.dir == .taken && b.dir == .notTaken &&
       a.loc == .pos 2 && b.loc == .pos 1 &&
       a.exprs.entries.isEmpty && b.exprs.entries.isEmpty &&
-      a.predicates == [.cmp (branchRel op) ta tb] &&
-      b.predicates == [.cmp (branchRel op).compl ta tb]
+      a.exprs.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op) tb] &&
+      b.exprs.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op).compl tb] &&
+      a.predicates.isEmpty && b.predicates.isEmpty
     | _ => false
 
 private def compressedBranchesCheck : Bool :=
@@ -677,8 +671,9 @@ private def compressedBranchesCheck : Bool :=
     | .candidates [a, b] => a.dir == .taken && b.dir == .notTaken &&
       a.loc == .pos 2 && b.loc == .pos 1 &&
       let rel := if word == 0xc011 then Rel.eq else Rel.ne
-      a.predicates == [.cmp rel (Term.V32 3) (Term.C32 0)] &&
-      b.predicates == [.cmp rel.compl (Term.V32 3) (Term.C32 0)]
+      a.exprs.constraints == [Expr.mkRel (Reg.real32 8) rel (Term.C32 0)] &&
+      b.exprs.constraints == [Expr.mkRel (Reg.real32 8) rel.compl (Term.C32 0)] &&
+      a.predicates.isEmpty && b.predicates.isEmpty
     | _ => false
 
 #guard symbolicBranchesCheck
@@ -740,10 +735,10 @@ private def esp32c3DeepFrontierCheck : Bool :=
 
 private def returnObservationMergeCheck : Bool :=
   let p := Predicate.ret (Term.V32 123)
-  let q := Predicate.cmp .eq (Term.V32 7) (Term.C32 0)
+  let q := Predicate.helper 7 .clock []
   (match mergePredicate [q] [p, p, q] with
     | .ok ps => ps == [q, p]
-    | _ => false) && p.eval?.isNone &&
+    | _ => false) &&
   renderPredicateJson (.ret (Term.C32 2)) == "{\"kind\":\"ret\",\"term\":\"2\"}"
 
 /-- C.JR and full JALR observe a0, but ordinary indirect jumps do not. -/

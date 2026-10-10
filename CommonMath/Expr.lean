@@ -5,7 +5,7 @@ import CommonMath.Term
 
 namespace CommonMath
 
-/-! ## Relations (`doc/common-math.md` §6) -/
+/-! ## Relations (`doc/Expr/关系符定义.md`) -/
 
 inductive Rel where
   | eq | ne
@@ -74,13 +74,20 @@ structure Expr where
   reg  : Reg
   rel  : Rel
   term : Term
-  deriving Repr, Inhabited
+  deriving BEq, Repr, Inhabited
 
 def Expr.key (e : Expr) : Reg × Rel := (e.reg, e.rel)
 
 def Expr.mkEq (r : Reg) (t : Term) : Expr := ⟨r, .eq, t⟩
 
 def Expr.mkRel (r : Reg) (rel : Rel) (t : Term) : Expr := ⟨r, rel, t⟩
+
+/-- Decide using the pre-instruction value of the left register. -/
+def Expr.decideWith (e : Expr) (lhs : Term) : Option Bool := do
+  if lhs.width != e.reg.width || e.term.width != e.reg.width then none else
+    let a ← eval (solve lhs)
+    let b ← eval (solve e.term)
+    pure (interpretRel e.reg.width.bits e.rel a b)
 
 def solveExpr (e : Expr) : Expr := { e with term := solve e.term }
 
@@ -96,19 +103,21 @@ def interpretExpr (ρ : Reg → Nat) (ν : Var → Nat) (e : Expr) : Bool :=
         | none => 0
   interpretRel e.reg.width.bits e.rel (ρ e.reg) (termVal e.term)
 
-/-! ## Key-unique finite Expr sets \(\mathscr F(\mathrm{Expr})\) -/
+/-! ## Value bindings and comparison constraints -/
 
-/-- Finite Expr set. Invariant: keys unique. Prefer `ExprSet.insert` / `ofList?`. -/
+/-- Value bindings are unique per register; constraints are structurally unique. -/
 structure ExprSet where
   entries : List Expr
-  deriving Repr, Inhabited
+  constraints : List Expr := []
+  deriving BEq, Repr, Inhabited
 
-def ExprSet.empty : ExprSet := ⟨[]⟩
+def ExprSet.empty : ExprSet := { entries := [] }
 
-def ExprSet.toList (E : ExprSet) : List Expr := E.entries
+def ExprSet.toList (E : ExprSet) : List Expr := E.entries ++ E.constraints
 
 def ExprSet.wellTyped (E : ExprSet) : Bool :=
-  E.entries.all (fun e => e.reg.valid && e.reg.width == e.term.width)
+  E.entries.all (fun e => e.rel == .eq) &&
+    E.toList.all (fun e => e.reg.valid && e.reg.width == e.term.width)
 
 def ExprSet.keysUnique (E : ExprSet) : Bool :=
   Id.run do
@@ -116,7 +125,7 @@ def ExprSet.keysUnique (E : ExprSet) : Bool :=
     for e in E.entries do
       if seen.elem e.key then return false
       seen := e.key :: seen
-    pure true
+    pure (E.constraints.eraseDups == E.constraints)
 
 def ExprSet.find? (E : ExprSet) (k : Reg × Rel) : Option Expr :=
   E.entries.find? (fun e => e.key == k)
@@ -129,37 +138,51 @@ def ExprSet.lookup (E : ExprSet) (r : Reg) (rel : Rel) : Option Term :=
 def ExprSet.lookupEq (E : ExprSet) (r : Reg) : Option Term :=
   E.lookup r .eq
 
-/-- Insert with override of the same key. -/
-def ExprSet.insert (E : ExprSet) (e : Expr) : ExprSet :=
+/-- Add a comparison without replacing the register's value binding. -/
+def ExprSet.insertConstraint (E : ExprSet) (e : Expr) : ExprSet :=
   let e := solveExpr e
-  ⟨e :: E.entries.filter (fun x => x.key != e.key)⟩
+  { E with constraints := if E.constraints.contains e then E.constraints else E.constraints ++ [e] }
+
+/-- Insert an equality as an assignment; other relations only add constraints. -/
+def ExprSet.insert (E : ExprSet) (e : Expr) : ExprSet :=
+  if e.rel != .eq then E.insertConstraint e else
+    let e := solveExpr e
+    { entries := e :: E.entries.filter (fun x => x.reg != e.reg)
+      constraints := E.constraints.filter (fun x => x.reg != e.reg) }
 
 def ExprSet.insertEq (E : ExprSet) (r : Reg) (t : Term) : ExprSet :=
   E.insert (Expr.mkEq r t)
 
-/-- Build from a list; `none` if duplicate keys. -/
+/-- Equalities become value bindings; other relations become constraints. -/
 def ExprSet.ofList? (es : List Expr) : Option ExprSet :=
-  let E : ExprSet := ⟨es.map solveExpr⟩
-  if E.keysUnique then some E else none
+  let es := es.map solveExpr
+  let E : ExprSet := {
+    entries := es.filter (fun e => e.rel == .eq)
+    constraints := es.filter (fun e => e.rel != .eq) }
+  if E.keysUnique && E.wellTyped then some E else none
 
 def ExprSet.ofList! (es : List Expr) : ExprSet :=
   match ExprSet.ofList? es with
   | some E => E
-  | none => ⟨[]⟩
+  | none => { entries := [] }
 
-/-- Override \(E_g\times E_i\) (`doc/rv32imc-expr-value-functions.md` §2.3). -/
+/-- Override \(E_g\times E_i\) (`doc/Expr/关系集合按键覆写.md`). -/
 def ExprSet.override (Eg Ei : ExprSet) : ExprSet :=
-  let kept := Eg.entries.filter (fun e => !(Ei.entries.any (fun ei => ei.key == e.key)))
-  ⟨kept ++ Ei.entries⟩
+  let untouched (e : Expr) := !(Ei.entries.any (fun ei => ei.reg == e.reg))
+  let base : ExprSet := {
+    entries := Eg.entries.filter untouched ++ Ei.entries
+    constraints := Eg.constraints.filter untouched }
+  Ei.constraints.foldl ExprSet.insertConstraint base
 
 def ExprSet.mapTerms (E : ExprSet) (f : Term → Term) : ExprSet :=
-  ⟨E.entries.map fun e => { e with term := f e.term }⟩
+  { entries := E.entries.map fun e => { e with term := f e.term }
+    constraints := (E.constraints.map fun e => { e with term := f e.term }).eraseDups }
 
 def ExprSet.solveAll (E : ExprSet) : ExprSet :=
   E.mapTerms solve
 
 /-- Filter to a single register's relations. -/
 def ExprSet.forReg (E : ExprSet) (r : Reg) : List Expr :=
-  E.entries.filter (fun e => e.reg == r)
+  E.toList.filter (fun e => e.reg == r)
 
 end CommonMath

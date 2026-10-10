@@ -13,10 +13,11 @@ export type ExprRow = {
   rel: string;
   /** Lean pretty-print; treat as opaque string (64-bit safe). */
   term: string;
+  role?: "constraint";
 };
 
 /**
- * One Predicate observation (doc: Cmp ⊔ Ret ⊔ Helper ⊔ …).
+ * One Predicate observation (doc: Ret ⊔ Helper).
  * `kind` is the disjoint-union tag; other fields are kind-specific and opaque.
  * New Lean Predicate variants must not require TS shape changes.
  */

@@ -118,7 +118,7 @@ mutual
     | _ => none
 end
 
-/-- Rendered constants omit width; the containing register supplies it (RV32 predicates use 32). -/
+/-- Rendered constants omit width; the containing register supplies it (helper arguments use 32). -/
 def parseTerm (text : String) (w : Width := .w32) : Option Term := do
   let (term, []) ← parseTermChars w text.toList | none
   pure term
@@ -140,10 +140,6 @@ private def helperKind (id : Nat) : HelperKind :=
 def parsePredicateJson (value : Lean.Json) : Option Predicate := do
   match ← jsonString value "kind" with
   | "ret" => return .ret (← parseTerm (← jsonString value "term"))
-  | "cmp" =>
-    if (value.getObjVal? "width" >>= Lean.Json.getNat?).toOption != some 32 then none else
-      return .cmp (← parseRel (← jsonString value "rel"))
-        (← parseTerm (← jsonString value "lhs")) (← parseTerm (← jsonString value "rhs"))
   | "helper" =>
     let event ← (value.getObjVal? "event" >>= Lean.Json.getNat?).toOption
     let id ← (value.getObjVal? "helperId" >>= Lean.Json.getNat?).toOption
@@ -155,8 +151,16 @@ def parsePredicateJson (value : Lean.Json) : Option Predicate := do
 def parseSemStateJson (exprsJson predsJson : String) : Option SemState := do
   let exprs ← ((Lean.Json.parse exprsJson) >>= Lean.Json.getArr?).toOption
   let preds ← ((Lean.Json.parse predsJson) >>= Lean.Json.getArr?).toOption
-  let entries ← exprs.toList.mapM parseExprJson
-  let E : ExprSet := ⟨entries⟩
+  let rows ← exprs.toList.mapM fun row => do
+    let expr ← parseExprJson row
+    let role ← match row.getObjVal? "role" with
+      | .error _ => some (expr.rel != .eq)
+      | .ok role => do
+        if (← role.getStr?.toOption) == "constraint" then some true else none
+    pure (expr, role)
+  let E : ExprSet := {
+    entries := (rows.filter fun row => !row.2).map Prod.fst
+    constraints := (rows.filter fun row => row.2).map Prod.fst }
   if !E.keysUnique || !E.wellTyped then none else
     pure ⟨E, ← preds.toList.mapM parsePredicateJson⟩
 
@@ -183,7 +187,7 @@ private def parseRoundTripCheck : Bool :=
     | some e' => e'.reg == e.reg && e'.rel == e.rel && e'.term == e.term
     | none => false) &&
   [Predicate.helper 42 .lookup [Term.C32 1, Term.regVar 4 (Reg.real32 11)],
-    .helper 43 (.unsupported 999) [], .cmp .ltu (Term.V32 2) (Term.C32 8),
+    .helper 43 (.unsupported 999) [],
     .ret (Term.V32 10)].all (fun p =>
       ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p)
 
@@ -199,6 +203,16 @@ private def parseOpsRoundTripCheck : Bool :=
     let term := Term.app .w32 op args
     parseTerm (renderTerm term) == some term
 
+private def constraintRoundTripCheck : Bool :=
+  let E := ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 1)
+    |>.insertConstraint (Expr.mkRel (Reg.real64 1) .eq (Term.C64 10))
+    |>.insertConstraint (Expr.mkRel (Reg.real64 1) (.ltuN 32) (Term.C64 20))
+  match parseSemStateJson ("[" ++ renderExprSetJson E ++ "]") "[]" with
+  | some state => state.exprs == E && state.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1)
+  | none => false
+
+#guard constraintRoundTripCheck
+#guard (parseSemStateJson "[]" "[{\"kind\":\"cmp\",\"width\":32,\"rel\":\"eq\",\"lhs\":\"0\",\"rhs\":\"0\"}]").isNone
 #guard parseRoundTripCheck
 #guard parseOpsRoundTripCheck
 #guard (parseSemStateJson "{}" "[]").isNone

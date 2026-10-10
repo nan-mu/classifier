@@ -109,7 +109,7 @@ function ExprDetail({ e }: { e: ExprRow }) {
   return (
     <Box className="expr-card">
       <Text className="mono sem-line" display="block">
-        {formatRegLabel(reg)} · {e.rel}
+        {formatRegLabel(reg)} · {e.rel}{e.role === "constraint" ? " · 比较约束" : ""}
       </Text>
       <Text className="mono muted" display="block" fontSize={11}>
         raw {e.reg} · view {termToPlain(term)}
@@ -141,30 +141,16 @@ function ExprGroups({ exprs }: { exprs: ExprRow[] }) {
 
 function PredDetail({ p }: { p: PredRow }) {
   const kindClass =
-    p.kind === "cmp"
-      ? " pred-cmp"
-      : p.kind === "ret"
-        ? " pred-ret"
-        : p.kind === "helper"
-          ? " pred-helper"
-          : "";
+    p.kind === "ret"
+      ? " pred-ret"
+      : p.kind === "helper"
+        ? " pred-helper"
+        : "";
   return (
     <Box className={`pred-card${kindClass}`}>
       <Text className={`mono sem-line${kindClass}`} display="block">
         {formatPred(p)}
       </Text>
-      {p.kind === "cmp" ? (
-        <>
-          <Text className="mono muted" display="block" fontSize={11}>
-            lhs
-          </Text>
-          <TermTree view={parseTerm(typeof p.lhs === "string" ? p.lhs : "")} />
-          <Text className="mono muted" display="block" fontSize={11}>
-            rhs
-          </Text>
-          <TermTree view={parseTerm(typeof p.rhs === "string" ? p.rhs : "")} />
-        </>
-      ) : null}
       {p.kind === "ret" ? (
         <TermTree view={parseTerm(typeof p.term === "string" ? p.term : "")} />
       ) : null}

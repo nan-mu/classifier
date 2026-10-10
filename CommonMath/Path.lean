@@ -4,7 +4,7 @@ import CommonMath.Direction
 
 namespace CommonMath
 
-/-! ## Location, node, edge, step (`doc/common-math.md` §12–15) -/
+/-! ## Location, node, edge, step (`doc/NodeInference/节点推理阅读索引.md`) -/
 
 inductive Location where
   | pos (j : Nat)
@@ -59,11 +59,11 @@ inductive StepResult where
   | candidates (cs : List Candidate)
   deriving Repr
 
-/-- \(\operatorname{updateExpr}\) = key-unique override. -/
+/-- \(\operatorname{updateExpr}\) = assignment override with comparison invalidation. -/
 def updateExpr (E Ei : ExprSet) : ExprSet :=
   ExprSet.override E Ei
 
-/-- Accumulate structurally new observations, retaining complements and distinct helper events.
+/-- Accumulate structurally new observations, retaining distinct helper events.
 An empty local effect is identity. -/
 def mergePredicate (P Pi : List Predicate) : Except RejectReason (List Predicate) :=
   match Pi with
@@ -73,6 +73,8 @@ def mergePredicate (P Pi : List Predicate) : Except RejectReason (List Predicate
 
 def SemState.applyLocal (σ : SemState) (Ei : ExprSet) (Pi : List Predicate) :
     Except RejectReason SemState := do
+  if !σ.exprs.keysUnique || !σ.exprs.wellTyped || !Ei.keysUnique || !Ei.wellTyped then
+    throw .localReject
   let predicates ← mergePredicate σ.predicates Pi
   pure ⟨updateExpr σ.exprs Ei, predicates⟩
 

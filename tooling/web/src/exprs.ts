@@ -1,7 +1,8 @@
 import type { ExprRow, GraphEdge, GraphNode } from "./types";
 
 function sameKey(a: ExprRow, b: ExprRow): boolean {
-  return a.reg === b.reg && a.rel === b.rel;
+  return a.reg === b.reg && a.rel === b.rel && a.role === b.role
+    && (a.role !== "constraint" || a.term === b.term);
 }
 
 /** Observable snapshot delta; identical-value writes cannot be recovered. */

@@ -301,7 +301,7 @@ fn bound_ffi_rejects_colliding_or_invalid_metadata() {
 }
 
 #[test]
-fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
+fn branch_constraints_are_overwritten_while_old_snapshots_and_helper_observations_survive() {
     let words = vec![
         addi(8, 1, 0),
         0x00051263,
@@ -313,17 +313,24 @@ fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
     let s = snapshot(&words, 6);
     assert_eq!(s["status"], "running");
     for (before, after, rel) in [(4, 6, "ne"), (5, 7, "eq")] {
-        let before_preds = s["nodes"][before]["predicates"].as_array().unwrap();
-        assert_eq!(before_preds.len(), 1);
-        assert_eq!(before_preds[0]["kind"], "cmp");
-        assert_eq!(before_preds[0]["rel"], rel);
-        let after_preds = s["nodes"][after]["predicates"].as_array().unwrap();
-        assert!(
-            after_preds
+        let branch = if before == 4 { 2 } else { 3 };
+        let historical = s["nodes"][branch]["exprs"].as_array().unwrap();
+        assert!(historical
+            .iter()
+            .any(|e| e["role"] == "constraint" && e["reg"] == "real32:10" && e["rel"] == rel));
+        for id in [before, after] {
+            assert!(s["nodes"][id]["exprs"]
+                .as_array()
+                .unwrap()
                 .iter()
-                .any(|p| p["kind"] == "cmp" && p["rel"] == rel),
-            "cmp/{rel} must survive helper"
-        );
+                .all(|e| e["role"] != "constraint" || e["reg"] != "real32:10"));
+            assert!(s["nodes"][id]["predicates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["kind"] != "cmp"));
+        }
+        let after_preds = s["nodes"][after]["predicates"].as_array().unwrap();
         let helper = after_preds
             .iter()
             .find(|p| p["kind"] == "helper")

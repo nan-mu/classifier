@@ -51,3 +51,19 @@ describe("successor expression deltas", () => {
     });
   });
 });
+
+
+describe("comparison constraints", () => {
+  it("keeps value and equality-constraint rows distinct in deltas", () => {
+    const value = binding("real32:1", "v32:1");
+    const constraint: ExprRow = { reg: "real32:1", rel: "eq", term: "10", role: "constraint" };
+    const parent = node(0, [value]);
+    const child = node(1, [value, constraint], [0]);
+    expect(splitExprs(parent, [parent, child], [{ from: 0, to: 1, dir: "taken" }]).eiOut[0].exprs)
+      .toEqual([constraint]);
+    const overwritten = node(2, [binding("real32:1", "20")], [1]);
+    expect(splitExprs(child, [parent, child, overwritten], [{ from: 1, to: 2, dir: "only" }]).eiOut[0].exprs)
+      .toEqual(overwritten.exprs);
+    expect(child.exprs).toEqual([value, constraint]);
+  });
+});

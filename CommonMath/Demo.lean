@@ -5,55 +5,43 @@ import CommonMath.Render
 
 namespace CommonMath
 
-/-- cmp merge is idempotent; empty Pi is identity even for nonempty P. -/
-def demoCmpMergeIdempotent : Bool :=
-  let p := Predicate.cmp .ltu (Term.V32 1) (Term.V32 2)
-  match mergePredicate [p] [p, p], mergePredicate [p] [] with
-  | .ok merged, .ok unchanged => merged == [p] && unchanged == [p]
+private def comparisonOverwriteCheck : Bool :=
+  let reg := Reg.real32 1
+  let original := ExprSet.empty.insertEq reg (Term.V32 1)
+    |>.insertConstraint (Expr.mkRel reg .eq (Term.C32 10))
+    |>.insertConstraint (Expr.mkRel reg .ltu (Term.C32 20))
+  let updated := ExprSet.override original (ExprSet.empty.insertEq reg (Term.C32 20))
+  original.keysUnique && original.lookupEq reg == some (Term.V32 1) &&
+    original.constraints.length == 2 && updated.constraints.isEmpty &&
+    updated.lookupEq reg == some (Term.C32 20)
+
+private def comparisonAccumulationCheck : Bool :=
+  let reg := Reg.real64 1
+  let E := ExprSet.empty.insertEq reg (Term.V64 1)
+  let a := Expr.mkRel reg .eq (Term.C64 10)
+  let b := Expr.mkRel reg .eq (Term.C64 20)
+  let result := ExprSet.override E (ExprSet.empty.insertConstraint a |>.insertConstraint b)
+  result.lookupEq reg == some (Term.V64 1) && result.constraints == [a, b] &&
+    (result.insertConstraint a).constraints == [a, b] && result.keysUnique &&
+    (ExprSet.override result (ExprSet.empty.insertEq (Reg.real64 2) (Term.C64 0))).constraints == [a, b]
+
+private def observationMergeCheck : Bool :=
+  let p := Predicate.helper 7 .clock []
+  let r := Predicate.ret (Term.V32 1)
+  match mergePredicate [p] [r, r, p], mergePredicate [r] [] with
+  | .ok merged, .ok unchanged => merged == [p, r] && unchanged == [r]
   | _, _ => false
 
-/-- Distinct conditions append once, and complementary conditions are retained. -/
-def demoCmpMergeAppendCheck : Bool :=
-  let p := Predicate.cmp .ltu (Term.V32 1) (Term.V32 2)
-  let q := Predicate.cmp .geu (Term.V32 1) (Term.V32 2)
-  match mergePredicate [p] [q, p, q] with
-  | .ok merged => merged == [p, q]
-  | _ => false
+#guard comparisonOverwriteCheck
+#guard comparisonAccumulationCheck
+#guard observationMergeCheck
+#guard (Expr.mkRel (Reg.real32 1) .ltu (Term.C32 2)).decideWith (Term.V32 1) == none
+#guard (Expr.mkRel (Reg.real32 1) .lts (Term.C32 0)).decideWith (Term.C32 0xffffffff) == some true
+#guard (Expr.mkRel (Reg.real64 1) .lts (Term.C64 0)).decideWith (Term.C64 0xffffffff) == some false
+#guard (Expr.mkRel (Reg.real64 1) (.ltsN 32) (Term.C64 0)).decideWith (Term.C64 0xffffffff) == some true
+#guard (Expr.mkRel (Reg.real64 1) .eq (Term.C64 0)).decideWith (Term.C32 0) == none
 
-#guard demoCmpMergeIdempotent
-#guard demoCmpMergeAppendCheck
-#guard renderPredicateJson (.cmp .ltu (Term.V32 1) (Term.V32 2)) ==
-  "{\"kind\":\"cmp\",\"rel\":\"ltu\",\"width\":32,\"lhs\":\"v32:1\",\"rhs\":\"v32:2\"}"
-
-/-- Return observations append once, preserving existing conditions and order. -/
-def demoRetMergeAppendCheck : Bool :=
-  let p := Predicate.cmp .ltu (Term.V32 1) (Term.V32 2)
-  let r := Predicate.ret (Term.V32 1)
-  let s := Predicate.ret (Term.C32 0)
-  match mergePredicate [p] [r, r, s, p, s], mergePredicate [r] [r, r],
-      mergePredicate [r] [] with
-  | .ok merged, .ok deduped, .ok unchanged =>
-    merged == [p, r, s] && deduped == [r] && unchanged == [r]
-  | _, _, _ => false
-
-#guard demoRetMergeAppendCheck
-#guard renderPredicateJson (.ret (Term.V32 1)) ==
-  "{\"kind\":\"ret\",\"term\":\"v32:1\"}"
-#guard renderPredicateJson (.ret (Term.C32 0)) ==
-  "{\"kind\":\"ret\",\"term\":\"0\"}"
-
-/-- Retained handoff check name: nonempty condition Pi now succeeds. -/
-def demoNonemptyPiMergeCheck : Bool := demoCmpMergeAppendCheck
-
-#guard demoNonemptyPiMergeCheck
-#guard (Predicate.cmp .ltu (Term.V32 1) (Term.C32 2)).eval? == none
-#guard (Predicate.cmp .lts (Term.C32 0xffffffff) (Term.C32 0)).eval? == some true
-#guard (Predicate.cmp .ltu (Term.C32 0xffffffff) (Term.C32 0)).eval? == some false
-#guard (Predicate.cmp .eq (.const .w32 0x100000000) (Term.C32 0)).eval? == some true
-#guard renderPredicateJson (.cmp .geu (Term.V32 1) (Term.V32 2)) ==
-  "{\"kind\":\"cmp\",\"rel\":\"geu\",\"width\":32,\"lhs\":\"v32:1\",\"rhs\":\"v32:2\"}"
-
-/-! ## §18 bounded loop demo (`doc/common-math.md` §18) -/
+/-! ## Bounded loop demo (`doc/NodeInference/有界循环的节点展开例证.md`) -/
 
 private def demoReg : Reg := Reg.real32 1
 
@@ -75,15 +63,17 @@ def demoStep (j : Nat) (σ : SemState) : StepResult :=
     match j with
     | 0 =>
       if r ≥ 3 then
-        .candidates [⟨.taken, .pos 3, ExprSet.empty, []⟩]
+        .candidates [⟨.taken, .pos 3,
+          ExprSet.empty.insertConstraint (Expr.mkRel demoReg .geu (Term.C32 3)), []⟩]
       else
-        .candidates [⟨.notTaken, .pos 1, ExprSet.empty, []⟩]
+        .candidates [⟨.notTaken, .pos 1,
+          ExprSet.empty.insertConstraint (Expr.mkRel demoReg .ltu (Term.C32 3)), []⟩]
     | 1 =>
       .candidates [⟨.only, .pos 2, setR (r + 1), []⟩]
     | 2 =>
       .candidates [⟨.only, .pos 0, ExprSet.empty, []⟩]
     | 3 =>
-      .candidates [⟨.only, .exit, ExprSet.empty, []⟩]
+      .candidates [⟨.only, .exit, ExprSet.empty, [.ret (Term.C32 r)]⟩]
     | _ => .reject .unboundTarget
 
 def demoσ0 : SemState := ⟨setR 0, []⟩
@@ -124,7 +114,7 @@ private def dirTag : Direction → String
   | .notTaken => "NotTaken"
 
 /-- JSON snapshot after `steps` expandOne calls (or earlier terminal).
-Node payload is SemState σ=(E,P) per `doc/common-math.md` §12. -/
+Node payload is SemState σ=(E,P) per `doc/NodeInference/语义状态与节点快照.md`. -/
 def demoSnapshot (steps budget : Nat) : String :=
   let pack (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
       (fuel : Nat) (status : String) (reason : Option RejectReason) (log : String) : String :=

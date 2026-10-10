@@ -2,7 +2,7 @@ import CommonMath.Bits
 
 namespace CommonMath
 
-/-! Named numeric functions from `doc/common-math.md` §7. Architecture-neutral. -/
+/-! Named numeric functions from `doc/Expr/位向量与共同数值函数.md`. Architecture-neutral. -/
 
 def ADD (w : Width) (a b : Nat) : Nat := MNat w.bits (a + b)
 def SUB (w : Width) (a b : Nat) : Nat :=

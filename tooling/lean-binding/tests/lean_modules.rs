@@ -48,13 +48,22 @@ fn path_demo_snapshot_complete_and_limit() {
     assert_eq!(nodes.len(), 12);
     assert_eq!(nodes[11]["loc"], "exit");
     let exprs = nodes[11]["exprs"].as_array().expect("exprs");
-    assert_eq!(exprs.len(), 1);
+    assert_eq!(exprs.len(), 2);
     assert_eq!(exprs[0]["reg"], "real32:1");
     assert_eq!(exprs[0]["rel"], "eq");
     assert_eq!(exprs[0]["term"], "3");
-    // Predicate class merge is undefined until Phase 3; Demo keeps empty Pi.
+    assert_eq!(exprs[1]["role"], "constraint");
+    assert_eq!(exprs[1]["rel"], "geu");
+    assert_eq!(exprs[1]["term"], "3");
+    assert_eq!(nodes[1]["exprs"][1]["rel"], "ltu");
+    assert_eq!(nodes[1]["exprs"][0]["term"], "0");
+    assert_eq!(nodes[2]["exprs"].as_array().unwrap().len(), 1);
+    assert_eq!(nodes[2]["exprs"][0]["term"], "1");
     let preds = nodes[11]["predicates"].as_array().expect("predicates");
-    assert!(preds.is_empty());
+    assert_eq!(
+        *preds,
+        vec![serde_json::json!({"kind": "ret", "term": "3"})]
+    );
 
     // After 10 successful expandOnes with B=10, fuel is 0 and work remains (running).
     // The next expandOne observes LimitExceeded.
@@ -241,7 +250,7 @@ mod stateless_head_ffi {
     }
 
     #[test]
-    fn symbolic_branch_returns_applied_states_and_complementary_predicates() {
+    fn symbolic_branch_returns_states_with_complementary_expr_constraints() {
         let words = [0x00051263, 0x00700513, 0x00008067];
         let root: Value =
             serde_json::from_str(&rv32::expand_create(&Meta::new(0x400, 0x100))).unwrap();
@@ -259,9 +268,31 @@ mod stateless_head_ffi {
         ] {
             assert_eq!(successor["dir"], dir);
             assert_eq!(successor["loc"], "1");
-            assert_eq!(successor["exprs"], node["exprs"]);
-            assert_eq!(successor["predicates"][0], preds[0]);
-            assert_eq!(successor["predicates"][1]["rel"], rel);
+            let exprs = successor["exprs"].as_array().unwrap();
+            let constraint = exprs.iter().find(|e| e["role"] == "constraint").unwrap();
+            assert_eq!(constraint["reg"], "real32:10");
+            assert_eq!(constraint["rel"], rel);
+            assert_eq!(constraint["term"], "0");
+            assert_eq!(
+                exprs.iter().filter(|e| e["role"] != "constraint").count(),
+                node["exprs"].as_array().unwrap().len()
+            );
+            assert_eq!(successor["predicates"], preds);
+            let saved = successor.clone();
+            let assigned = step(
+                &words,
+                1,
+                &successor["exprs"].to_string(),
+                &preds.to_string(),
+            );
+            let after = &assigned["successors"][0];
+            assert!(after["exprs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["role"] != "constraint" || e["reg"] != "real32:10"));
+            assert_eq!(after["predicates"], preds);
+            assert_eq!(*successor, saved);
         }
         assert_eq!(
             step(&words, 0, &node["exprs"].to_string(), &preds.to_string()),

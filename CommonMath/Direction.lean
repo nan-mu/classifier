@@ -1,6 +1,6 @@
 namespace CommonMath
 
-/-! ## Successor direction (`doc/common-math.md` §13.3) -/
+/-! ## Successor direction (`doc/NodeInference/展开图与执行路径.md`) -/
 
 inductive Direction where
   | only

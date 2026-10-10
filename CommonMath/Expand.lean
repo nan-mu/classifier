@@ -2,7 +2,7 @@ import CommonMath.Path
 
 namespace CommonMath
 
-/-! ## Budgeted node expansion (`doc/common-math.md` §16) -/
+/-! ## Budgeted node expansion (`doc/NodeInference/节点推理阅读索引.md`) -/
 
 structure WorkState where
   nodes : Array Node
@@ -69,7 +69,7 @@ private def appendPrepared (eta : NodeId) (nodes : Array Node) (edges : Array Ed
     let work := if loc.isExit then work else work ++ [zeta]
     appendPrepared eta nodes edges work rs
 
-/-- One loop iteration of §16.2. `progLen` bounds non-Exit targets. -/
+/-- One node expansion (`doc/NodeInference/节点推理阅读索引.md`). `progLen` bounds non-Exit targets. -/
 def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
     Sum ExpandOutcome WorkState :=
   match ws.work with
@@ -99,7 +99,7 @@ def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : Wor
                 fuel  := ws.fuel - 1
               }
 
-/-- Recurse on remaining fuel (`doc/common-math.md` §16.4). -/
+/-- Recurse on remaining fuel (`doc/NodeInference/有限预算展开的终止证明.md`). -/
 partial def expand (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
     ExpandOutcome :=
   match expandOne progLen step ws with

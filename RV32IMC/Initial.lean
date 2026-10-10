@@ -3,7 +3,7 @@ import CommonMath.Path
 namespace RV32IMC
 open CommonMath
 
-/-! RV32 wrapper entry and six XDP context slots (§§1–4 of `doc/rv32-initial-expr.zh.md`). -/
+/-! RV32 wrapper entry and six XDP context slots (§§1–4 of `doc/RV32初态描述.md`). -/
 
 -- Stable names for the default symbolic calling-environment inputs.
 namespace EntryVar
@@ -96,7 +96,7 @@ def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if p.αCtx + 5 ≥ (1 <<< 32) then throw .invalidEntry
   let Ereal ← buildRealE0 p
   let Ectx := buildECtx0 p
-  let E0 : ExprSet := ⟨Ereal.entries ++ Ectx.entries⟩
+  let E0 : ExprSet := { entries := Ereal.entries ++ Ectx.entries }
   if !E0.keysUnique then throw .invalidEntry
   pure ⟨E0, []⟩
 

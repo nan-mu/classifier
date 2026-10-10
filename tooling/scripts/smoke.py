@@ -135,9 +135,9 @@ def snapshots(base):
         p.get("kind") == "ret" for n in fw_done["nodes"] for p in n["predicates"]
     ), "Exit must observe a ret Predicate"
     assert any(
-        p.get("kind") == "cmp" and p.get("rel") == "ltu"
-        for n in fw_done["nodes"] for p in n["predicates"]
-    ), "branch cmp Predicates must appear"
+        e.get("role") == "constraint" and e.get("rel") == "ltu"
+        for n in fw_done["nodes"] for e in n["exprs"]
+    ), "branch comparison Exprs must appear"
     assert {"taken", "not_taken"} <= {e["dir"] for e in fw_done["edges"]}
     invalid = [
         default_elf[:-1],

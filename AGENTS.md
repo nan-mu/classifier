@@ -10,8 +10,12 @@ interpreter or a verified cross-ISA equivalence checker.
 `CommonMath` owns architecture-independent registers, numeric operations,
 terms, expression sets, predicates, semantic states, paths, budgeted expansion,
 history structures, rendering, and shared FFI exports. Read
-`doc/common-math.md`, `doc/registers.md`, and the relevant source before changing
-shared math. Executable `RegKind` contains real, stack, map, and packet.
+`doc/Expr/位向量与共同数值函数.md`,
+`doc/寄存器定义.md`, and the relevant source before
+changing shared math. Expr and Predicate rules are indexed in `doc/Expr/表达式阅读索引.md`
+and `doc/Predicate/谓词阅读索引.md`; node inference is indexed in
+`doc/NodeInference/节点推理阅读索引.md`. Executable `RegKind` contains real, stack, map,
+and packet.
 Packet identities pair a resource namespace with a canonical byte offset; each
 byte uses a 32-bit term. `CommonMath/Virtual.lean` owns resolved Stack/Map field
 accesses and 32/64-bit Packet assembly/splitting. Address classification remains
@@ -35,16 +39,19 @@ snapshots; it must not become a second implementation of instruction semantics.
   `updates` contains instruction writes. RV32 `expr` returns writes, while `step`
   transports both in a delta. Previously written bytes and words must never
   revert to their input content.
-- Expression keys are `(Reg, Rel)`. Apply a local update by replacing the
-  matching global keys, preserving other bindings. Validate key uniqueness;
-  the list-backed representation does not enforce it by construction.
+- ExprSet separates complete value bindings (`entries`, one equality per Reg)
+  from comparison Exprs (`constraints`, structurally unique). Assignment clears
+  all old bindings and constraints for its Reg. Comparison only adds a constraint;
+  source lookup reads value bindings. Validate both roles before applying updates.
 - A node at a program position contains the state before its instruction.
   An Exit node contains the resulting state and return observation.
 - Every candidate arrival creates a fresh node. Expansion does not merge
   states at a shared program position or compute a fixed point.
 - Concrete RV32 branches choose the feasible side. Symbolic branches retain
-  both sides with complementary predicates. Predicate merging removes
-  structural duplicates; it does not solve path feasibility or contradictions.
+  both sides with complementary comparison Exprs in fresh successor snapshots.
+  Later assignments clear current constraints without changing historical nodes.
+  Predicate merging retains only return/helper observations and removes structural
+  duplicates; no path feasibility or contradiction solver is provided.
 - Prepare all successors before appending any nodes or edges. A rejected step
   preserves the graph and reports failure. An unknown target or missing source
   must not silently become Exit, completion, or an empty successful update.
@@ -62,7 +69,7 @@ snapshots; it must not become a second implementation of instruction semantics.
 ### CommonMath
 
 The shared core provides 32/64-bit numeric terms, expression overwrite,
-comparison and return predicates, candidate transitions, and finite-budget
+comparison Exprs, return/helper predicates, candidate transitions, and finite-budget
 path expansion. History data structures exist, but a full history-analysis
 pipeline is not exposed by the current API.
 
@@ -147,8 +154,8 @@ forms with immediate or register sources, plus outer EXIT. Entry state binds
 only `r1` to the context input and `r10` to the stack input. ALU32 results are
 zero-extended, `r10` is read-only, and EXIT observes defined `r0`.
 
-Loads/stores, branches, LDDW, calls, atomics, and the broader functions described
-in `doc/ebpf-expr-value-functions.md` are not implemented in this slice. There
+Loads/stores, branches, LDDW, calls, atomics, and the broader value rules indexed
+in `doc/Expr/表达式阅读索引.md` are not implemented in this slice. There
 is no established RV32/eBPF input correspondence or equivalence theorem.
 The Rust API and web viewer expose RV32IMC expand over an uploaded Compact XDP
 ELF (default `tooling/fixtures/just_tx.elf`). Rust parses it through the sibling
@@ -182,9 +189,14 @@ in work-queue order. UI `/step` still expands a single head. Separate HTTP
 sessions can also overlap on the same Lean pool.
 `Meta` carries `base`, `helperAddress` (dispatcher — not a Predicate),
 `returnAddress` default `0x2000`, plus ignored unknown fields. Predicates follow
-`Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` (`doc/predicates.md`); Helper is one
-Predicate variant carrying `(ε, h, args)`. Lean returns applied successor
-states or a rejection. Snapshot Predicate rows keep `kind` plus flattened
+`Predicate = Ret ⊔ Helper` (`doc/Predicate/谓词定义.md`); Helper carries
+`(ε, h, args)`. Comparison is an Expr constraint, never a Predicate.
+`Expr.decideWith` evaluates 32/64-bit comparisons, including low-width relations,
+against the pre-instruction left value; it remains partial for symbolic terms.
+This shared rule does not add executable eBPF branch instructions. Expr snapshot
+rows mark constraints with `role: "constraint"`; equality constraints can coexist
+with complete value bindings. Legacy `kind: "cmp"` Predicate input is rejected. Lean returns
+applied successor states or a rejection. Snapshot Predicate rows keep `kind` plus flattened
 fields. No expand object remains in the Lean heap across FFI calls. Legacy
 `expand_bound_words_snapshot` keeps an ephemeral WorkState inside one call.
 Builtin fixture replay is `lean_rv32_expand_builtin_snapshot`.

@@ -3,7 +3,8 @@ import CommonMath.Numeric
 
 namespace CommonMath
 
-/-- Form operators whose signatures lie in \(W\) (`doc/common-math.md` §4, §7). -/
+/-- Form operators whose signatures lie in \(W\) (`doc/Expr/右值.md`,
+`doc/Expr/位向量与共同数值函数.md`). -/
 inductive Op where
   | add (w : Width)
   | sub (w : Width)

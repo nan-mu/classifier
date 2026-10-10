@@ -56,7 +56,8 @@ export function processedIds(snap: SessionSnapshot): Set<number> {
 }
 
 export function sameExprKey(a: ExprRow, b: ExprRow): boolean {
-  return a.reg === b.reg && a.rel === b.rel;
+  return a.reg === b.reg && a.rel === b.rel && a.role === b.role
+    && (a.role !== "constraint" || a.term === b.term);
 }
 
 export type ExprDiff = {
@@ -114,9 +115,6 @@ function predArgs(p: PredRow): string[] {
 }
 
 function predKey(p: PredRow): string {
-  if (p.kind === "cmp") {
-    return `cmp:${predStr(p, "rel")}:${predStr(p, "width")}:${predStr(p, "lhs")}:${predStr(p, "rhs")}`;
-  }
   if (p.kind === "ret") return `ret:${predStr(p, "term")}`;
   if (p.kind === "helper") {
     return `helper:${predStr(p, "event")}:${predStr(p, "helperId")}:${predArgs(p).join(",")}`;
@@ -137,10 +135,6 @@ export function diffPredicates(a: PredRow[], b: PredRow[]): {
 }
 
 export function formatPred(p: PredRow): string {
-  if (p.kind === "cmp") {
-    const w = predNum(p, "width") != null ? `${predNum(p, "width")}` : "?";
-    return `cmp/${w} [${predStr(p, "rel") || "?"}] ${predStr(p, "lhs") || "?"} ⋈ ${predStr(p, "rhs") || "?"}`;
-  }
   if (p.kind === "ret") return `ret ${predStr(p, "term") || "?"}`;
   if (p.kind === "helper") {
     const name = helperName(predNum(p, "helperId"));

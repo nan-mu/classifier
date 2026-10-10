@@ -4,7 +4,8 @@ import CommonMath.Direction
 
 namespace CommonMath
 
-/-! ## Raw instruction and history (`doc/common-math.md` §2) -/
+/-! ## Raw instruction and history (`doc/NodeInference/指令序列与程序位置.md`,
+`doc/NodeInference/正常返回历史投影.md`) -/
 
 /-- \(\mathrm{Insn}=\bigsqcup_w(\{w\}\times\mathbb B_w)\). -/
 structure Insn where
@@ -26,20 +27,11 @@ def HelperKind.id : HelperKind → Nat
   | .printk => 6 | .checksum => 28 | .adjustTail => 65
   | .unsupported id => id
 
-/-- Comparisons fix their source terms; returns and helper calls are value/event observations. -/
+/-- Return and helper-call observations; branch conditions are Expr constraints. -/
 inductive Predicate where
-  | cmp (rel : Rel) (lhs : Term) (rhs : Term)
   | ret (value : Term)
   | helper (event : NodeId) (kind : HelperKind) (args : List Term)
   deriving BEq, Repr, Inhabited
-
-/-- RV32 condition interpretation. Unknown source values remain unknown. -/
-def Predicate.eval? : Predicate → Option Bool
-  | .ret _ | .helper _ _ _ => none
-  | .cmp rel lhs rhs => do
-    let a ← eval (solve lhs)
-    let b ← eval (solve rhs)
-    pure (interpretRel 32 rel a b)
 
 /-- \(\mathrm{Inst}_{\mathrm{next}}=\mathrm{Direction}\times\mathrm{NodeId}\) (§13.3). -/
 structure InstNext where

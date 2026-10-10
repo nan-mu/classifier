@@ -260,12 +260,13 @@ fn parse_exprs(n: &Value) -> Vec<ExprOut> {
             reg: e["reg"].as_str().unwrap_or("?").to_string(),
             rel: e["rel"].as_str().unwrap_or("?").to_string(),
             term: e["term"].as_str().unwrap_or("?").to_string(),
+            role: e["role"].as_str().map(str::to_owned),
         })
         .collect()
 }
 
 /// Pass through Lean Predicate JSON (`kind` + kind-specific fields).
-/// `Predicate = Cmp ⊔ Ret ⊔ Helper ⊔ …` — new variants must not require Rust field changes.
+/// `Predicate = Ret ⊔ Helper` — new variants must not require Rust field changes.
 fn parse_predicates(n: &Value) -> Vec<PredOut> {
     n["predicates"]
         .as_array()
@@ -370,10 +371,12 @@ pub struct ExprOut {
     pub reg: String,
     pub rel: String,
     pub term: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// One Predicate observation. `kind` is the disjoint-union tag; remaining fields
-/// stay opaque so Cmp / Ret / Helper / future variants share one wire type.
+/// stay opaque so Ret / Helper / future variants share one wire type.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct PredOut {
     pub kind: String,
@@ -604,52 +607,43 @@ mod tests {
         assert!(taken
             .iter()
             .any(|t| not_taken.iter().any(|n| n.src == t.src)));
-        let ltu = snap
+        let constraints: Vec<_> = snap
+            .nodes
+            .iter()
+            .flat_map(|n| &n.exprs)
+            .filter(|e| e.role.as_deref() == Some("constraint"))
+            .collect();
+        let ltu = constraints
+            .iter()
+            .find(|e| e.rel == "ltu")
+            .expect("ltu Expr on Taken path");
+        let geu = constraints
+            .iter()
+            .find(|e| e.rel == "geu")
+            .expect("geu Expr on NotTaken path");
+        assert_eq!(ltu.reg, geu.reg);
+        assert_eq!(ltu.term, geu.term);
+        assert!(snap
             .nodes
             .iter()
             .flat_map(|n| &n.predicates)
-            .find(|p| p.kind == "cmp" && p.get_str("rel") == Some("ltu"));
-        let geu = snap
-            .nodes
-            .iter()
-            .flat_map(|n| &n.predicates)
-            .find(|p| p.kind == "cmp" && p.get_str("rel") == Some("geu"));
-        let ltu = ltu.expect("ltu cmp Predicate on Taken path");
-        let geu = geu.expect("geu cmp Predicate on NotTaken path");
-        assert_eq!(ltu.get_u64("width"), Some(32));
-        assert_eq!(geu.get_u64("width"), Some(32));
-        assert!(ltu.get_str("lhs").is_some_and(|s| !s.is_empty()));
-        assert!(ltu.get_str("rhs").is_some_and(|s| !s.is_empty()));
-        assert_eq!(ltu.get_str("lhs"), geu.get_str("lhs"));
-        assert_eq!(ltu.get_str("rhs"), geu.get_str("rhs"));
+            .all(|p| p.kind != "cmp"));
     }
 
     #[test]
-    fn parse_cmp_predicate_json() {
+    fn parse_comparison_expr_json() {
         let lean = serde_json::json!({
-            "nodes": [{
-                "loc": "4",
-                "exprs": [],
-                "predicates": [{
-                    "kind": "cmp",
-                    "rel": "ltu",
-                    "width": 32,
-                    "lhs": "v32:4",
-                    "rhs": "add32(v32:4,v32:5)"
-                }]
-            }],
-            "edges": []
+            "nodes": [{ "loc": "4", "exprs": [
+                { "reg": "real32:4", "rel": "eq", "term": "v32:4" },
+                { "reg": "real32:4", "rel": "eq", "term": "10", "role": "constraint" }
+            ], "predicates": [] }], "edges": []
         });
         let (nodes, _) = graph_from_lean(&lean);
-        assert_eq!(nodes[0].predicates.len(), 1);
-        let p = &nodes[0].predicates[0];
-        assert_eq!(p.kind, "cmp");
-        assert_eq!(p.get_str("rel"), Some("ltu"));
-        assert_eq!(p.get_u64("width"), Some(32));
-        assert_eq!(p.get_str("lhs"), Some("v32:4"));
-        assert_eq!(p.get_str("rhs"), Some("add32(v32:4,v32:5)"));
-        assert!(!p.fields.contains_key("tag"));
-        assert!(!p.fields.contains_key("term"));
+        assert_eq!(nodes[0].exprs.len(), 2);
+        assert_eq!(nodes[0].exprs[0].role, None);
+        assert_eq!(nodes[0].exprs[1].role.as_deref(), Some("constraint"));
+        assert_eq!(nodes[0].exprs[1].term, "10");
+        assert!(nodes[0].predicates.is_empty());
     }
 
     #[test]
@@ -810,9 +804,9 @@ mod tests {
                     .any(|p| p.kind == "ret" && p.get_str("term").is_some())
         }));
         assert!(snap.nodes.iter().any(|n| {
-            n.predicates
+            n.exprs
                 .iter()
-                .any(|p| p.kind == "cmp" && p.get_str("rel") == Some("ltu"))
+                .any(|e| e.role.as_deref() == Some("constraint") && e.rel == "ltu")
         }));
     }
 }

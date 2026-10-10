@@ -8,7 +8,7 @@ import CommonMath.Path
 
 namespace CommonMath
 
-/-! ## Compact string renderers for SemState JSON (`doc/common-math.md` §12) -/
+/-! ## Compact string renderers for SemState JSON (`doc/NodeInference/语义状态与节点快照.md`) -/
 
 def renderWidth : Width → String
   | .w32 => "32"
@@ -74,12 +74,9 @@ def renderPredicateJson : Predicate → String
     s!"\{\"kind\":\"helper\",\"event\":{event},\"helperId\":{kind.id},\"args\":[{args}]}"
   | .ret value =>
     s!"\{\"kind\":\"ret\",\"term\":\"{renderTerm value}\"}"
-  | .cmp rel lhs rhs =>
-    -- rel is the complete effective relation; no redundant atom/polarity fields.
-    s!"\{\"kind\":\"cmp\",\"rel\":\"{renderRel rel}\",\"width\":32,\"lhs\":\"{renderTerm lhs}\",\"rhs\":\"{renderTerm rhs}\"}"
-
 def renderExprSetJson (E : ExprSet) : String :=
-  String.intercalate "," (E.entries.map renderExprJson)
+  String.intercalate "," (E.entries.map renderExprJson ++ E.constraints.map fun e =>
+    s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}")
 
 def renderPredicatesJson (ps : List Predicate) : String :=
   String.intercalate "," (ps.map renderPredicateJson)

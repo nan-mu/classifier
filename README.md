@@ -6,10 +6,11 @@
 
 完整阅读路线见 [文档索引](doc/README.md)。
 
-- [共同数学定义](doc/common-math.md)：共享对象、语义状态、路径和展开算法。
-- [RV32IMC 值函数](doc/rv32imc-expr-value-functions.md)与 [RV32 初态](doc/rv32-initial-expr.zh.md)：指令规则和入口约定。
-- [eBPF 值函数](doc/ebpf-expr-value-functions.md)：eBPF 规则及待定边界。
-- [代数程序分析](doc/algebraic-program-analysis.zh.md)：路径表达式与语义解释的研究说明。
+- [寄存器定义](doc/寄存器定义.md)、[Expr](doc/Expr/表达式阅读索引.md)与 [Predicate](doc/Predicate/谓词阅读索引.md)：对象定义、关系生成和观察规则。
+- [位向量与数值函数](doc/Expr/位向量与共同数值函数.md)：共同数值基础。
+- [节点推理](doc/NodeInference/节点推理阅读索引.md)：推理入口、各判断步骤、展开模型与证明。
+- [RV32 初态描述](doc/RV32初态描述.md)：入口条件与初始关系。共同指令规则按问题放在 Expr、Predicate 和 NodeInference 中。
+- [代数程序分析](doc/NodeInference/路径语言与位置消去.md)：路径表达式与语义解释的研究说明。
 
 ## 启动调试界面
 

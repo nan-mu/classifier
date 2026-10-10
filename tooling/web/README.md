@@ -26,8 +26,8 @@ Open `http://127.0.0.1:5173`.
 Click a node to focus it. Click the focused work-head node again, or press **单步调试**, to expand that node. **到底调试** runs until the session is complete or failed.
 
 The node panel groups expressions by `RegKind` (Real / Stack / Map / Packet),
-shows arrival and expansion deltas (`eiIn` / `eiOut`), and expands cmp / ret /
-helper Predicates with term trees. Packet alphas decode to `(κ, offset)`. Graph
+shows arrival and expansion deltas (`eiIn` / `eiOut`), labels comparison Expr
+constraints, and expands ret / helper Predicates with term trees. Packet alphas decode to `(κ, offset)`. Graph
 nodes mark helper (`H`), packet (`Pk`), and return (`R`) presence.
 
 ```bash

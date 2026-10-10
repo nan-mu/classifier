@@ -77,7 +77,7 @@ describe("helper predicates", () => {
 
   it("diffs helper predicates by event / id / args", () => {
     const a: PredRow[] = [
-      { kind: "cmp", rel: "ne", width: 32, lhs: "v32:1", rhs: "0" },
+      { kind: "ret", term: "v32:1" },
     ];
     const b: PredRow[] = [
       ...a,
