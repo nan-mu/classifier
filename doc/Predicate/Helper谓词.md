@@ -52,9 +52,9 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 \right\}.
 \]
 
-其中 \(b_j\) 为第 \(j\) 个 32 位有限符号项，\(\nu,\theta\) 遍历 [Expr 项解释](../Expr/待处理.md#右值)允许的赋值与解释补全，\(\mathbb B_8\subset\mathbb B_{32}\) 是[字节值域](../寄存器定义.md)。每项承载一个 8 位字节，高 24 位为零。数组的位置从 1 开始；\(n=0\) 时数组为空。数组按位置逐项结构相等，重复项保留。
+其中 \(b_j\) 为第 \(j\) 个 32 位有限符号项，\(\nu,\theta\) 遍历 [Expr 项解释](../Expr/Term/Term.md#term)允许的赋值与解释补全，\(\mathbb B_8\subset\mathbb B_{32}\) 是[位向量值集](../Expr/Term/位向量.md#位向量)的包含关系。每项承载一个 8 位字节，高 24 位为零。数组的位置从 1 开始；\(n=0\) 时数组为空。数组按位置逐项结构相等，重复项保留。
 
-字节项沿用[包字节的 32 位项表示](../Expr/待处理.md#读取拼接与写入拆分)。从较宽单元取得字节时，使用[字段投影与零扩展](../Expr/待处理.md#单元字段读写)的 \(q=8,v=32\) 实例；从已有包字节项取得字节时，使用[零扩展](../Expr/待处理.md#截取与扩展)的 \(Z_{8\to32}^{(32),\star}\) 固定字节语义。这些运算保留调用时的符号值表达式，不要求折叠为常元。
+字节项沿用[包字节的 32 位项表示](../Expr/寄存器/包字节.md#读取拼接与写入拆分)。从较宽单元取得字节时，使用[字段投影与零扩展](../Expr/寄存器/单元字段读写.md#单元字段读写)的 \(q=8,v=32\) 实例；从已有包字节项取得字节时，使用[零扩展](../Expr/Term/数值函数.md#截取与扩展)的 \(Z_{8\to32}^{(32),\star}\) 固定字节语义。这些运算保留调用时的符号值表达式，不要求折叠为常元。
 
 在固定 \((\nu,\theta)\) 下，字节数组的解释为：
 
@@ -68,7 +68,7 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 ### 解释参数
 
-\(\nu\) 为[项解释](../Expr/待处理.md#右值)中的赋值族，将各位宽变元映到相应的 \(\mathbb B_w\)，其中 \(w\in\{32,64\}\)；\(\theta\) 为未解释运算的解释补全，按运算符签名提供值函数。\(\left[\!\left[\cdot\right]\!\right]_{\nu,\theta}\) 为固定该赋值与补全后的解释。
+\(\nu\) 为[项解释](../Expr/Term/Term.md#term)中的赋值族，将各位宽变元映到相应的 \(\mathbb B_w\)，其中 \(w\in\{32,64\}\)；\(\theta\) 为未解释运算的解释补全，按运算符签名提供值函数。\(\left[\!\left[\cdot\right]\!\right]_{\nu,\theta}\) 为固定该赋值与补全后的解释。
 
 ## 触发逻辑
 
@@ -82,7 +82,7 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 这些条件成立时，按分派编号选择 Helper 的四个构造。
 
-已绑定 helper 的局部观察规则见[生成指令局部效果](../NodeInference/step.md)。外部调用分类见[控制转移与返回识别](../NodeInference/Jump/待处理.md)。
+已绑定 helper 的局部观察规则见[生成指令结果](../NodeInference/step.md#生成指令结果)。
 
 ### eBPF
 
@@ -90,7 +90,7 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 ## 生成条件
 
-\(E_g\) 为执行前的有效 [Expr 关系](../Expr/待处理.md#表达式分量)，其完整值绑定分量为 \(\mathcal V_g\)。\(P_g\) 为执行前的[观察集合](谓词定义.md#类型与结构相等)。\(\Gamma\) 为本次处理显式给定的[资源绑定](../Expr/待处理.md#分类所需的输入)；三个 Map 构造还从中取得唯一绑定对象的已知 Map 布局。
+\(E_g\) 为执行前的有效 [Expr 关系](../Expr/Expr.md#表达式分量)，其完整值绑定分量为 \(\mathcal V_g\)。\(P_g\) 为执行前的[观察集合](谓词定义.md#类型与结构相等)。三个 Map 构造要求调用参数的 Map 项唯一指向调用时已知布局的对象。
 
 分派编号要求 \(\mathcal V_g\) 中存在唯一的完整等式 \(a_0=u_0\)，且其右侧项经求值确定类型 \(h\in H\)：
 
@@ -117,69 +117,97 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 Helper谓词构造对 \(P_g\) 无成员前提。
 
-满足共同前提及所选 Map 构造的生成条件时，生成 Helper 谓词：
+分派编号属于上述七个已命名类型，且满足共同前提及所选 Map 构造的生成条件时，生成 Helper 谓词：
 
 \[
-\operatorname{makeHelperPredicate}(\varepsilon,E_g,\Gamma):=
+\operatorname{makeHelperPredicate}(\varepsilon,E_g):=
 \begin{cases}
 \operatorname{mapLookup}(\varepsilon,t_1,
-\operatorname{readBytes}(\Gamma,E_g,t_2,L_k(\Gamma,t_1))),
+\operatorname{readBytes}(E_g,t_2,L_k(t_1))),
 &h=\mathrm{MAP\_LOOKUP},\\
 \operatorname{mapUpdate}(\varepsilon,t_1,
-\operatorname{readBytes}(\Gamma,E_g,t_2,L_k(\Gamma,t_1)),
-\operatorname{readBytes}(\Gamma,E_g,t_3,L_v(\Gamma,t_1)),t_4),
+\operatorname{readBytes}(E_g,t_2,L_k(t_1)),
+\operatorname{readBytes}(E_g,t_3,L_v(t_1)),t_4),
 &h=\mathrm{MAP\_UPDATE},\\
 \operatorname{mapDelete}(\varepsilon,t_1,
-\operatorname{readBytes}(\Gamma,E_g,t_2,L_k(\Gamma,t_1))),
+\operatorname{readBytes}(E_g,t_2,L_k(t_1))),
 &h=\mathrm{MAP\_DELETE},\\
 \operatorname{helper}(\varepsilon,h,\vec t),&h\in H_{\mathrm{other}}.
 \end{cases}
 \]
 
-其中 \(\operatorname{makeHelperPredicate}\) 是以调用身份、执行前 Expr 关系和资源绑定为输入、取值于 \(\mathrm{Helper}\) 的部分构造；\(h,t_j,\vec t\) 由同一 \(E_g\) 按上述编号与参数等式取得。三个 \(\mathrm{MAP\_*}\) 标签分别为编号 1、2、3 的已命名类型；\(H_{\mathrm{other}}\) 见[OtherHelper 类型定义](OtherHelper谓词.md#类型定义)。\(L_k(\Gamma,t_m)\)、\(L_v(\Gamma,t_m)\) 分别为 \(\Gamma\) 对 Map 参数项 \(t_m\) 唯一绑定对象给出的键、值字节长度；绑定或所需布局不确定时，相应长度无定义。\(\operatorname{readBytes}\) 的定义见[调用时的字节读取](#调用时的字节读取)。
+其中 \(\operatorname{makeHelperPredicate}\) 是以调用身份、执行前 Expr 关系为输入、取值于 \(\mathrm{Helper}\) 的部分构造；\(h,t_j,\vec t\) 由同一 \(E_g\) 按上述编号与参数等式取得。三个 \(\mathrm{MAP\_*}\) 标签分别为编号 1、2、3 的已命名类型；\(H_{\mathrm{other}}\) 见[OtherHelper 类型定义](OtherHelper谓词.md#类型定义)。\(L_k(t_m)\)、\(L_v(t_m)\) 分别为 Map 参数项 \(t_m\) 唯一指向对象的键、值字节长度；调用时该对象及所需布局已知是相应长度有定义的前提。\(\operatorname{readBytes}\) 的定义见[调用时的字节读取](#调用时的字节读取)。
 
-成功生成 \(p=\operatorname{makeHelperPredicate}(\varepsilon,E_g,\Gamma)\) 后，本步骤的局部观察集合为：
+成功生成 \(p=\operatorname{makeHelperPredicate}(\varepsilon,E_g)\) 后，本步骤的局部观察集合为：
 
 \[
-\mathcal P_i:=\{p\}.
+P_i:=\{p\}.
 \]
 
-其中 \(p\in\mathrm{Helper}\) 为本次调用的观察，\(\mathcal P_i\) 为局部谓词增量。
+其中 \(p\in\mathrm{Helper}\) 为本次调用的观察，\(P_i\) 为本步骤的谓词分量。
+
+### 生成的 Expr
+
+成功生成调用谓词 \(p\) 后，创建真实返回寄存器的完整等式：
+
+\[
+r_{\mathrm{ret}}=t_{32}.
+\]
+
+其中 \(t_{32}\in\mathrm{Term}_{32}\) 是由本次调用的身份与参数确定的返回项，\(r_{\mathrm{ret}}\) 为该调用约定的真实返回寄存器。
+
+若 \(p\in\mathrm{MapLookup}\)，还创建虚拟 Map 的完整等式：
+
+\[
+\mathrm{Map}_{32}(\alpha)=R_{32}^{\varepsilon}(r_{\mathrm{ret}}).
+\]
+
+其中 \(\mathrm{Map}_{32}(\alpha)\) 使用[寄存器定义](../寄存器定义.md)的 Map 单元标记，标识 \(\alpha\) 由本次调用确定；\(\varepsilon\) 为同一次调用的身份，\(R_{32}^{\varepsilon}(r_{\mathrm{ret}})\) 为[调用返回时刻的真实寄存器变元](../Expr/Term/Term.md#叶子与运算符)。
+其他类型只创建真实返回等式；这些完整等式按[关系集合按键覆写](../Expr/Expr.md#关系集合按键覆写)写入 Expr 分量。
 
 ### 调用时的字节读取
 
-给定资源绑定 \(\Gamma\)、同一调用前关系 \(E_g\)、缓冲区地址项 \(t_b\in\mathrm{Term}_{32}\) 及所需字节数 \(n\in\mathbb N\)，定义部分读取：
+给定同一调用前关系 \(E_g\)、缓冲区地址项 \(t_b\in\mathrm{Term}_{32}\) 及所需字节数 \(n\in\mathbb N\)，定义部分读取：
 
 \[
-\operatorname{readBytes}(\Gamma,E_g,t_b,n)
+\operatorname{readBytes}(E_g,t_b,n)
 :=(b_1,\ldots,b_n)\in\mathrm{BytesTerm}(n).
 \]
 
-其中 \(b_j\) 是从 \(t_b\) 所绑定缓冲区的第 \(j\) 个字节取得的有限符号值项，按内存地址递增排列；\(\Gamma\) 决定资源身份、规范单元、字节偏移和字节序，\(E_g\) 提供这些单元的完整旧值项。每个 \(b_j\) 依[字节项数组](#字节项数组)中的已有字节投影取得。
+其中 \(b_j\) 是从地址项 \(t_b\) 指向的缓冲区取得的第 \(j\) 个有限符号字节值项，按内存地址递增排列；对象与起始字节偏移由该地址项确定，所需范围由字节数 \(n\) 确定，规范单元、字段位置及字节序按该对象的布局与访问规则确定，\(E_g\) 提供这些单元的完整旧值项。每个 \(b_j\) 依[字节项数组](#字节项数组)中的已有字节投影取得。
 
 读取的定义域要求：
 
-- \(\Gamma\) 将全部所需字节唯一归约到已有的资源单元及字段。
+- 调用时地址项 \(t_b\) 指向唯一缓冲区对象，且其布局与访问规则确定所需 \(n\) 个字节的资源单元及字段。
 - 读取满足所属资源的访问条件。
 - \(E_g\) 为每个所需单元提供唯一、位宽匹配的完整等式。
 - 全部字节投影有定义。
 
-保存的是调用时取得的有限符号项，而非供以后再次解引用的缓冲区地址。键和值均使用这个读取；生成时读取完整数组。后续覆写缓冲区不修改已保存的项。读取的资源归约、源项或投影不足时，\(\operatorname{readBytes}\) 无定义。
+保存的是调用时取得的有限符号项，而非供以后再次解引用的缓冲区地址。键和值均使用这个读取；生成时读取完整数组。后续覆写缓冲区不修改已保存的项。读取的对象或字段不能确定、源项或投影不足时，\(\operatorname{readBytes}\) 无定义。
 
 ### 错误类型
 
-已选定 helper 分派的步骤在下列任一情形下构造无定义，不生成谓词或局部观察集合，必须[拒绝本次处理](../NodeInference/step.md)并保留当前图：
+已选定 helper 分派的步骤在下列任一情形下构造无定义，不生成谓词或局部观察集合，必须[拒绝本次处理](../NodeInference/step.md#无定义时的处理)：
 
-- 必需的调用绑定缺失或不唯一。
+- 必需的调用参数或分派信息缺失或不唯一。
 - \(E_g\) 无效。
 - \(a_0\) 或任一所需 \(a_j\) 的完整等式缺失、不唯一，或位宽不符。
 - \(D_{32}(\operatorname{solve}(u_0))\) 无定义。
-
-确定的未支持编号不属于上述失败情形，其类型为 \(\operatorname{unsupported}(k)\)，属于 [OtherHelper](OtherHelper谓词.md#类型定义)。
+- 类型编号为未支持编号时，没有相应规则，拒绝本次 step。
 
 ## 数学性质
 
 OtherHelper 生成的唯一性与参数齐备见[命题 H1](OtherHelper谓词.md#数学性质)。
+
+引理 M5 与命题 H2 的对象为调用产生的真实返回等式与 lookup 的虚拟 Map 等式。
+
+**引理 M5（lookup 关联的结构有效性）。** lookup 产生两个互异键的 32 位完整等式，其中一个写真实返回标记，另一个建立虚拟 Map 关联；之后覆写 \(a_0\) 不改变已经构造的真实寄存器变元身份。
+
+**证明。** Real 与 Map 类别不交，因此两个键不同。返回项与真实寄存器变元均为 32 位，与左侧位宽匹配。变元身份固定了调用事件与寄存器标记，后续覆写不修改已有项。\(\square\)
+
+**命题 H2（返回更新的有限性与位宽）。** 对生成成功的 \(p\)，调用生成的 Expr 集合含真实返回键，lookup 另含一个虚拟 Map 键；集合有限、位宽匹配且键唯一，覆写不改变其余 Expr 键。
+
+**证明。** 结果项与真实寄存器变元均为 32 位。lookup 的两个左侧分别属于 Real 与 Map，键互异；其他类型只有返回键。覆写结论由[按键覆写](../Expr/Expr.md#关系集合按键覆写)的定义得到。结论限于所选值更新的结构性质。\(\square\)
 
 **命题 H3（动态调用区分）。** 同一种 Helper 构造的两个元素若调用身份 \(\varepsilon\ne\varepsilon'\)，则两谓词不同，在集合合并后均保留。
 
@@ -187,16 +215,14 @@ OtherHelper 生成的唯一性与参数齐备见[命题 H1](OtherHelper谓词.md
 
 **命题 H4（保存的字节项保持）。** 已生成的 Map 谓词在后续缓冲区覆写后，其字节数组及在同一 \((\nu,\theta)\) 下的解释保持不变。
 
-**证明。** \(\operatorname{readBytes}\) 的结果保存有限项。后续[按键覆写](../Expr/待处理.md#关系集合按键覆写)只改变当前 Expr 绑定，不修改既有项。数组各分量的结构不变，其逐项解释在固定赋值和补全下不变。\(\square\)
+**证明。** \(\operatorname{readBytes}\) 的结果保存有限项。后续[按键覆写](../Expr/Expr.md#关系集合按键覆写)只改变当前 Expr 绑定，不修改既有项。数组各分量的结构不变，其逐项解释在固定赋值和补全下不变。\(\square\)
 
-**证明义务 H-B（字节读取与布局可靠性）。** 须证明给定 \(\Gamma\) 的 Map 对象绑定和布局与实际调用对象一致。须证明 \(\operatorname{readBytes}\) 的源项、字节顺序及访问条件准确描述实际调用时的全部缓冲区字节。跨规范单元和别名访问的一致性由[资源归约义务](../Expr/待处理.md#来源与结构性质)承担。缺少具体归约时，读取保持无定义，不补造字节项。
-
-**证明义务 H-C（跨架构调用对应）。** 须给出动态调用身份、Map 对象参数及符号赋值的跨架构对应，并证明对应调用的冻结字节解释及其他参数值相符。结构相等和本篇的局部生成性质不提供该对应。
+**证明义务 H-B（字节读取与布局可靠性）。** 须证明 Map 参数项指向的对象和调用时已知布局与实际调用对象一致。须证明 \(\operatorname{readBytes}\) 的源项、字节顺序及访问条件准确描述实际调用时的全部缓冲区字节。跨规范单元和别名访问的一致性见[访问对象与单元一致性的义务](../Expr/Expr.md#来源与结构性质)。对象或字段不能确定时，读取保持无定义，不补造字节项。
 
 ## 相关文档
 
-- [helper 的 Expr](../Expr/待处理.md#辅助调用结果)
-- [检查源项与资源绑定](../NodeInference/step.md)
+- [生成的 Expr](#生成的-expr)
+- [检查源项与访问对象](../NodeInference/step.md#检查源项与访问对象)
 - [指令参数与规则定义域](../NodeInference/step.md#局部规则的合法域)
-- [符号项求值与常量折叠](../Expr/待处理.md#符号项求值与常量折叠)
-- [右值与项解释](../Expr/待处理.md#右值)
+- [solve 的化简与求值](../Expr/Term/solve.md#solve-的化简与求值)
+- [Term与项解释](../Expr/Term/Term.md#term)

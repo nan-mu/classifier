@@ -39,7 +39,7 @@ OtherHelper 解释为事件记录：
 
 ## 生成条件
 
-[共同参数取源](Helper谓词.md#生成条件)成功且 \(h\in H_{\mathrm{other}}\) 时，生成 \(\operatorname{helper}(\varepsilon,h,\vec t)\)。OtherHelper 不读取 \(\Gamma\)。局部观察集合按[共享生成器](Helper谓词.md#生成条件)生成。
+[共同参数取源](Helper谓词.md#生成条件)成功且 \(h\in H_{\mathrm{other}}\) 时，生成 \(\operatorname{helper}(\varepsilon,h,\vec t)\)。局部观察集合按[共享生成器](Helper谓词.md#生成条件)生成。
 
 ### 错误类型
 
@@ -47,17 +47,17 @@ OtherHelper 解释为事件记录：
 
 ## 数学性质
 
-**命题 H1（OtherHelper 生成的唯一性与参数齐备）。** 在有效 \(E_g\)、既定调用绑定及固定 \(\varepsilon\) 下，若分派类型属于 \(H_{\mathrm{other}}\)，则成功生成的 OtherHelper 谓词唯一，并具有恰好 \(n(h)\) 个 32 位参数项。
+**命题 H1（OtherHelper 生成的唯一性与参数齐备）。** 在有效 \(E_g\)、既定调用参数及固定 \(\varepsilon\) 下，若分派类型属于 \(H_{\mathrm{other}}\)，则成功生成的 OtherHelper 谓词唯一，并具有恰好 \(n(h)\) 个 32 位参数项。
 
 **证明。** 已命名编号互异，未支持类型由其确定编号给出，因此 \(h\) 唯一。完整等式的键唯一使每个参数项唯一，solve 是确定的；构造逐一取得所需的 \(n(h)\) 个项。\(\square\)
 
-动态调用区分见[命题 H3](Helper谓词.md#数学性质)，跨架构调用对应仍为[义务 H-C](Helper谓词.md#数学性质)。
+动态调用区分见[命题 H3](Helper谓词.md#数学性质)。
 
 ## 相关文档
 
-- [helper 的 Expr](../Expr/待处理.md#辅助调用结果)
-- [检查源项与资源绑定](../NodeInference/step.md)
+- [Helper 生成的 Expr](Helper谓词.md#生成的-expr)
+- [检查源项与访问对象](../NodeInference/step.md#检查源项与访问对象)
 - [指令参数与规则定义域](../NodeInference/step.md#局部规则的合法域)
-- [符号项求值与常量折叠](../Expr/待处理.md#符号项求值与常量折叠)
-- [右值与项解释](../Expr/待处理.md#右值)
+- [solve 的化简与求值](../Expr/Term/solve.md#solve-的化简与求值)
+- [Term与项解释](../Expr/Term/Term.md#term)
 - [Helper 共同约定与生成器](Helper谓词.md)：分派参数、调用身份及共享生成条件。
