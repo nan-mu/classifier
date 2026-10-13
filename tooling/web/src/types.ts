@@ -176,6 +176,66 @@ export type CompareReject = {
 
 export type CompareOutcome = CompareReport | CompareReject;
 
+/** Wire shape for `POST /api/compare/predicates` (id/loc/predicates only). */
+export type PredRunNode = {
+  id: number;
+  loc: string;
+  predicates: PredRow[];
+};
+
+export type PredRun = {
+  arch: string;
+  nodes: PredRunNode[];
+};
+
+export type SoftScore = {
+  kind: number;
+  fields: number;
+  terms: number;
+  overall: number;
+};
+
+export type PredAtom = {
+  node_id: number;
+  loc: string;
+  index: number;
+  kind: string;
+  fields: Record<string, unknown>;
+  fingerprint: string;
+};
+
+export type PredPair =
+  | { status: "matched"; loc: string; score: SoftScore; left: PredAtom; right: PredAtom }
+  | { status: "onlyLeft"; loc: string; left: PredAtom }
+  | { status: "onlyRight"; loc: string; right: PredAtom };
+
+export type PredLocBucket = {
+  loc: string;
+  leftCount: number;
+  rightCount: number;
+  pairs: PredPair[];
+};
+
+export type PredRunSummary = {
+  arch: string;
+  nodeCount: number;
+  predCount: number;
+};
+
+/** Host fuzzy Predicate align; `claim` stays heuristic until Lean Term equality. */
+export type PredMatchReport = {
+  status: "matched";
+  claim: "heuristic";
+  behavioralEquivalence: "notEstablished";
+  note: string;
+  left: PredRunSummary;
+  right: PredRunSummary;
+  matched: number;
+  only_left: number;
+  only_right: number;
+  locations: PredLocBucket[];
+};
+
 const COMPARE_DIR = {
   only: "OK",
   taken: "Taken",
@@ -200,4 +260,17 @@ export function toCompareRun(snap: SessionSnapshot): CompareRun {
     })),
     edges,
   };
+}
+
+/** Strip a snapshot to PredRun for heuristic Predicate match. */
+export function toPredRun(snap: SessionSnapshot): PredRun {
+  return {
+    arch: snap.arch,
+    nodes: snap.nodes.map(({ id, loc, predicates }) => ({ id, loc, predicates })),
+  };
+}
+
+/** Flatten a PredAtom into a PredRow for formatPred / chips. */
+export function atomToPred(atom: PredAtom): PredRow {
+  return { kind: atom.kind, ...atom.fields };
 }

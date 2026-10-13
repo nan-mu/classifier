@@ -2,6 +2,8 @@ import type {
   ArchKind,
   CompareOutcome,
   CompareRun,
+  PredMatchReport,
+  PredRun,
   SessionSnapshot,
 } from "./types";
 
@@ -72,6 +74,24 @@ export async function compareRuns(
     return body as CompareOutcome;
   }
   throw new Error("unexpected compare status");
+}
+
+/** Host fuzzy Predicate align (`claim: heuristic`). Not Lean Term equality. */
+export async function comparePredicates(
+  left: PredRun,
+  right: PredRun,
+): Promise<PredMatchReport> {
+  const res = await fetch("/api/compare/predicates", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ left, right }),
+  });
+  if (!res.ok) throw new Error(`/api/compare/predicates failed with ${res.status}`);
+  const body = (await res.json()) as Partial<PredMatchReport>;
+  if (body.status === "matched" && body.claim === "heuristic") {
+    return body as PredMatchReport;
+  }
+  throw new Error("unexpected predicate-compare status");
 }
 
 export type RunStreamEvent = {

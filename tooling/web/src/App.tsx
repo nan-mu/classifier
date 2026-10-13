@@ -20,13 +20,12 @@ import {
 } from "react";
 import "@xyflow/react/dist/style.css";
 import {
-  compareRuns,
+  comparePredicates,
   createSession,
   runSessionStream,
   stepSession,
   type RunStreamStats,
 } from "./api";
-import { CompareReportView } from "./CompareReport";
 import { insnIndexForNode, splitExprs } from "./exprs";
 import { formatExprMath, formatPredChip } from "./formatExpr";
 import { foldSameTypeChains, resolveFoldedId } from "./collapse";
@@ -36,16 +35,16 @@ import {
   insnTextForNode,
   NODE_ROLE_LEGEND,
 } from "./nodeRole";
+import { PredicateCompareView } from "./PredicateCompare";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
 import type {
   ArchKind,
-  CompareReject,
-  CompareReport,
-  ExprRow,
+  PredMatchReport,
   PredRow,
+  ExprRow,
   SessionSnapshot,
 } from "./types";
-import { toCompareRun } from "./types";
+import { toPredRun } from "./types";
 import { useForceLayout } from "./useForceLayout";
 import {
   branchSource,
@@ -60,37 +59,44 @@ import {
   type ViewerSelection,
 } from "./viewer";
 
+type TabId = ArchKind | "compare";
+
+type Snaps = {
+  rv32imc: SessionSnapshot | null;
+  ebpf: SessionSnapshot | null;
+};
+
 type RunSlot = {
-  arch: "rv32imc" | "ebpf";
+  arch: ArchKind;
   label: string;
   snap: SessionSnapshot | null;
   stats: RunStreamStats | null;
 };
 
-type ComparePhase =
-  | { tag: "single" }
+type CompareUi =
+  | { tag: "idle" }
   | { tag: "expanding"; left: RunSlot; right: RunSlot }
-  | {
-      tag: "reported";
-      left: SessionSnapshot;
-      right: SessionSnapshot;
-      report: CompareReport;
-      loc: string | null;
-    }
-  | {
-      tag: "rejected";
-      left: SessionSnapshot;
-      right: SessionSnapshot;
-      reject: CompareReject;
-    };
+  | { tag: "ready"; report: PredMatchReport };
 
-function emptySlot(arch: "rv32imc" | "ebpf"): RunSlot {
+function emptySlot(arch: ArchKind): RunSlot {
   return {
     arch,
     label: arch === "rv32imc" ? "just_tx.elf" : "just_tx.bpf.o",
     snap: null,
     stats: null,
   };
+}
+
+function defaultName(arch: ArchKind): string {
+  return arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf";
+}
+
+function snapFresh(snap: SessionSnapshot | null, budget: number): snap is SessionSnapshot {
+  return (
+    snap != null
+    && snap.budget === budget
+    && (snap.status === "complete" || snap.status === "fail")
+  );
 }
 
 const nodeTypes = { state: StateNodeView };
@@ -218,7 +224,8 @@ export function App() {
 }
 
 function DebugScreen() {
-  const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+  const [tab, setTab] = useState<TabId>("rv32imc");
+  const [snaps, setSnaps] = useState<Snaps>({ rv32imc: null, ebpf: null });
   const [sel, setSel] = useState<ViewerSelection>({
     focus: 0,
     compare: null,
@@ -227,14 +234,13 @@ function DebugScreen() {
     panel: "eg",
   });
   const [budget, setBudget] = useState(1024);
-  const [arch, setArch] = useState<ArchKind>("rv32imc");
   const [firmwareName, setFirmwareName] = useState("just_tx.elf");
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runRate, setRunRate] = useState<string | null>(null);
-  const [phase, setPhase] = useState<ComparePhase>({ tag: "single" });
+  const [compareUi, setCompareUi] = useState<CompareUi>({ tag: "idle" });
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -243,16 +249,26 @@ function DebugScreen() {
   const pendingSnapRef = useRef<SessionSnapshot | null>(null);
   const rafRef = useRef<number | null>(null);
   const fitOnceRef = useRef(true);
+  const tabRef = useRef<TabId>(tab);
+  const snapsRef = useRef(snaps);
   const flow = useReactFlow();
-  const comparing = phase.tag !== "single";
+
+  tabRef.current = tab;
+  snapsRef.current = snaps;
+
+  const archTab: ArchKind | null = tab === "compare" ? null : tab;
+  const snap = archTab ? snaps[archTab] : null;
+  const comparing = tab === "compare";
 
   const flushPendingSnap = useCallback(() => {
     rafRef.current = null;
     const next = pendingSnapRef.current;
     if (!next) return;
     pendingSnapRef.current = null;
-    setSnap(next);
-    setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+    setSnaps((prev) => ({ ...prev, [next.arch]: next }));
+    if (tabRef.current === next.arch) {
+      setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+    }
   }, []);
 
   const apply = useCallback(
@@ -263,8 +279,10 @@ function DebugScreen() {
           cancelAnimationFrame(rafRef.current);
           rafRef.current = null;
         }
-        setSnap(next);
-        setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+        setSnaps((prev) => ({ ...prev, [next.arch]: next }));
+        if (tabRef.current === next.arch) {
+          setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+        }
         return;
       }
       pendingSnapRef.current = next;
@@ -292,12 +310,14 @@ function DebugScreen() {
           image,
         });
         apply(next, { immediate: true });
-        setSel((s) => ({
-          ...s,
-          focus: next.focus,
-          compare: null,
-          edgeKey: null,
-        }));
+        if (tabRef.current === nextArch) {
+          setSel((s) => ({
+            ...s,
+            focus: next.focus,
+            compare: null,
+            edgeKey: null,
+          }));
+        }
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "session failed");
       } finally {
@@ -314,7 +334,7 @@ function DebugScreen() {
   const onFirmwarePick = useCallback((ev: ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
     if (!file) {
-      setFirmwareName("just_tx.elf");
+      setFirmwareName(archTab ? defaultName(archTab) : "just_tx.elf");
       setFirmwareBytes(null);
       return;
     }
@@ -322,7 +342,7 @@ function DebugScreen() {
       setFirmwareName(file.name);
       setFirmwareBytes(buf);
     });
-  }, []);
+  }, [archTab]);
 
   const focusedNode = snap?.nodes.find((n) => n.id === sel.focus) ?? null;
   const highlightJ = useMemo(
@@ -331,14 +351,14 @@ function DebugScreen() {
   );
 
   useEffect(() => {
-    if (streaming) return;
+    if (streaming || comparing) return;
     insnRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [highlightJ, snap?.insns.length, streaming]);
+  }, [highlightJ, snap?.insns.length, streaming, comparing]);
 
   useEffect(() => {
-    if (streaming) return;
+    if (streaming || comparing) return;
     logRef.current?.scrollIntoView({ block: "end" });
-  }, [snap?.log.length, streaming]);
+  }, [snap?.log.length, streaming, comparing]);
 
   const visible = useMemo(() => {
     if (!snap) return new Set<number>();
@@ -366,8 +386,6 @@ function DebugScreen() {
     if (!snap) {
       return foldSameTypeChains([], [], () => "", new Set());
     }
-    // Only pin the nodes the user is looking at — protecting the whole
-    // path-to-root used to disable same-type folding on the main spine.
     const protectedIds = new Set<number>([sel.focus, ...snap.work]);
     if (sel.compare != null) protectedIds.add(sel.compare);
     if (snap.status === "fail" && snap.failed != null) protectedIds.add(snap.failed);
@@ -408,7 +426,6 @@ function DebugScreen() {
     return out;
   }, [snap, visible, typeFold, displayNodeIds]);
 
-  // While running: cheap incremental placement. After complete/fail: final layout.
   const layoutMode =
     snap?.status === "complete" || snap?.status === "fail" ? "final" : "fast";
   const positions = useForceLayout(
@@ -421,8 +438,7 @@ function DebugScreen() {
 
   const finalFitKeyRef = useRef("");
   useEffect(() => {
-    // Never fit on focus/fold churn — that resets the camera on node clicks.
-    if (streaming || !hasPositions) return;
+    if (streaming || comparing || !hasPositions) return;
     let doFit = false;
     if (fitOnceRef.current) {
       fitOnceRef.current = false;
@@ -439,7 +455,7 @@ function DebugScreen() {
       void flow.fitView({ padding: 0.28, duration: 240 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [flow, streaming, layoutMode, snap?.id, hasPositions]);
+  }, [flow, streaming, comparing, layoutMode, snap?.id, hasPositions]);
 
   const head = snap?.work[0];
   const canStep = Boolean(
@@ -519,7 +535,7 @@ function DebugScreen() {
     }
   }, [apply, flushPendingSnap, snap]);
 
-  const onStructuralCompare = useCallback(async () => {
+  const runPredicateCompare = useCallback(async () => {
     runAbortRef.current?.abort();
     compareAbortRef.current?.abort();
     const ac = new AbortController();
@@ -528,59 +544,88 @@ function DebugScreen() {
     setStreaming(false);
     setError(null);
     setRunRate(null);
-    setPhase({
-      tag: "expanding",
-      left: emptySlot("rv32imc"),
-      right: emptySlot("ebpf"),
-    });
-    const patchSlot = (side: "left" | "right", snapNext: SessionSnapshot, stats: RunStreamStats) => {
-      setPhase((prev) => {
-        if (prev.tag !== "expanding") return prev;
-        return {
-          ...prev,
-          [side]: { ...prev[side], snap: snapNext, stats },
-        };
-      });
-    };
+
     try {
-      const [left0, right0] = await Promise.all([
-        createSession({ budget, arch: "rv32imc", name: "just_tx.elf" }),
-        createSession({ budget, arch: "ebpf", name: "just_tx.bpf.o" }),
-      ]);
-      const [left, right] = await Promise.all([
-        runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
-        runSessionStream(right0.id, (s, stats) => patchSlot("right", s, stats), ac.signal),
-      ]);
-      const outcome = await compareRuns(toCompareRun(left), toCompareRun(right));
-      if (ac.signal.aborted) return;
-      if (outcome.status === "reject") {
-        setPhase({ tag: "rejected", left, right, reject: outcome });
-        return;
+      let left = snapsRef.current.rv32imc;
+      let right = snapsRef.current.ebpf;
+      const needExpand = !snapFresh(left, budget) || !snapFresh(right, budget);
+
+      if (needExpand) {
+        setCompareUi({
+          tag: "expanding",
+          left: emptySlot("rv32imc"),
+          right: emptySlot("ebpf"),
+        });
+        const patchSlot = (
+          side: "left" | "right",
+          snapNext: SessionSnapshot,
+          stats: RunStreamStats,
+        ) => {
+          apply(snapNext);
+          setCompareUi((prev) => {
+            if (prev.tag !== "expanding") return prev;
+            return {
+              ...prev,
+              [side]: { ...prev[side], snap: snapNext, stats },
+            };
+          });
+        };
+        const [left0, right0] = await Promise.all([
+          createSession({ budget, arch: "rv32imc", name: "just_tx.elf" }),
+          createSession({ budget, arch: "ebpf", name: "just_tx.bpf.o" }),
+        ]);
+        const [leftFinal, rightFinal] = await Promise.all([
+          runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
+          runSessionStream(right0.id, (s, stats) => patchSlot("right", s, stats), ac.signal),
+        ]);
+        left = leftFinal;
+        right = rightFinal;
+        apply(leftFinal, { immediate: true });
+        apply(rightFinal, { immediate: true });
       }
-      setPhase({
-        tag: "reported",
-        left,
-        right,
-        report: outcome,
-        loc: outcome.positions[0]?.loc ?? null,
-      });
+
+      if (ac.signal.aborted || !left || !right) return;
+      const report = await comparePredicates(toPredRun(left), toPredRun(right));
+      if (ac.signal.aborted) return;
+      setCompareUi({ tag: "ready", report });
     } catch (err: unknown) {
       if (!ac.signal.aborted) {
-        setError(err instanceof Error ? err.message : "compare failed");
+        setError(err instanceof Error ? err.message : "predicate compare failed");
+        setCompareUi({ tag: "idle" });
       }
-      setPhase({ tag: "single" });
     } finally {
       if (compareAbortRef.current === ac) compareAbortRef.current = null;
       setBusy(false);
     }
-  }, [budget]);
+  }, [apply, budget]);
 
-  const onExitCompare = useCallback(() => {
-    compareAbortRef.current?.abort();
-    compareAbortRef.current = null;
-    setPhase({ tag: "single" });
-    setBusy(false);
-  }, []);
+  const onSelectTab = useCallback(
+    (next: TabId) => {
+      if (next === "compare") {
+        setTab("compare");
+        void runPredicateCompare();
+        return;
+      }
+      compareAbortRef.current?.abort();
+      compareAbortRef.current = null;
+      setCompareUi({ tag: "idle" });
+      setTab(next);
+      fitOnceRef.current = true;
+      const existing = snapsRef.current[next];
+      if (existing) {
+        setSel((s) => ({
+          ...s,
+          focus: existing.focus,
+          compare: null,
+          edgeKey: null,
+        }));
+      }
+      if (!firmwareBytes) {
+        setFirmwareName(defaultName(next));
+      }
+    },
+    [firmwareBytes, runPredicateCompare],
+  );
 
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
     const id = Number(node.id);
@@ -697,54 +742,62 @@ function DebugScreen() {
   return (
     <Flex className="app-shell" height="100%" flexDirection="column">
       <Flex className="topbar" alignItems="center" gap={10} px={12} pt={10}>
-        <Text className="panel__title" p={0}>
-          架构
-        </Text>
-        <select
-          className="toolbar__select"
-          value={arch}
-          disabled={busy || comparing}
-          onChange={(ev) => {
-            const next = ev.target.value as ArchKind;
-            setArch(next);
-            if (!firmwareBytes) {
-              setFirmwareName(next === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf");
-            }
-          }}
-        >
-          <option value="rv32imc">RV32IMC</option>
-          <option value="ebpf">eBPF</option>
-        </select>
-        <Text className="muted">XDP ELF</Text>
-        <label className="toolbar__file">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".elf"
-            disabled={busy}
-            onChange={onFirmwarePick}
-          />
-          <span className="toolbar__file-btn">选择文件</span>
-        </label>
-        <Text className="mono muted" fontSize={11} title={firmwareName}>
-          {firmwareBytes
-            ? firmwareName
-            : `${arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf"}（默认）`}
-        </Text>
-        {firmwareBytes ? (
-          <Button
-            type="button"
-            className="toolbar__btn toolbar__btn--quiet"
-            disabled={busy}
-            onClick={() => {
-              setFirmwareName(arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf");
-              setFirmwareBytes(null);
-              if (fileRef.current) fileRef.current.value = "";
-            }}
-          >
-            恢复默认
-          </Button>
+        <div className="arch-tabs" role="tablist" aria-label="视图">
+          {(
+            [
+              ["rv32imc", "RV32IMC"],
+              ["ebpf", "eBPF"],
+              ["compare", "对比"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`arch-tab${tab === id ? " arch-tab--on" : ""}`}
+              onClick={() => onSelectTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {!comparing ? (
+          <>
+            <Text className="muted">XDP ELF</Text>
+            <label className="toolbar__file">
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".elf,.o"
+                disabled={busy}
+                onChange={onFirmwarePick}
+              />
+              <span className="toolbar__file-btn">选择文件</span>
+            </label>
+            <Text className="mono muted" fontSize={11} title={firmwareName}>
+              {firmwareBytes
+                ? firmwareName
+                : `${archTab ? defaultName(archTab) : "just_tx.elf"}（默认）`}
+            </Text>
+            {firmwareBytes ? (
+              <Button
+                type="button"
+                className="toolbar__btn toolbar__btn--quiet"
+                disabled={busy}
+                onClick={() => {
+                  setFirmwareName(archTab ? defaultName(archTab) : "just_tx.elf");
+                  setFirmwareBytes(null);
+                  if (fileRef.current) fileRef.current.value = "";
+                }}
+              >
+                恢复默认
+              </Button>
+            ) : null}
+          </>
         ) : null}
+
         <Text className="muted">budget</Text>
         <input
           className="toolbar__input mono"
@@ -755,49 +808,38 @@ function DebugScreen() {
           disabled={busy}
           onChange={(ev) => setBudget(Number(ev.target.value) || 0)}
         />
-        <Button
-          type="button"
-          className="toolbar__btn"
-          disabled={busy || comparing}
-          onClick={() => void boot(arch, budget, firmwareName, firmwareBytes)}
-        >
-          新建运行
-        </Button>
-        <Button
-          type="button"
-          className="toolbar__btn"
-          disabled={busy || phase.tag === "expanding"}
-          title="just_tx.elf × just_tx.bpf.o，同 budget，无自定义镜像"
-          onClick={() => void onStructuralCompare()}
-        >
-          结构比较
-        </Button>
-        {phase.tag === "reported" || phase.tag === "rejected" ? (
+
+        {!comparing && archTab ? (
           <Button
             type="button"
-            className="toolbar__btn toolbar__btn--quiet"
-            onClick={onExitCompare}
+            className="toolbar__btn"
+            disabled={busy}
+            onClick={() =>
+              void boot(archTab, budget, firmwareName, firmwareBytes)
+            }
           >
-            返回单图
+            新建运行
           </Button>
         ) : null}
-        {phase.tag === "expanding" ? (
+
+        {compareUi.tag === "expanding" ? (
           <Button
             type="button"
             className="toolbar__btn toolbar__btn--quiet"
             onClick={() => {
               compareAbortRef.current?.abort();
-              setPhase({ tag: "single" });
+              setCompareUi({ tag: "idle" });
               setBusy(false);
             }}
           >
             停止
           </Button>
         ) : null}
-        {phase.tag === "expanding" ? (
+
+        {compareUi.tag === "expanding" ? (
           <Flex flexDirection="column" gap={2} className="compare-progress">
             {(["left", "right"] as const).map((side) => {
-              const slot = phase[side];
+              const slot = compareUi[side];
               return (
                 <Text key={side} className="mono muted" fontSize={11}>
                   {slot.arch} · {slot.label} · steps {slot.stats?.steps ?? 0} · nodes{" "}
@@ -808,7 +850,9 @@ function DebugScreen() {
           </Flex>
         ) : (
           <Text className="mono muted" fontSize={11}>
-            快照不可变 · Shift+点击设比较 · 同类型自动折叠 · {snap?.proof_note ?? ""}
+            {comparing
+              ? "Predicate heuristic · Term equality not proven"
+              : `Shift+点击设比较 · 同类型自动折叠 · ${snap?.proof_note ?? ""}`}
           </Text>
         )}
       </Flex>
@@ -820,257 +864,255 @@ function DebugScreen() {
               {error}
             </Text>
           ) : null}
-          {phase.tag === "expanding" ? (
-            <Flex className="compare-spine panel" flex="1" alignItems="center" justifyContent="center">
-              <Text className="mono muted">并行展开 rv32imc / ebpf…</Text>
+          {compareUi.tag === "expanding" || compareUi.tag === "idle" ? (
+            <Flex
+              className="pred-compare panel"
+              flex="1"
+              alignItems="center"
+              justifyContent="center"
+            >
+              <Text className="mono muted">
+                {compareUi.tag === "expanding"
+                  ? "并行展开 rv32imc / ebpf…"
+                  : "准备 Predicate 比较…"}
+              </Text>
             </Flex>
           ) : null}
-          {phase.tag === "reported" ? (
-            <CompareReportView
-              left={phase.left}
-              right={phase.right}
-              report={phase.report}
-              openLoc={phase.loc}
-              onOpenLoc={(loc) =>
-                setPhase((prev) => (prev.tag === "reported" ? { ...prev, loc } : prev))
-              }
-            />
-          ) : null}
-          {phase.tag === "rejected" ? (
-            <CompareReportView
-              left={phase.left}
-              right={phase.right}
-              reject={phase.reject}
-              openLoc={null}
-              onOpenLoc={() => {}}
-            />
+          {compareUi.tag === "ready" ? (
+            <PredicateCompareView report={compareUi.report} />
           ) : null}
         </Flex>
       ) : (
-      <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
-        <Flex className="panel panel--left" width={300} flexDirection="column" minHeight={0}>
-          <Text className="panel__title">指令 / 位置</Text>
-          <Box className="panel__body insn-list" flex="1" overflow="auto" minHeight={0}>
-            {snap?.insns.map((insn) => {
-              const current = highlightJ === insn.j;
-              const exec = snap.cursor_j === insn.j;
-              const sp = insn.text.indexOf(" ");
-              const addr = sp < 0 ? insn.text : insn.text.slice(0, sp);
-              const body = sp < 0 ? "" : insn.text.slice(sp + 1);
-              return (
-                <Box
-                  key={insn.j}
-                  ref={current ? insnRef : undefined}
-                  className={`insn-row${current ? " insn-row--focus" : ""}${
-                    exec ? " insn-row--exec" : ""
-                  }`}
-                >
-                  <span className="insn-row__addr mono">{addr}</span>
-                  <span className="insn-row__body mono">{body}</span>
-                </Box>
-              );
-            })}
-          </Box>
-          <Box className="meta-strip" px={12} py={8}>
-            <Text className="mono muted" display="block" fontSize={11}>
-              Work [{snap?.work.join(", ") ?? ""}] · fuel {snap?.fuel ?? "—"}/
-              {snap?.budget ?? "—"}
-            </Text>
-            <Text className="mono muted" display="block" fontSize={11}>
-              已处理 {done.size} · 节点 {snap?.nodes.length ?? 0} · 边{" "}
-              {snap?.edges.length ?? 0}
-            </Text>
-            {branchStats.taken > 0 || branchStats.notTaken > 0 ? (
-              <button
-                type="button"
-                className="branch-chip"
-                onClick={focusBranchSource}
-              >
-                分支 Taken×{branchStats.taken} / NotTaken×{branchStats.notTaken}
-                （点此跳到分支源）
-              </button>
-            ) : null}
-            {snap?.status === "fail" ? (
-              <Text className="fail-banner" display="block">
-                未完成 · {snap.reason ?? "?"}（保留部分图）
-                {snap.failed != null ? ` · 拒绝节点 #${snap.failed}` : ""}
-              </Text>
-            ) : null}
-          </Box>
-        </Flex>
-
-        <Box className="panel panel--canvas" flex="1" minWidth={0} position="relative">
-          {error ? (
-            <Text className="error-banner" p={16} fontSize={13}>
-              {error}
-            </Text>
-          ) : null}
-          <ReactFlow
-            nodes={flowNodes}
-            edges={flowEdges}
-            nodeTypes={nodeTypes}
-            onNodeClick={onNodeClick}
-            onEdgeClick={onEdgeClick}
-            nodesDraggable={false}
-            nodesFocusable={false}
-            elementsSelectable={false}
-            connectionMode={ConnectionMode.Loose}
-            fitView={false}
-            minZoom={0.15}
-            maxZoom={2}
-            proOptions={{ hideAttribution: false }}
-            colorMode="dark"
-          >
-            <Background color="rgba(120,112,98,0.35)" gap={24} />
-          </ReactFlow>
-          {snap && flowNodes.length > 0 ? (
-            <div className="node-legend" aria-label="节点类型图例">
-              {NODE_ROLE_LEGEND.map((row) => (
-                <div key={row.role} className="node-legend__row">
-                  <span
-                    className={`node-legend__swatch state-node--role-${row.role}${
-                      row.role.startsWith("reg_") ? " state-node--access" : ""
+        <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
+          <Flex className="panel panel--left" width={300} flexDirection="column" minHeight={0}>
+            <Text className="panel__title">指令 / 位置</Text>
+            <Box className="panel__body insn-list" flex="1" overflow="auto" minHeight={0}>
+              {snap?.insns.map((insn) => {
+                const current = highlightJ === insn.j;
+                const exec = snap.cursor_j === insn.j;
+                const sp = insn.text.indexOf(" ");
+                const addr = sp < 0 ? insn.text : insn.text.slice(0, sp);
+                const body = sp < 0 ? "" : insn.text.slice(sp + 1);
+                return (
+                  <Box
+                    key={insn.j}
+                    ref={current ? insnRef : undefined}
+                    className={`insn-row${current ? " insn-row--focus" : ""}${
+                      exec ? " insn-row--exec" : ""
                     }`}
-                  />
-                  <span>{row.label}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="canvas-float" aria-label="运行控制">
-            <button
-              type="button"
-              className="canvas-float__btn"
-              onClick={() => void onStep()}
-              disabled={!canStep}
-            >
-              单步（Work 首）
-            </button>
-            <button
-              type="button"
-              className="canvas-float__btn"
-              onClick={() => void onRun()}
-              disabled={!canRun}
-            >
-              运行到结束
-            </button>
-            <span className="mono canvas-float__status">
-              {snap
-                ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
-                    snap.arch
-                  }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}${
-                    runRate ? `  ${runRate}` : ""
-                  }`
-                : "连接中"}
-            </span>
-          </div>
-        </Box>
-
-        <Flex className="panel panel--right" flexDirection="column" minHeight={0}>
-          <Flex className="panel-tabs" gap={6} px={10} pt={8}>
-            {(
-              [
-                ["ei", <>E<sub>i</sub></>],
-                ["eg", <>E<sub>g</sub></>],
-                ["pi", <>P<sub>i</sub></>],
-                ["pg", <>P<sub>g</sub></>],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={`tab-btn${sel.panel === id ? " tab-btn--on" : ""}`}
-                onClick={() => setSel((s) => ({ ...s, panel: id }))}
-              >
-                {label}
-              </button>
-            ))}
+                  >
+                    <span className="insn-row__addr mono">{addr}</span>
+                    <span className="insn-row__body mono">{body}</span>
+                  </Box>
+                );
+              })}
+            </Box>
+            <Box className="meta-strip" px={12} py={8}>
+              <Text className="mono muted" display="block" fontSize={11}>
+                Work [{snap?.work.join(", ") ?? ""}] · fuel {snap?.fuel ?? "—"}/
+                {snap?.budget ?? "—"}
+              </Text>
+              <Text className="mono muted" display="block" fontSize={11}>
+                已处理 {done.size} · 节点 {snap?.nodes.length ?? 0} · 边{" "}
+                {snap?.edges.length ?? 0}
+              </Text>
+              {branchStats.taken > 0 || branchStats.notTaken > 0 ? (
+                <button
+                  type="button"
+                  className="branch-chip"
+                  onClick={focusBranchSource}
+                >
+                  分支 Taken×{branchStats.taken} / NotTaken×{branchStats.notTaken}
+                  （点此跳到分支源）
+                </button>
+              ) : null}
+              {snap?.status === "fail" ? (
+                <Text className="fail-banner" display="block">
+                  未完成 · {snap.reason ?? "?"}（保留部分图）
+                  {snap.failed != null ? ` · 拒绝节点 #${snap.failed}` : ""}
+                </Text>
+              ) : null}
+            </Box>
           </Flex>
 
-          <Box className="panel__body panel__body--state" flex="1" overflow="auto" minHeight={0} px={12} pb={8}>
-            {focusedNode ? (
-              <Text className="sem-heading">
-                #{focusedNode.id}
-                {focusedNode.loc === "exit" ? " · exit" : ` · pos ${focusedNode.loc}`}
+          <Box className="panel panel--canvas" flex="1" minWidth={0} position="relative">
+            {error ? (
+              <Text className="error-banner" p={16} fontSize={13}>
+                {error}
               </Text>
             ) : null}
-
-            {sel.panel === "ei" && focusedNode && focusedSplit ? (
-              <>
-                {selectedEdge ? (
-                  <Text className="mono muted" display="block" fontSize={11}>
-                    {selectedEdge.from} —{selectedEdge.dir}→ {selectedEdge.to}
-                  </Text>
-                ) : null}
-                {focusedSplit.eiIn.length > 0 ? (
-                  <SemBlock tag={<EiTag />}>
-                    <ExprCapsules exprs={focusedSplit.eiIn} />
-                  </SemBlock>
-                ) : null}
-                {focusedSplit.eiOut
-                  .filter((d) =>
-                    selectedEdge
-                      ? d.to === selectedEdge.to
-                      : d.exprs.length > 0 || d.dir === "taken" || d.dir === "not_taken",
-                  )
-                  .map((delta) => (
-                    <SemBlock key={delta.to} tag={<EiTag on={eiOnLabel(delta.dir)} />}>
-                      <ExprCapsules exprs={delta.exprs} />
-                    </SemBlock>
-                  ))}
-                {focusedSplit.eiIn.length === 0
-                && focusedSplit.eiOut.every((d) => d.exprs.length === 0)
-                && !selectedEdge ? (
-                  <SemBlock tag={<EiTag />}>
-                    <ExprCapsules exprs={[]} />
-                  </SemBlock>
-                ) : null}
-                {dualTakenNotTaken ? (
-                  <Text className="mono muted" display="block" fontSize={11}>
-                    T→{dualTakenNotTaken.taken.map((e) => e.to).join(",") || "∅"}
-                    {" · "}
-                    N→{dualTakenNotTaken.notTaken.map((e) => e.to).join(",") || "∅"}
-                  </Text>
-                ) : null}
-              </>
+            <ReactFlow
+              nodes={flowNodes}
+              edges={flowEdges}
+              nodeTypes={nodeTypes}
+              onNodeClick={onNodeClick}
+              onEdgeClick={onEdgeClick}
+              nodesDraggable={false}
+              nodesFocusable={false}
+              elementsSelectable={false}
+              connectionMode={ConnectionMode.Loose}
+              fitView={false}
+              minZoom={0.15}
+              maxZoom={2}
+              proOptions={{ hideAttribution: false }}
+              colorMode="dark"
+            >
+              <Background color="rgba(120,112,98,0.35)" gap={24} />
+            </ReactFlow>
+            {snap && flowNodes.length > 0 ? (
+              <div className="node-legend" aria-label="节点类型图例">
+                {NODE_ROLE_LEGEND.map((row) => (
+                  <div key={row.role} className="node-legend__row">
+                    <span
+                      className={`node-legend__swatch state-node--role-${row.role}${
+                        row.role.startsWith("reg_") ? " state-node--access" : ""
+                      }`}
+                    />
+                    <span>{row.label}</span>
+                  </div>
+                ))}
+              </div>
             ) : null}
-
-            {sel.panel === "eg" && focusedNode && focusedSplit ? (
-              <SemBlock tag={<EgTag />}>
-                <ExprCapsules exprs={focusedSplit.eg} />
-              </SemBlock>
-            ) : null}
-
-            {sel.panel === "pi" && focusedNode ? (
-              <SemBlock tag={<PiTag />}>
-                <PredCapsules preds={focusedPi} />
-              </SemBlock>
-            ) : null}
-
-            {sel.panel === "pg" && focusedNode ? (
-              <SemBlock tag={<PgTag />}>
-                <PredCapsules preds={focusedNode.predicates} />
-              </SemBlock>
-            ) : null}
-
-            {!focusedNode ? <Text className="muted">等待节点…</Text> : null}
+            <div className="canvas-float" aria-label="运行控制">
+              <button
+                type="button"
+                className="canvas-float__btn"
+                onClick={() => void onStep()}
+                disabled={!canStep}
+              >
+                单步（Work 首）
+              </button>
+              <button
+                type="button"
+                className="canvas-float__btn"
+                onClick={() => void onRun()}
+                disabled={!canRun}
+              >
+                运行到结束
+              </button>
+              <span className="mono canvas-float__status">
+                {snap
+                  ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
+                      snap.arch
+                    }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}${
+                      runRate ? `  ${runRate}` : ""
+                    }`
+                  : "连接中"}
+              </span>
+            </div>
           </Box>
 
-          <Box className="log-strip">
-            <Text className="panel__title panel__title--small">日志</Text>
-            <Box className="log-strip__body" maxHeight={120} overflow="auto" px={12} pb={10}>
-              {snap?.log.map((entry) => (
-                <Text key={entry.t} className="mono log-line" display="block">
-                  {entry.t}. {entry.msg}
-                </Text>
+          <Flex className="panel panel--right" flexDirection="column" minHeight={0}>
+            <Flex className="panel-tabs" gap={6} px={10} pt={8}>
+              {(
+                [
+                  ["ei", <>E<sub>i</sub></>],
+                  ["eg", <>E<sub>g</sub></>],
+                  ["pi", <>P<sub>i</sub></>],
+                  ["pg", <>P<sub>g</sub></>],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`tab-btn${sel.panel === id ? " tab-btn--on" : ""}`}
+                  onClick={() => setSel((s) => ({ ...s, panel: id }))}
+                >
+                  {label}
+                </button>
               ))}
-              <Box ref={logRef} />
-            </Box>
-          </Box>
-        </Flex>
-      </Flex>
-      )}
+            </Flex>
 
+            <Box
+              className="panel__body panel__body--state"
+              flex="1"
+              overflow="auto"
+              minHeight={0}
+              px={12}
+              pb={8}
+            >
+              {focusedNode ? (
+                <Text className="sem-heading">
+                  #{focusedNode.id}
+                  {focusedNode.loc === "exit" ? " · exit" : ` · pos ${focusedNode.loc}`}
+                </Text>
+              ) : null}
+
+              {sel.panel === "ei" && focusedNode && focusedSplit ? (
+                <>
+                  {selectedEdge ? (
+                    <Text className="mono muted" display="block" fontSize={11}>
+                      {selectedEdge.from} —{selectedEdge.dir}→ {selectedEdge.to}
+                    </Text>
+                  ) : null}
+                  {focusedSplit.eiIn.length > 0 ? (
+                    <SemBlock tag={<EiTag />}>
+                      <ExprCapsules exprs={focusedSplit.eiIn} />
+                    </SemBlock>
+                  ) : null}
+                  {focusedSplit.eiOut
+                    .filter((d) =>
+                      selectedEdge
+                        ? d.to === selectedEdge.to
+                        : d.exprs.length > 0 || d.dir === "taken" || d.dir === "not_taken",
+                    )
+                    .map((delta) => (
+                      <SemBlock key={delta.to} tag={<EiTag on={eiOnLabel(delta.dir)} />}>
+                        <ExprCapsules exprs={delta.exprs} />
+                      </SemBlock>
+                    ))}
+                  {focusedSplit.eiIn.length === 0
+                  && focusedSplit.eiOut.every((d) => d.exprs.length === 0)
+                  && !selectedEdge ? (
+                    <SemBlock tag={<EiTag />}>
+                      <ExprCapsules exprs={[]} />
+                    </SemBlock>
+                  ) : null}
+                  {dualTakenNotTaken ? (
+                    <Text className="mono muted" display="block" fontSize={11}>
+                      T→{dualTakenNotTaken.taken.map((e) => e.to).join(",") || "∅"}
+                      {" · "}
+                      N→{dualTakenNotTaken.notTaken.map((e) => e.to).join(",") || "∅"}
+                    </Text>
+                  ) : null}
+                </>
+              ) : null}
+
+              {sel.panel === "eg" && focusedNode && focusedSplit ? (
+                <SemBlock tag={<EgTag />}>
+                  <ExprCapsules exprs={focusedSplit.eg} />
+                </SemBlock>
+              ) : null}
+
+              {sel.panel === "pi" && focusedNode ? (
+                <SemBlock tag={<PiTag />}>
+                  <PredCapsules preds={focusedPi} />
+                </SemBlock>
+              ) : null}
+
+              {sel.panel === "pg" && focusedNode ? (
+                <SemBlock tag={<PgTag />}>
+                  <PredCapsules preds={focusedNode.predicates} />
+                </SemBlock>
+              ) : null}
+
+              {!focusedNode ? <Text className="muted">等待节点…</Text> : null}
+            </Box>
+
+            <Box className="log-strip">
+              <Text className="panel__title panel__title--small">日志</Text>
+              <Box className="log-strip__body" maxHeight={120} overflow="auto" px={12} pb={10}>
+                {snap?.log.map((entry) => (
+                  <Text key={entry.t} className="mono log-line" display="block">
+                    {entry.t}. {entry.msg}
+                  </Text>
+                ))}
+                <Box ref={logRef} />
+              </Box>
+            </Box>
+          </Flex>
+        </Flex>
+      )}
     </Flex>
   );
 }

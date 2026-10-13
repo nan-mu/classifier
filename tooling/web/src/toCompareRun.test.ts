@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toCompareRun, type SessionSnapshot } from "./types";
+import { toCompareRun, toPredRun, type SessionSnapshot } from "./types";
 
 function snap(partial: Partial<SessionSnapshot> & Pick<SessionSnapshot, "edges" | "nodes">): SessionSnapshot {
   return {
@@ -57,5 +57,29 @@ describe("toCompareRun", () => {
     expect(run.arch).toBe("ebpf");
     expect(run.edges).toEqual([{ src: 0, dst: 1, dir: "OK" }]);
     expect(run.nodes).toEqual([{ id: 0, loc: "0", exprs: [], predicates: [] }]);
+  });
+});
+
+describe("toPredRun", () => {
+  it("keeps only arch and id/loc/predicates per node", () => {
+    const run = toPredRun(
+      snap({
+        arch: "ebpf",
+        nodes: [
+          {
+            id: 3,
+            loc: "exit",
+            exprs: [{ reg: "r0", rel: "eq", term: "1" }],
+            predicates: [{ kind: "ret", term: "1" }],
+            preds: [0],
+          },
+        ],
+        edges: [{ from: 0, to: 3, dir: "only" }],
+      }),
+    );
+    expect(run).toEqual({
+      arch: "ebpf",
+      nodes: [{ id: 3, loc: "exit", predicates: [{ kind: "ret", term: "1" }] }],
+    });
   });
 });

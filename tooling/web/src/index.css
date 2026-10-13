@@ -574,6 +574,133 @@ body {
   flex-wrap: wrap;
 }
 
+.arch-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(40, 36, 30, 0.55);
+}
+
+.arch-tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.arch-tab:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.arch-tab--on {
+  color: var(--accent);
+  border-color: rgba(226, 207, 171, 0.45);
+  background: rgba(226, 207, 171, 0.1);
+}
+
+.arch-tab:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pred-compare {
+  overflow: hidden;
+}
+
+.pred-compare__title {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.pred-compare__body {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(160, 148, 128, 0.55) transparent;
+}
+
+.pred-loc__title {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.pred-pair {
+  border: 1px solid rgba(120, 108, 90, 0.35);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  background: rgba(40, 36, 30, 0.4);
+}
+
+.pred-pair--matched {
+  border-color: rgba(120, 160, 130, 0.35);
+}
+
+.pred-pair--onlyLeft {
+  border-color: rgba(180, 120, 100, 0.4);
+  background: rgba(180, 100, 90, 0.08);
+}
+
+.pred-pair--onlyRight {
+  border-color: rgba(120, 140, 170, 0.4);
+  background: rgba(120, 140, 170, 0.08);
+}
+
+.pred-pair__row {
+  flex-wrap: wrap;
+}
+
+.pred-pair__side {
+  font-size: 11px;
+  min-width: 1em;
+}
+
+.pred-pair__badge {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.pred-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 96px;
+}
+
+.pred-score__track {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(80, 72, 60, 0.55);
+  overflow: hidden;
+  min-width: 48px;
+}
+
+.pred-score__fill {
+  height: 100%;
+  background: rgba(226, 207, 171, 0.65);
+  border-radius: inherit;
+}
+
+.pred-score__pct {
+  font-size: 11px;
+  min-width: 2.5em;
+  text-align: right;
+}
+
 .toolbar__select,
 .toolbar__input {
   background: rgba(40, 36, 30, 0.9);
