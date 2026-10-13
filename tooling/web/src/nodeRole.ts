@@ -197,7 +197,7 @@ export function dominantRegRole(exprs: ExprRow[]): NodeRole | null {
   }
   let best: RegKind | null = null;
   let bestN = 0;
-  for (const kind of ["packet", "map", "stack", "real"] as const) {
+  for (const kind of ["packet", "map", "context", "stack", "real"] as const) {
     const n = counts[kind] ?? 0;
     if (n > bestN) {
       best = kind;
@@ -207,7 +207,8 @@ export function dominantRegRole(exprs: ExprRow[]): NodeRole | null {
   if (!best) return null;
   if (best === "packet") return "reg_packet";
   if (best === "map") return "reg_map";
-  if (best === "stack") return "reg_stack";
+  // Context shares the stack wash for now (virtual cell accent).
+  if (best === "stack" || best === "context") return "reg_stack";
   return "reg_real";
 }
 

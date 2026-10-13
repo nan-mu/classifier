@@ -68,11 +68,20 @@ describe("helper predicates", () => {
     };
     expect(helperName(1)).toBe("lookup");
     expect(formatPred(lookup)).toBe(
-      "helper lookup@e166(1077412584, id32(add32(v32:0,4294967280)))",
+      "lookup(0x403802e8, id(add(v0,-16)))",
     );
     expect(formatPred({ kind: "helper", helperId: 999, event: 2, args: [] })).toBe(
-      "helper helper999@e2()",
+      "helper999",
     );
+    // Frozen key bytes after ABI arity are omitted from the chip.
+    expect(
+      formatPred({
+        kind: "helper",
+        helperId: 1,
+        event: 46,
+        args: ["1077412584", "id32(add32(v32:0,4294967280))", "a", "b", "c", "d"],
+      }),
+    ).toBe("lookup(0x403802e8, id(add(v0,-16)))");
   });
 
   it("diffs helper predicates by event / id / args", () => {

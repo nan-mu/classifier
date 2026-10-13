@@ -61,6 +61,13 @@ function shortReg(reg: ParsedReg): string {
     return `x${reg.alpha}`;
   }
   if (reg.kind === "stack" && reg.alpha != null) return `sw${reg.alpha}`;
+  if (reg.kind === "context" && reg.alpha != null) {
+    const n = Number(reg.alpha);
+    // Default αCtx=0: six xdp_md cells at create (data, end, meta, ifindex, rxq, egress).
+    const ctxField = ["data", "end", "meta", "ifindex", "rxq", "egress"] as const;
+    if (Number.isInteger(n) && n >= 0 && n < ctxField.length) return `ctx.${ctxField[n]}`;
+    return `ctx${reg.alpha}`;
+  }
   if ((reg.kind === "map" || reg.kind === "packet") && reg.resource != null && reg.offset != null) {
     const tag = reg.kind === "map" ? "M" : "P";
     return `${tag}[${reg.resource}+${reg.offset}]`;
@@ -70,14 +77,50 @@ function shortReg(reg: ParsedReg): string {
   return reg.raw;
 }
 
-function shortTerm(term: string): string {
-  const view = parseTerm(term);
+/** Remaining create EntryVar ids (RV32IMC/Initial.lean) — not callee-saved invent-V. */
+function entryVarLabel(ξ: number): string | null {
+  const named: Record<number, string> = {
+    0: "sp°",
+    1: "ctx°",
+    4: "data°",
+    5: "len°",
+  };
+  return named[ξ] ?? null;
+}
+
+const INFIX_OP: Record<string, string> = {
+  add32: "+",
+  add64: "+",
+  sub32: "-",
+  sub64: "-",
+};
+
+/** Pretty view for chips; wire terms stay add32(…). */
+function prettyTerm(view: ReturnType<typeof parseTerm>): string {
   if (view.kind === "const") return view.digits;
-  if (view.kind === "var") return `v${view.name}`;
+  if (view.kind === "var") {
+    const n = Number(view.name);
+    if (Number.isInteger(n)) {
+      const entry = entryVarLabel(n);
+      if (entry) return entry;
+    }
+    return `v${view.name}`;
+  }
   if (view.kind === "app" && view.op.startsWith("regVar") && view.args[0]?.kind === "raw") {
     return shortReg(parseReg(view.args[0].text));
   }
-  const plain = termToPlain(view);
+  if (view.kind === "app" && INFIX_OP[view.op] && view.args.length === 2) {
+    const op = INFIX_OP[view.op]!;
+    return `(${prettyTerm(view.args[0]!)} ${op} ${prettyTerm(view.args[1]!)})`;
+  }
+  if (view.kind === "app") {
+    return `${view.op.replace(/32$/, "")}(${view.args.map(prettyTerm).join(", ")})`;
+  }
+  return termToPlain(view);
+}
+
+function shortTerm(term: string): string {
+  const plain = prettyTerm(parseTerm(term));
   return plain.length > 36 ? `${plain.slice(0, 34)}…` : plain;
 }
 
@@ -88,8 +131,8 @@ export function formatExprMath(e: ExprRow): string {
   return `${left} ${op} ${shortTerm(e.term)}`;
 }
 
-/** Compact predicate chip text. */
+/** Compact predicate chip text (`formatPred` already shortens helper args). */
 export function formatPredChip(p: PredRow): string {
   const s = formatPred(p);
-  return s.length > 42 ? `${s.slice(0, 40)}…` : s;
+  return s.length > 48 ? `${s.slice(0, 46)}…` : s;
 }

@@ -112,14 +112,21 @@ describe("parseTerm", () => {
 });
 
 describe("groupExprsByKind", () => {
-  it("orders Real / Stack / Map / Packet groups", () => {
+  it("orders Real / Stack / Map / Context / Packet groups", () => {
     const groups = groupExprsByKind([
       { reg: "packet32:1", rel: "eq", term: "1" },
       { reg: "real32:10", rel: "eq", term: "2" },
       { reg: "map32:0", rel: "eq", term: "regVar1(real32:10)" },
       { reg: "stack32:0", rel: "eq", term: "3" },
+      { reg: "context32:0", rel: "eq", term: "v32:4" },
     ]);
-    expect(groups.map((g) => g.kind)).toEqual(["real", "stack", "map", "packet"]);
+    expect(groups.map((g) => g.kind)).toEqual([
+      "real",
+      "stack",
+      "map",
+      "context",
+      "packet",
+    ]);
     expect(groups[2]!.rows[0]!.reg).toBe("map32:0");
   });
 });

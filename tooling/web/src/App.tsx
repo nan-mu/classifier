@@ -20,7 +20,7 @@ import {
 } from "react";
 import "@xyflow/react/dist/style.css";
 import { createSession, runSessionStream, stepSession } from "./api";
-import { insnIndexForNode, localExprs, splitExprs } from "./exprs";
+import { insnIndexForNode, splitExprs } from "./exprs";
 import { formatExprMath, formatPredChip } from "./formatExpr";
 import { foldSameTypeChains, resolveFoldedId } from "./collapse";
 import {
@@ -35,13 +35,11 @@ import { useForceLayout } from "./useForceLayout";
 import {
   branchSource,
   countBranchEdges,
-  diffExprs,
   diffPredicates,
   edgeKey,
-  inboundEdges,
+  formatPred,
   outboundEdges,
   parseEdgeKey,
-  pathToRoot,
   processedIds,
   visibleNodeIds,
   type ViewerSelection,
@@ -86,7 +84,7 @@ function PredCapsules({ preds }: { preds: PredRow[] }) {
         <span
           key={i}
           className={`capsule capsule--pred capsule--${p.kind}`}
-          title={formatPredChip(p)}
+          title={formatPred(p)}
         >
           {formatPredChip(p)}
         </span>
@@ -149,6 +147,14 @@ function PgTag() {
   );
 }
 
+function PiTag() {
+  return (
+    <>
+      P<sub>i</sub>
+    </>
+  );
+}
+
 function eiOnLabel(dir: string | null | undefined): "taken" | "not_taken" | "only" {
   if (dir === "taken") return "taken";
   if (dir === "not_taken") return "not_taken";
@@ -170,7 +176,7 @@ function DebugScreen() {
     compare: null,
     edgeKey: null,
     collapseSameLoc: false,
-    panel: "node",
+    panel: "eg",
   });
   const [budget, setBudget] = useState(1024);
   const [arch, setArch] = useState<ArchKind>("rv32imc");
@@ -268,8 +274,6 @@ function DebugScreen() {
   }, []);
 
   const focusedNode = snap?.nodes.find((n) => n.id === sel.focus) ?? null;
-  const compareNode =
-    sel.compare === null ? null : (snap?.nodes.find((n) => n.id === sel.compare) ?? null);
   const highlightJ = useMemo(
     () => (snap ? insnIndexForNode(focusedNode, snap.nodes) : null),
     [focusedNode, snap],
@@ -409,10 +413,12 @@ function DebugScreen() {
     );
   }, [sel.edgeKey, snap]);
 
-  const pathIds = useMemo(
-    () => (snap ? pathToRoot(sel.focus, snap.nodes) : []),
-    [sel.focus, snap],
-  );
+  const focusedPi = useMemo(() => {
+    if (!focusedNode || !snap) return [];
+    const parent = snap.nodes.find((n) => focusedNode.preds.includes(n.id));
+    if (!parent) return focusedNode.predicates;
+    return diffPredicates(parent.predicates, focusedNode.predicates).added;
+  }, [focusedNode, snap]);
 
   const onStep = useCallback(async () => {
     if (!snap || snap.status !== "running" || snap.work[0] !== sel.focus) return;
@@ -468,7 +474,6 @@ function DebugScreen() {
       setSel((s) => ({
         ...s,
         compare: s.compare === id ? null : id,
-        panel: "compare",
       }));
       return;
     }
@@ -480,7 +485,7 @@ function DebugScreen() {
       ...s,
       edgeKey: edge.id,
       focus: Number(edge.source),
-      panel: "step",
+      panel: "ei",
     }));
   }, []);
 
@@ -572,7 +577,7 @@ function DebugScreen() {
     if (!snap) return;
     const src = branchSource(sel.focus, snap.edges);
     if (src === null) return;
-    setSel((s) => ({ ...s, focus: src, panel: "node", edgeKey: null }));
+    setSel((s) => ({ ...s, focus: src, panel: "eg", edgeKey: null }));
   }, [sel.focus, snap]);
 
   return (
@@ -763,10 +768,10 @@ function DebugScreen() {
           <Flex className="panel-tabs" gap={6} px={10} pt={8}>
             {(
               [
-                ["node", "节点"],
-                ["step", "边"],
-                ["path", "路径"],
-                ["compare", "比较"],
+                ["ei", <>E<sub>i</sub></>],
+                ["eg", <>E<sub>g</sub></>],
+                ["pi", <>P<sub>i</sub></>],
+                ["pg", <>P<sub>g</sub></>],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -781,30 +786,43 @@ function DebugScreen() {
           </Flex>
 
           <Box className="panel__body panel__body--state" flex="1" overflow="auto" minHeight={0} px={12} pb={8}>
-            {sel.panel === "node" && focusedNode && focusedSplit ? (
+            {focusedNode ? (
+              <Text className="sem-heading">
+                #{focusedNode.id}
+                {focusedNode.loc === "exit" ? " · exit" : ` · pos ${focusedNode.loc}`}
+              </Text>
+            ) : null}
+
+            {sel.panel === "ei" && focusedNode && focusedSplit ? (
               <>
-                <Text className="sem-heading">
-                  #{focusedNode.id}
-                  {focusedNode.loc === "exit" ? " · exit" : ` · pos ${focusedNode.loc}`}
-                </Text>
-                <SemBlock tag={<EgTag />}>
-                  <ExprCapsules exprs={focusedSplit.eg} />
-                </SemBlock>
+                {selectedEdge ? (
+                  <Text className="mono muted" display="block" fontSize={11}>
+                    {selectedEdge.from} —{selectedEdge.dir}→ {selectedEdge.to}
+                  </Text>
+                ) : null}
                 {focusedSplit.eiIn.length > 0 ? (
                   <SemBlock tag={<EiTag />}>
                     <ExprCapsules exprs={focusedSplit.eiIn} />
                   </SemBlock>
                 ) : null}
                 {focusedSplit.eiOut
-                  .filter((d) => d.exprs.length > 0)
+                  .filter((d) =>
+                    selectedEdge
+                      ? d.to === selectedEdge.to
+                      : d.exprs.length > 0 || d.dir === "taken" || d.dir === "not_taken",
+                  )
                   .map((delta) => (
                     <SemBlock key={delta.to} tag={<EiTag on={eiOnLabel(delta.dir)} />}>
                       <ExprCapsules exprs={delta.exprs} />
                     </SemBlock>
                   ))}
-                <SemBlock tag={<PgTag />}>
-                  <PredCapsules preds={focusedNode.predicates} />
-                </SemBlock>
+                {focusedSplit.eiIn.length === 0
+                && focusedSplit.eiOut.every((d) => d.exprs.length === 0)
+                && !selectedEdge ? (
+                  <SemBlock tag={<EiTag />}>
+                    <ExprCapsules exprs={[]} />
+                  </SemBlock>
+                ) : null}
                 {dualTakenNotTaken ? (
                   <Text className="mono muted" display="block" fontSize={11}>
                     T→{dualTakenNotTaken.taken.map((e) => e.to).join(",") || "∅"}
@@ -815,116 +833,22 @@ function DebugScreen() {
               </>
             ) : null}
 
-            {sel.panel === "step" && snap ? (
-              <>
-                <Text className="sem-heading">边</Text>
-                {selectedEdge ? (
-                  <>
-                    <Text className="mono muted" display="block" fontSize={11}>
-                      {selectedEdge.from} —{selectedEdge.dir}→ {selectedEdge.to}
-                    </Text>
-                    {(() => {
-                      const src = snap.nodes.find((n) => n.id === selectedEdge.from);
-                      const dst = snap.nodes.find((n) => n.id === selectedEdge.to);
-                      if (!src || !dst) return null;
-                      const delta = localExprs(src.exprs, dst.exprs);
-                      return (
-                        <>
-                          <SemBlock tag={<EiTag on={eiOnLabel(selectedEdge.dir)} />}>
-                            <ExprCapsules exprs={delta} />
-                          </SemBlock>
-                          <SemBlock tag={<PgTag />}>
-                            <PredCapsules preds={dst.predicates} />
-                          </SemBlock>
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <Text className="muted">点击图上的边。</Text>
-                )}
-                {focusedNode
-                  ? inboundEdges(focusedNode.id, snap.edges).map((e) => (
-                      <Text key={edgeKey(e)} className="mono muted" display="block" fontSize={11}>
-                        #{e.from} —{e.dir}→ #{e.to}
-                      </Text>
-                    ))
-                  : null}
-              </>
+            {sel.panel === "eg" && focusedNode && focusedSplit ? (
+              <SemBlock tag={<EgTag />}>
+                <ExprCapsules exprs={focusedSplit.eg} />
+              </SemBlock>
             ) : null}
 
-            {sel.panel === "path" && snap ? (
-              <>
-                <Text className="sem-heading">路径</Text>
-                <Text className="mono muted" display="block" fontSize={11}>
-                  {pathIds.map((id) => `#${id}`).join(" → ")}
-                </Text>
-                {pathIds.map((id) => {
-                  const n = snap.nodes.find((x) => x.id === id);
-                  if (!n) return null;
-                  return (
-                    <SemBlock key={id} tag={`#${id}`}>
-                      <PredCapsules preds={n.predicates} />
-                    </SemBlock>
-                  );
-                })}
-              </>
+            {sel.panel === "pi" && focusedNode ? (
+              <SemBlock tag={<PiTag />}>
+                <PredCapsules preds={focusedPi} />
+              </SemBlock>
             ) : null}
 
-            {sel.panel === "compare" ? (
-              <>
-                <Text className="sem-heading">比较</Text>
-                <Text className="muted" display="block" fontSize={11}>
-                  #{sel.focus}
-                  {sel.compare !== null ? ` · #${sel.compare}` : " · Shift+点击第二节点"}
-                </Text>
-                {focusedNode && compareNode ? (
-                  <>
-                    <Text className="mono muted" display="block" fontSize={11}>
-                      loc {focusedNode.loc === compareNode.loc ? "=" : "≠"}{" "}
-                      {focusedNode.loc}/{compareNode.loc}
-                    </Text>
-                    {(() => {
-                      const d = diffExprs(focusedNode.exprs, compareNode.exprs);
-                      const pd = diffPredicates(
-                        focusedNode.predicates,
-                        compareNode.predicates,
-                      );
-                      return (
-                        <>
-                          {d.added.length > 0 ? (
-                            <SemBlock tag="+E">
-                              <ExprCapsules exprs={d.added} />
-                            </SemBlock>
-                          ) : null}
-                          {d.removed.length > 0 ? (
-                            <SemBlock tag="−E">
-                              <ExprCapsules exprs={d.removed} />
-                            </SemBlock>
-                          ) : null}
-                          {d.changed.length > 0 ? (
-                            <SemBlock tag="ΔE">
-                              <ExprCapsules exprs={d.changed.map((c) => c.after)} />
-                            </SemBlock>
-                          ) : null}
-                          {pd.added.length > 0 ? (
-                            <SemBlock tag="+P">
-                              <PredCapsules preds={pd.added} />
-                            </SemBlock>
-                          ) : null}
-                          {pd.removed.length > 0 ? (
-                            <SemBlock tag="−P">
-                              <PredCapsules preds={pd.removed} />
-                            </SemBlock>
-                          ) : null}
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <Text className="muted">需要两个节点。</Text>
-                )}
-              </>
+            {sel.panel === "pg" && focusedNode ? (
+              <SemBlock tag={<PgTag />}>
+                <PredCapsules preds={focusedNode.predicates} />
+              </SemBlock>
             ) : null}
 
             {!focusedNode ? <Text className="muted">等待节点…</Text> : null}

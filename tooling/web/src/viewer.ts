@@ -7,7 +7,7 @@ export type ViewerSelection = {
   edgeKey: string | null;
   /** View-only: hide non-focused arrivals that share a program location. */
   collapseSameLoc: boolean;
-  panel: "node" | "step" | "path" | "compare";
+  panel: "ei" | "eg" | "pi" | "pg";
 };
 
 export function edgeKey(e: Pick<GraphEdge, "from" | "to" | "dir">): string {
@@ -99,6 +99,42 @@ export function helperName(id: number | undefined): string {
   return HELPER_NAMES[id] ?? `helper${id}`;
 }
 
+/** ABI arity for chip text; frozen lookup-key tail is omitted from display. */
+const HELPER_DISPLAY_ARITY: Record<number, number> = {
+  1: 2,
+  2: 4,
+  3: 2,
+  5: 0,
+  6: 5,
+  28: 5,
+  65: 2,
+};
+
+/** Shorten one helper arg for chips (map VMA → hex; long terms truncated). */
+export function shortHelperArg(arg: string): string {
+  if (/^\d+$/.test(arg)) {
+    const n = Number(arg);
+    if (Number.isSafeInteger(n) && n >= 0x1000) return `0x${n.toString(16)}`;
+    return arg;
+  }
+  // id32(add32(v32:0,4294967280)) → keep structure but compress constants.
+  let s = arg
+    .replace(/\bid32\b/g, "id")
+    .replace(/\badd32\b/g, "add")
+    .replace(/\bv32:(\d+)\b/g, "v$1");
+  s = s.replace(/\b(\d{5,})\b/g, (_, d: string) => {
+    const n = Number(d);
+    if (!Number.isSafeInteger(n)) return d;
+    // Stack offsets often appear as unsigned wrap of negatives.
+    if (n >= 0xffff0000) {
+      const neg = n - 0x1_0000_0000;
+      return String(neg);
+    }
+    return n >= 0x1000 ? `0x${n.toString(16)}` : d;
+  });
+  return s.length > 28 ? `${s.slice(0, 26)}…` : s;
+}
+
 function predStr(p: PredRow, key: string): string {
   const v = p[key];
   return typeof v === "string" ? v : v == null ? "" : String(v);
@@ -139,25 +175,32 @@ export function formatPred(p: PredRow): string {
     return `ret ${predStr(p, "term") || "?"}`;
   }
   if (p.kind === "helper") {
-    const name = helperName(predNum(p, "helperId"));
-    const ev = predNum(p, "event") != null ? `@e${predNum(p, "event")}` : "";
-    return `helper ${name}${ev}(${predArgs(p).join(", ")})`;
+    // `event` stays in PredRow / predKey; chips do not decorate with @eN.
+    const id = predNum(p, "helperId");
+    const name = helperName(id);
+    const arity = id != null ? (HELPER_DISPLAY_ARITY[id] ?? predArgs(p).length) : predArgs(p).length;
+    const args = predArgs(p).slice(0, arity).map(shortHelperArg);
+    return args.length === 0 ? name : `${name}(${args.join(", ")})`;
   }
   if (p.kind === "branch") {
-    const at = predStr(p, "at") || predStr(p, "loc") || "?";
-    return `branch ${predStr(p, "dir") || "?"} @${at}`;
+    const at = predStr(p, "at") || predStr(p, "loc") || predStr(p, "position") || "?";
+    const dir = predStr(p, "dir") || "?";
+    return `branch ${dir} #${at}`;
   }
   if (p.kind === "mapWrite" || p.kind === "map_write") {
+    const off = predStr(p, "offset");
+    const map = predStr(p, "map");
+    if (map && off) return `mapWrite ${shortHelperArg(map)}+${off}`;
     const target = predStr(p, "addr") || predStr(p, "key") || predStr(p, "term");
-    return target ? `map_write ${target}` : "map_write";
+    return target ? `mapWrite ${shortHelperArg(target)}` : "mapWrite";
   }
   if (p.kind === "packetWrite" || p.kind === "packet_write") {
     const off = predStr(p, "offset") || predStr(p, "term");
-    return off ? `packet_write ${off}` : "packet_write";
+    return off ? `packetWrite +${off}` : "packetWrite";
   }
   if (p.kind === "mapLookup" || p.kind === "map_lookup") {
     const target = predStr(p, "addr") || predStr(p, "key") || predStr(p, "term");
-    return target ? `map_lookup ${target}` : "map_lookup";
+    return target ? `mapLookup ${shortHelperArg(target)}` : "mapLookup";
   }
   return `${p.kind} predicate`;
 }
