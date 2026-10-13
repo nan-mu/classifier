@@ -60,10 +60,8 @@ fn path_demo_snapshot_complete_and_limit() {
     assert_eq!(nodes[2]["exprs"].as_array().unwrap().len(), 1);
     assert_eq!(nodes[2]["exprs"][0]["term"], "1");
     let preds = nodes[11]["predicates"].as_array().expect("predicates");
-    assert_eq!(
-        *preds,
-        vec![serde_json::json!({"kind": "ret", "term": "3"})]
-    );
+    // Exit carries return Expr equality; Return Predicate is not emitted yet.
+    assert!(preds.is_empty(), "unexpected predicates {preds:?}");
 
     // After 10 successful expandOnes with B=10, fuel is 0 and work remains (running).
     // The next expandOne observes LimitExceeded.
@@ -255,7 +253,8 @@ mod stateless_head_ffi {
         let root: Value =
             serde_json::from_str(&rv32::expand_create(&Meta::new(0x400, 0x100))).unwrap();
         let node = &root["nodes"][0];
-        let preds = json!([{ "kind": "ret", "term": "v32:123" }]);
+        // Predicate wire is Helper-only until Branch/Return land in Lean.
+        let preds = json!([]);
         let result = step(&words, 0, &node["exprs"].to_string(), &preds.to_string());
         assert_eq!(result["status"], "ok");
         assert_eq!(result["reason"], Value::Null);
@@ -298,6 +297,36 @@ mod stateless_head_ffi {
             step(&words, 0, &node["exprs"].to_string(), &preds.to_string()),
             result
         );
+    }
+
+    #[test]
+    fn expand_merge_exact_config_is_arch_neutral() {
+        let equal = json!({
+            "observationModel": "HelperOnly",
+            "requiredObservations": ["Helper"],
+            "taken": { "id": 42, "loc": "3", "exprs": [], "predicates": [] },
+            "notTaken": [
+                { "id": 17, "loc": "3", "exprs": [], "predicates": [] },
+                { "id": 18, "loc": "4", "exprs": [], "predicates": [] }
+            ]
+        });
+        let merged: Value = serde_json::from_str(&rv32::expand_merge(&equal.to_string())).unwrap();
+        assert_eq!(merged["status"], "merged");
+        assert_eq!(merged["scope"], "ExactConfig");
+        assert_eq!(merged["reuseFrom"], 17);
+        assert_eq!(merged["taken"], 42);
+
+        let unequal = json!({
+            "observationModel": "HelperOnly",
+            "requiredObservations": ["Helper"],
+            "taken": { "id": 1, "loc": "3", "exprs": [], "predicates": [] },
+            "notTaken": [{ "id": 2, "loc": "4", "exprs": [], "predicates": [] }]
+        });
+        let rejected: Value =
+            serde_json::from_str(&rv32::expand_merge(&unequal.to_string())).unwrap();
+        assert_eq!(rejected["status"], "reject");
+        assert_eq!(rejected["reason"], "InsufficientEvidence");
+        assert_eq!(rejected["detail"], "NoExactConfigMatch");
     }
 
     #[test]

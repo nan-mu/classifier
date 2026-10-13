@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::driver::{Agenda, Dir, MergePort, RecordStore};
+use crate::driver::{Agenda, ConfigSnapshot, Dir, MergeEffect, MergePort, RecordStore};
 
 /// Matches `lean_binding::LEAN_WORKERS`: at most this many expand jobs in flight.
 pub const INFERENCE_PERMITS: usize = lean_binding::LEAN_WORKERS;
@@ -88,7 +88,7 @@ impl ExpandSession {
             snapshot,
             agenda,
             records: RecordStore::default(),
-            merge: MergePort,
+            merge: MergePort::default(),
         };
         session.sync_work();
         session
@@ -99,6 +99,33 @@ impl ExpandSession {
         self.snapshot["work"] = json!(ids);
     }
 
+    fn apply_merge_effects(&mut self, effects: Vec<MergeEffect>) {
+        for effect in effects {
+            match effect {
+                MergeEffect::Reuse { taken, reuse_from } => {
+                    let nodes = self.snapshot["nodes"].as_array_mut().expect("nodes");
+                    if let Some(node) = nodes.get_mut(taken as usize) {
+                        node.as_object_mut()
+                            .expect("node object")
+                            .insert("mergeReuseFrom".into(), json!(reuse_from));
+                    }
+                    self.snapshot["edges"]
+                        .as_array_mut()
+                        .expect("edges")
+                        .push(json!({
+                            "src": taken,
+                            "dir": "reuse",
+                            "dst": reuse_from,
+                        }));
+                }
+                MergeEffect::Rejected { .. } => {
+                    // Exact-config reject is expected on branch diamonds that keep
+                    // complementary constraints; Agenda continues merge-step.
+                }
+            }
+        }
+    }
+
     /// Expand up to `max_heads` Agenda-ready heads in parallel on the Lean worker pool.
     /// Same-branch Taken stays blocked while NotTaken is open; independent heads may wave.
     /// Returns how many heads were successfully expanded (0 if idle/limit/reject-before-commit).
@@ -107,6 +134,20 @@ impl ExpandSession {
             return 0;
         }
         let fuel = self.snapshot["fuel"].as_u64().unwrap_or(0) as u32;
+        if fuel == 0 {
+            // Must run before ready_heads(...min(fuel)): fuel 0 would yield an empty
+            // preview and skip LimitExceeded while work remains.
+            if !self.agenda.is_idle() || !self.agenda.ready_ids().is_empty() {
+                self.snapshot["status"] = json!("fail");
+                self.snapshot["reason"] = json!("LimitExceeded");
+                self.snapshot["failed"] = Value::Null;
+                self.sync_work();
+                return 0;
+            }
+            self.snapshot["status"] = json!("complete");
+            self.sync_work();
+            return 0;
+        }
         let preview = self.agenda.ready_heads(
             max_heads
                 .max(1)
@@ -118,13 +159,6 @@ impl ExpandSession {
                 self.snapshot["status"] = json!("complete");
                 self.sync_work();
             }
-            return 0;
-        }
-        if fuel == 0 {
-            self.snapshot["status"] = json!("fail");
-            self.snapshot["reason"] = json!("LimitExceeded");
-            self.snapshot["failed"] = Value::Null;
-            self.sync_work();
             return 0;
         }
 
@@ -200,18 +234,31 @@ impl ExpandSession {
                     }));
                 succ_meta.push((dir, id, loc));
             }
+            let nodes = self.snapshot["nodes"].clone();
+            let mut merge_effects = Vec::new();
+            let lookup = |id: u32| {
+                nodes
+                    .get(id as usize)
+                    .map(|n| ConfigSnapshot::from_node(id, n))
+            };
             self.agenda.on_successors(
                 event,
                 &parent_loc,
                 &succ_meta,
                 &mut self.records,
                 &self.merge,
+                &lookup,
+                &mut merge_effects,
             );
+            self.apply_merge_effects(merge_effects);
         }
         self.sync_work();
         if self.agenda.is_idle() {
             self.snapshot["status"] = json!("complete");
         }
+        // LimitExceeded is declared on the next expand attempt when fuel is already 0,
+        // matching Lean bound-words snapshots (fuel 0 with remaining work stays running
+        // until the exhausted step is requested).
         expanded
     }
 

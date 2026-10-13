@@ -70,6 +70,8 @@ pub(crate) mod ffi {
             exprs_json: LeanObj,
             preds_json: LeanObj,
         ) -> LeanObj;
+        /// Arch-neutral exact-config merge (`CommonMath/Merge.lean`).
+        pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
     }
 
     #[cfg(test)]
@@ -116,6 +118,15 @@ pub fn init() {
         let _ = ffi::initialize_classifier_RV32IMC(1, world);
         ffi::lean_io_mark_end_initialization();
     });
+}
+
+pub mod expand {
+    use super::rv32;
+
+    /// Arch-neutral exact-config merge (request JSON only).
+    pub fn merge(request_json: &str) -> String {
+        rv32::expand_merge(request_json)
+    }
 }
 
 pub mod common_math {
@@ -331,6 +342,16 @@ pub mod rv32 {
             take_string(ffi::lean_rv32_expand_step(
                 arr, meta, event, j, exprs, preds,
             ))
+        })
+    }
+
+    /// Arch-neutral exact-config merge. Request JSON only (no program / Meta).
+    /// See `doc/NodeInference/路径合并FFI.md`.
+    pub fn expand_merge(request_json: &str) -> String {
+        let request_json = request_json.to_owned();
+        lean_call(move || unsafe {
+            let req = lean_string(&request_json);
+            take_string(ffi::lean_expand_merge(req))
         })
     }
 }

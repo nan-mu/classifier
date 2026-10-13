@@ -33,12 +33,14 @@ export type GraphNode = {
   exprs: ExprRow[];
   predicates: PredRow[];
   preds: number[];
+  /** Exact-config merge reuse target (NotTaken suffix entry). */
+  merge_reuse_from?: number;
 };
 
 export type GraphEdge = {
   from: number;
   to: number;
-  dir: "only" | "taken" | "not_taken";
+  dir: "only" | "taken" | "not_taken" | "reuse";
 };
 
 export type LogRow = {
