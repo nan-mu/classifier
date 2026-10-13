@@ -15,7 +15,7 @@ def parseReg (text : String) : Option Reg := do
   let [head, alpha] := text.splitOn ":" | none
   let alpha ← alpha.toNat?
   let (kind, width) ← ([ ("real", RegKind.real), ("stack", .stack),
-    ("map", .map), ("packet", .packet) ].findSome? fun (stem, kind) => do
+    ("map", .map), ("packet", .packet), ("context", .context) ].findSome? fun (stem, kind) => do
       if !head.startsWith stem then none else
         pure (kind, ← parseWidth (head.drop stem.length).toString))
   let r : Reg := ⟨kind, width, alpha⟩
@@ -331,7 +331,8 @@ private def parseRoundTripCheck : Bool :=
     Term.app .w32 (.or 32) [Term.app .w32 (.low 8 32)
       [Term.app .w32 (.inputByte 3) [Term.V32 1, Term.V32 2]], Term.C32 4],
     Term.C64 18446744073709551615, Term.V64 9]
-  let regs := [Reg.real32 10, Reg.sw 8, Reg.mapWord 7 4, Reg.packet 3 2, Reg.real64 1]
+  let regs := [Reg.real32 10, Reg.sw 8, Reg.mapWord 7 4, Reg.packet 3 2, Reg.real64 1,
+    Reg.ctx32 100, Reg.ctx64 101]
   let rels := [Rel.eq, .ne, .ltu, .geu, .lts, .ges, .eqN 8, .neN 16,
     .ltuN 8, .leuN 8, .gtuN 8, .geuN 8, .ltsN 8, .lesN 8, .gtsN 8, .gesN 8,
     .bitsnz 8, .bitsz 8, .leu, .gtu, .les, .gts]

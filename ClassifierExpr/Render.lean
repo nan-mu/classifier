@@ -18,6 +18,7 @@ def renderRegKind : RegKind → String
   | .stack => "stack"
   | .map => "map"
   | .packet => "packet"
+  | .context => "context"
 
 def renderReg (r : Reg) : String :=
   s!"{renderRegKind r.kind}{renderWidth r.width}:{r.alpha}"

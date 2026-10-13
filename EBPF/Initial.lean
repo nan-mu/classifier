@@ -6,7 +6,7 @@ open ClassifierExpr PathMerge
 /-! External correspondence TBD.
 Only logical context and stack inputs are bound: r1=tCtx, r10=tSp.
 RV32's tCtx/tSp name the corresponding logical inputs, but its 32-bit wrapper,
-context-slot layout, saved registers, and return address are not equated here.
+context-cell layout, wrapper register bindings, and return address are not equated here.
 Packet/context loads, resource contracts, helper calls and internal returns are
 outside this executable slice. Uninitialized registers have no equality. -/
 structure EntryParams where

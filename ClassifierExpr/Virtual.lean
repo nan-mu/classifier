@@ -16,7 +16,7 @@ def ExprEffect.validFor (effect : ExprEffect) (Eg : ExprSet) : Bool :=
     effect.inputs.keysUnique && effect.updates.keysUnique &&
     effect.inputs.entries.all (fun e => (Eg.find? e.key).isNone)
 
-/-- A resolved field in a canonical Stack or Map cell; address binding is ISA-owned. -/
+/-- A resolved field in a canonical Stack, Map or Context cell; address binding is ISA-owned. -/
 structure CellAccess where
   reg : Reg
   bitOffset : Nat
@@ -24,7 +24,7 @@ structure CellAccess where
   deriving Inhabited, Repr
 
 def CellAccess.valid (a : CellAccess) (valueWidth : Width) : Bool :=
-  (a.reg.kind == .stack || a.reg.kind == .map) &&
+  (a.reg.kind == .stack || a.reg.kind == .map || a.reg.kind == .context) &&
     a.bits > 0 && a.bits ≤ valueWidth.bits && a.bitOffset + a.bits ≤ a.reg.width.bits
 
 def CellAccess.read (a : CellAccess) (Eg : ExprSet) (w : Width)

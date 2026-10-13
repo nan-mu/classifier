@@ -7,7 +7,7 @@
 create、step、history、merge 与合并步使用数学契约；create 的入口假设和 step 的指令规则按目标架构给定。产品 create/step 的 RV32IMC 归属与模块构建图见[工程模块与迁移](NodeInference/路径合并FFI.md#工程模块与迁移)，跨架构研究与证明限度见[语义范围与证据边界](NodeInference/路径合并FFI.md#语义范围与证据边界)。数学定义和公式由以下所属正文维护，FFI 与现有实现差异由工程文档维护。
 
 1. [位向量](Expr/Term/位向量.md)与[共同数值函数](Expr/Term/数值函数.md)：Expr 右值使用的数值记号与纯数值函数。
-2. [寄存器定义](寄存器定义.md)：四类对象的身份、位宽、值域与相等，只维护定义。
+2. [寄存器定义](寄存器定义.md)：五类对象的身份、位宽、值域与相等，只维护定义。
 3. 表达式主题见 [Expr 索引](Expr/Expr.md#索引)。
 4. 谓词与观察集合主题依次读[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)、[Helper 共同定义](Predicate/Helper谓词.md)、[MapLookup谓词](Predicate/MapLookup谓词.md)、[MapUpdate谓词](Predicate/MapUpdate谓词.md)、[MapDelete谓词](Predicate/MapDelete谓词.md)、[OtherHelper谓词](Predicate/OtherHelper谓词.md)、[Branch谓词](Predicate/Branch谓词.md)、[Return谓词](Predicate/Return谓词.md)、[MapWrite谓词](Predicate/MapWrite谓词.md)、[PacketWrite谓词](Predicate/PacketWrite谓词.md)、[五类观察结构累积及解释义务](Predicate/谓词定义.md#观察集合累积与可满足性)、[观察集合与历史顺序](Predicate/谓词定义.md#观察集合与历史顺序)。固定程序的观察域为 \(\mathrm{Predicate}_{\mathbf I}\)：Helper 的外部调用观察、Branch 的选定方向与条件、Return 的最外层正常返回结果、MapWrite 的 Map 元素内写入与 PacketWrite 的包写入分别由各所属正文维护。
 5. [路径](NodeInference/路径.md)：指令序号、机器地址、字节偏移与不透明节点引用的区别，以及方向。
@@ -47,7 +47,7 @@ create、step、history、merge 与合并步使用数学契约；create 的入�
 
 以下问题仍需定义或证明：
 
-- Stack、Map 与 Packet 访问的资源身份、范围、权限与对齐条件和访问有效性之间的语义联系，仍须定义或证明；MapWrite 与 PacketWrite 已规定写入观察的构造及生成前提。当前 \(\mathrm{Predicate}_{\mathbf I}\) 包含 Helper、Branch、Return、MapWrite 与 PacketWrite，类型及各类解释入口见[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)。
+- Stack、Map、Context 与 Packet 访问的资源身份、范围、权限与对齐条件和访问有效性之间的语义联系，仍须定义或证明；MapWrite 与 PacketWrite 已规定写入观察的构造及生成前提。当前 \(\mathrm{Predicate}_{\mathbf I}\) 包含 Helper、Branch、Return、MapWrite 与 PacketWrite，类型及各类解释入口见[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)。
 - 在累积条件下判定可行性、检测矛盾及约束推理的可靠性仍须定义或证明；现有规则见[累积不等于可行性求解](Predicate/谓词定义.md#累积不等于可行性求解)。
 - helper 调用与写入的动态身份已有局部构造要求，其他事件身份、完整轨迹与顺序观察规则仍须定义，当前边界见[观察集合与历史顺序](Predicate/谓词定义.md#观察集合与历史顺序)及[History 动态身份义务](NodeInference/History.md#局部结果顺序与重复事件)。
 - 五类混合观察的结构累积已规定；入口语义合法性、各类解释与实际步骤和历史的对应仍须证明，见[观察解释与历史义务](Predicate/谓词定义.md#观察集合累积与可满足性)。这些集合性质与现有局部命题不能直接推出资源访问正确或完整行为等价。产品生成覆盖与缺口见[五类观察的实现对应](NodeInference/路径合并FFI.md#五类观察的实现对应)。

@@ -42,7 +42,7 @@ t_{\mathrm{end}}
 R_s=\{\mathrm{s0},\ldots,\mathrm{s11}\}.
 \]
 
-对 \(r\in R_s\cup\{\mathrm{gp},\mathrm{tp}\}\)，给定入口项 \(t_r\in\mathrm{Term}_{32}\)。未知值使用各自固定的输入名称。
+基础赋值不为保存寄存器与 \(\mathrm{gp}\)、\(\mathrm{tp}\) 添加入口等式；未取得入口位置绑定的这些寄存器读取无定义，见[适用边界](#适用边界与依据)。
 
 定义基础关系集合
 
@@ -55,12 +55,11 @@ R_s=\{\mathrm{s0},\ldots,\mathrm{s11}\}.
 &\mathrm{Real}_{32}(\mathrm{t0})=t_{\mathrm{sp}},\
 \mathrm{Real}_{32}(\mathrm{t1})=t_{\mathrm{return}},\
 \mathrm{Real}_{32}(\mathrm{t2})=t_{\mathrm{frame}},\
-\mathrm{Real}_{32}(\mathrm{a0})=t_{\mathrm{ctx}}\}
-&\cup\{\mathrm{Real}_{32}(r)=t_r:r\in R_s\cup\{\mathrm{gp},\mathrm{tp}\}\}.
+\mathrm{Real}_{32}(\mathrm{a0})=t_{\mathrm{ctx}}\}.
 \end{aligned}
 \]
 
-\(\mathrm{t0}\) 与 SP 具有相同入口值，\(\mathrm{t1}\) 与 RA 具有相同返回值项。这些是入口关系，不表示两个不同寄存器具有相同身份。目标程序尚未执行，所以不预设 \(\mathrm{s0}=\mathrm{sp}\)。
+\(\mathrm{t0}\) 与 SP 具有相同入口值，\(\mathrm{t1}\) 与 RA 具有相同返回值项。这些是入口关系，不表示两个不同寄存器具有相同身份。
 
 #### 承载入口位置的寄存器
 
@@ -84,7 +83,7 @@ r_{\mathrm{entry}}\in
 \end{cases}
 \]
 
-\(\operatorname{valueBindings}(\mathcal V,\mathcal C)=\mathcal V\) 取得值绑定分量。若承载标识属于保存寄存器，普通等式被替换，不同时保留两份完整值定义。未在构造中出现的真实寄存器没有入口等式，读取这些缺失值仍不满足值函数定义域。
+\(\operatorname{valueBindings}(\mathcal V,\mathcal C)=\mathcal V\) 取得值绑定分量。合法的 \(r_{\mathrm{entry}}\ne\mathrm{ra}\) 与七个基础真实键均不相同，入口位置绑定总是增加一个新键。未在构造中出现的真实寄存器没有入口等式，读取这些缺失值仍不满足值函数定义域。
 
 ### 上下文六槽关系
 
@@ -98,22 +97,22 @@ C_{32}(\iota_{\mathrm{wifi}}),C_{32}(0),C_{32}(0)).
 
 这些初值属于本入口模型的假设；字段布局本身不确定这些值。
 
-给定互不相同的虚拟栈标识 \(\alpha_{\mathrm{ctx},0},\ldots,\alpha_{\mathrm{ctx},5}\)。
+给定上下文规范单元的标识起点 \(\alpha_{\mathrm{ctx}}\in\mathbb N\)，六个字段的单元标识依次为 \(\alpha_{\mathrm{ctx}}+j\)，其中 \(0\le j<6\)。
 
-**假设 II（上下文字段访问）。** 地址项
+**假设 II（上下文字段访问）。** 对 \(0\le j<6\)，地址项
 
 \[
 \mathrm{ADD}_{32}^{\star}(t_{\mathrm{ctx}},C_{32}(4j))
 \]
 
-唯一确定所访问的字段单元为 \(\mathrm{SW}(\alpha_{\mathrm{ctx},j})\)，且访问有效。字段地址与单元的对应、资源观察的完整语义需另外给定；Expr 本身只记录值关系。
+唯一确定所访问的字段单元为 \(\mathrm{Ctx}_{32}(\alpha_{\mathrm{ctx}}+j)\)，且访问有效。字段地址与单元的对应由指令集侧的入口绑定给定，资源观察的完整语义需另外给定；Expr 本身只记录值关系。
 
 定义
 
 \[
 \boxed{
 \mathcal V_{\mathrm{ctx},0}
-:=\{\mathrm{SW}(\alpha_{\mathrm{ctx},j})=u_j:0\le j<6\}.
+:=\{\mathrm{Ctx}_{32}(\alpha_{\mathrm{ctx}}+j)=u_j:0\le j<6\}.
 }
 \]
 
@@ -135,23 +134,23 @@ C_{32}(\iota_{\mathrm{wifi}}),C_{32}(0),C_{32}(0)).
 
 **命题 I1（有限性与位宽）。** 假设 I、II 成立时，\(\mathcal E_0\in\mathscr F(\mathrm{Expr})\)，每个关系均为完整的 32 位等式；其中 \(\mathscr F(\mathrm{Expr})\) 为有限 Expr 关系集合的类型，\(\mathcal E_0\) 为该类型的初始关系集合。
 
-**证明。** 基础赋值包含有限个真实标识，覆写至多添加一个目标；上下文有六个标识。所有入口项为 32 位，模加法与常元也为 32 位。两部分的每个左侧标记均为 32 位，故每个等式类型正确且总集合有限。\(\square\)
+**证明。** 基础赋值包含七个真实标识，入口位置绑定至多添加一个真实目标；上下文有六个 Context 标识。所有入口项为 32 位，模加法与常元也为 32 位。Real 与 Context 均允许 32 位标记，故两部分的每个等式类型正确且总集合有限。\(\square\)
 
 **命题 I2（键唯一性）。** \(\mathcal V_0\) 满足同左值关系唯一。
 
-**证明。** 基础赋值中的真实寄存器身份互异，别名不重复加入；按键覆写保持唯一性。上下文六个栈标识互异，故内部键唯一。Real 与 Stack 是不交类别，两部分没有公共键，因此它们的并集仍有效。\(\square\)
+**证明。** 基础赋值中的真实寄存器身份互异，别名不重复加入；按键覆写保持唯一性。上下文六个连续标识 \(\alpha_{\mathrm{ctx}}+j\) 互异，故 Context 部分内部键唯一。Real 与 Context 是不交类别，两部分没有公共键，因此它们的并集仍有效。\(\square\)
 
 **命题 I3（基数）。**
 
 \[
 |\mathcal V_0|=
 \begin{cases}
-27,&r_{\mathrm{entry}}\in\{\mathrm{ra}\}\cup R_s,\\
-28,&r_{\mathrm{entry}}\in\{\mathrm{a1},\ldots,\mathrm{a7},\mathrm{t3},\ldots,\mathrm{t6}\}.
+13,&r_{\mathrm{entry}}=\mathrm{ra},\\
+14,&r_{\mathrm{entry}}\ne\mathrm{ra}.
 \end{cases}
 \]
 
-**证明。** \(\mathcal V_{\mathrm{base}}\) 有 \(7+12+2=21\) 个真实键。第一种情形不增加键，第二种增加一个原本不存在的真实键；上下文六键与真实键不交。\(\square\)
+**证明。** \(\mathcal V_{\mathrm{base}}\) 的七个真实键编号为 \(\{0,1,2,5,6,7,10\}\)。\(r_{\mathrm{entry}}=\mathrm{ra}\) 时不增加键；其他合法承载标识的编号属于 \(\{8,9,11,\ldots,31\}\)，与七个基础键均不相同，故恰增加一个真实键。六个 Context 键彼此互异且与真实键不交，分别得到 \(7+6=13\) 与 \(7+1+6=14\)。\(\square\)
 
 **命题 I4（入口关系可满足）。** 对每个变元赋值 \(\nu\)，存在寄存器赋值 \(\rho\) 使 \(\mathcal V_0\) 的全部等式成立。
 
@@ -161,7 +160,7 @@ C_{32}(\iota_{\mathrm{wifi}}),C_{32}(0),C_{32}(0)).
 
 ### 适用边界与依据
 
-未初始化局部栈槽不补零，未出现的真实寄存器不补任意值。\(\mathcal E_0\) 不含包字节关系，其基数结论不计入后续引入的包标记。未记录虚拟寄存器的取源见[未记录虚拟寄存器的取源](../Expr/Expr.md#未记录虚拟寄存器的取源)。四类读写规则见 [Expr 索引](../Expr/Expr.md#索引)。初态本身不定义 Map 访问或外部调用。
+未初始化局部栈槽不补零，未出现的真实寄存器不补任意值。\(\mathcal E_0\) 不含包字节关系，其基数结论不计入后续引入的包标记。未记录虚拟寄存器的取源见[未记录虚拟寄存器的取源](../Expr/Expr.md#未记录虚拟寄存器的取源)。五类读写规则见 [Expr 索引](../Expr/Expr.md#索引)。初态本身不定义 Map 访问或外部调用。
 
 上下文字段布局见 [Linux UAPI 的 xdp_md 定义](https://github.com/torvalds/linux/blob/master/include/uapi/linux/bpf.h)。真实寄存器入口赋值、接口编号与字段初值由入口项与假设给定。
 

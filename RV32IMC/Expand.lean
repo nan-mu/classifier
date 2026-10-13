@@ -293,9 +293,13 @@ def smokeEntryParams : EntryParams := {
   tLen := Term.V32 EntryVar.len
   ιWifi := 1 -- Synthetic IFINDEX_WIFI for this smoke fixture.
   αCtx := 0
-  tGp := Term.V32 EntryVar.gp
-  tTp := Term.V32 EntryVar.tp
-  rEntry := Reg.real32 11
+  -- The fixture first reads a callee-saved register at index 7: c.swsp s0,8(sp).
+  -- x8 ∈ R_s is a legal r_entry; it is otherwise unbound in the frozen entry model.
+  -- Binding x8 to the concrete entry-address term tEntry = C32 0x1000 (not a free
+  -- variable) preserves the documented frontier without inventing a saved-register
+  -- entry equality: rEntry=x11 blocks at index 7; rEntry=x8 reaches index 25's
+  -- LHU symbolic-offset block.
+  rEntry := Reg.real32 8
 }
 
 /-- addi a0,zero,7; addi a0,a0,1; jalr zero,ra,0. -/
@@ -311,16 +315,18 @@ private def smokeE0RealCheck : Bool :=
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    σ.exprs.keysUnique && σ.predicates.isEmpty && σ.exprs.entries.length == 28 &&
-      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 22 &&
-      (buildEBase p).entries.length == 21 &&
+    σ.exprs.keysUnique && σ.predicates.isEmpty && σ.exprs.entries.length == 14 &&
+      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 8 &&
+      (buildEBase p).entries.length == 7 &&
       initialEqCheck σ.exprs (Reg.real32 0) (Term.C32 0) &&
       initialEqCheck σ.exprs (Reg.real32 2) p.tSp &&
       initialEqCheck σ.exprs (Reg.real32 5) p.tSp &&
       initialEqCheck σ.exprs (Reg.real32 1) p.tReturn &&
       initialEqCheck σ.exprs (Reg.real32 6) p.tReturn &&
+      initialEqCheck σ.exprs (Reg.real32 7) p.tFrame &&
       initialEqCheck σ.exprs (Reg.real32 10) p.tCtx &&
       initialEqCheck σ.exprs p.rEntry p.tEntry &&
+      (σ.exprs.lookupEq (Reg.real32 9)).isNone &&
       (σ.exprs.lookupEq (Reg.real32 32)).isNone
 
 private def smokeE0CtxCheck : Bool :=
@@ -329,29 +335,29 @@ private def smokeE0CtxCheck : Bool :=
   | .error _ => false
   | .ok σ =>
     (buildECtx0 p).entries.length == 6 &&
-      (σ.exprs.entries.filter (fun e => e.reg.kind == .stack)).length == 6 &&
-      initialEqCheck σ.exprs (Reg.sw p.αCtx) p.tData &&
-      initialEqCheck σ.exprs (Reg.sw (p.αCtx + 1)) (addStar .w32 p.tData p.tLen) &&
-      initialEqCheck σ.exprs (Reg.sw (p.αCtx + 2)) (Term.C32 0) &&
-      initialEqCheck σ.exprs (Reg.sw (p.αCtx + 3)) (Term.C32 p.ιWifi) &&
-      initialEqCheck σ.exprs (Reg.sw (p.αCtx + 4)) (Term.C32 0) &&
-      initialEqCheck σ.exprs (Reg.sw (p.αCtx + 5)) (Term.C32 0)
+      (σ.exprs.entries.filter (fun e => e.reg.kind == .context)).length == 6 &&
+      initialEqCheck σ.exprs (Reg.ctx32 p.αCtx) p.tData &&
+      initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 1)) (addStar .w32 p.tData p.tLen) &&
+      initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 2)) (Term.C32 0) &&
+      initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 3)) (Term.C32 p.ιWifi) &&
+      initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 4)) (Term.C32 0) &&
+      initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 5)) (Term.C32 0)
 
-private def smokeEntryOverwriteCheck : Bool :=
-  let p := { smokeEntryParams with rEntry := Reg.real32 8 }
+private def smokeEntryFreshKeyCheck : Bool :=
+  let p := { smokeEntryParams with rEntry := Reg.real32 9 }
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    σ.exprs.keysUnique && σ.exprs.entries.length == 27 &&
-      initialEqCheck (buildEBase p) p.rEntry (Term.V32 (p.savedVar 8)) &&
-      initialEqCheck σ.exprs p.rEntry p.tEntry &&
-      initialEqCheck σ.exprs (Reg.real32 9) (Term.V32 (p.savedVar 9))
+    σ.exprs.keysUnique && σ.exprs.entries.length == 14 &&
+      initialEqCheck σ.exprs (Reg.real32 9) p.tEntry &&
+      (buildEBase p).entries.length == 7 &&
+      (σ.exprs.lookupEq (Reg.real32 8)).isNone
 
 private def smokeRaEntryCheck : Bool :=
   let p := { smokeEntryParams with rEntry := Reg.real32 1 }
   match buildE0 p with
   | .error _ => false
-  | .ok σ => σ.exprs.entries.length == 27 &&
+  | .ok σ => σ.exprs.entries.length == 13 &&
       initialEqCheck σ.exprs p.rEntry p.tReturn &&
       initialEqCheck σ.exprs (Reg.real32 6) p.tReturn
 
@@ -359,9 +365,9 @@ private def smokeConcreteDataEndCheck : Bool :=
   let p := { smokeEntryParams with tData := Term.C32 4096, tLen := Term.C32 64, αCtx := 100 }
   match buildE0 p with
   | .error _ => false
-  | .ok σ => initialEqCheck σ.exprs (Reg.sw 100) (Term.C32 4096) &&
-      initialEqCheck σ.exprs (Reg.sw 101) (Term.C32 4160) &&
-      (σ.exprs.lookupEq (Reg.sw 0)).isNone
+  | .ok σ => initialEqCheck σ.exprs (Reg.ctx32 100) (Term.C32 4096) &&
+      initialEqCheck σ.exprs (Reg.ctx32 101) (Term.C32 4160) &&
+      (σ.exprs.lookupEq (Reg.ctx32 0)).isNone
 
 private def smokeInitialRootCheck : Bool :=
   match rv32Init smokeProgram smokeEntryParams 0 3 with
@@ -370,8 +376,8 @@ private def smokeInitialRootCheck : Bool :=
     match ws.nodes[0]? with
     | none => false
     | some root => root.loc == .pos 0 && ws.nodes.size == 1 && ws.edges.isEmpty &&
-        ws.work == [0] && ws.fuel == 3 && root.state.exprs.entries.length == 28 &&
-        initialEqCheck root.state.exprs (Reg.sw smokeEntryParams.αCtx) smokeEntryParams.tData
+        ws.work == [0] && ws.fuel == 3 && root.state.exprs.entries.length == 14 &&
+        initialEqCheck root.state.exprs (Reg.ctx32 smokeEntryParams.αCtx) smokeEntryParams.tData
 
 private def smokeInvalidEntryCheck : Bool :=
   [{ smokeEntryParams with rEntry := Reg.real32 32 },
@@ -427,7 +433,7 @@ private def smokeEmptyPredicateMergeCheck : Bool :=
 
 #guard smokeE0RealCheck
 #guard smokeE0CtxCheck
-#guard smokeEntryOverwriteCheck
+#guard smokeEntryFreshKeyCheck
 #guard smokeRaEntryCheck
 #guard smokeConcreteDataEndCheck
 #guard smokeInitialRootCheck
@@ -469,7 +475,7 @@ private def contextLoadRejectionCheck : Bool :=
   | .error _ => false
   | .ok σ =>
     let incomplete : ExprSet := { entries := (σ.exprs.entries.filter
-      (fun e => e.reg != Reg.sw (smokeEntryParams.αCtx + 5))) }
+      (fun e => e.reg != Reg.ctx32 (smokeEntryParams.αCtx + 5))) }
     let bad := [
       Insn.LOAD (2#12, .Regidx 10#5, .Regidx 12#5, false, 4),
       .LOAD (24#12, .Regidx 10#5, .Regidx 12#5, false, 4),
@@ -488,8 +494,8 @@ private def contextShiftedBaseCheck : Bool :=
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    -- An isolated lower stack alpha is not a context run; an alias can share the context term.
-    let Eg := σ.exprs.insertEq (Reg.sw 1) (Term.C32 99)
+    -- An isolated lower Context alpha is not a complete run; an alias shares the context term.
+    let Eg := σ.exprs.insertEq (Reg.ctx32 1) (Term.C32 99)
       |>.insertEq (Reg.real32 15) p.tCtx
     match exprLOAD Eg (.Regidx 15#5) (.Regidx 12#5) 4 with
     | some Ei => Ei.entries.length == 1 &&
@@ -595,14 +601,14 @@ private def esp32c3OpeningCheck : Bool :=
     | .inr ws =>
       match ws.nodes[0]?, ws.nodes[4]?, ws.nodes[5]?, ws.nodes[6]?, ws.nodes[7]? with
       | some root, some branch, some taken, some fall, some returned =>
-        root.state.exprs.entries.length == 28 &&
+        root.state.exprs.entries.length == 14 &&
         initialEqCheck root.state.exprs (Reg.real32 10) p.tCtx &&
         branch.loc == .pos 4 &&
         initialEqCheck branch.state.exprs (Reg.real32 12) p.tData &&
         initialEqCheck branch.state.exprs (Reg.real32 11) (addStar .w32 p.tData p.tLen) &&
         initialEqCheck branch.state.exprs (Reg.real32 13) (addStar .w32 p.tData (Term.C32 14)) &&
         initialEqCheck branch.state.exprs (Reg.real32 10) (Term.C32 2) &&
-        initialEqCheck branch.state.exprs (Reg.sw p.αCtx) p.tData &&
+        initialEqCheck branch.state.exprs (Reg.ctx32 p.αCtx) p.tData &&
         (branch.state.exprs.lookupEq (Reg.real32 32)).isNone &&
         ws.nodes.size == 8 && ws.edges.size == 7 && ws.work == [6] && ws.fuel == 42 &&
         taken.loc == .pos 47 && fall.loc == .pos 5 && returned.loc == .exit &&

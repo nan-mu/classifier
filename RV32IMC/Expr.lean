@@ -191,23 +191,22 @@ def exprJALR (Eg : ExprSet) (rs1 rd : regidx) : Option ExprSet :=
           | none => none
           | some tπ => some (assign rd (addStar .w32 tπ (Term.C32 4)))
 
-/-- MVP context binding: the lowest start of six consecutive SW equalities.
+/-- Context binding is the lowest start of six consecutive Context32 equalities.
 Address-to-slot Predicates and other resource access rules remain undefined. -/
 private def ctxBaseAlpha (Eg : ExprSet) : Option Nat := Id.run do
   let mut base : Option Nat := none
   for e in Eg.entries do
-    if e.reg.kind == .stack && e.reg.width == .w32 && e.reg.alpha < (1 <<< 32) && e.rel == .eq then
+    if e.reg.kind == .context && e.reg.width == .w32 && e.rel == .eq then
       let α := e.reg.alpha
       let complete := (List.range 6).all fun j =>
-        match Eg.lookupEq (Reg.sw (α + j)) with
+        match Eg.lookupEq (Reg.ctx32 (α + j)) with
         | some t => t.width == .w32
         | none => false
       if complete then
         base := some (match base with | none => α | some b => min b α)
   pure base
 
-/-- Stack slots use alphas ≥ 2^32; context bindings occupy the lower namespace.
-Normalize only affine 32-bit addresses, without changing symbolic value terms.
+/-- Normalize only affine 32-bit addresses, without changing symbolic value terms.
 `id` wraps a copied term (`C.MV`, eBPF copy) but denotes the identity on values
 (`ID_w a = a`), so peel it before classifying the shape, as `lookupAddress` does. -/
 private def affineAddress : Term → Option (Option Nat × Nat)
@@ -252,7 +251,7 @@ def exprLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
       none
     else
       let α ← ctxBaseAlpha Eg
-      let t ← Eg.lookupEq (Reg.sw (α + offset / 4))
+      let t ← Eg.lookupEq (Reg.ctx32 (α + offset / 4))
       some (assign rd t)
 
 /-- SP and its affine aliases bind aligned word slots. Symbolic alignment is an
@@ -289,7 +288,7 @@ def exprWordLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
 constant byte offset is admitted; symbolic offsets need a future binding rule. -/
 def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option PacketAccess := do
   let α ← ctxBaseAlpha Eg
-  let data ← Eg.lookupEq (Reg.sw α)
+  let data ← Eg.lookupEq (Reg.ctx32 α)
   let source ← readReg Eg rs1
   let (root, dataOff) ← affineAddress data
   let (sourceRoot, sourceOff) ← affineAddress source
@@ -300,7 +299,7 @@ def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option Pa
     else
       -- Concrete pointers require a concrete interval, rather than treating every
       -- numerical address as a packet alias. Symbolic bounds remain a premise.
-      let ending ← Eg.lookupEq (Reg.sw (α + 1))
+      let ending ← Eg.lookupEq (Reg.ctx32 (α + 1))
       match affineAddress ending with
       | some (endRoot, endOff) =>
         if endRoot != root || endOff < dataOff || o + width > endOff - dataOff then none
@@ -338,7 +337,7 @@ private def contextAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
   if root != ctxRoot || relative ≥ 24 || within + width > 4 then none
   else
     let α ← ctxBaseAlpha Eg
-    some ⟨Reg.sw (α + relative / 4), 8 * within, 8 * width⟩
+    some ⟨Reg.ctx32 (α + relative / 4), 8 * within, 8 * width⟩
 
 /-- Exactly one lookup-result base plus concrete displacement. Other helper results,
 numeric pointers and sums of symbolic bases do not establish a Map identity. -/

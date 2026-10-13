@@ -8,7 +8,7 @@ open ClassifierExpr
 private def bindingEntry : ExprSet :=
   let fields := [Term.V32 4, addStar .w32 (Term.V32 4) (Term.C32 64),
     Term.C32 0, Term.C32 0, Term.C32 0, Term.C32 0]
-  let E := fields.zipIdx.foldl (fun E (t, j) => E.insertEq (Reg.sw j) t) ExprSet.empty
+  let E := fields.zipIdx.foldl (fun E (t, j) => E.insertEq (Reg.ctx32 j) t) ExprSet.empty
   E.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 10) (Term.V32 1)
 
@@ -60,8 +60,8 @@ private def rejectionChecks : String :=
   let noInput : PacketAccess := ⟨0, 0, 1, .little, none⟩
   let concrete := bindingEntry.insertEq (Reg.real32 2) (Term.C32 0x3000)
     |>.insertEq (Reg.real32 12) (Term.C32 0x1003)
-    |>.insertEq (Reg.sw 0) (Term.C32 0x1000)
-    |>.insertEq (Reg.sw 1) (Term.C32 0x1040)
+    |>.insertEq (Reg.ctx32 0) (Term.C32 0x1000)
+    |>.insertEq (Reg.ctx32 1) (Term.C32 0x1040)
   let concreteRead := stepEffects concrete (.LOAD (0#12, .Regidx 12#5, .Regidx 14#5, true, 4))
   let independentInput : PacketAccess := ⟨1, 0, 1, .little, some (Term.C32 0x1000)⟩
   let otherInput := { independentInput with κ := 2 }
