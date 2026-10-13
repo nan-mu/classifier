@@ -57,18 +57,8 @@ def renderOp : Op → String
   | .inputByte resource => s!"inputByte{resource}"
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
 
-partial def renderTerm : Term → String
-  | .const _ c => toString c
-  | .var w ξ => s!"v{renderWidth w}:{ξ}"
-  | .regVar event reg => s!"regVar{event}({renderReg reg})"
-  | .app _ op args =>
-      let body := String.intercalate "," (args.map renderTerm)
-      s!"{renderOp op}({body})"
-
-
-/-- Predicate terms preserve mixed-width constants and operator input widths.
-The existing Expr and Helper term encoding remains unchanged. -/
-private partial def renderPredicateTerm (context : Width) : Term → String
+/-- Shared term rendering preserves mixed-width constants and operator input carriers. -/
+private partial def renderTermAt (context : Width) : Term → String
   | .const w c =>
     if w == context then toString c else s!"c{renderWidth w}:{c}"
   | .var w ξ => s!"v{renderWidth w}:{ξ}"
@@ -85,9 +75,11 @@ private partial def renderPredicateTerm (context : Width) : Term → String
       | .low _ v | .extract _ _ v | .zext _ _ v | .sext _ _ v | .bswap _ v =>
         if v == 64 then Width.w64 else .w32
       | _ => w
-    let body := String.intercalate "," (args.map (renderPredicateTerm input))
+    let body := String.intercalate "," (args.map (renderTermAt input))
     let body := s!"{name}({body})"
     if w == context then body else s!"t{renderWidth w}({body})"
+
+def renderTerm (t : Term) : String := renderTermAt t.width t
 def renderExprJson (e : Expr) : String :=
   s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\"}"
 
@@ -98,14 +90,14 @@ def renderPredicateJson : Predicate → String
   | .branch position dir cond =>
     let direction := match dir with | .taken => "taken" | .notTaken => "notTaken"
     let w := cond.lhs.width
-    s!"\{\"kind\":\"branch\",\"position\":{position},\"dir\":\"{direction}\",\"width\":{w.bits},\"cond\":\{\"lhs\":\"{renderPredicateTerm w cond.lhs}\",\"rel\":\"{renderRel cond.rel}\",\"rhs\":\"{renderPredicateTerm w cond.rhs}\"}}"
+    s!"\{\"kind\":\"branch\",\"position\":{position},\"dir\":\"{direction}\",\"width\":{w.bits},\"cond\":\{\"lhs\":\"{renderTermAt w cond.lhs}\",\"rel\":\"{renderRel cond.rel}\",\"rhs\":\"{renderTermAt w cond.rhs}\"}}"
   | .ret term =>
-    s!"\{\"kind\":\"ret\",\"width\":{term.width.bits},\"term\":\"{renderPredicateTerm term.width term}\"}"
+    s!"\{\"kind\":\"ret\",\"width\":{term.width.bits},\"term\":\"{renderTermAt term.width term}\"}"
   | .mapWrite event map key offset source =>
-    let keys := String.intercalate "," (key.map fun t => s!"\"{renderPredicateTerm .w32 t}\"")
-    s!"\{\"kind\":\"mapWrite\",\"event\":{event},\"mapWidth\":{map.width.bits},\"map\":\"{renderPredicateTerm map.width map}\",\"key\":[{keys}],\"offset\":{offset},\"sourceWidth\":{source.width.bits},\"source\":\"{renderPredicateTerm source.width source}\"}"
+    let keys := String.intercalate "," (key.map fun t => s!"\"{renderTermAt .w32 t}\"")
+    s!"\{\"kind\":\"mapWrite\",\"event\":{event},\"mapWidth\":{map.width.bits},\"map\":\"{renderTermAt map.width map}\",\"key\":[{keys}],\"offset\":{offset},\"sourceWidth\":{source.width.bits},\"source\":\"{renderTermAt source.width source}\"}"
   | .packetWrite event packet offset source =>
-    s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"packet\":{packet},\"offset\":{offset},\"width\":{source.width.bits},\"source\":\"{renderPredicateTerm source.width source}\"}"
+    s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"packet\":{packet},\"offset\":{offset},\"width\":{source.width.bits},\"source\":\"{renderTermAt source.width source}\"}"
 def renderExprSetJson (E : ExprSet) : String :=
   String.intercalate "," (E.entries.map renderExprJson ++ E.constraints.map fun e =>
     s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}")

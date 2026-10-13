@@ -3,7 +3,7 @@ import RV32IMC.Expr
 import RV32IMC.Helper
 import RV32IMC.Encode
 import RV32IMC.Esp32c3Program
-import RV32IMC.Budget
+import PathMerge.Budget
 import ClassifierExpr.Render
 import ClassifierExpr.Parse
 

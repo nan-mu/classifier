@@ -1,8 +1,8 @@
 import PathMerge.Path
 import ClassifierExpr.Render
 
-namespace RV32IMC
-open ClassifierExpr PathMerge
+namespace PathMerge
+open ClassifierExpr
 
 /-! ## Budgeted node expansion (`doc/NodeInference/step.md`) -/
 
@@ -169,4 +169,4 @@ def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState → Step
         (if attempted then ws.fuel - 1 else ws.fuel) "fail" (some reason)
         (if attempted then ws.work.head? else none)
 
-end RV32IMC
+end PathMerge

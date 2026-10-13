@@ -60,7 +60,7 @@ private def parseOp (text : String) (w : Width) : Option Op := do
     return if text.startsWith "zext" then .zext q width w.bits else .sext q width w.bits
   none
 
-/-- Extra width annotations are confined to the five-class predicate wire format. -/
+/-- Explicit carrier annotations shared by Expr and all five predicate classes. -/
 private def parsePredicateOp (text : String) (w : Width) : Option Op := do
   match text.splitOn "/" with
   | [name, input] =>
@@ -153,9 +153,9 @@ mutual
     | _ => none
 end
 
-/-- Rendered constants omit width; the containing register supplies it (helper arguments use 32). -/
+/-- Bare constants inherit the field carrier; mixed-carrier applications retain annotations. -/
 def parseTerm (text : String) (w : Width := .w32) : Option Term := do
-  let (term, []) ← parseTermChars w text.toList | none
+  let (term, []) ← parseTermChars w text.toList true | none
   pure term
 
 private def jsonString (value : Lean.Json) (key : String) : Option String :=
@@ -360,6 +360,24 @@ private def parseOpsRoundTripCheck : Bool :=
       else [Term.V32 1, Term.C32 2]
     let term := Term.app .w32 op args
     parseTerm (renderTerm term) == some term
+
+private def crossCarrierRoundTripCheck : Bool :=
+  let fixtures := [
+    (Term.app .w64 (.zext 32 .w64 32) [Term.V32 4], "zext32/64/32(v32:4)"),
+    (Term.app .w64 (.sext 32 .w64 32) [Term.C32 4294967295], "sext32/64/32(4294967295)"),
+    (Term.app .w32 (.extract 0 32 64) [Term.V64 1], "extract0,32/64(v64:1)"),
+    (Term.app .w32 (.low 32 64) [Term.C64 4294967296], "low32/64(4294967296)"),
+    (Term.app .w32 (.bswap 32 64) [Term.V64 2], "bswap32/64(v64:2)"),
+    (Term.app .w64 (.zext 32 .w64 32)
+      [Term.app .w32 (.extract 0 32 32)
+        [Term.app .w32 (.add .w32) [Term.V32 4, Term.C32 128]]],
+      "zext32/64/32(extract0,32(add32(v32:4,128)))")]
+  fixtures.all fun (term, text) =>
+    renderTerm term == text && parseTerm text term.width == some term &&
+      ((Lean.Json.parse (renderExprJson (Expr.mkEq (Reg.real term.width 1) term))).toOption
+        >>= parseExprJson).any (fun e => e.term == term)
+
+#guard crossCarrierRoundTripCheck
 
 private def constraintRoundTripCheck : Bool :=
   let E := ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 1)

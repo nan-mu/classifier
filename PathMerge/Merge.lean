@@ -58,7 +58,7 @@ deriving instance DecidableEq for ClassifierExpr.HelperKind
 deriving instance DecidableEq for ClassifierExpr.Cond
 deriving instance DecidableEq for ClassifierExpr.Predicate
 
-private def sameSet [DecidableEq α] (xs ys : List α) : Bool :=
+def sameSet [DecidableEq α] (xs ys : List α) : Bool :=
   xs.all (fun x => ys.any (fun y => decide (x = y))) &&
     ys.all (fun y => xs.any (fun x => decide (y = x)))
 
@@ -106,7 +106,7 @@ private def opSignature (w : Width) (op : Op) (args : List Term) : Bool :=
   | .inputByte _ => w == .w32 && uniform 2
 
 mutual
-  private def validTerm : Term → Bool
+  def validTerm : Term → Bool
     | .const w c => c < 2 ^ w.bits
     | .var _ _ => true
     | .regVar _ r => r.valid && r.kind == .real
@@ -119,7 +119,7 @@ mutual
   termination_by ts => sizeOf ts
 end
 
-private def validRel (w : Width) : Rel → Bool
+def validRel (w : Width) : Rel → Bool
   | .eqN q | .neN q | .ltuN q | .leuN q | .gtuN q | .geuN q
   | .ltsN q | .lesN q | .gtsN q | .gesN q | .bitsnz q | .bitsz q =>
     boundedWidth q w.bits
