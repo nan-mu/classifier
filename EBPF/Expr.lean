@@ -1,7 +1,7 @@
 import EBPF.Insn
 
 namespace EBPF
-open CommonMath
+open ClassifierExpr
 
 private def readReg (E : ExprSet) (r : Nat) : Option Term := do
   if r > 10 then none else do
@@ -18,7 +18,7 @@ private def writeValue (w : Width) (t : Term) : Term :=
   | .w64 => idStar .w64 t
   | .w32 => zStar 32 .w64 64 t
 
-/-- Local Expr effects read only the input E; EXIT itself has no Expr effect. -/
+/-- Local Expr results read only the input E; EXIT itself has no Expr result. -/
 def expr (E : ExprSet) (i : Insn) : Option ExprSet := do
   match i with
   | .illegal _ => none

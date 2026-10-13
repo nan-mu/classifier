@@ -1,4 +1,4 @@
-namespace CommonMath
+namespace ClassifierExpr
 
 /-- Register / term width set \(W=\{32,64\}\). -/
 inductive Width where
@@ -41,4 +41,4 @@ def indicator (φ : Bool) : Nat := if φ then 1 else 0
 
 def bit (a j : Nat) : Nat := (a / (1 <<< j)) % 2
 
-end CommonMath
+end ClassifierExpr

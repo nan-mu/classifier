@@ -15,10 +15,11 @@ step counts, focus, logs, and instruction text. The server depends on the siblin
 The default `tooling/fixtures/just_tx.elf` is a copy of
 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`. Its image base is `0x40380200` and
 its dispatcher address is `0x40380000`. The default session budget is 1024.
-With that budget the analysis completes: 882 nodes, 881 edges, and 45 Exits;
-21 Exits carry lookup-region Map updates. Budget 512 still crosses the lookup
-and Map loads/stores, then exhausts fuel with `LimitExceeded` (552 nodes,
-10 Exits, 30 pending) and is retained as a fuel-regression case.
+With that budget the analysis completes under exact-config merge reuse: 601
+nodes, 601 edges (including reuse), and 30 Exits; 14 Exits carry lookup-region
+Map updates. Budget 512 still crosses the lookup and Map loads/stores, then
+exhausts fuel with `LimitExceeded` (542 nodes, 26 Exits) and is retained as a
+fuel-regression case.
 
 Map word zero remains helper-introduced `regVar`; untouched later words
 materialize on demand through `ExprEffect.inputs` as opaque event-bound content.

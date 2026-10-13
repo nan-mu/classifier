@@ -1,16 +1,17 @@
-import CommonMath
+import ClassifierExpr.Virtual
 import RV32IMC.Insn
+import PathMerge.Path
 
 namespace RV32IMC
-open CommonMath
+open ClassifierExpr PathMerge
 
-/-! Use CommonMath.Reg: x0..x31 and PC as real32 alphas. -/
+/-! Use ClassifierExpr.Reg: x0..x31 and PC as real32 alphas. -/
 
 private def xReg (r : regidx) : Reg := Reg.real32 r.toNat
 private def pcReg : Reg := Reg.real32 32
 private def isX0 (r : regidx) : Bool := r.toNat == 0
 
-/-! RV32M closed arithmetic (ISA rules on top of CommonMath TQ/TR). -/
+/-! RV32M closed arithmetic (ISA rules on top of ClassifierExpr TQ/TR). -/
 
 private def mulhu (a b : Nat) : Nat :=
   MNat 32 ((MNat 32 a * MNat 32 b) / (1 <<< 32))
@@ -615,7 +616,7 @@ def step (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option Exp
        | _ => false
    | none => false)
 
--- A successful empty local effect stays empty even when Eg is nonempty.
+-- A successful empty local result stays empty even when Eg is nonempty.
 #guard
   (match step (ExprSet.empty.insertEq (Reg.real32 2) (Term.C32 20)) (.C_NOP 0#6) with
    | some Ei => Ei.entries.isEmpty

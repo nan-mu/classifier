@@ -1,7 +1,7 @@
-import CommonMath.Render
+import ClassifierExpr.Render
 import Lean.Data.Json
 
-namespace CommonMath
+namespace ClassifierExpr
 
 private def suffixNat (stem text : String) : Option Nat :=
   if text.startsWith stem then (text.drop stem.length).toString.toNat? else none
@@ -139,7 +139,6 @@ private def helperKind (id : Nat) : HelperKind :=
 
 def parsePredicateJson (value : Lean.Json) : Option Predicate := do
   match ← jsonString value "kind" with
-  | "ret" => return .ret (← parseTerm (← jsonString value "term"))
   | "helper" =>
     let event ← (value.getObjVal? "event" >>= Lean.Json.getNat?).toOption
     let id ← (value.getObjVal? "helperId" >>= Lean.Json.getNat?).toOption
@@ -188,7 +187,7 @@ private def parseRoundTripCheck : Bool :=
     | none => false) &&
   [Predicate.helper 42 .lookup [Term.C32 1, Term.regVar 4 (Reg.real32 11)],
     .helper 43 (.unsupported 999) [],
-    .ret (Term.V32 10)].all (fun p =>
+    .helper 44 .lookup [Term.V32 10, Term.C32 0]].all (fun p =>
       ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p)
 
 private def parseOpsRoundTripCheck : Bool :=
@@ -213,10 +212,11 @@ private def constraintRoundTripCheck : Bool :=
 
 #guard constraintRoundTripCheck
 #guard (parseSemStateJson "[]" "[{\"kind\":\"cmp\",\"width\":32,\"rel\":\"eq\",\"lhs\":\"0\",\"rhs\":\"0\"}]").isNone
+#guard (parseSemStateJson "[]" "[{\"kind\":\"ret\",\"term\":\"2\"}]").isNone
 #guard parseRoundTripCheck
 #guard parseOpsRoundTripCheck
 #guard (parseSemStateJson "{}" "[]").isNone
 #guard (parseTerm "add32(v32:1,)").isNone
 #guard (parseReg "packet64:0").isNone
 
-end CommonMath
+end ClassifierExpr

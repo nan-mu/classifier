@@ -1,6 +1,6 @@
-import CommonMath.Bits
+import ClassifierExpr.Bits
 
-namespace CommonMath
+namespace ClassifierExpr
 
 inductive RegKind where
   | real
@@ -37,4 +37,4 @@ def Reg.packet (κ offset : Nat) : Reg :=
 
 def Reg.valid (r : Reg) : Bool := r.kind != .packet || r.width == .w32
 
-end CommonMath
+end ClassifierExpr

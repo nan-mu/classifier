@@ -3,12 +3,12 @@ import RV32IMC.Expr
 import RV32IMC.Helper
 import RV32IMC.Encode
 import RV32IMC.Esp32c3Program
-import CommonMath.Expand
-import CommonMath.Render
-import CommonMath.Parse
+import RV32IMC.Budget
+import ClassifierExpr.Render
+import ClassifierExpr.Parse
 
 namespace RV32IMC
-open CommonMath
+open ClassifierExpr PathMerge
 
 /-! MVP gaps: symbolic indirect targets reject; resource Predicates remain undefined. -/
 
@@ -49,14 +49,14 @@ private def emit (dir : Direction) (loc : Option Location) (Ei : ExprSet) : Step
   | some k => .candidates [⟨dir, k, Ei, []⟩]
   | none => .reject .unboundTarget
 
-/-- Observe a0 only on a successfully bound Exit, from the post-instruction state. -/
+/-- Require a0's complete equality on a bound Exit, from the post-instruction state. -/
 private def emitIndirect (loc : Option Location) (Eg Ei : ExprSet) : StepResult :=
   match loc with
   | some .exit =>
     match (updateExpr Eg Ei).lookupEq (Reg.real32 10) with
-    | some t => .candidates [⟨.only, .exit, Ei, [.ret (solve t)]⟩]
+    | some _ => .candidates [⟨.ok, .exit, Ei, []⟩]
     | none => .reject .undefinedSrc
-  | _ => emit .only loc Ei
+  | _ => emit .ok loc Ei
 
 private def branchRel : bop → Rel
   | .BEQ => .eq
@@ -96,7 +96,7 @@ private def valueRejection : Insn → RejectReason
   | _ => .undefinedSrc
 
 /-- Static layout/return bindings are captured by the Step closure, never stored in SemState.
-PC is derived from the layout solely for the value call; Candidates contain only its Ei. -/
+PC is derived from the layout solely for the value call; Candidates contain its local E_k and P_k. -/
 def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
     (j : Nat) (σ : SemState) (boundCtx : Option Term := none) : StepResult :=
   match I[j]? with
@@ -114,7 +114,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
         | none => .reject (valueRejection i)
         | some Ei =>
           match i with
-          | .JAL (imm, _) => emit .only (directTarget offsets j (s 21 imm.toNat)) Ei
+          | .JAL (imm, _) => emit .ok (directTarget offsets j (s 21 imm.toNat)) Ei
           | .BTYPE (imm, rs2, rs1, op) =>
             match readReg Eg rs1, readReg Eg rs2 with
             | some ta, some tb =>
@@ -156,7 +156,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
                 emitIndirect (indirectTarget offsets base returnAddr
                   (MNat 32 a &&& ((1 <<< 32) - 2)) isReturn) Eg Ei
           | .C_J imm | .C_JAL imm =>
-            emit .only (directTarget offsets j (2 * s 11 imm.toNat)) Ei
+            emit .ok (directTarget offsets j (2 * s 11 imm.toNat)) Ei
           | .C_BEQZ (imm, rs1) | .C_BNEZ (imm, rs1) =>
             match readReg Eg (creg2reg_idx rs1) with
             | none => .reject .undefinedSrc
@@ -179,7 +179,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
                     ⟨.taken, taken, Ei.insertConstraint takenE, []⟩,
                     ⟨.notTaken, fall, Ei.insertConstraint fallE, []⟩]
                 | _, _ => .reject .unboundTarget
-          | _ => emit .only (nextPosition I j) Ei
+          | _ => emit .ok (nextPosition I j) Ei
 
 /-- Unbound adapter: sequential effects and relative RV32 direct targets work;
 PC-dependent effects and indirect targets require rv32StepBound's static bindings. -/
@@ -202,55 +202,6 @@ private def entryBase (I : Array Insn) (p : EntryParams) (j0 : Nat) : Option Nat
   let entry ← const32? p.tEntry
   let offset ← (programOffsets I)[j0]?
   pure (MNat 32 ((entry &&& ((1 <<< 32) - 2)) + (1 <<< 32) - offset))
-
-private def reasonTag : RejectReason → String
-  | .invalidEntry => "InvalidEntry"
-  | .limitExceeded => "LimitExceeded"
-  | .unsupported => "Unsupported"
-  | .unboundTarget => "UnboundTarget"
-  | .undefinedSrc => "UndefinedSrc"
-  | .localReject => "LocalReject"
-
-private def dirTag : Direction → String
-  | .only => "Only"
-  | .taken => "Taken"
-  | .notTaken => "NotTaken"
-
-private def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
-    (fuel : Nat) (status : String) (reason : Option RejectReason)
-    (failed : Option NodeId := none) : String :=
-  let nodeStrs := Id.run do
-    let mut acc : List String := []
-    for id in [:nodes.size] do
-      if let some n := nodes[id]? then
-        let (ej, pj) := renderSemStateJson n.state
-        let loc := match n.loc with | .exit => "exit" | .pos j => toString j
-        acc := acc ++
-          [s!"\{\"id\":{id},\"loc\":\"{loc}\",\"exprs\":[{ej}],\"predicates\":[{pj}]}"]
-    pure (String.intercalate "," acc)
-  let edgeStrs := String.intercalate "," (edges.toList.map fun e =>
-    s!"\{\"src\":{e.src},\"dir\":\"{dirTag e.dir}\",\"dst\":{e.dst}}")
-  let workStr := String.intercalate "," (work.map toString)
-  let reasonField := match reason with
-    | none => "null"
-    | some r => s!"\"{reasonTag r}\""
-  let failedField := match failed with | none => "null" | some id => toString id
-  s!"\{\"status\":\"{status}\",\"reason\":{reasonField},\"failed\":{failedField},\"fuel\":{fuel},\"work\":[{workStr}],\"nodes\":[{nodeStrs}],\"edges\":[{edgeStrs}]}"
-
-private def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState → StepResult)
-    (ws : WorkState) : Nat → String
-  | 0 => snapshotJson ws.nodes ws.edges ws.work ws.fuel
-      (if ws.work.isEmpty then "complete" else "running") none
-  | n + 1 =>
-    match expandOne progLen (stepFn (ws.work.headD 0)) ws with
-    | .inr ws' => snapshotAfter progLen stepFn ws' n
-    | .inl (.complete g) => snapshotJson g.nodes g.edges [] ws.fuel "complete" none
-    | .inl (.fail reason g) =>
-      -- expandOne's terminal result has only a graph; retain diagnostic queue/fuel here.
-      let attempted := !ws.work.isEmpty && ws.fuel > 0
-      snapshotJson g.nodes g.edges (if attempted then ws.work.tail else ws.work)
-        (if attempted then ws.fuel - 1 else ws.fuel) "fail" (some reason)
-        (if attempted then ws.work.head? else none)
 
 /-- JSON after at most steps expandOne calls; all node Exprs are global pre-execution snapshots.
 The caller binds the contiguous instruction layout and wrapper label via EntryParams. -/
@@ -382,10 +333,9 @@ private def smokeCompleteExitCheck : Bool :=
     match expandN smokeProgram.size stepFn ws 4 with
     | .inl (.complete g) =>
       g.nodes.size == 4 && g.edges.size == 3 &&
-        g.nodes.any (fun n => n.loc.isExit &&
+        g.nodes.any (fun n => PathMerge.isExit n.loc &&
           initialEqCheck n.state.exprs (Reg.real32 10) (Term.C32 8)) &&
-        g.nodes.all (fun n => n.state.predicates ==
-          (if n.loc.isExit then [.ret (Term.C32 8)] else []))
+        g.nodes.all (fun n => n.state.predicates.isEmpty)
     | _ => false
 
 private def smokeRejectsWithoutExitCheck : Bool :=
@@ -402,14 +352,14 @@ private def smokeRejectsWithoutExitCheck : Bool :=
     | .ok ws =>
       match expandN I.size stepFn ws 4 with
       | .inl (.fail reason g) => reason == expected &&
-          !(g.nodes.any fun n => n.loc.isExit)
+          !(g.nodes.any fun n => PathMerge.isExit n.loc)
       | _ => false
 
 private def smokeEmptyPredicateMergeCheck : Bool :=
   match buildE0 smokeEntryParams with
   | .error _ => false
   | .ok σ =>
-    match mergePredicate σ.predicates [], σ.applyLocal ExprSet.empty [] with
+    match mergePredicate σ.predicates [], PathMerge.applyLocal σ ExprSet.empty [] with
     | .ok predicates, .ok unchanged =>
       predicates.isEmpty && unchanged.predicates.isEmpty &&
         reprStr unchanged.exprs == reprStr σ.exprs
@@ -425,7 +375,6 @@ private def smokeEmptyPredicateMergeCheck : Bool :=
 #guard smokeCompleteExitCheck
 #guard smokeRejectsWithoutExitCheck
 #guard smokeEmptyPredicateMergeCheck
-#guard CommonMath.demoCheck
 
 private def esp32c3DecodeCheck : Bool :=
   esp32c3Program.size == 48 && insnTag (decodeInsnWord 0x4110) == 46 &&
@@ -505,13 +454,13 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
   | .candidates [taken, fall] =>
     taken.dir == .taken && taken.loc == .pos 2 &&
       fall.dir == .notTaken && fall.loc == .pos 1 &&
-      taken.exprs.entries.isEmpty && fall.exprs.entries.isEmpty &&
-      taken.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
-      fall.exprs.constraints == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
-      taken.predicates.isEmpty && fall.predicates.isEmpty &&
-      match (SemState.mk E []).applyLocal taken.exprs taken.predicates with
+      taken.E_k.entries.isEmpty && fall.E_k.entries.isEmpty &&
+      taken.E_k.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
+      fall.E_k.constraints == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
+      taken.P_k.isEmpty && fall.P_k.isEmpty &&
+      match PathMerge.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
       | .ok child =>
-        match child.applyLocal (ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0)) [] with
+        match PathMerge.applyLocal child (ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0)) [] with
         | .ok overwritten => overwritten.exprs.constraints.isEmpty &&
             child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
             child.exprs.lookupEq (Reg.real32 1) == some lhs
@@ -532,10 +481,10 @@ private def symbolicBtypeRelationsCheck : Bool :=
       decodeInsnWord 0x00100513, decodeInsnWord 0x00008067]
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [taken, fall] => taken.dir == .taken && fall.dir == .notTaken &&
-        taken.exprs.constraints == [Expr.mkRel (Reg.real32 1) rel rhs] &&
-        fall.exprs.constraints == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
-        taken.predicates.isEmpty && fall.predicates.isEmpty &&
-        match (SemState.mk E []).applyLocal taken.exprs [] with
+        taken.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel rhs] &&
+        fall.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
+        taken.P_k.isEmpty && fall.P_k.isEmpty &&
+        match PathMerge.applyLocal (SemState.mk E []) taken.E_k [] with
         | .ok child => child.exprs.lookupEq (Reg.real32 1) == some lhs && child.exprs.keysUnique
         | _ => false
     | _ => false
@@ -550,7 +499,7 @@ private def concreteBltuFeasibleSideCheck : Bool :=
       |>.insertEq (Reg.real32 2) (Term.C32 b)
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [c] => c.dir == dir && c.loc == loc &&
-        c.exprs.constraints == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] && c.predicates.isEmpty
+        c.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] && c.P_k.isEmpty
     | _ => false
 
 /-- A symbolic branch cannot bind to the middle of a full-width instruction. -/
@@ -597,7 +546,8 @@ private def esp32c3OpeningCheck : Bool :=
         fall.state.exprs.constraints == [Expr.mkRel (Reg.real32 11) .geu
           (solve (addStar .w32 p.tData (Term.C32 14)))] &&
         taken.state.predicates.isEmpty && fall.state.predicates.isEmpty &&
-        returned.state.predicates == taken.state.predicates ++ [.ret (Term.C32 2)] &&
+        returned.state.predicates == taken.state.predicates &&
+        initialEqCheck returned.state.exprs (Reg.real32 10) (Term.C32 2) &&
         match ws.edges[4]?, ws.edges[5]? with
         | some te, some fe => te.src == 4 && fe.src == 4 &&
           te.dst == 5 && fe.dst == 6 && te.dir == .taken && fe.dir == .notTaken
@@ -657,10 +607,10 @@ private def symbolicBranchesCheck : Bool :=
     | .candidates [a, b] =>
       a.dir == .taken && b.dir == .notTaken &&
       a.loc == .pos 2 && b.loc == .pos 1 &&
-      a.exprs.entries.isEmpty && b.exprs.entries.isEmpty &&
-      a.exprs.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op) tb] &&
-      b.exprs.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op).compl tb] &&
-      a.predicates.isEmpty && b.predicates.isEmpty
+      a.E_k.entries.isEmpty && b.E_k.entries.isEmpty &&
+      a.E_k.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op) tb] &&
+      b.E_k.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op).compl tb] &&
+      a.P_k.isEmpty && b.P_k.isEmpty
     | _ => false
 
 private def compressedBranchesCheck : Bool :=
@@ -671,9 +621,9 @@ private def compressedBranchesCheck : Bool :=
     | .candidates [a, b] => a.dir == .taken && b.dir == .notTaken &&
       a.loc == .pos 2 && b.loc == .pos 1 &&
       let rel := if word == 0xc011 then Rel.eq else Rel.ne
-      a.exprs.constraints == [Expr.mkRel (Reg.real32 8) rel (Term.C32 0)] &&
-      b.exprs.constraints == [Expr.mkRel (Reg.real32 8) rel.compl (Term.C32 0)] &&
-      a.predicates.isEmpty && b.predicates.isEmpty
+      a.E_k.constraints == [Expr.mkRel (Reg.real32 8) rel (Term.C32 0)] &&
+      b.E_k.constraints == [Expr.mkRel (Reg.real32 8) rel.compl (Term.C32 0)] &&
+      a.P_k.isEmpty && b.P_k.isEmpty
     | _ => false
 
 #guard symbolicBranchesCheck
@@ -701,7 +651,7 @@ private def compressedBranchesCheck : Bool :=
 4/24 BLTU, 18 BNE, 28 BEQ; 5/10/29/46 C.ADDI;
 6–7 C.SWSP; 8 C.ADDI4SPN; 9 LHU, 16/19 LBU;
 12–13 SLTU; 14 C.OR; 15 C.BNEZ; 20 C.SLLI; 21 C.SRLI;
-22 C.ADD; 26 C.LUI; 30 LUI; 44–45 C.LWSP; 47 C.JR + return observation.
+22 C.ADD; 26 C.LUI; 30 LUI; 44–45 C.LWSP; 47 C.JR + Exit with a0 equality.
 25 LHU has a symbolic packet offset and lacks a unique byte binding.
 36 C.JAL has its link-value semantics, but target offset 104 - 616 = -512
 is outside this image. External call/result contracts are required to reach 37–43;
@@ -719,8 +669,8 @@ private def esp32c3DeepFrontierCheck : Bool :=
     | .inl _ => false
     | .inr ws =>
       ws.nodes.size == 43 && ws.fuel == 474 && ws.work == [40, 41, 42] &&
-      ws.nodes.any (fun n => n.loc == .exit && n.state.predicates.getLast? ==
-        some (.ret (Term.C32 2))) &&
+      ws.nodes.any (fun n => n.loc == .exit && n.state.predicates.isEmpty &&
+        initialEqCheck n.state.exprs (Reg.real32 10) (Term.C32 2)) &&
       (match ws.nodes[40]?, expandOne I.size stepFn ws with
         | some blocked, .inl (.fail .undefinedSrc g) =>
           blocked.loc == .pos 25 && g.nodes.size == ws.nodes.size &&
@@ -733,21 +683,27 @@ private def esp32c3DeepFrontierCheck : Bool :=
             | _ => false)
         | _ => false)
 
-private def returnObservationMergeCheck : Bool :=
-  let p := Predicate.ret (Term.V32 123)
+private def helperObservationMergeCheck : Bool :=
+  let p := Predicate.helper 8 .clock []
   let q := Predicate.helper 7 .clock []
   (match mergePredicate [q] [p, p, q] with
     | .ok ps => ps == [q, p]
     | _ => false) &&
-  renderPredicateJson (.ret (Term.C32 2)) == "{\"kind\":\"ret\",\"term\":\"2\"}"
+  renderPredicateJson p == "{\"kind\":\"helper\",\"event\":8,\"helperId\":5,\"args\":[]}"
 
-/-- C.JR and full JALR observe a0, but ordinary indirect jumps do not. -/
-private def boundReturnObservationCheck : Bool :=
+/-- C.JR and full JALR require a0's equality for Exit, without adding a predicate. -/
+private def boundReturnExprCheck : Bool :=
   let E := ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000)
     |>.insertEq (Reg.real32 10) (Term.V32 123)
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
     match rv32StepBound I (some 0x1000) (some 0x2000) 0 ⟨E, []⟩ with
-    | .candidates [c] => c.loc == .exit && c.predicates == [.ret (Term.V32 123)]
+    | .candidates [c] => c.loc == .exit && c.P_k.isEmpty &&
+        initialEqCheck (updateExpr E c.E_k) (Reg.real32 10) (Term.V32 123)
+    | _ => false) &&
+  [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
+    match rv32StepBound I (some 0x1000) (some 0x2000) 0
+        ⟨ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000), []⟩ with
+    | .reject .undefinedSrc => true
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067]) (some 0x1000) (some 0x2002)
       0 ⟨E, []⟩ with
@@ -781,8 +737,8 @@ private def packetLoadsCheck : Bool :=
 #guard packetLoadsCheck
 
 #guard esp32c3DeepFrontierCheck
-#guard returnObservationMergeCheck
-#guard boundReturnObservationCheck
+#guard helperObservationMergeCheck
+#guard boundReturnExprCheck
 
 @[export lean_rv32_expand_builtin_snapshot]
 def exportRv32Snapshot (steps budget : UInt32) : String :=
@@ -836,7 +792,7 @@ def inferStep (I : Array Insn) (context : StepContext)
           | .error reason => .reject reason
           | .ok result =>
             let Ei := updateExpr link result
-            .candidates [⟨.only, loc, Ei, [predicate]⟩]
+            .candidates [⟨.ok, loc, Ei, [predicate]⟩]
         | _, .error reason => .reject reason
         | none, _ => .reject .undefinedSrc
   | _, _, _, _ => fallback
@@ -973,7 +929,7 @@ private def statelessStepCheck : Bool :=
       (match expandOne I.size (inferStep I context 0) ws with
        | .inr next => exportRv32ExpandStep insns metaJson 0 0
            s!"[{exprs}]" s!"[{preds}]" ==
-           s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.only, next.nodes[1]!.loc, next.nodes[1]!.state)}]}"
+           s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, next.nodes[1]!.loc, next.nodes[1]!.state)}]}"
        | _ => false) &&
       exportRv32ExpandStep #[] metaJson 0 0 "[]" "[]" ==
         headFailJson .invalidEntry &&

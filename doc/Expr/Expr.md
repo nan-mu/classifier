@@ -19,6 +19,7 @@
 - [寄存器/包字节](寄存器/包字节.md)：包字节读写。
 - [Term/位向量](Term/位向量.md)：记号与位向量。
 - [Term/数值函数](Term/数值函数.md)：共同数值函数。
+- [工程模块与迁移](../NodeInference/路径合并FFI.md#工程模块与迁移)：表达式实现的 ClassifierExpr 归属，以及与 PathMerge、RV32IMC、EBPF 的依赖分工；跨架构研究与证明限度见[语义范围与证据边界](../NodeInference/路径合并FFI.md#语义范围与证据边界)。
 
 ## 表达式定义
 

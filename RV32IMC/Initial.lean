@@ -1,9 +1,9 @@
-import CommonMath.Path
+import PathMerge.Path
 
 namespace RV32IMC
-open CommonMath
+open ClassifierExpr PathMerge
 
-/-! RV32 wrapper entry and six XDP context slots (§§1–4 of `doc/RV32初态描述.md`). -/
+/-! RV32 wrapper entry and six XDP context slots (RV32 section of `doc/NodeInference/create.md`). -/
 
 -- Stable names for the default symbolic calling-environment inputs.
 namespace EntryVar
@@ -58,7 +58,7 @@ private def initialTerm (p : EntryParams) (r : Nat) : Term :=
     | 10 => p.tCtx
     | _ => Term.V32 (p.savedVar r)
 
-/-- The 21 real-register equalities in the §2 base table, before the entry overwrite. -/
+/-- The 21 real-register equalities in the base bindings, before the entry overwrite. -/
 def buildEBase (p : EntryParams) : ExprSet :=
   baseRegs.foldl (fun E r => E.insertEq (Reg.real32 r) (initialTerm p r)) ExprSet.empty
 
@@ -83,7 +83,7 @@ def buildRealE0 (p : EntryParams) : Except RejectReason ExprSet := do
   if !Ereal.keysUnique then throw .invalidEntry
   pure Ereal
 
-/-- Values of the six bound xdp_md stack-word slots (§3); no access Predicates are invented. -/
+/-- Values of the six bound xdp_md stack-word slots; no access Predicates are invented. -/
 def buildECtx0 (p : EntryParams) : ExprSet :=
   let tEnd := addStar .w32 p.tData p.tLen
   let fields := [p.tData, tEnd, Term.C32 0, Term.C32 p.ιWifi, Term.C32 0, Term.C32 0]

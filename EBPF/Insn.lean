@@ -1,7 +1,7 @@
-import CommonMath.Expr
+import ClassifierExpr.Expr
 
 namespace EBPF
-open CommonMath
+open ClassifierExpr
 
 /-- The executable slice uses ALU32/ALU64 MOV and ADD, plus outer EXIT. -/
 inductive Source where

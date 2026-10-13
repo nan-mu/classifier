@@ -1,6 +1,6 @@
-import CommonMath.Expr
+import ClassifierExpr.Expr
 
-namespace CommonMath
+namespace ClassifierExpr
 
 /-- Input materialization is separate from the instruction's simultaneous assignments. -/
 structure ExprEffect where
@@ -63,7 +63,7 @@ inductive ByteOrder where
 /-- A unique packet identity and byte offset. Access validity is an external premise.
 Only `inputBase` authorizes first-read materialization of untouched input bytes. -/
 structure PacketAccess where
-  resource : Nat
+  κ : Nat
   offset : Nat
   bytes : Nat
   order : ByteOrder := .little
@@ -89,7 +89,7 @@ def PacketAccess.read (a : PacketAccess) (Eg : ExprSet) (w : Width)
     let mut inputs := ExprSet.empty
     let mut raw := Term.C w 0
     for j in List.range a.bytes do
-      let reg := Reg.packet a.resource (a.offset + j)
+      let reg := Reg.packet a.κ (a.offset + j)
       let byte ← match Eg.lookupEq reg with
         | some t => if t.width == .w32 then some t else none
         | none => do
@@ -100,7 +100,7 @@ def PacketAccess.read (a : PacketAccess) (Eg : ExprSet) (w : Width)
             if a.offset + j ≥ (1 <<< base.width.bits) then none
             else
               let address := addStar base.width base (Term.C base.width (a.offset + j))
-              let t := star .w32 (.low 8 32) [star .w32 (.inputByte a.resource) [base, address]]
+              let t := star .w32 (.low 8 32) [star .w32 (.inputByte a.κ) [base, address]]
               inputs := inputs.insertEq reg t
               some t
       let widened := zStar 8 w 32 byte
@@ -113,7 +113,7 @@ def PacketAccess.write (a : PacketAccess) (Eg : ExprSet) (source : Term) : Optio
     let mut updates := ExprSet.empty
     for j in List.range a.bytes do
       let byte := star .w32 (.extract (8 * bytePosition a j) 8 source.width.bits) [source]
-      updates := updates.insertEq (Reg.packet a.resource (a.offset + j)) byte
+      updates := updates.insertEq (Reg.packet a.κ (a.offset + j)) byte
     some updates
 
-end CommonMath
+end ClassifierExpr

@@ -14,7 +14,7 @@ def decodeInsnWord (word : UInt64) : Insn :=
   if opcode == 0x95 then
     if n == 0x95 then .exit else .illegal word
   else
-    let width := if opcode % 8 == 4 then CommonMath.Width.w32 else .w64
+    let width := if opcode % 8 == 4 then ClassifierExpr.Width.w32 else .w64
     let registerSource := opcode % 16 ≥ 8
     let operand := if registerSource then Source.reg src else .imm imm
     if dst ≥ 10 || offset != 0 ||

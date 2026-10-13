@@ -1,30 +1,30 @@
-import CommonMath.Numeric
-import CommonMath.Virtual
-import CommonMath.Render
+import ClassifierExpr.Numeric
+import ClassifierExpr.Virtual
+import ClassifierExpr.Render
 
-namespace CommonMath
+namespace ClassifierExpr
 
-@[export common_math_add32]
+@[export classifier_expr_add32]
 def exportAdd32 (a b : UInt32) : UInt32 :=
   UInt32.ofNat (ADD .w32 a.toNat b.toNat)
 
-@[export common_math_sub32]
+@[export classifier_expr_sub32]
 def exportSub32 (a b : UInt32) : UInt32 :=
   UInt32.ofNat (SUB .w32 a.toNat b.toNat)
 
-@[export common_math_and32]
+@[export classifier_expr_and32]
 def exportAnd32 (a b : UInt32) : UInt32 :=
   UInt32.ofNat (AND 32 a.toNat b.toNat)
 
 /-- Toward-zero signed quotient bits; div-by-zero and overflow left to callers. -/
-@[export common_math_tq32]
+@[export classifier_expr_tq32]
 def exportTq32 (a b : UInt32) : UInt32 :=
   let x := s 32 a.toNat
   let y := s 32 b.toNat
   if y == 0 then 0xffffffff
   else UInt32.ofNat (M 32 (TQ x y))
 
-@[export common_math_divu32]
+@[export classifier_expr_divu32]
 def exportDivu32 (a b : UInt32) : UInt32 :=
   let a := a.toNat; let b := b.toNat
   if b == 0 then 0xffffffff
@@ -55,15 +55,15 @@ def exportCellAccess (kind width hasOld bitOffset bits sourceWidth isUnsigned wr
 /-- A binding probe for byte assembly, including untouched input materialization. -/
 @[export lean_virtual_packet_access]
 def exportPacketAccess (values : Array UInt32)
-    (resource offset bytes width bigEndian isUnsigned allowInput write : UInt32)
+    (κ offset bytes width bigEndian isUnsigned allowInput write : UInt32)
     (source : UInt64) : String :=
   let result : Option String := do
     let w ← ffiWidth width
     let E := values.toList.zipIdx.foldl (fun E (value, j) =>
-      E.insertEq (Reg.packet resource.toNat j) (Term.C32 (MNat 8 value.toNat))) ExprSet.empty
-    let access : PacketAccess := ⟨resource.toNat, offset.toNat, bytes.toNat,
+      E.insertEq (Reg.packet κ.toNat j) (Term.C32 (MNat 8 value.toNat))) ExprSet.empty
+    let access : PacketAccess := ⟨κ.toNat, offset.toNat, bytes.toNat,
       if bigEndian == 0 then .little else .big,
-      if allowInput == 0 then none else some (Term.V64 resource.toNat)⟩
+      if allowInput == 0 then none else some (Term.V64 κ.toNat)⟩
     if write == 0 then
       let read ← access.read E w (isUnsigned != 0)
       some s!"\{\"value\":\"{renderTerm read.value}\",\"inputs\":[{renderExprSetJson read.inputs}]}"
@@ -72,4 +72,4 @@ def exportPacketAccess (values : Array UInt32)
       some s!"\{\"updates\":[{renderExprSetJson updates}]}"
   result.getD "null"
 
-end CommonMath
+end ClassifierExpr

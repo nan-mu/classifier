@@ -1,9 +1,9 @@
-namespace CommonMath
+namespace ClassifierExpr
 
-/-! ## Successor direction (`doc/NodeInference/展开图与执行路径.md`) -/
+/-! ## Successor direction (`doc/NodeInference/路径.md`) -/
 
 inductive Direction where
-  | only
+  | ok
   | taken
   | notTaken
   deriving DecidableEq, BEq, Repr, Inhabited
@@ -11,4 +11,4 @@ inductive Direction where
 /-- Continuous node references within one run. -/
 abbrev NodeId := Nat
 
-end CommonMath
+end ClassifierExpr

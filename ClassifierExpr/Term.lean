@@ -1,8 +1,8 @@
-import CommonMath.Bits
-import CommonMath.Op
-import CommonMath.Reg
+import ClassifierExpr.Bits
+import ClassifierExpr.Op
+import ClassifierExpr.Reg
 
-namespace CommonMath
+namespace ClassifierExpr
 
 inductive Term where
   | const (w : Width) (c : Nat)
@@ -97,4 +97,4 @@ def negStar (w : Width) (t : Term) : Term := star w (Op.neg w) [t]
 def zStar (q : Nat) (w : Width) (v : Nat) (t : Term) : Term := star w (Op.zext q w v) [t]
 def sStar (q : Nat) (w : Width) (v : Nat) (t : Term) : Term := star w (Op.sext q w v) [t]
 
-end CommonMath
+end ClassifierExpr

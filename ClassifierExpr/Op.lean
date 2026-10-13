@@ -1,10 +1,10 @@
-import CommonMath.Bits
-import CommonMath.Numeric
+import ClassifierExpr.Bits
+import ClassifierExpr.Numeric
 
-namespace CommonMath
+namespace ClassifierExpr
 
-/-- Form operators whose signatures lie in \(W\) (`doc/Expr/右值.md`,
-`doc/Expr/位向量与共同数值函数.md`). -/
+/-- Form operators whose signatures lie in \(W\) (`doc/Expr/待处理.md#右值`,
+`doc/Expr/待处理.md#位向量与共同数值函数`). -/
 inductive Op where
   | add (w : Width)
   | sub (w : Width)
@@ -53,4 +53,4 @@ def interpretOp (op : Op) (args : List Nat) : Option Nat :=
   | .mergeLow q wbits, [old, src] => some (mergeLow q wbits old src)
   | _, _ => none
 
-end CommonMath
+end ClassifierExpr

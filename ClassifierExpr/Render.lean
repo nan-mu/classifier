@@ -1,14 +1,13 @@
-import CommonMath.Bits
-import CommonMath.Reg
-import CommonMath.Op
-import CommonMath.Term
-import CommonMath.Expr
-import CommonMath.Insn
-import CommonMath.Path
+import ClassifierExpr.Bits
+import ClassifierExpr.Reg
+import ClassifierExpr.Op
+import ClassifierExpr.Term
+import ClassifierExpr.Expr
+import ClassifierExpr.Insn
 
-namespace CommonMath
+namespace ClassifierExpr
 
-/-! ## Compact string renderers for SemState JSON (`doc/NodeInference/语义状态与节点快照.md`) -/
+/-! ## Compact string renderers for SemState JSON (`doc/NodeInference/step.md#语义状态与节点状态`) -/
 
 def renderWidth : Width → String
   | .w32 => "32"
@@ -72,8 +71,6 @@ def renderPredicateJson : Predicate → String
   | .helper event kind args =>
     let args := String.intercalate "," (args.map fun t => s!"\"{renderTerm t}\"")
     s!"\{\"kind\":\"helper\",\"event\":{event},\"helperId\":{kind.id},\"args\":[{args}]}"
-  | .ret value =>
-    s!"\{\"kind\":\"ret\",\"term\":\"{renderTerm value}\"}"
 def renderExprSetJson (E : ExprSet) : String :=
   String.intercalate "," (E.entries.map renderExprJson ++ E.constraints.map fun e =>
     s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}")
@@ -84,4 +81,4 @@ def renderPredicatesJson (ps : List Predicate) : String :=
 def renderSemStateJson (σ : SemState) : String × String :=
   (renderExprSetJson σ.exprs, renderPredicatesJson σ.predicates)
 
-end CommonMath
+end ClassifierExpr

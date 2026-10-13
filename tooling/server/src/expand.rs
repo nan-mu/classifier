@@ -706,10 +706,10 @@ mod tests {
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
         assert_eq!(snap.failed, None, "no instruction rejects");
         assert_eq!(snap.fuel, 0);
-        // NotTaken-before-Taken Agenda changes expansion order vs the old flat queue.
-        assert_eq!(snap.nodes.len(), 551);
-        assert_eq!(snap.edges.iter().filter(|e| e.dir != "reuse").count(), 550);
-        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 9);
+        // Exact-config merge reuses Taken suffixes; counts are below the pre-merge Agenda.
+        assert_eq!(snap.nodes.len(), 542);
+        assert_eq!(snap.edges.iter().filter(|e| e.dir != "reuse").count(), 541);
+        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 26);
         assert!(!snap.work.is_empty());
         assert_eq!(snap.work.first(), Some(&snap.focus));
         assert!(snap.edges.iter().all(|e| !snap.work.contains(&e.src)));
@@ -738,11 +738,11 @@ mod tests {
         assert_eq!(snap.status, "complete");
         assert_eq!(snap.reason, None);
         assert_eq!(snap.failed, None);
-        assert_eq!(snap.fuel, 187, "837 expansions finish the fixture");
+        assert_eq!(snap.fuel, 455, "569 expansions finish the fixture under merge reuse");
         assert!(snap.work.is_empty());
-        assert_eq!(snap.nodes.len(), 882);
-        assert_eq!(snap.edges.len(), 881);
-        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 45);
+        assert_eq!(snap.nodes.len(), 601);
+        assert_eq!(snap.edges.len(), 601);
+        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 30);
         assert_eq!(
             snap.nodes
                 .iter()
@@ -750,8 +750,12 @@ mod tests {
                     && n.exprs.iter().any(|e| e.reg.starts_with("map32:")
                         && e.term.starts_with("add32(externalResult")))
                 .count(),
-            21,
+            14,
             "lookup update paths must reach Exit"
+        );
+        assert!(
+            snap.edges.iter().any(|e| e.dir == "reuse"),
+            "exact-config merge must record at least one reuse edge"
         );
     }
 

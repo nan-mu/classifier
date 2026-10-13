@@ -1,7 +1,7 @@
-import CommonMath.Path
+import PathMerge.Path
 
 namespace EBPF
-open CommonMath
+open ClassifierExpr PathMerge
 
 /-! External correspondence TBD.
 Only logical context and stack inputs are bound: r1=tCtx, r10=tSp.

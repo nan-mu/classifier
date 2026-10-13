@@ -1,8 +1,10 @@
-import CommonMath.Path
+import PathMerge.Path
+import ClassifierExpr.Render
 
-namespace CommonMath
+namespace RV32IMC
+open ClassifierExpr PathMerge
 
-/-! ## Budgeted node expansion (`doc/NodeInference/节点推理阅读索引.md`) -/
+/-! ## Budgeted node expansion (`doc/NodeInference/step.md`) -/
 
 structure WorkState where
   nodes : Array Node
@@ -14,6 +16,8 @@ structure WorkState where
 inductive ExpandOutcome where
   | complete (g : RunGraph)
   | fail (reason : RejectReason) (g : RunGraph)
+  /-- Runtime budget exhaustion, separate from step rejection reasons. -/
+  | limitExceeded (g : RunGraph)
   deriving Repr, Inhabited
 
 def WorkState.toGraph (ws : WorkState) : RunGraph :=
@@ -37,14 +41,14 @@ private def prepareCandidate (σ : SemState) (c : Candidate) (progLen : Nat) :
   match c.loc with
   | .exit =>
       do
-        let state ← σ.applyLocal c.exprs c.predicates
+        let state ← PathMerge.applyLocal σ c.E_k c.P_k
         pure (c.dir, .exit, state)
   | .pos k =>
       if k ≥ progLen then
         Except.error .unboundTarget
       else
         do
-          let state ← σ.applyLocal c.exprs c.predicates
+          let state ← PathMerge.applyLocal σ c.E_k c.P_k
           pure (c.dir, .pos k, state)
 
 def prepareAll (σ : SemState) (progLen : Nat) :
@@ -66,17 +70,17 @@ private def appendPrepared (eta : NodeId) (nodes : Array Node) (edges : Array Ed
     let zeta := nodes.size
     let nodes := nodes.push ⟨loc, σ'⟩
     let edges := edges.push ⟨eta, d, zeta⟩
-    let work := if loc.isExit then work else work ++ [zeta]
+    let work := if PathMerge.isExit loc then work else work ++ [zeta]
     appendPrepared eta nodes edges work rs
 
-/-- One node expansion (`doc/NodeInference/节点推理阅读索引.md`). `progLen` bounds non-Exit targets. -/
+/-- One node expansion (`doc/NodeInference/step.md`). `progLen` bounds non-Exit targets. -/
 def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
     Sum ExpandOutcome WorkState :=
   match ws.work with
   | [] => Sum.inl (.complete ws.toGraph)
   | eta :: rest =>
     if ws.fuel = 0 then
-      Sum.inl (.fail .limitExceeded ws.toGraph)
+      Sum.inl (.limitExceeded ws.toGraph)
     else
       match ws.nodes[eta]? with
       | none => Sum.inl (.fail .localReject ws.toGraph)
@@ -99,7 +103,7 @@ def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : Wor
                 fuel  := ws.fuel - 1
               }
 
-/-- Recurse on remaining fuel (`doc/NodeInference/有限预算展开的终止证明.md`). -/
+/-- Recurse on remaining fuel (`doc/NodeInference/step.md#有限预算展开的终止证明`). -/
 partial def expand (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
     ExpandOutcome :=
   match expandOne progLen step ws with
@@ -115,4 +119,54 @@ def expandN (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkS
     | Sum.inl outcome => Sum.inl outcome
     | Sum.inr ws' => expandN progLen step ws' n
 
-end CommonMath
+def reasonTag : RejectReason → String
+  | .invalidEntry => "InvalidEntry"
+  | .unsupported => "Unsupported"
+  | .unboundTarget => "UnboundTarget"
+  | .undefinedSrc => "UndefinedSrc"
+  | .localReject => "LocalReject"
+
+def dirTag : Direction → String
+  | .ok => "OK"
+  | .taken => "Taken"
+  | .notTaken => "NotTaken"
+
+def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
+    (fuel : Nat) (status : String) (reason : Option RejectReason)
+    (failed : Option NodeId := none) (budgetExhausted : Bool := false) : String :=
+  let nodeStrs := Id.run do
+    let mut acc : List String := []
+    for id in [:nodes.size] do
+      if let some n := nodes[id]? then
+        let (ej, pj) := renderSemStateJson n.state
+        let loc := match n.loc with | .exit => "exit" | .pos j => toString j
+        acc := acc ++
+          [s!"\{\"id\":{id},\"loc\":\"{loc}\",\"exprs\":[{ej}],\"predicates\":[{pj}]}"]
+    pure (String.intercalate "," acc)
+  let edgeStrs := String.intercalate "," (edges.toList.map fun e =>
+    s!"\{\"src\":{e.src},\"dir\":\"{dirTag e.dir}\",\"dst\":{e.dst}}")
+  let workStr := String.intercalate "," (work.map toString)
+  let reasonField := match reason with
+    | none => if budgetExhausted then "\"LimitExceeded\"" else "null"
+    | some r => s!"\"{reasonTag r}\""
+  let failedField := match failed with | none => "null" | some id => toString id
+  s!"\{\"status\":\"{status}\",\"reason\":{reasonField},\"failed\":{failedField},\"fuel\":{fuel},\"work\":[{workStr}],\"nodes\":[{nodeStrs}],\"edges\":[{edgeStrs}]}"
+
+def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState → StepResult)
+    (ws : WorkState) : Nat → String
+  | 0 => snapshotJson ws.nodes ws.edges ws.work ws.fuel
+      (if ws.work.isEmpty then "complete" else "running") none
+  | n + 1 =>
+    match expandOne progLen (stepFn (ws.work.headD 0)) ws with
+    | .inr ws' => snapshotAfter progLen stepFn ws' n
+    | .inl (.complete g) => snapshotJson g.nodes g.edges [] ws.fuel "complete" none
+    | .inl (.limitExceeded g) =>
+      snapshotJson g.nodes g.edges ws.work ws.fuel "fail" none none true
+    | .inl (.fail reason g) =>
+      -- expandOne's terminal result has only a graph; retain diagnostic queue/fuel here.
+      let attempted := !ws.work.isEmpty && ws.fuel > 0
+      snapshotJson g.nodes g.edges (if attempted then ws.work.tail else ws.work)
+        (if attempted then ws.fuel - 1 else ws.fuel) "fail" (some reason)
+        (if attempted then ws.work.head? else none)
+
+end RV32IMC

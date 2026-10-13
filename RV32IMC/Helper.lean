@@ -1,11 +1,9 @@
 import RV32IMC.Initial
 import RV32IMC.Expr
-import CommonMath.Path
+import PathMerge.Path
 
 namespace RV32IMC
-open CommonMath
-
-abbrev HelperKind := CommonMath.HelperKind
+open ClassifierExpr PathMerge
 
 structure HelperCall where
   kind : HelperKind
@@ -44,13 +42,14 @@ def helperPredicate (event : NodeId) (Eg : ExprSet) : Except RejectReason Predic
   pure (.helper event call.kind call.args)
 
 private def helperCallOfPredicate (p : Predicate) : Except RejectReason (NodeId × HelperCall) := do
-  let .helper event kind args := p | throw .localReject
+  let .helper event kind args := p
   if kind.id ≥ (1 <<< 32) || helperKind kind.id != kind then throw .unsupported
   if args.length != helperArity kind || args.any (fun t => t.width != .w32) then
     throw .undefinedSrc
   pure (event, ⟨kind, kind.id, args⟩)
 
-def helperResult (p : Predicate) : Except RejectReason Term := do
+/-- The return item is determined by the call's identity and arguments. -/
+private def callReturnTerm (p : Predicate) : Except RejectReason Term := do
   let (event, call) ← helperCallOfPredicate p
   let external := star .w32 (.externalResult event 0) (Term.C32 call.id :: call.args)
   let result := match call.kind with
@@ -68,7 +67,7 @@ def helperMapExpr (p : Predicate) : Except RejectReason ExprSet := do
 
 /-- The helper value projection writes a0; a lookup also introduces its Map relation. -/
 def helperExpr (p : Predicate) : Except RejectReason ExprSet := do
-  let result ← helperResult p
+  let result ← callReturnTerm p
   let map ← helperMapExpr p
   pure (updateExpr (ExprSet.empty.insertEq (Reg.real32 10) result) map)
 

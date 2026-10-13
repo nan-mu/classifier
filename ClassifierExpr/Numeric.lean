@@ -1,8 +1,8 @@
-import CommonMath.Bits
+import ClassifierExpr.Bits
 
-namespace CommonMath
+namespace ClassifierExpr
 
-/-! Named numeric functions from `doc/Expr/位向量与共同数值函数.md`. Architecture-neutral. -/
+/-! Named numeric functions from `doc/Expr/待处理.md#位向量与共同数值函数`. Architecture-neutral. -/
 
 def ADD (w : Width) (a b : Nat) : Nat := MNat w.bits (a + b)
 def SUB (w : Width) (a b : Nat) : Nat :=
@@ -90,4 +90,4 @@ def mergeLow (q wbits : Nat) (old src : Nat) : Nat :=
   let hi := old / (1 <<< q) * (1 <<< q)
   MNat wbits (hi + MNat q src)
 
-end CommonMath
+end ClassifierExpr

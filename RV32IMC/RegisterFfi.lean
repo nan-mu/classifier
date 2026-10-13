@@ -1,8 +1,9 @@
 import RV32IMC.Expr
 import RV32IMC.Initial
+import ClassifierExpr.Render
 
 namespace RV32IMC
-open CommonMath
+open ClassifierExpr
 
 private def bindingEntry : ExprSet :=
   let fields := [Term.V32 4, addStar .w32 (Term.V32 4) (Term.C32 64),
@@ -63,7 +64,7 @@ private def rejectionChecks : String :=
     |>.insertEq (Reg.sw 1) (Term.C32 0x1040)
   let concreteRead := stepEffects concrete (.LOAD (0#12, .Regidx 12#5, .Regidx 14#5, true, 4))
   let independentInput : PacketAccess := ⟨1, 0, 1, .little, some (Term.C32 0x1000)⟩
-  let otherInput := { independentInput with resource := 2 }
+  let otherInput := { independentInput with κ := 2 }
   let checks := [
     ("unbound", (stepEffects unbound (.LOAD (0#12, .Regidx 12#5, zreg, true, 1))).isNone),
     ("symbolicOffset", (stepEffects symbolic (.LOAD (0#12, .Regidx 12#5, zreg, true, 1))).isNone),

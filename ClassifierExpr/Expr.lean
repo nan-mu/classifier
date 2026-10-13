@@ -1,11 +1,11 @@
-import CommonMath.Bits
-import CommonMath.Reg
-import CommonMath.Numeric
-import CommonMath.Term
+import ClassifierExpr.Bits
+import ClassifierExpr.Reg
+import ClassifierExpr.Numeric
+import ClassifierExpr.Term
 
-namespace CommonMath
+namespace ClassifierExpr
 
-/-! ## Relations (`doc/Expr/关系符定义.md`) -/
+/-! ## Relations (`doc/Expr/待处理.md#关系符定义`) -/
 
 inductive Rel where
   | eq | ne
@@ -166,7 +166,7 @@ def ExprSet.ofList! (es : List Expr) : ExprSet :=
   | some E => E
   | none => { entries := [] }
 
-/-- Override \(E_g\times E_i\) (`doc/Expr/关系集合按键覆写.md`). -/
+/-- Override \(E_g\times E_i\) (`doc/Expr/待处理.md#关系集合按键覆写`). -/
 def ExprSet.override (Eg Ei : ExprSet) : ExprSet :=
   let untouched (e : Expr) := !(Ei.entries.any (fun ei => ei.reg == e.reg))
   let base : ExprSet := {
@@ -185,4 +185,4 @@ def ExprSet.solveAll (E : ExprSet) : ExprSet :=
 def ExprSet.forReg (E : ExprSet) (r : Reg) : List Expr :=
   E.toList.filter (fun e => e.reg == r)
 
-end CommonMath
+end ClassifierExpr
