@@ -2,6 +2,7 @@ mod bpf_image;
 mod driver;
 mod engine;
 mod expand;
+mod pred_match;
 mod rv32_image;
 
 use std::collections::HashMap;
@@ -61,6 +62,7 @@ fn app(state: AppState) -> Router {
         .route("/api/session/{id}/run/ws", get(run_session_ws))
         .route("/api/session/{id}", get(get_session))
         .route("/api/compare", post(compare_runs))
+        .route("/api/compare/predicates", post(compare_predicates))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -205,6 +207,17 @@ async fn compare_runs(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let value: Value = serde_json::from_str(&raw).map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(Json(value))
+}
+
+/// Host-side fuzzy Predicate align (`claim: heuristic`). Not Lean Term equality.
+async fn compare_predicates(
+    Json(body): Json<CompareBody>,
+) -> Result<Json<pred_match::PredMatchReport>, StatusCode> {
+    let left: pred_match::PredRun =
+        serde_json::from_value(body.left).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let right: pred_match::PredRun =
+        serde_json::from_value(body.right).map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(Json(pred_match::match_predicate_runs(&left, &right)))
 }
 
 fn session_handle(app: &AppState, id: &str) -> Result<Arc<Mutex<Session>>, StatusCode> {
@@ -464,6 +477,22 @@ mod http_tests {
         assert_eq!(report["conclusion"], "sameStructure");
         assert_eq!(report["claim"], "structural");
         assert_eq!(report["behavioralEquivalence"], "notEstablished");
+    }
+
+    #[tokio::test]
+    async fn compare_predicates_heuristic_ret_pair() {
+        let router = app(new_state());
+        let body = br#"{
+            "left":{"arch":"rv32imc","nodes":[{"id":1,"loc":"exit","predicates":[{"kind":"ret","term":"1","width":32}]}]},
+            "right":{"arch":"ebpf","nodes":[{"id":2,"loc":"exit","predicates":[{"kind":"ret","term":"1","width":64}]}]}
+        }"#;
+        let (status, report) = call(&router, "POST", "/api/compare/predicates", body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["status"], "matched");
+        assert_eq!(report["claim"], "heuristic");
+        assert_eq!(report["behavioralEquivalence"], "notEstablished");
+        assert_eq!(report["matched"], 1);
+        assert_eq!(report["locations"][0]["pairs"][0]["status"], "matched");
     }
 
     #[tokio::test]
