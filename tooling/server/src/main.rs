@@ -1,3 +1,4 @@
+mod bpf_image;
 mod driver;
 mod engine;
 mod expand;
