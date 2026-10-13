@@ -81,7 +81,20 @@ impl Agenda {
     }
 
     pub fn is_idle(&self) -> bool {
-        self.items.is_empty()
+        !self.items.iter().any(|item| match item {
+            WorkItem::Ready(_) => true,
+            WorkItem::BlockedTaken { frame, .. } => self.frame_blocks_progress(*frame),
+        })
+    }
+
+    fn frame_blocks_progress(&self, frame_id: u32) -> bool {
+        match self.frames.get(frame_id as usize) {
+            Some(f) => {
+                !f.merge_settled
+                    && !matches!(f.phase, BranchPhase::Closed | BranchPhase::MergeAttempted)
+            }
+            None => false,
+        }
     }
 
     /// Ready heads only. Taken of an `OpenNotTaken` frame never appears.
@@ -234,7 +247,7 @@ impl Agenda {
         // Nested Taken/NotTaken opens a new BranchFrame that owns BlockedTaken scheduling.
         // Outer frames must still inherit unfinished work and merge candidates:
         // - outer NT waits on the nested NotTaken root (and later Ok descendants);
-        // - outer Taken waits on the nested Taken root;
+        // - outer Taken waits on BOTH nested roots (join tips often lie on nested NT);
         // - never park the nested Taken under an outer NT pending set (stranded BlockedTaken).
         for &(dir, id, ref loc) in successors {
             if loc == "exit" {
@@ -246,11 +259,9 @@ impl Agenda {
                         self.frames[i].pending_not_taken.insert(id);
                         self.frames[i].not_taken_candidates.insert(id);
                     }
-                    if !opens_branch {
-                        for &i in &in_t {
-                            self.frames[i].pending_taken.insert(id);
-                            self.frames[i].taken_arm_nodes.insert(id);
-                        }
+                    for &i in &in_t {
+                        self.frames[i].pending_taken.insert(id);
+                        self.frames[i].taken_arm_nodes.insert(id);
                     }
                 }
                 Dir::Taken => {
@@ -398,7 +409,41 @@ impl Agenda {
         while let Some(item) = self.items.pop_front() {
             match item {
                 WorkItem::Ready(id) if taken_arm.contains(&id) => {}
-                WorkItem::BlockedTaken { frame, .. } if frame == frame_id => {}
+                WorkItem::BlockedTaken { frame, node }
+                    if frame == frame_id || taken_arm.contains(&node) => {}
+                other => kept.push_back(other),
+            }
+        }
+        self.items = kept;
+        // Drop cancelled ids from every frame pending set so nested frames opened on
+        // the Taken arm cannot keep the Agenda non-idle with stranded BlockedTaken.
+        for frame in &mut self.frames {
+            frame.pending_not_taken.retain(|id| !taken_arm.contains(id));
+            frame.pending_taken.retain(|id| !taken_arm.contains(id));
+            if frame.id != frame_id
+                && !frame.merge_settled
+                && frame.pending_not_taken.is_empty()
+                && frame.pending_taken.is_empty()
+                && matches!(
+                    frame.phase,
+                    BranchPhase::OpenNotTaken
+                        | BranchPhase::NotTakenDone
+                        | BranchPhase::OpenTaken
+                        | BranchPhase::MergeAttempted
+                )
+            {
+                frame.phase = BranchPhase::Closed;
+                frame.merge_settled = true;
+            }
+        }
+        self.scrub_closed_blocked();
+    }
+
+    fn scrub_closed_blocked(&mut self) {
+        let mut kept = VecDeque::new();
+        while let Some(item) = self.items.pop_front() {
+            match item {
+                WorkItem::BlockedTaken { frame, .. } if !self.frame_blocks_progress(frame) => {}
                 other => kept.push_back(other),
             }
         }
@@ -613,6 +658,77 @@ mod tests {
             vec![crate::driver::merge::MergeEffect::Reuse {
                 taken: 30,
                 reuse_from: 31,
+            }]
+        );
+    }
+
+    /// Outer Taken opens a nested branch whose join tip lies on nested NotTaken
+    /// (just_drop 13→33→39→49 vs NT tip 22). Outer pending_taken must keep that arm.
+    #[test]
+    fn nested_not_taken_on_outer_taken_reaches_merge_tip() {
+        let mut agenda = Agenda::default();
+        agenda.open_branch(12, 12, 14, 13);
+        let merge_reject = MergePort::fixed(MergeVerdict::Reject {
+            reason: RejectReason::InsufficientEvidence,
+        });
+        let mut records = RecordStore::default();
+        let mut effects = Vec::new();
+
+        agenda.on_successors(
+            14,
+            "12",
+            &[(Dir::Ok, 22, "18".into())],
+            &mut records,
+            &merge_reject,
+            &stub_lookup,
+            &mut effects,
+        );
+        agenda.on_successors(22, "18", &[], &mut records, &merge_reject, &stub_lookup, &mut effects);
+        assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
+
+        agenda.on_successors(
+            13,
+            "14",
+            &[(Dir::Ok, 33, "15".into())],
+            &mut records,
+            &merge_reject,
+            &stub_lookup,
+            &mut effects,
+        );
+        agenda.on_successors(
+            33,
+            "15",
+            &[
+                (Dir::Taken, 38, "45".into()),
+                (Dir::NotTaken, 39, "16".into()),
+            ],
+            &mut records,
+            &merge_reject,
+            &stub_lookup,
+            &mut effects,
+        );
+        assert!(agenda.frames[0].pending_taken.contains(&39));
+        assert!(agenda.frames[0].pending_taken.contains(&38));
+
+        agenda.on_successors(
+            39,
+            "16",
+            &[(Dir::Ok, 49, "18".into())],
+            &mut records,
+            &merge_reject,
+            &stub_lookup,
+            &mut effects,
+        );
+        let merge_merged = MergePort::fixed(MergeVerdict::Merged {
+            reuse_suffix_from: 22,
+        });
+        effects.clear();
+        agenda.on_successors(49, "18", &[], &mut records, &merge_merged, &stub_lookup, &mut effects);
+        assert_eq!(
+            effects,
+            vec![crate::driver::merge::MergeEffect::Reuse {
+                taken: 49,
+                reuse_from: 22,
             }]
         );
     }

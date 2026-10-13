@@ -155,6 +155,8 @@ impl ExpandSession {
                 .min(lean_binding::LEAN_WORKERS),
         );
         if preview.is_empty() {
+            // Ready empty: either truly done, or only stranded BlockedTaken after reuse
+            // cancel. is_idle ignores BlockedTaken on closed/settled frames.
             if self.agenda.is_idle() {
                 self.snapshot["status"] = json!("complete");
                 self.sync_work();

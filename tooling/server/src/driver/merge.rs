@@ -103,6 +103,26 @@ impl MergePort {
                     "notTaken": not_taken.iter().map(ConfigSnapshot::to_wire).collect::<Vec<_>>(),
                 });
                 let raw = lean_binding::rv32::expand_merge(&request.to_string());
+                if std::env::var_os("MERGE_TRACE").is_some() {
+                    let cand: Vec<NodeId> = not_taken.iter().map(|c| c.id).collect();
+                    let status = serde_json::from_str::<Value>(&raw)
+                        .ok()
+                        .and_then(|v| v.get("status").and_then(|s| s.as_str()).map(str::to_owned))
+                        .unwrap_or_else(|| "parse_fail".into());
+                    let detail = serde_json::from_str::<Value>(&raw)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("detail")
+                                .or_else(|| v.get("reason"))
+                                .and_then(|s| s.as_str())
+                                .map(str::to_owned)
+                        })
+                        .unwrap_or_default();
+                    eprintln!(
+                        "MERGE_TRACE jb={_jb_doc} taken={} loc={} cands={cand:?} -> {status} {detail}",
+                        taken.id, taken.loc
+                    );
+                }
                 parse_merge_json(&raw)
             }
         }

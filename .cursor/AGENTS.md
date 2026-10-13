@@ -86,11 +86,12 @@ loop, and concurrency (`tooling/server/src/engine.rs`, `tooling/server/src/drive
 
 - `ExpandSession` holds `insns`, applied graph snapshot, Agenda, `MergePort`, fuel.
 - Agenda ready set encodes NotTaken-before-Taken for an open branch frame;
-  after NotTaken completes, Taken unblocks. Nested Taken/NotTaken opens a new
+  after NotTaken completes, Taken unblocks.   Nested Taken/NotTaken opens a new
   frame for BlockedTaken scheduling, but outer frames still inherit the nested
   NotTaken root (and later Ok descendants) into `pending_not_taken` /
-  `not_taken_candidates`; outer Taken waits on the nested Taken root. Never park
-  nested Taken under an outer NT pending set. **Merge-step:** after each Taken
+  `not_taken_candidates`; outer Taken waits on both nested roots (join tips often
+  lie on nested NotTaken). Never park nested Taken under an outer NT pending set.
+  **Merge-step:** after each Taken
   head commits successors, `MergePort` compares the Taken tip to NotTaken suffix
   candidates; `InsufficientEvidence` keeps expanding Taken; `merged` records
   `mergeReuseFrom` plus a `reuse` edge and stops redundant Taken suffix work;
