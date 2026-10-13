@@ -14,3 +14,5 @@
 /.codex/
 # Local omp harness (skills + .omp/AGENTS.md); Cursor guide is .cursor/AGENTS.md
 /.omp/
+# One-shot Cursor→omp briefs (local only; not agent definitions)
+.cursor/omp-handoff-*.md
