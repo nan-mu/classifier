@@ -1,8 +1,8 @@
 //! Extract eBPF insn words (u64 LE) from an ELF64 bpf object.
 
-/// Default eBPF object fixture (clang -target bpf). Expand/FFI for Arch::Ebpf is not wired yet.
+/// Default eBPF object fixture (clang -target bpf).
 pub const DEFAULT_BPF: &[u8] = include_bytes!("../../fixtures/just_tx.bpf.o");
-/// Display name parallel to [`rv32_image::DEFAULT_NAME`]; create-path wiring waits on Arch::Ebpf.
+/// Display name parallel to [`rv32_image::DEFAULT_NAME`].
 pub const DEFAULT_BPF_NAME: &str = "just_tx.bpf.o";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

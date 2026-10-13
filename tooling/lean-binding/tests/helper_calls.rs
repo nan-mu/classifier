@@ -267,22 +267,24 @@ fn context_identity_survives_returns_and_adjust_tail_keeps_data_end() {
     let s = snapshot(&words, pos as u32 + 1);
     assert!(term(&s["nodes"][pos + 1], 10).contains(&format!("externalResult{pos}_0")));
     // Return-only projection does not rewrite data_end; stack SW bindings are unchanged.
+    // Return-only projection does not rewrite data_end (context32:1).
     let before_end = before["nodes"][pos]["exprs"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["reg"] == "stack32:1")
+        .find(|e| e["reg"] == "context32:1")
         .unwrap()["term"]
         .clone();
     let after_end = s["nodes"][pos + 1]["exprs"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["reg"] == "stack32:1")
+        .find(|e| e["reg"] == "context32:1")
         .unwrap()["term"]
         .clone();
     assert_eq!(after_end, before_end);
 }
+
 
 #[test]
 fn a_loop_revisiting_the_same_helper_gets_new_events() {

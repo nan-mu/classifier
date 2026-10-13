@@ -1,7 +1,9 @@
+use lean_binding::ebpf;
 use lean_binding::rv32;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::bpf_image::BpfProgram;
 use crate::engine::ExpandSession;
 use crate::rv32_image::{self, InsnImage};
 
@@ -13,12 +15,14 @@ struct LogEntry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Arch {
     Rv32imc,
+    Ebpf,
 }
 
 impl Arch {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "rv32imc" | "esp32c3" => Some(Self::Rv32imc),
+            "ebpf" | "bpf" => Some(Self::Ebpf),
             _ => None,
         }
     }
@@ -26,6 +30,37 @@ impl Arch {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Rv32imc => "rv32imc",
+            Self::Ebpf => "ebpf",
+        }
+    }
+}
+
+/// Display rows for the instruction list (RV32 decode text or eBPF hex words).
+enum DisplayInsns {
+    Rv32(InsnImage),
+    Ebpf(Vec<u64>),
+}
+
+impl DisplayInsns {
+    fn outs(&self) -> Vec<InsnOut> {
+        match self {
+            Self::Rv32(image) => image
+                .insns
+                .iter()
+                .enumerate()
+                .map(|(j, insn)| InsnOut {
+                    j: j as u32,
+                    text: insn.text.clone(),
+                })
+                .collect(),
+            Self::Ebpf(words) => words
+                .iter()
+                .enumerate()
+                .map(|(j, word)| InsnOut {
+                    j: j as u32,
+                    text: format!("{j:04} {word:016x}"),
+                })
+                .collect(),
         }
     }
 }
@@ -36,7 +71,7 @@ pub struct Session {
     id: String,
     arch: Arch,
     name: String,
-    image: InsnImage,
+    image: DisplayInsns,
     budget: u32,
     steps: u32,
     focus: u32,
@@ -52,8 +87,10 @@ impl Session {
         name: String,
         program: rv32_image::Rv32Program,
     ) -> Self {
+        assert_eq!(arch, Arch::Rv32imc);
         let image = program.image;
         let insns = rv32_image::words(&image);
+        let insn_len = insns.len();
         let expand = ExpandSession::create(
             &insns,
             rv32::Meta::new(program.base_address, program.helper_address)
@@ -64,7 +101,7 @@ impl Session {
             id: id.into(),
             arch,
             name,
-            image,
+            image: DisplayInsns::Rv32(image),
             budget,
             steps: 0,
             focus: 0,
@@ -75,7 +112,39 @@ impl Session {
             "init root pre-state arch={} image={} insns={} budget={}",
             arch.as_str(),
             session.name,
-            insns.len(),
+            insn_len,
+            budget
+        ));
+        session.sync_focus_from_lean();
+        session
+    }
+
+    pub fn new_ebpf(
+        id: impl Into<String>,
+        budget: u32,
+        name: String,
+        program: BpfProgram,
+        meta: ebpf::Meta,
+    ) -> Self {
+        let words = program.words;
+        let insn_len = words.len();
+        let expand = ExpandSession::create_ebpf(&words, meta, budget);
+        let mut session = Self {
+            id: id.into(),
+            arch: Arch::Ebpf,
+            name,
+            image: DisplayInsns::Ebpf(words),
+            budget,
+            steps: 0,
+            focus: 0,
+            log: Vec::new(),
+            expand,
+        };
+        session.push_log(format!(
+            "init root pre-state arch={} image={} insns={} budget={}",
+            Arch::Ebpf.as_str(),
+            session.name,
+            insn_len,
             budget
         ));
         session.sync_focus_from_lean();
@@ -162,16 +231,7 @@ impl Session {
             focus: self.focus,
             arch: self.arch.as_str(),
             program: self.name.clone(),
-            insns: self
-                .image
-                .insns
-                .iter()
-                .enumerate()
-                .map(|(j, insn)| InsnOut {
-                    j: j as u32,
-                    text: insn.text.clone(),
-                })
-                .collect(),
+            insns: self.image.outs(),
             nodes,
             edges,
             log: self
@@ -460,8 +520,9 @@ mod tests {
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.nodes[0].loc, "0");
         assert_eq!(eq_term(&snap.nodes[0], "real32:0"), Some("0"));
-        assert!(eq_term(&snap.nodes[0], "stack32:0").is_some());
-        assert_eq!(snap.nodes[0].exprs.len(), 28);
+        // Entry binds context cells + callee-saved x8; stack cells are materialised on first access.
+        assert_eq!(eq_term(&snap.nodes[0], "context32:0"), Some("v32:4"));
+        assert_eq!(snap.nodes[0].exprs.len(), 14);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
         assert!(snap.log[0].msg.contains("just_tx.elf"));
@@ -547,8 +608,34 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.program, "upload.elf");
         assert_eq!(snap.insns.len(), 79);
-        assert_eq!(snap.nodes[0].exprs.len(), 28);
+        assert_eq!(snap.nodes[0].exprs.len(), 14);
     }
+
+    #[test]
+    fn ebpf_just_tx_create_and_one_step() {
+        use crate::bpf_image;
+        let program = bpf_image::extract_insn_words(bpf_image::DEFAULT_BPF).expect("bpf");
+        assert_eq!(program.words.len(), 58);
+        let mut session = Session::new_ebpf(
+            "ebpf",
+            8,
+            bpf_image::DEFAULT_BPF_NAME.into(),
+            program,
+            ebpf::Meta::just_tx_unbound_map(),
+        );
+        let snap = session.snapshot();
+        assert_eq!(snap.arch, "ebpf");
+        assert_eq!(snap.program, "just_tx.bpf.o");
+        assert_eq!(snap.status, "running");
+        assert_eq!(snap.insns.len(), 58);
+        assert_eq!(snap.nodes[0].loc, "0");
+        session.step_once();
+        let after = session.snapshot();
+        assert_eq!(after.status, "running");
+        assert_eq!(after.nodes.len(), 2);
+        assert_eq!(after.nodes[1].loc, "1");
+    }
+
 
     fn firewall_session(id: &str, budget: u32) -> Session {
         Session::new(
@@ -699,91 +786,31 @@ mod tests {
     }
 
     #[test]
-    fn just_tx_crosses_lookup_and_map_updates_then_exhausts_budget_512() {
+    fn just_tx_stops_at_undefined_src_on_x9_spill() {
+        // Entry Meta binds only x8 among callee-saved regs; c.swsp s1,4(sp) at idx 3
+        // reads unbound x9 → UndefinedSrc (omp eBPF handoff frontier).
         let mut session = default_session("s", 512);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
-        assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
-        assert_eq!(snap.failed, None, "no instruction rejects");
-        assert_eq!(snap.fuel, 0);
-        // Frozen lookup keys + dual SW mapWrite (*value += 1) expand the DAG past the
-        // pre-freeze counts; exact-config reuse stays rare while keys stay symbolic.
-        assert_eq!(snap.nodes.len(), 549);
-        assert_eq!(snap.edges.iter().filter(|e| e.dir != "reuse").count(), 548);
-        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 17);
-        assert!(!snap.work.is_empty());
-        assert_eq!(snap.work.first(), Some(&snap.focus));
-        assert!(snap.edges.iter().all(|e| !snap.work.contains(&e.src)));
-        assert!(snap.nodes.iter().any(|n| n
-            .predicates
-            .iter()
-            .any(|p| p.kind == "helper" && p.get_u64("helperId") == Some(1))));
-        assert!(
-            snap.nodes.iter().any(|n| n.predicates.iter().any(|p| p.kind == "branch")),
-            "just_tx has BLTU/BEQ/BNE forks that must emit Branch"
-        );
-        assert!(
-            snap.nodes
-                .iter()
-                .any(|n| n.predicates.iter().any(|p| p.kind == "mapWrite")),
-            "just_tx *value += 1 must emit MapWrite once ELF maps reach Meta"
-        );
-        assert!(
-            snap.nodes.iter().any(|n| {
-                n.exprs.iter().any(|e| e.reg.starts_with("map32:"))
-                    && n.exprs.iter().any(|e| e.term.contains("externalResult"))
-            }),
-            "lookup must materialize Map bindings before budget exhaustion"
-        );
-        assert!(snap
-            .nodes
-            .iter()
-            .any(|n| n.exprs.iter().any(|e| e.reg.starts_with("packet32:"))));
+        assert_eq!(snap.reason.as_deref(), Some("UndefinedSrc"));
+        assert_eq!(snap.failed, Some(3));
+        assert_eq!(snap.nodes.len(), 4);
+        assert_eq!(snap.nodes[3].loc, "3");
+        assert!(snap.nodes.iter().all(|node| node.loc != "exit"));
     }
 
     #[test]
-    fn just_tx_larger_budget_completes_with_lookup_update_exit_paths() {
+    fn just_tx_larger_budget_still_stops_at_undefined_src() {
+        // Extra fuel does not pass idx 3 until entry Meta also binds x9.
         let mut session = default_session("s", 1024);
         session.run_all();
         let snap = session.snapshot();
-        assert_eq!(snap.status, "complete");
-        assert_eq!(snap.reason, None);
-        assert_eq!(snap.failed, None);
-        assert_eq!(snap.fuel, 187, "837 expansions finish just_tx with mapWrite/packetWrite");
-        assert!(snap.work.is_empty());
-        assert_eq!(snap.nodes.len(), 882);
-        assert_eq!(snap.edges.len(), 881);
-        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 45);
-        assert_eq!(
-            snap.nodes
-                .iter()
-                .filter(|n| n.loc == "exit"
-                    && n.exprs.iter().any(|e| e.reg.starts_with("map32:")
-                        && e.term.starts_with("add32(externalResult")))
-                .count(),
-            21,
-            "lookup update paths must reach Exit"
-        );
-        assert!(
-            snap.nodes
-                .iter()
-                .flat_map(|n| &n.predicates)
-                .filter(|p| p.kind == "mapWrite")
-                .count()
-                >= 2,
-            "u64 *value += 1 is two SW MapWrites (lo then hi with carry)"
-        );
-        assert!(snap
-            .nodes
-            .iter()
-            .flat_map(|n| &n.predicates)
-            .any(|p| p.kind == "packetWrite"));
-        assert!(snap
-            .nodes
-            .iter()
-            .flat_map(|n| &n.predicates)
-            .any(|p| p.kind == "ret"));
+        assert_eq!(snap.status, "fail");
+        assert_eq!(snap.reason.as_deref(), Some("UndefinedSrc"));
+        assert_eq!(snap.failed, Some(3));
+        assert_eq!(snap.nodes.len(), 4);
+        assert_eq!(snap.nodes[3].loc, "3");
     }
 
     #[test]

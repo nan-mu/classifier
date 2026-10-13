@@ -21,7 +21,10 @@ use engine::InferencePool;
 use expand::{Arch, Session, Snapshot};
 use futures_util::future::FutureExt;
 use futures_util::StreamExt;
+use lean_binding::compare;
+use lean_binding::ebpf;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
@@ -36,12 +39,18 @@ struct AppState {
 #[derive(Deserialize)]
 struct CreateBody {
     budget: Option<u32>,
-    /// ISA selector. Currently only `rv32imc` (alias `esp32c3` accepted).
+    /// ISA selector: `rv32imc` (alias `esp32c3`) or `ebpf` (alias `bpf`).
     arch: Option<String>,
-    /// Display name for the firmware image. Defaults to `just_tx.elf`.
+    /// Display name for the firmware image. Defaults per arch (`just_tx.elf` / `just_tx.bpf.o`).
     name: Option<String>,
-    /// Optional base64-encoded compact XDP ELF bytes. Omitted → embedded `just_tx.elf`.
+    /// Optional base64-encoded image bytes. Omitted → embedded fixture for the arch.
     image_b64: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CompareBody {
+    left: Value,
+    right: Value,
 }
 
 fn app(state: AppState) -> Router {
@@ -51,6 +60,7 @@ fn app(state: AppState) -> Router {
         .route("/api/session/{id}/run", post(run_session))
         .route("/api/session/{id}/run/ws", get(run_session_ws))
         .route("/api/session/{id}", get(get_session))
+        .route("/api/compare", post(compare_runs))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -97,6 +107,20 @@ fn decode_image_b64(raw: &str) -> Result<Vec<u8>, StatusCode> {
         .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
+fn default_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::Rv32imc => rv32_image::DEFAULT_NAME,
+        Arch::Ebpf => bpf_image::DEFAULT_BPF_NAME,
+    }
+}
+
+fn default_bytes(arch: Arch) -> &'static [u8] {
+    match arch {
+        Arch::Rv32imc => rv32_image::DEFAULT_ELF,
+        Arch::Ebpf => bpf_image::DEFAULT_BPF,
+    }
+}
+
 async fn create_session(
     State(app): State<AppState>,
     body: Bytes,
@@ -118,9 +142,9 @@ async fn create_session(
         let name = parsed
             .name
             .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| rv32_image::DEFAULT_NAME.to_string());
+            .unwrap_or_else(|| default_name(arch).to_string());
         let bin = match parsed.image_b64.as_deref() {
-            None | Some("") => rv32_image::DEFAULT_ELF.to_vec(),
+            None | Some("") => default_bytes(arch).to_vec(),
             Some(b64) => {
                 let bytes = decode_image_b64(b64)?;
                 if bytes.is_empty() || bytes.len() > 256 * 1024 {
@@ -131,20 +155,56 @@ async fn create_session(
         };
         (parsed.budget.unwrap_or(1024), arch, name, bin)
     };
-    let program = rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
     let id_for_store = id.clone();
-    let session = app
-        .pool
-        .run(move || Arc::new(Mutex::new(Session::new(id, budget, arch, name, program))))
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let session = match arch {
+        Arch::Rv32imc => {
+            let program =
+                rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
+            app.pool
+                .run(move || {
+                    Arc::new(Mutex::new(Session::new(
+                        id, budget, arch, name, program,
+                    )))
+                })
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        }
+        Arch::Ebpf => {
+            let program =
+                bpf_image::extract_insn_words(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
+            let meta = ebpf::Meta::just_tx_unbound_map();
+            app.pool
+                .run(move || {
+                    Arc::new(Mutex::new(Session::new_ebpf(
+                        id, budget, name, program, meta,
+                    )))
+                })
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        }
+    };
     let snap = session.lock().expect("session").snapshot();
     app.sessions
         .lock()
         .expect("sessions")
         .insert(id_for_store, session);
     Ok(Json(snap))
+}
+
+/// Structural same/diff of two run snapshots (`lean_compare_run_same_diff`).
+async fn compare_runs(
+    State(app): State<AppState>,
+    Json(body): Json<CompareBody>,
+) -> Result<Json<Value>, StatusCode> {
+    let request = serde_json::json!({ "left": body.left, "right": body.right }).to_string();
+    let raw = app
+        .pool
+        .run(move || compare::run_same_diff(&request))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let value: Value = serde_json::from_str(&raw).map_err(|_| StatusCode::BAD_GATEWAY)?;
+    Ok(Json(value))
 }
 
 fn session_handle(app: &AppState, id: &str) -> Result<Arc<Mutex<Session>>, StatusCode> {
@@ -367,10 +427,43 @@ mod http_tests {
             &router,
             "POST",
             "/api/session",
-            br#"{"budget":2,"arch":"ebpf"}"#,
+            br#"{"budget":2,"arch":"arm"}"#,
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn ebpf_create_defaults_to_just_tx_bpf() {
+        let router = app(new_state());
+        let (status, created) = call(
+            &router,
+            "POST",
+            "/api/session",
+            br#"{"budget":2,"arch":"ebpf"}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(created["arch"], "ebpf");
+        assert_eq!(created["program"], "just_tx.bpf.o");
+        assert_eq!(created["status"], "running");
+        assert_eq!(created["insns"].as_array().expect("insns").len(), 58);
+        assert_eq!(created["nodes"][0]["loc"], "0");
+    }
+
+    #[tokio::test]
+    async fn compare_identical_minimal_runs() {
+        let router = app(new_state());
+        let body = br#"{
+            "left":{"arch":"ebpf","nodes":[{"id":0,"loc":"0","exprs":[],"predicates":[]}],"edges":[]},
+            "right":{"arch":"ebpf","nodes":[{"id":0,"loc":"0","exprs":[],"predicates":[]}],"edges":[]}
+        }"#;
+        let (status, report) = call(&router, "POST", "/api/compare", body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["status"], "compared");
+        assert_eq!(report["conclusion"], "sameStructure");
+        assert_eq!(report["claim"], "structural");
+        assert_eq!(report["behavioralEquivalence"], "notEstablished");
     }
 
     #[tokio::test]
@@ -394,8 +487,9 @@ mod http_tests {
             let (status, done) = task.await.expect("join");
             assert_eq!(status, StatusCode::OK);
             assert_eq!(done["status"], "fail");
-            assert_eq!(done["reason"], "LimitExceeded");
-            assert_eq!(done["nodes"].as_array().expect("nodes").len(), 5);
+            // Budget 4 reaches the idx-3 x9 spill before LimitExceeded.
+            assert_eq!(done["reason"], "UndefinedSrc");
+            assert_eq!(done["nodes"].as_array().expect("nodes").len(), 4);
         }
     }
 }

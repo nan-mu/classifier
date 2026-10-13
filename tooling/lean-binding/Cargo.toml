@@ -2,7 +2,7 @@
 name = "lean-binding"
 version = "0.1.0"
 edition = "2021"
-description = "Rust FFI binding to Lean ClassifierExpr, PathMerge, and RV32IMC @[export]s"
+description = "Rust FFI binding to Lean ClassifierExpr, PathMerge, RV32IMC, and EBPF @[export]s"
 publish = false
 
 [lib]

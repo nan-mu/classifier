@@ -1,6 +1,6 @@
 //! Integration tests that call Lean4 modules through the Rust FFI surface.
 
-use lean_binding::{classifier_expr, rv32};
+use lean_binding::{classifier_expr, compare, ebpf, rv32};
 
 #[test]
 fn classifier_expr_add_wraps_at_32() {
@@ -111,11 +111,13 @@ fn rv32_expand_esp32c3_root_and_opening() {
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0]["loc"], "0");
     let exprs = nodes[0]["exprs"].as_array().expect("exprs");
-    assert_eq!(exprs.len(), 28);
+    assert_eq!(exprs.len(), 14);
     assert!(exprs
         .iter()
         .any(|e| e["reg"] == "real32:0" && e["term"] == "0"));
-    assert!(exprs.iter().any(|e| e["reg"] == "stack32:0"));
+    assert!(exprs
+        .iter()
+        .any(|e| e["reg"] == "context32:0" && e["term"] == "v32:4"));
 
     // After first C_LW a2,0(a0): real32:12 = EntryVar.data (v32:4).
     let step1: serde_json::Value =
@@ -309,5 +311,56 @@ mod stateless_head_ffi {
                 "status":"fail", "reason":"UndefinedSrc", "successors":[],
             })
         );
+    }
+}
+
+mod ebpf_expand_ffi {
+    use super::{compare, ebpf};
+    use lean_binding::ebpf::Meta;
+    use serde_json::{json, Value};
+
+    /// BPF_ALU | BPF_MOV | BPF_K: w0 ← 1, then EXIT.
+    const MOV_R0_1: u64 = 0x0000_0001_0000_00b4;
+    const EXIT: u64 = 0x0000_0000_0000_0095;
+
+    #[test]
+    fn create_then_step_one_insn() {
+        let words = [MOV_R0_1, EXIT];
+        let meta = Meta::just_tx_unbound_map();
+        let root: Value = serde_json::from_str(&ebpf::expand_create(&meta)).unwrap();
+        assert_eq!(root["status"], "running");
+        assert!(root.get("fuel").is_none());
+        assert_eq!(root["nodes"][0]["loc"], "0");
+        let node = &root["nodes"][0];
+        let step: Value = serde_json::from_str(&ebpf::expand_step(
+            &words,
+            &meta,
+            0,
+            0,
+            &node["exprs"].to_string(),
+            &node["predicates"].to_string(),
+        ))
+        .unwrap();
+        assert_eq!(step["status"], "ok");
+        assert!(step.get("fuel").is_none());
+        let successors = step["successors"].as_array().unwrap();
+        assert_eq!(successors.len(), 1);
+        // eBPF fallthrough uses Direction.OK → wire tag "OK" (RV32 uses Only).
+        assert_eq!(successors[0]["dir"], "OK");
+        assert_eq!(successors[0]["loc"], "1");
+    }
+
+    #[test]
+    fn compare_run_same_diff_identical_minimal() {
+        let req = json!({
+            "left": {"arch":"ebpf","nodes":[{"id":0,"loc":"0","exprs":[],"predicates":[]}],"edges":[]},
+            "right": {"arch":"ebpf","nodes":[{"id":0,"loc":"0","exprs":[],"predicates":[]}],"edges":[]}
+        });
+        let report: Value =
+            serde_json::from_str(&compare::run_same_diff(&req.to_string())).unwrap();
+        assert_eq!(report["status"], "compared");
+        assert_eq!(report["conclusion"], "sameStructure");
+        assert_eq!(report["claim"], "structural");
+        assert_eq!(report["behavioralEquivalence"], "notEstablished");
     }
 }

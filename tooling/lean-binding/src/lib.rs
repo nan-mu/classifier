@@ -1,4 +1,5 @@
-//! Thin Rust interface over Lean `@[export]` symbols from `ClassifierExpr`, `PathMerge`, and `RV32IMC`.
+//! Thin Rust interface over Lean `@[export]` symbols from `ClassifierExpr`,
+//! `PathMerge`, `RV32IMC`, and `EBPF`.
 //!
 //! FFI runs on a fixed pool of [`LEAN_WORKERS`] Lean-initialized OS threads
 //! (`lean_initialize_thread`). The process runtime is initialized once; there is
@@ -28,12 +29,14 @@ pub(crate) mod ffi {
         pub fn initialize_classifier_ClassifierExpr(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_PathMerge(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_RV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_EBPF(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
         pub fn lean_binding_string_cstr(o: LeanObj) -> *const c_char;
         pub fn lean_binding_mk_string(utf8: *const c_char) -> LeanObj;
         pub fn lean_binding_dec(o: LeanObj);
         pub fn lean_binding_mk_uint32_array(data: *const u32, len: usize) -> LeanObj;
+        pub fn lean_binding_mk_uint64_array(data: *const u64, len: usize) -> LeanObj;
 
         pub fn classifier_expr_add32(a: u32, b: u32) -> u32;
         pub fn classifier_expr_sub32(a: u32, b: u32) -> u32;
@@ -70,6 +73,25 @@ pub(crate) mod ffi {
         ) -> LeanObj;
         /// HelperOnly ExactConfig merge (`PathMerge/Merge.lean`).
         pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
+
+        pub fn lean_ebpf_expand_create(meta_json: LeanObj) -> LeanObj;
+        pub fn lean_ebpf_expand_step(
+            insns: LeanObj,
+            meta_json: LeanObj,
+            event: u32,
+            j: u32,
+            exprs_json: LeanObj,
+            preds_json: LeanObj,
+        ) -> LeanObj;
+        pub fn lean_ebpf_expand_bound_words_snapshot(
+            insns: LeanObj,
+            meta_json: LeanObj,
+            steps: u32,
+            budget: u32,
+        ) -> LeanObj;
+
+        /// Structural same/diff of two run snapshots (`PathMerge/Compare.lean`).
+        pub fn lean_compare_run_same_diff(request_json: LeanObj) -> LeanObj;
     }
 
     #[cfg(test)]
@@ -115,6 +137,7 @@ pub fn init() {
         let _ = ffi::initialize_classifier_ClassifierExpr(1, world);
         let _ = ffi::initialize_classifier_PathMerge(1, world);
         let _ = ffi::initialize_classifier_RV32IMC(1, world);
+        let _ = ffi::initialize_classifier_EBPF(1, world);
         ffi::lean_io_mark_end_initialization();
     });
 }
@@ -347,6 +370,166 @@ pub mod rv32 {
         lean_call(move || unsafe {
             let req = lean_string(&request_json);
             take_string(ffi::lean_expand_merge(req))
+        })
+    }
+}
+
+/// eBPF budget expand FFI (`lean_ebpf_expand_*`). Insn slots are `Array UInt64`.
+pub mod ebpf {
+    use super::{ffi, lean_call};
+    use std::ffi::CStr;
+
+    /// One LDDW resource binding (`slot` = raw program word index).
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ResourceLocation {
+        pub slot: u32,
+        /// `null` marks an unbound target (map LDDW without relocation term).
+        pub term: Option<String>,
+    }
+
+    /// Entry terms and packet/stack identities for `buildE0`.
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Entry {
+        pub t_ctx: String,
+        pub t_sp: String,
+        pub t_data: String,
+        pub packet_bytes: u32,
+        pub alpha_ctx: u32,
+        pub packet_id: u32,
+        pub stack_id: u32,
+    }
+
+    impl Entry {
+        /// Fixture entry matching `EBPF/Expand.lean` / just_tx smoke Meta.
+        pub fn just_tx() -> Self {
+            Self {
+                t_ctx: "v64:1".into(),
+                t_sp: "v64:0".into(),
+                t_data: "v32:4".into(),
+                packet_bytes: 128,
+                alpha_ctx: 0,
+                packet_id: 0,
+                stack_id: 0,
+            }
+        }
+    }
+
+    /// Static eBPF bindings outside SemState (wire schema for `parseMetaJson`).
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Meta {
+        pub entry: Entry,
+        #[serde(default)]
+        pub resource_locations: Vec<ResourceLocation>,
+    }
+
+    impl Meta {
+        /// just_tx with slot 34 map LDDW marked unbound (`term: null`).
+        pub fn just_tx_unbound_map() -> Self {
+            Self {
+                entry: Entry::just_tx(),
+                resource_locations: vec![ResourceLocation {
+                    slot: 34,
+                    term: None,
+                }],
+            }
+        }
+
+        pub fn to_json(&self) -> String {
+            serde_json::to_string(self).expect("eBPF Meta JSON")
+        }
+    }
+
+    unsafe fn take_string(obj: ffi::LeanObj) -> String {
+        let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
+            .to_string_lossy()
+            .into_owned();
+        ffi::lean_binding_dec(obj);
+        s
+    }
+
+    unsafe fn lean_string(s: &str) -> ffi::LeanObj {
+        use std::ffi::CString;
+        let c = CString::new(s).expect("JSON contains NUL");
+        ffi::lean_binding_mk_string(c.as_ptr())
+    }
+
+    pub fn expand_create(meta: &Meta) -> String {
+        let meta_json = meta.to_json();
+        lean_call(move || unsafe {
+            let meta = lean_string(&meta_json);
+            take_string(ffi::lean_ebpf_expand_create(meta))
+        })
+    }
+
+    pub fn expand_step(
+        insns: &[u64],
+        meta: &Meta,
+        event: u32,
+        j: u32,
+        exprs_json: &str,
+        preds_json: &str,
+    ) -> String {
+        let insns = insns.to_vec();
+        let meta_json = meta.to_json();
+        let exprs_json = exprs_json.to_owned();
+        let preds_json = preds_json.to_owned();
+        lean_call(move || unsafe {
+            let arr = ffi::lean_binding_mk_uint64_array(insns.as_ptr(), insns.len());
+            let meta = lean_string(&meta_json);
+            let exprs = lean_string(&exprs_json);
+            let preds = lean_string(&preds_json);
+            take_string(ffi::lean_ebpf_expand_step(
+                arr, meta, event, j, exprs, preds,
+            ))
+        })
+    }
+
+    pub fn expand_bound_words_snapshot(
+        insns: &[u64],
+        meta: &Meta,
+        steps: u32,
+        budget: u32,
+    ) -> String {
+        let insns = insns.to_vec();
+        let meta_json = meta.to_json();
+        lean_call(move || unsafe {
+            let arr = ffi::lean_binding_mk_uint64_array(insns.as_ptr(), insns.len());
+            let meta = lean_string(&meta_json);
+            take_string(ffi::lean_ebpf_expand_bound_words_snapshot(
+                arr, meta, steps, budget,
+            ))
+        })
+    }
+}
+
+/// Structural cross-arch compare (`lean_compare_run_same_diff`).
+pub mod compare {
+    use super::{ffi, lean_call};
+    use std::ffi::CStr;
+
+    unsafe fn take_string(obj: ffi::LeanObj) -> String {
+        let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
+            .to_string_lossy()
+            .into_owned();
+        ffi::lean_binding_dec(obj);
+        s
+    }
+
+    unsafe fn lean_string(s: &str) -> ffi::LeanObj {
+        use std::ffi::CString;
+        let c = CString::new(s).expect("JSON contains NUL");
+        ffi::lean_binding_mk_string(c.as_ptr())
+    }
+
+    /// Request JSON: `{ "left": { arch, nodes, edges }, "right": { ... } }`.
+    pub fn run_same_diff(request_json: &str) -> String {
+        let request_json = request_json.to_owned();
+        lean_call(move || unsafe {
+            let req = lean_string(&request_json);
+            take_string(ffi::lean_compare_run_same_diff(req))
         })
     }
 }

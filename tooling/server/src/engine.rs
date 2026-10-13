@@ -1,12 +1,45 @@
 //! Rust-owned expand engine: applied graph snapshot, Agenda schedule, and fuel.
 //! Lean FFI stays thin and stateless in `lean-binding`.
 
+use lean_binding::ebpf;
 use lean_binding::rv32::{self, Meta};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::driver::{Agenda, ConfigSnapshot, Dir, MergeEffect, MergePort, RecordStore};
+
+/// ISA-owned program words and Meta for one expand session.
+enum IsaState {
+    Rv32 {
+        insns: Vec<u32>,
+        meta: Meta,
+    },
+    Ebpf {
+        insns: Vec<u64>,
+        meta: ebpf::Meta,
+    },
+}
+
+impl IsaState {
+    fn expand_create(&self) -> String {
+        match self {
+            Self::Rv32 { meta, .. } => rv32::expand_create(meta),
+            Self::Ebpf { meta, .. } => ebpf::expand_create(meta),
+        }
+    }
+
+    fn expand_step(&self, event: u32, j: u32, exprs: &str, preds: &str) -> String {
+        match self {
+            Self::Rv32 { insns, meta } => {
+                rv32::expand_step(insns, meta, event, j, exprs, preds)
+            }
+            Self::Ebpf { insns, meta } => {
+                ebpf::expand_step(insns, meta, event, j, exprs, preds)
+            }
+        }
+    }
+}
 
 /// Matches `lean_binding::LEAN_WORKERS`: at most this many expand jobs in flight.
 pub const INFERENCE_PERMITS: usize = lean_binding::LEAN_WORKERS;
@@ -61,8 +94,7 @@ pub enum PoolError {
 
 /// Owns program image, Meta, applied graph snapshot, Agenda, and fuel.
 pub struct ExpandSession {
-    insns: Vec<u32>,
-    meta: Meta,
+    isa: IsaState,
     /// Applied SemState graph + status/fuel. `work` is derived from Agenda.
     snapshot: Value,
     agenda: Agenda,
@@ -71,9 +103,9 @@ pub struct ExpandSession {
 }
 
 impl ExpandSession {
-    pub fn create(insns: &[u32], meta: Meta, budget: u32) -> Self {
+    fn from_isa(isa: IsaState, budget: u32) -> Self {
         let mut snapshot: Value =
-            serde_json::from_str(&rv32::expand_create(&meta)).expect("Lean create snapshot JSON");
+            serde_json::from_str(&isa.expand_create()).expect("Lean create snapshot JSON");
         if snapshot["status"] == "running" {
             snapshot["fuel"] = json!(budget);
         }
@@ -83,8 +115,7 @@ impl ExpandSession {
             Agenda::default()
         };
         let mut session = Self {
-            insns: insns.to_vec(),
-            meta,
+            isa,
             snapshot,
             agenda,
             records: RecordStore::default(),
@@ -92,6 +123,26 @@ impl ExpandSession {
         };
         session.sync_work();
         session
+    }
+
+    pub fn create(insns: &[u32], meta: Meta, budget: u32) -> Self {
+        Self::from_isa(
+            IsaState::Rv32 {
+                insns: insns.to_vec(),
+                meta,
+            },
+            budget,
+        )
+    }
+
+    pub fn create_ebpf(insns: &[u64], meta: ebpf::Meta, budget: u32) -> Self {
+        Self::from_isa(
+            IsaState::Ebpf {
+                insns: insns.to_vec(),
+                meta,
+            },
+            budget,
+        )
     }
 
     fn sync_work(&mut self) {
@@ -181,17 +232,14 @@ impl ExpandSession {
             ));
         }
 
-        let insns = self.insns.clone();
-        let meta = self.meta.clone();
         let results: Vec<(u32, Value)> = std::thread::scope(|scope| {
             let mut joins = Vec::with_capacity(heads.len());
             for (event, j, _loc, exprs, preds) in &heads {
-                let insns = &insns;
-                let meta = &meta;
+                let isa = &self.isa;
                 let event = *event;
                 let j = *j;
                 joins.push(scope.spawn(move || {
-                    let raw = rv32::expand_step(insns, meta, event, j, exprs, preds);
+                    let raw = isa.expand_step(event, j, exprs, preds);
                     let result: Value = serde_json::from_str(&raw).expect("Lean step JSON");
                     (event, result)
                 }));
