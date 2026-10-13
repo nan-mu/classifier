@@ -8,7 +8,7 @@ Do not treat `.omp/AGENTS.md` as Cursor policy.
 | Harness | Guide | Owns writes | Must refuse writes |
 | --- | --- | --- | --- |
 | **Cursor** (this chat) | `.cursor/AGENTS.md` | `tooling/`, `.cursor/`, `README.md`, `.github/` | `doc/`, Lean4 / Lake sources |
-| **omp** | `.omp/AGENTS.md` | `doc/`, Lean4 / Lake sources | `tooling/` |
+| **omp** | `.omp/AGENTS.md` | `doc/`, Lean4 / Lake sources — through a `spec-author` spawn | `tooling/` |
 
 **注意事项.**
 
@@ -31,6 +31,45 @@ Allowed on those paths: read, search, cite. `lake build` / `lake test` only
 as verification that does not rewrite them.
 
 **Writable.** `.cursor/`, `README.md`, `tooling/`, `.github/`.
+
+## Delegating to omp (Lean / `doc/` work)
+
+Cursor never edits the frozen side. It delegates through the `omp` CLI and keeps
+the integration and the final verification. Delegation is two hops, and the
+second one is omp's own:
+
+1. **Cursor → omp main session.** A one-shot brief, run non-interactively:
+   `omp -p @.cursor/omp-handoff-<task>.md`.
+2. **omp main session → `spec-author`.** `.omp/config.yml` runs that session on a
+   DeepSeek model, and no CLI flag makes a session *be* a named agent (`omp --help`
+   has `--model`, not `--agent`). `.omp/AGENTS.md` therefore requires it to spawn
+   `spec-author` — pinned to `openai-codex/gpt-6.1-sol:high` — for every `doc/` or
+   Lean edit, and forbids it from editing those paths itself.
+
+**Briefs address the dispatcher, never assert an identity.** Asking for the spawn
+is the contract:
+
+```text
+# Task: <what Cursor needs>
+Spawn `agent: spec-author` for every doc/Lean item below; do not edit them yourself.
+<tooling-side facts: measured node/fuel numbers, fixture paths, what Cursor changed>
+```
+
+- Never write "You are **omp** (`spec-author`)" and never attach
+  `@.omp/agents/spec-author.md`. A main session that reads an identity adopts it
+  and does the work on the DeepSeek model, so Codex never runs at all.
+- Do not pin the main session to `openai-codex/...` to force Codex at the top
+  level; the Codex work belongs to the spawned agent.
+- Tooling-side facts go in the brief. omp reads `tooling/` freely and never edits
+  it.
+
+**Verification stays with Cursor.** After omp yields, read `git diff`, require
+`lake build ClassifierExpr PathMerge RV32IMC EBPF` and the three `.audit/` doc
+gates, then do the live `/run` check yourself. omp's prose is not evidence, and a
+green build is not a semantic proof.
+
+Handoff notes live in `.cursor/omp-handoff-<task>.md`, describe the tooling side
+only, and are one-shot inputs — not agent definitions.
 
 ## What Cursor owns
 
@@ -154,4 +193,5 @@ Never commit `.codex/` or `.omp/`.
 
 Follow `~/.cursor/rules/model-access.mdc`. Cursor parent and Task subagents use
 **Auto** only. Do not pin paid Task model slugs. Do not open Codex/MCP write
-handoffs for Lean or `doc/` (omp owns those).
+handoffs for Lean or `doc/`: hand those to the `omp` CLI, which spawns its pinned
+Codex `spec-author` (see "Delegating to omp").

@@ -18,11 +18,15 @@ You are in the **Cursor** harness. Full guide: `.cursor/AGENTS.md`.
 Refuse create/edit/delete/rename/move/regenerate/format of:
 
 - `doc/**`
-- `*.lean`, `CommonMath/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, `lake-manifest.json`
+- `*.lean`, `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, `lake-manifest.json`
 
 Allowed: read/search/cite. `lake build` / `lake test` only as verification.
 
-If the task needs Lean or `doc/` edits, decline and point to omp.
+If the task needs Lean or `doc/` edits, decline and delegate to the `omp` CLI.
+Ask for a `spec-author` spawn; never assert the omp session's identity ("You are
+spec-author") and never attach `@.omp/agents/spec-author.md` — the DeepSeek main
+session would adopt that identity and do the work itself. See `.cursor/AGENTS.md`
+§ Delegating to omp.
 
 ## Lean for tooling
 

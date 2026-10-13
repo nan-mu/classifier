@@ -74,7 +74,28 @@ OMP 具有自己的模型、上下文、工具及 Skills，可以直接处理项
 - Lean 4 相关规范文档的同步更新。
 - Lean 4 编译错误、证明错误及运行错误的修复。
 
-调用前可以使用 `omp --help` 确认当前版本支持的命令参数。一次性任务优先使用非交互模式；需要连续迭代时，可以考虑使用 OMP 的会话机制。
+调用前可以使用 `omp --help` 确认当前版本支持的命令参数。
+
+### 委派是两跳
+
+1. **Cursor → OMP 主会话**：一次性任务用非交互模式，`omp -p @.cursor/omp-handoff-<task>.md`；需要连续迭代时可用 OMP 的会话机制。
+2. **OMP 主会话 → `spec-author`**：`.omp/config.yml` 让主会话跑在 DeepSeek 上，而 `omp --help` 只有 `--model`、没有 `--agent`，所以主会话无法"变成"某个 agent。`.omp/AGENTS.md` 因此要求它把每一处 `doc/` 与 Lean 修改交给 `spec-author`（pin 在 `openai-codex/gpt-6.1-sol:high`）执行，并禁止它自己动手。
+
+第二步是 OMP 内部的事，你只需要在任务书里点名要这个 spawn。
+
+### 任务书怎么写
+
+对**派发者**说话，只说要做的改动：
+
+```text
+# Task: <Cursor 需要的改动>
+每一处 doc/Lean 修改都 spawn `agent: spec-author` 执行，不要自己编辑。
+<tooling 侧事实：实测节点/fuel 数字、fixture 路径、Cursor 已改动的部分>
+```
+
+- **不要**写 "You are **omp**（`spec-author`）"，**不要**附带 `@.omp/agents/spec-author.md`。主会话一旦读到身份就会认领它，直接用自己的模型把活干完，Codex 完全不会运行。
+- 不要用 `--model openai-codex/...` 把顶层会话钉到 Codex；Codex 只属于被 spawn 的 `spec-author`。
+- tooling 侧事实写进任务书。OMP 可以自由读 `tooling/`，但不改它。
 
 ### Agent 职责划分
 
@@ -88,11 +109,9 @@ OMP 具有自己的模型、上下文、工具及 Skills，可以直接处理项
 - 检查 OMP 的实际修改结果。
 - 执行最终端到端验证。
 
-OMP 可以直接修改所委派范围内的代码和文档，但需要明确任务边界，避免两个 Agent 同时修改同一文件。
+**不要将 OMP 仅作为问答工具。** 需要修复 Lean 4 实现时，在任务书里直接要求 OMP spawn `spec-author` 完成代码修改，而不是让主会话自己改。
 
-**不要将 OMP 仅作为问答工具。需要修复 Lean 4 实现时，可以直接要求 OMP 完成代码修改。**
-
-OMP 完成后，请检查文件差异、构建结果及实际运行行为。不能仅凭 OMP 的文字回复认定任务完成。
+OMP 完成后，请检查文件差异、构建结果及实际运行行为，并自行执行 `lake build ClassifierExpr PathMerge RV32IMC EBPF`、`.audit/` 三个文档门禁与 live `/run`。不能仅凭 OMP 的文字回复认定任务完成，编译通过也不等于语义证明。
 
 ## 四、Lean 4 实现与文档必须同步
 

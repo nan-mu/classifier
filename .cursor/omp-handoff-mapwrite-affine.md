@@ -4,7 +4,9 @@
 **Repo:** `/Volumes/SSD/bs/classifier`
 **From:** Cursor harness (tooling-only). Lean/`doc/` changes below were made out of Cursor freeze — please review and own.
 
-## Ask omp (spec-author)
+**Status:** landed in `49a7776`; kept as the tooling-side record.
+
+## Ask omp (dispatcher → `spec-author`)
 
 1. **Review** Cursor’s Lean patch in `RV32IMC/Expr.lean`: peel `id32` in `affineAddress` (mirror `lookupAddress`), plus `#guard`.
 2. Confirm it is the right fix for lookup key freeze via `readStackBytes` when helper args keep `id32(add32(sp,-16))`.
