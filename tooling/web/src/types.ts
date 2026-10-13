@@ -17,7 +17,8 @@ export type ExprRow = {
 };
 
 /**
- * One Predicate observation (doc: Ret ⊔ Helper).
+ * One Predicate observation (opaque five-class kinds: helper, branch, ret,
+ * mapWrite / map_write, packetWrite / packet_write, plus mapLookup, …).
  * `kind` is the disjoint-union tag; other fields are kind-specific and opaque.
  * New Lean Predicate variants must not require TS shape changes.
  */

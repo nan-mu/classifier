@@ -39,7 +39,7 @@ web graph viewer, fixtures, scripts, and CI.
 
 ```text
 tooling/Cargo.toml              Rust workspace (one Cargo.lock)
-tooling/lean-binding/           FFI to Lean create/step (+ legacy test helpers)
+tooling/lean-binding/           FFI to Lean create/step/merge (+ legacy test helpers)
 tooling/lean-binding/tests/     binding and snapshot regressions
 tooling/server/                 axum Expand API, ExpandSession, InferencePool
 tooling/web/                    Vite + Kuma + xyflow viewer
@@ -61,33 +61,49 @@ Default fixture budget notes used by tests/UI: HTTP/WebUI default budget
 1024; budget 512 remains a fuel-exhaustion regression on `just_tx`.
 Synthetic wrapper return address is `0x2000` (not an ELF field).
 
-## Lean surface for tooling: create and step only
+## Lean surface for tooling: create, step, merge
 
 Rust must not reimplement instruction semantics. Against Lean, tooling's
-supported expand contract is two stateless String FFI calls (via
+supported expand contract is three stateless String FFI calls (via
 `lean-binding`):
 
-- `expand_create(metaJson)` → root SemState snapshot JSON (no `fuel` field)
+- `expand_create(metaJson)` → root SemState snapshot JSON (no `fuel` field).
+  **Arch-specific** today (`lean_rv32_expand_create`).
 - `expand_step(insns, metaJson, event, j, exprsJson, predsJson)` →
-  `{status, reason, successors}` (applied SemStates) or a rejection
+  `{status, reason, successors}` (applied SemStates) or a rejection.
+  Step remains RV32-exported (`lean_rv32_expand_step`) until a neutral step
+  export exists; treat the JSON contract as arch-neutral at the boundary.
+- `expand_merge(requestJson)` → exact-config merge verdict JSON
+  (`merged` / `reject`). Request is arch-neutral: `taken` + `notTaken[]`
+  applied snapshots and `observationModel: HelperOnly` (no program / Meta).
+  Export: `lean_expand_merge` in `CommonMath/Merge.lean`.
 
-Exports: `lean_rv32_expand_create` / `lean_rv32_expand_step`. No Lean expand
-object stays alive across calls. Legacy snapshot helpers may exist for tests;
-do not grow new product paths on them.
+No Lean expand object stays alive across calls. Legacy snapshot helpers may exist
+for tests; do not grow new product paths on them.
 
-**Rust owns** session graph, work queue, edges, `fuel`/budget, and concurrency
-(`tooling/server/src/engine.rs`):
+**Rust owns** session graph, Agenda schedule, edges, `fuel`/budget, merge-step
+loop, and concurrency (`tooling/server/src/engine.rs`, `tooling/server/src/driver/`):
 
-- `ExpandSession` holds `insns`, work queue, edges, fuel.
+- `ExpandSession` holds `insns`, applied graph snapshot, Agenda, `MergePort`, fuel.
+- Agenda ready set encodes NotTaken-before-Taken for an open branch frame;
+  after NotTaken completes, Taken unblocks. Nested Taken/NotTaken opens a new
+  frame for BlockedTaken scheduling, but outer frames still inherit the nested
+  NotTaken root (and later Ok descendants) into `pending_not_taken` /
+  `not_taken_candidates`; outer Taken waits on the nested Taken root. Never park
+  nested Taken under an outer NT pending set. **Merge-step:** after each Taken
+  head commits successors, `MergePort` compares the Taken tip to NotTaken suffix
+  candidates; `InsufficientEvidence` keeps expanding Taken; `merged` records
+  `mergeReuseFrom` plus a `reuse` edge and stops redundant Taken suffix work;
+  `Counterexample` closes the frame. Snapshot `work` lists ready ids only.
 - `InferencePool` has 10 Tokio permits gating `spawn_blocking` Lean jobs.
 - `lean-binding` runs a fixed pool of 10 OS threads (`LEAN_WORKERS`) after
   one process-wide Lean init. Permit count matches worker count.
 - HTTP `/create`, `/step`, `/run`, `/run/ws`, `/get` take a pool permit.
 - UI “运行到结束” uses `GET /api/session/{id}/run/ws` (one snapshot per
-  work-queue wave, then `done`). POST `/run` is for smoke/tests.
-- Linear work (`work` length 1): one Lean worker per wave. Multiple pending
-  heads: `step_wave` expands up to 10 in parallel, merges in queue order.
-  UI `/step` expands a single head.
+  Agenda-ready wave, then `done`). POST `/run` is for smoke/tests.
+- Linear ready set (`work` length 1): one Lean worker per wave. Multiple
+  ready heads: `step_wave` expands up to 10 in parallel, commits in order.
+  UI `/step` expands a single ready head.
 
 **Wire facts tooling must honor** (consume, do not redefine semantics):
 
@@ -95,7 +111,9 @@ do not grow new product paths on them.
   `0x2000`; ignore unknown fields.
 - Expr rows: value bindings plus optional `role: "constraint"` for
   comparisons. Legacy Predicate `kind: "cmp"` is rejected.
-- Predicate rows: `Ret ⊔ Helper` only (`kind` + flattened fields).
+- Predicate rows: opaque five-class `kind` + fields (`helper`, `branch`,
+  `ret`, `mapWrite` / `map_write`, `packetWrite` / `packet_write`; UI also
+  formats `mapLookup`). No closed field enum in Rust/TS.
 - A rejected step must not mutate the graph. Unknown target / missing source
   must not become a silent Exit or empty success.
 

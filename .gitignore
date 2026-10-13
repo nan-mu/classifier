@@ -3,6 +3,7 @@
 *.pre_session_restore
 /tooling/target/
 /tooling/target-nightly/
+/tooling/.scratch/
 /tooling/*/target/
 /tooling/web/node_modules/
 /tooling/web/dist/

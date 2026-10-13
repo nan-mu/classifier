@@ -100,18 +100,22 @@ field, retain their pre-call bindings; full caller-saved and resource-effect
 contracts remain unfinished. Context loads use the fixed entry context identity,
 so a helper return value cannot become the context pointer.
 
-Lean emits a typed `helper` Predicate on each summarized call. The snapshot JSON
-carries `kind`, `event` (dynamic source-node identity), `helperId`, and `args`
-(term strings). Lookup also introduces `map32:α = regVar{event}(real32:10)` for
-the first Map word. LOAD/STORE resolve copies and constant add/subtract aliases
-of one lookup return, requiring that first-word equality and an access contained
-in one four-byte word. Reads and subword stores materialize untouched later words
-through `ExprEffect.inputs`; full-word stores can create them directly. Reads
-write only the real destination; stores use CommonMath CellAccess and preserve
-other bits for subword writes. Changing a0 does not change the lookup identity.
-Null/numeric pointers, other helper returns, symbolic offsets and cross-word
-accesses reject. The event-local association proves neither lookup success nor
-actual contents, ELF Map binding/value size, or alias consistency across calls.
+Lean emits opaque Predicate rows (`kind` + fields). Helper summaries use
+`kind: "helper"` with `event` (dynamic source-node identity), `helperId`, and
+`args` (term strings). The same wire carries other five-class kinds as they
+land (`branch`, `ret`, `mapWrite` / `map_write`, `packetWrite` /
+`packet_write`, and related tags such as `mapLookup`); tooling does not lock
+per-kind field enums. Lookup also introduces
+`map32:α = regVar{event}(real32:10)` for the first Map word. LOAD/STORE resolve
+copies and constant add/subtract aliases of one lookup return, requiring that
+first-word equality and an access contained in one four-byte word. Reads and
+subword stores materialize untouched later words through `ExprEffect.inputs`;
+full-word stores can create them directly. Reads write only the real
+destination; stores use CommonMath CellAccess and preserve other bits for
+subword writes. Changing a0 does not change the lookup identity. Null/numeric
+pointers, other helper returns, symbolic offsets and cross-word accesses
+reject. The event-local association proves neither lookup success nor actual
+contents, ELF Map binding/value size, or alias consistency across calls.
 Pointed buffers, helper safety obligations, and complete helper correctness
 remain outside this slice.
 

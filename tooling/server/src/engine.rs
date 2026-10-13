@@ -1,10 +1,12 @@
-//! Rust-owned expand engine: graph, work queue, and fuel.
+//! Rust-owned expand engine: applied graph snapshot, Agenda schedule, and fuel.
 //! Lean FFI stays thin and stateless in `lean-binding`.
 
 use lean_binding::rv32::{self, Meta};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use crate::driver::{Agenda, Dir, MergePort, RecordStore};
 
 /// Matches `lean_binding::LEAN_WORKERS`: at most this many expand jobs in flight.
 pub const INFERENCE_PERMITS: usize = lean_binding::LEAN_WORKERS;
@@ -57,11 +59,15 @@ pub enum PoolError {
     Join,
 }
 
-/// Owns program image, Meta, graph snapshot, work queue, and fuel.
+/// Owns program image, Meta, applied graph snapshot, Agenda, and fuel.
 pub struct ExpandSession {
     insns: Vec<u32>,
     meta: Meta,
+    /// Applied SemState graph + status/fuel. `work` is derived from Agenda.
     snapshot: Value,
+    agenda: Agenda,
+    records: RecordStore,
+    merge: MergePort,
 }
 
 impl ExpandSession {
@@ -71,54 +77,69 @@ impl ExpandSession {
         if snapshot["status"] == "running" {
             snapshot["fuel"] = json!(budget);
         }
-        Self {
+        let agenda = if snapshot["status"] == "running" {
+            Agenda::with_root(0)
+        } else {
+            Agenda::default()
+        };
+        let mut session = Self {
             insns: insns.to_vec(),
             meta,
             snapshot,
-        }
+            agenda,
+            records: RecordStore::default(),
+            merge: MergePort,
+        };
+        session.sync_work();
+        session
     }
 
-    /// Expand up to `max_heads` work-queue heads in parallel on the Lean worker pool.
+    fn sync_work(&mut self) {
+        let ids = self.agenda.ready_ids();
+        self.snapshot["work"] = json!(ids);
+    }
+
+    /// Expand up to `max_heads` Agenda-ready heads in parallel on the Lean worker pool.
+    /// Same-branch Taken stays blocked while NotTaken is open; independent heads may wave.
     /// Returns how many heads were successfully expanded (0 if idle/limit/reject-before-commit).
     pub fn step_wave(&mut self, max_heads: usize) -> u32 {
         if !self.is_running() {
             return 0;
         }
         let fuel = self.snapshot["fuel"].as_u64().unwrap_or(0) as u32;
-        let work_len = self.snapshot["work"]
-            .as_array()
-            .map(|w| w.len())
-            .unwrap_or(0);
-        if work_len == 0 {
-            self.snapshot["status"] = json!("complete");
+        let preview = self.agenda.ready_heads(
+            max_heads
+                .max(1)
+                .min(fuel as usize)
+                .min(lean_binding::LEAN_WORKERS),
+        );
+        if preview.is_empty() {
+            if self.agenda.is_idle() {
+                self.snapshot["status"] = json!("complete");
+                self.sync_work();
+            }
             return 0;
         }
         if fuel == 0 {
             self.snapshot["status"] = json!("fail");
             self.snapshot["reason"] = json!("LimitExceeded");
             self.snapshot["failed"] = Value::Null;
+            self.sync_work();
             return 0;
         }
 
-        let k = max_heads
-            .max(1)
-            .min(work_len)
-            .min(fuel as usize)
-            .min(lean_binding::LEAN_WORKERS);
-        let work = self.snapshot["work"].as_array().expect("work queue");
+        let k = preview.len();
+        let heads_ids = self.agenda.take_ready(k);
         let nodes = self.snapshot["nodes"].as_array().expect("nodes");
-        let mut heads = Vec::with_capacity(k);
-        for slot in work.iter().take(k) {
-            let event = slot.as_u64().expect("work event");
-            let node = &nodes[event as usize];
-            let j: u32 = node["loc"]
-                .as_str()
-                .expect("head location")
-                .parse()
-                .expect("head position");
+        let mut heads = Vec::with_capacity(heads_ids.len());
+        for event in &heads_ids {
+            let node = &nodes[*event as usize];
+            let loc = node["loc"].as_str().expect("head location").to_string();
+            let j: u32 = loc.parse().expect("head position");
             heads.push((
-                event,
+                *event,
                 j,
+                loc,
                 node["exprs"].to_string(),
                 node["predicates"].to_string(),
             ));
@@ -126,15 +147,15 @@ impl ExpandSession {
 
         let insns = self.insns.clone();
         let meta = self.meta.clone();
-        let results: Vec<(u64, Value)> = std::thread::scope(|scope| {
+        let results: Vec<(u32, Value)> = std::thread::scope(|scope| {
             let mut joins = Vec::with_capacity(heads.len());
-            for (event, j, exprs, preds) in &heads {
+            for (event, j, _loc, exprs, preds) in &heads {
                 let insns = &insns;
                 let meta = &meta;
                 let event = *event;
                 let j = *j;
                 joins.push(scope.spawn(move || {
-                    let raw = rv32::expand_step(insns, meta, event as u32, j, exprs, preds);
+                    let raw = rv32::expand_step(insns, meta, event, j, exprs, preds);
                     let result: Value = serde_json::from_str(&raw).expect("Lean step JSON");
                     (event, result)
                 }));
@@ -145,37 +166,30 @@ impl ExpandSession {
                 .collect()
         });
 
-        // Drop the K heads up front; re-queue any not committed on mid-wave reject.
-        {
-            let work = self.snapshot["work"].as_array_mut().expect("work queue");
-            work.drain(0..k);
-        }
-
         let mut expanded = 0u32;
         let mut fuel_left = fuel;
         for (i, (event, result)) in results.into_iter().enumerate() {
             fuel_left -= 1;
             self.snapshot["fuel"] = json!(fuel_left);
             if result["status"] == "fail" {
-                // Put uncommitted heads back at the front of the work queue.
-                if i + 1 < heads.len() {
-                    let rest: Vec<Value> =
-                        heads[i + 1..].iter().map(|(e, _, _, _)| json!(e)).collect();
-                    let work = self.snapshot["work"].as_array_mut().expect("work queue");
-                    for (offset, ev) in rest.into_iter().enumerate() {
-                        work.insert(offset, ev);
-                    }
-                }
+                // Put uncommitted heads back at the front of the Agenda ready set.
+                let rest: Vec<u32> = heads[i + 1..].iter().map(|(e, _, _, _, _)| *e).collect();
+                self.agenda.requeue_front(rest);
                 self.snapshot["status"] = json!("fail");
                 self.snapshot["reason"] = result["reason"].clone();
                 self.snapshot["failed"] = json!(event);
+                self.sync_work();
                 return expanded;
             }
             expanded += 1;
+            let parent_loc = heads[i].2.clone();
+            let mut succ_meta: Vec<(Dir, u32, String)> = Vec::new();
             for successor in result["successors"].as_array().expect("successors") {
-                let id = self.snapshot["nodes"].as_array().expect("nodes").len();
+                let id = self.snapshot["nodes"].as_array().expect("nodes").len() as u32;
+                let loc = successor["loc"].as_str().unwrap_or("exit").to_string();
+                let dir = Dir::from_wire(successor["dir"].as_str().unwrap_or("Only"));
                 self.snapshot["nodes"].as_array_mut().unwrap().push(json!({
-                    "id": id, "loc": successor["loc"],
+                    "id": id, "loc": loc,
                     "exprs": successor["exprs"], "predicates": successor["predicates"],
                 }));
                 self.snapshot["edges"]
@@ -184,15 +198,18 @@ impl ExpandSession {
                     .push(json!({
                         "src": event, "dir": successor["dir"], "dst": id,
                     }));
-                if successor["loc"] != "exit" {
-                    self.snapshot["work"]
-                        .as_array_mut()
-                        .unwrap()
-                        .push(json!(id));
-                }
+                succ_meta.push((dir, id, loc));
             }
+            self.agenda.on_successors(
+                event,
+                &parent_loc,
+                &succ_meta,
+                &mut self.records,
+                &self.merge,
+            );
         }
-        if self.snapshot["work"].as_array().unwrap().is_empty() {
+        self.sync_work();
+        if self.agenda.is_idle() {
             self.snapshot["status"] = json!("complete");
         }
         expanded
@@ -235,8 +252,9 @@ async fn run_many_to_completion(
             .await
         }));
     }
+    let mut handles = handles;
     let mut out = Vec::with_capacity(handles.len());
-    for handle in handles {
+    for handle in handles.drain(..) {
         let inner = handle.await.map_err(|_| PoolError::Join)??;
         out.push(inner);
     }

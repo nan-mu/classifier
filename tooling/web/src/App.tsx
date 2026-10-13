@@ -141,17 +141,26 @@ function ExprGroups({ exprs }: { exprs: ExprRow[] }) {
 
 function PredDetail({ p }: { p: PredRow }) {
   const kindClass =
-    p.kind === "ret"
+    p.kind === "ret" || p.kind === "return"
       ? " pred-ret"
       : p.kind === "helper"
         ? " pred-helper"
-        : "";
+        : p.kind === "branch"
+          ? " pred-branch"
+          : p.kind === "mapWrite" ||
+              p.kind === "map_write" ||
+              p.kind === "packetWrite" ||
+              p.kind === "packet_write" ||
+              p.kind === "mapLookup" ||
+              p.kind === "map_lookup"
+            ? " pred-effect"
+            : "";
   return (
     <Box className={`pred-card${kindClass}`}>
       <Text className={`mono sem-line${kindClass}`} display="block">
         {formatPred(p)}
       </Text>
-      {p.kind === "ret" ? (
+      {p.kind === "ret" || p.kind === "return" ? (
         <TermTree view={parseTerm(typeof p.term === "string" ? p.term : "")} />
       ) : null}
       {p.kind === "helper" && Array.isArray(p.args)

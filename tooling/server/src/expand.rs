@@ -266,7 +266,7 @@ fn parse_exprs(n: &Value) -> Vec<ExprOut> {
 }
 
 /// Pass through Lean Predicate JSON (`kind` + kind-specific fields).
-/// `Predicate = Ret ⊔ Helper` — new variants must not require Rust field changes.
+/// Opaque five-class kinds (`driver::pred_kinds`); new variants need no Rust field changes.
 fn parse_predicates(n: &Value) -> Vec<PredOut> {
     n["predicates"]
         .as_array()
@@ -376,7 +376,7 @@ pub struct ExprOut {
 }
 
 /// One Predicate observation. `kind` is the disjoint-union tag; remaining fields
-/// stay opaque so Ret / Helper / future variants share one wire type.
+/// stay opaque (helper / branch / ret / mapWrite / packetWrite / …).
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct PredOut {
     pub kind: String,

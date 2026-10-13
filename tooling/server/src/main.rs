@@ -1,3 +1,4 @@
+mod driver;
 mod engine;
 mod expand;
 mod rv32_image;

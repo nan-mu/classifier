@@ -115,7 +115,7 @@ function predArgs(p: PredRow): string[] {
 }
 
 function predKey(p: PredRow): string {
-  if (p.kind === "ret") return `ret:${predStr(p, "term")}`;
+  if (p.kind === "ret" || p.kind === "return") return `ret:${predStr(p, "term")}`;
   if (p.kind === "helper") {
     return `helper:${predStr(p, "event")}:${predStr(p, "helperId")}:${predArgs(p).join(",")}`;
   }
@@ -135,11 +135,29 @@ export function diffPredicates(a: PredRow[], b: PredRow[]): {
 }
 
 export function formatPred(p: PredRow): string {
-  if (p.kind === "ret") return `ret ${predStr(p, "term") || "?"}`;
+  if (p.kind === "ret" || p.kind === "return") {
+    return `ret ${predStr(p, "term") || "?"}`;
+  }
   if (p.kind === "helper") {
     const name = helperName(predNum(p, "helperId"));
     const ev = predNum(p, "event") != null ? `@e${predNum(p, "event")}` : "";
     return `helper ${name}${ev}(${predArgs(p).join(", ")})`;
+  }
+  if (p.kind === "branch") {
+    const at = predStr(p, "at") || predStr(p, "loc") || "?";
+    return `branch ${predStr(p, "dir") || "?"} @${at}`;
+  }
+  if (p.kind === "mapWrite" || p.kind === "map_write") {
+    const target = predStr(p, "addr") || predStr(p, "key") || predStr(p, "term");
+    return target ? `map_write ${target}` : "map_write";
+  }
+  if (p.kind === "packetWrite" || p.kind === "packet_write") {
+    const off = predStr(p, "offset") || predStr(p, "term");
+    return off ? `packet_write ${off}` : "packet_write";
+  }
+  if (p.kind === "mapLookup" || p.kind === "map_lookup") {
+    const target = predStr(p, "addr") || predStr(p, "key") || predStr(p, "term");
+    return target ? `map_lookup ${target}` : "map_lookup";
   }
   return `${p.kind} predicate`;
 }

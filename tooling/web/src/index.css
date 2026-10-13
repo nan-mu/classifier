@@ -439,6 +439,14 @@ body {
   color: #c4b5e0;
 }
 
+.pred-branch {
+  color: #d2b48c;
+}
+
+.pred-effect {
+  color: #9db4c0;
+}
+
 .meta-strip {
   border-top: 1px solid var(--line);
   background: rgba(20, 18, 15, 0.35);
