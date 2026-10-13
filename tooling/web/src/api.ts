@@ -1,4 +1,9 @@
-import type { ArchKind, SessionSnapshot } from "./types";
+import type {
+  ArchKind,
+  CompareOutcome,
+  CompareRun,
+  SessionSnapshot,
+} from "./types";
 
 async function postJson(path: string, body: unknown): Promise<SessionSnapshot> {
   const res = await fetch(path, {
@@ -49,6 +54,24 @@ export function stepSession(id: string): Promise<SessionSnapshot> {
 /** Blocking run-to-end (tests / smoke). UI uses {@link runSessionStream}. */
 export function runSession(id: string): Promise<SessionSnapshot> {
   return postJson(`/api/session/${id}/run`, {});
+}
+
+/** Structural same/diff. Lean `reject` is HTTP 200; pool/Lean errors are 5xx. */
+export async function compareRuns(
+  left: CompareRun,
+  right: CompareRun,
+): Promise<CompareOutcome> {
+  const res = await fetch("/api/compare", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ left, right }),
+  });
+  if (!res.ok) throw new Error(`/api/compare failed with ${res.status}`);
+  const body = (await res.json()) as Partial<CompareOutcome>;
+  if (body.status === "compared" || body.status === "reject") {
+    return body as CompareOutcome;
+  }
+  throw new Error("unexpected compare status");
 }
 
 export type RunStreamEvent = {

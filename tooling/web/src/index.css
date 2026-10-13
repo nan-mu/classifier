@@ -765,3 +765,92 @@ body {
   border-top: 1px solid var(--line);
   background: rgba(20, 18, 15, 0.35);
 }
+
+.compare-progress {
+  min-width: 280px;
+}
+
+.compare-spine {
+  overflow: hidden;
+}
+
+.compare-spine__conclusion {
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.compare-filter {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.compare-filter--on {
+  color: var(--accent);
+  border-color: rgba(226, 207, 171, 0.55);
+  background: rgba(226, 207, 171, 0.1);
+}
+
+.compare-row {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  margin-bottom: 4px;
+}
+
+.compare-row--diff {
+  background: rgba(180, 100, 90, 0.12);
+}
+
+.compare-row--coverage {
+  background: rgba(120, 140, 170, 0.12);
+}
+
+.compare-row--same {
+  background: rgba(40, 36, 30, 0.35);
+}
+
+.compare-row--open {
+  border-color: rgba(226, 207, 171, 0.35);
+}
+
+.compare-row__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 8px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.compare-row__loc {
+  min-width: 4em;
+  color: var(--accent);
+}
+
+.compare-row__verdict {
+  min-width: 6em;
+}
+
+.compare-member {
+  padding-left: 8px;
+  color: var(--muted);
+}
+
+.compare-obligations {
+  margin-top: 16px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.compare-obligations summary {
+  cursor: pointer;
+}

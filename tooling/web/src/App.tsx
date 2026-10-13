@@ -19,7 +19,14 @@ import {
   type ReactNode,
 } from "react";
 import "@xyflow/react/dist/style.css";
-import { createSession, runSessionStream, stepSession } from "./api";
+import {
+  compareRuns,
+  createSession,
+  runSessionStream,
+  stepSession,
+  type RunStreamStats,
+} from "./api";
+import { CompareReportView } from "./CompareReport";
 import { insnIndexForNode, splitExprs } from "./exprs";
 import { formatExprMath, formatPredChip } from "./formatExpr";
 import { foldSameTypeChains, resolveFoldedId } from "./collapse";
@@ -30,7 +37,15 @@ import {
   NODE_ROLE_LEGEND,
 } from "./nodeRole";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
-import type { ArchKind, ExprRow, PredRow, SessionSnapshot } from "./types";
+import type {
+  ArchKind,
+  CompareReject,
+  CompareReport,
+  ExprRow,
+  PredRow,
+  SessionSnapshot,
+} from "./types";
+import { toCompareRun } from "./types";
 import { useForceLayout } from "./useForceLayout";
 import {
   branchSource,
@@ -44,6 +59,39 @@ import {
   visibleNodeIds,
   type ViewerSelection,
 } from "./viewer";
+
+type RunSlot = {
+  arch: "rv32imc" | "ebpf";
+  label: string;
+  snap: SessionSnapshot | null;
+  stats: RunStreamStats | null;
+};
+
+type ComparePhase =
+  | { tag: "single" }
+  | { tag: "expanding"; left: RunSlot; right: RunSlot }
+  | {
+      tag: "reported";
+      left: SessionSnapshot;
+      right: SessionSnapshot;
+      report: CompareReport;
+      loc: string | null;
+    }
+  | {
+      tag: "rejected";
+      left: SessionSnapshot;
+      right: SessionSnapshot;
+      reject: CompareReject;
+    };
+
+function emptySlot(arch: "rv32imc" | "ebpf"): RunSlot {
+  return {
+    arch,
+    label: arch === "rv32imc" ? "just_tx.elf" : "just_tx.bpf.o",
+    snap: null,
+    stats: null,
+  };
+}
 
 const nodeTypes = { state: StateNodeView };
 const EMPTY_FLOW_NODES: StateFlowNode[] = [];
@@ -186,14 +234,17 @@ function DebugScreen() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runRate, setRunRate] = useState<string | null>(null);
+  const [phase, setPhase] = useState<ComparePhase>({ tag: "single" });
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const runAbortRef = useRef<AbortController | null>(null);
+  const compareAbortRef = useRef<AbortController | null>(null);
   const pendingSnapRef = useRef<SessionSnapshot | null>(null);
   const rafRef = useRef<number | null>(null);
   const fitOnceRef = useRef(true);
   const flow = useReactFlow();
+  const comparing = phase.tag !== "single";
 
   const flushPendingSnap = useCallback(() => {
     rafRef.current = null;
@@ -468,6 +519,69 @@ function DebugScreen() {
     }
   }, [apply, flushPendingSnap, snap]);
 
+  const onStructuralCompare = useCallback(async () => {
+    runAbortRef.current?.abort();
+    compareAbortRef.current?.abort();
+    const ac = new AbortController();
+    compareAbortRef.current = ac;
+    setBusy(true);
+    setStreaming(false);
+    setError(null);
+    setRunRate(null);
+    setPhase({
+      tag: "expanding",
+      left: emptySlot("rv32imc"),
+      right: emptySlot("ebpf"),
+    });
+    const patchSlot = (side: "left" | "right", snapNext: SessionSnapshot, stats: RunStreamStats) => {
+      setPhase((prev) => {
+        if (prev.tag !== "expanding") return prev;
+        return {
+          ...prev,
+          [side]: { ...prev[side], snap: snapNext, stats },
+        };
+      });
+    };
+    try {
+      const [left0, right0] = await Promise.all([
+        createSession({ budget, arch: "rv32imc", name: "just_tx.elf" }),
+        createSession({ budget, arch: "ebpf", name: "just_tx.bpf.o" }),
+      ]);
+      const [left, right] = await Promise.all([
+        runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
+        runSessionStream(right0.id, (s, stats) => patchSlot("right", s, stats), ac.signal),
+      ]);
+      const outcome = await compareRuns(toCompareRun(left), toCompareRun(right));
+      if (ac.signal.aborted) return;
+      if (outcome.status === "reject") {
+        setPhase({ tag: "rejected", left, right, reject: outcome });
+        return;
+      }
+      setPhase({
+        tag: "reported",
+        left,
+        right,
+        report: outcome,
+        loc: outcome.positions[0]?.loc ?? null,
+      });
+    } catch (err: unknown) {
+      if (!ac.signal.aborted) {
+        setError(err instanceof Error ? err.message : "compare failed");
+      }
+      setPhase({ tag: "single" });
+    } finally {
+      if (compareAbortRef.current === ac) compareAbortRef.current = null;
+      setBusy(false);
+    }
+  }, [budget]);
+
+  const onExitCompare = useCallback(() => {
+    compareAbortRef.current?.abort();
+    compareAbortRef.current = null;
+    setPhase({ tag: "single" });
+    setBusy(false);
+  }, []);
+
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
     const id = Number(node.id);
     if (event.shiftKey) {
@@ -589,10 +703,17 @@ function DebugScreen() {
         <select
           className="toolbar__select"
           value={arch}
-          disabled={busy}
-          onChange={(ev) => setArch(ev.target.value as ArchKind)}
+          disabled={busy || comparing}
+          onChange={(ev) => {
+            const next = ev.target.value as ArchKind;
+            setArch(next);
+            if (!firmwareBytes) {
+              setFirmwareName(next === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf");
+            }
+          }}
         >
           <option value="rv32imc">RV32IMC</option>
+          <option value="ebpf">eBPF</option>
         </select>
         <Text className="muted">XDP ELF</Text>
         <label className="toolbar__file">
@@ -606,7 +727,9 @@ function DebugScreen() {
           <span className="toolbar__file-btn">选择文件</span>
         </label>
         <Text className="mono muted" fontSize={11} title={firmwareName}>
-          {firmwareBytes ? firmwareName : "just_tx.elf（默认）"}
+          {firmwareBytes
+            ? firmwareName
+            : `${arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf"}（默认）`}
         </Text>
         {firmwareBytes ? (
           <Button
@@ -614,7 +737,7 @@ function DebugScreen() {
             className="toolbar__btn toolbar__btn--quiet"
             disabled={busy}
             onClick={() => {
-              setFirmwareName("just_tx.elf");
+              setFirmwareName(arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf");
               setFirmwareBytes(null);
               if (fileRef.current) fileRef.current.value = "";
             }}
@@ -635,16 +758,95 @@ function DebugScreen() {
         <Button
           type="button"
           className="toolbar__btn"
-          disabled={busy}
+          disabled={busy || comparing}
           onClick={() => void boot(arch, budget, firmwareName, firmwareBytes)}
         >
           新建运行
         </Button>
-        <Text className="mono muted" fontSize={11}>
-          快照不可变 · Shift+点击设比较 · 同类型自动折叠 · {snap?.proof_note ?? ""}
-        </Text>
+        <Button
+          type="button"
+          className="toolbar__btn"
+          disabled={busy || phase.tag === "expanding"}
+          title="just_tx.elf × just_tx.bpf.o，同 budget，无自定义镜像"
+          onClick={() => void onStructuralCompare()}
+        >
+          结构比较
+        </Button>
+        {phase.tag === "reported" || phase.tag === "rejected" ? (
+          <Button
+            type="button"
+            className="toolbar__btn toolbar__btn--quiet"
+            onClick={onExitCompare}
+          >
+            返回单图
+          </Button>
+        ) : null}
+        {phase.tag === "expanding" ? (
+          <Button
+            type="button"
+            className="toolbar__btn toolbar__btn--quiet"
+            onClick={() => {
+              compareAbortRef.current?.abort();
+              setPhase({ tag: "single" });
+              setBusy(false);
+            }}
+          >
+            停止
+          </Button>
+        ) : null}
+        {phase.tag === "expanding" ? (
+          <Flex flexDirection="column" gap={2} className="compare-progress">
+            {(["left", "right"] as const).map((side) => {
+              const slot = phase[side];
+              return (
+                <Text key={side} className="mono muted" fontSize={11}>
+                  {slot.arch} · {slot.label} · steps {slot.stats?.steps ?? 0} · nodes{" "}
+                  {slot.snap?.nodes.length ?? 0} · {slot.snap?.status ?? "…"}
+                </Text>
+              );
+            })}
+          </Flex>
+        ) : (
+          <Text className="mono muted" fontSize={11}>
+            快照不可变 · Shift+点击设比较 · 同类型自动折叠 · {snap?.proof_note ?? ""}
+          </Text>
+        )}
       </Flex>
 
+      {comparing ? (
+        <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
+          {error ? (
+            <Text className="error-banner" p={16} fontSize={13}>
+              {error}
+            </Text>
+          ) : null}
+          {phase.tag === "expanding" ? (
+            <Flex className="compare-spine panel" flex="1" alignItems="center" justifyContent="center">
+              <Text className="mono muted">并行展开 rv32imc / ebpf…</Text>
+            </Flex>
+          ) : null}
+          {phase.tag === "reported" ? (
+            <CompareReportView
+              left={phase.left}
+              right={phase.right}
+              report={phase.report}
+              openLoc={phase.loc}
+              onOpenLoc={(loc) =>
+                setPhase((prev) => (prev.tag === "reported" ? { ...prev, loc } : prev))
+              }
+            />
+          ) : null}
+          {phase.tag === "rejected" ? (
+            <CompareReportView
+              left={phase.left}
+              right={phase.right}
+              reject={phase.reject}
+              openLoc={null}
+              onOpenLoc={() => {}}
+            />
+          ) : null}
+        </Flex>
+      ) : (
       <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
         <Flex className="panel panel--left" width={300} flexDirection="column" minHeight={0}>
           <Text className="panel__title">指令 / 位置</Text>
@@ -867,6 +1069,7 @@ function DebugScreen() {
           </Box>
         </Flex>
       </Flex>
+      )}
 
     </Flex>
   );
