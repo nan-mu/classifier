@@ -96,7 +96,7 @@ P_i:=\{\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,t)\}.
 
 写入所用 Map 值引用若来自先前的 MapLookup，地址源寄存器的项须依 [Expr lookup 返回关联](Helper谓词.md#生成的-expr)确定它的引用来源。\(t_m\) 使用该来源对应的 Map 参数项；\(\vec k\) 复用 [MapLookup 观察](MapLookup谓词.md)在查询时保存的完整符号键。写入时不重新读取查询使用的原始键指针所指向的当前字节。
 
-产品 RV32IMC step 在 Meta `maps` 与栈上 `readStackBytes` 成功时，于 lookup 的 helper `args` 尾部保存冻结键，MapWrite 再按 lookup 事件身份取回该数组；这是实现侧的来源规则，不是 MW-O2 的证明。栈地址由复制得到的别名给出时，其项保留恒等包裹；按[根与常数偏移的识别](../Expr/Term/solve.md#设计目标)该包裹不改变形状，冻结仍取到同一栈单元。别名传播、空返回与失效引用的完备性仍列为 [MW-O2](#证明义务)，不能只凭 Map 编号、指针数值或返回寄存器变元判定该依赖已经满足。
+产品 RV32IMC step 在 Meta `maps` 与栈上 `readStackBytes` 成功时，于 lookup 的 helper `args` 尾部保存冻结键，MapWrite 再按 lookup 事件身份取回该数组；这是实现侧的来源规则，不是 MW-O2 的证明。栈地址项保留复制产生的恒等包裹时，按[根与常数偏移的识别](../Expr/Term/solve.md#设计目标)该包裹不改变识别所得的根与常数偏移，冻结仍取到同一栈单元。别名传播、空返回与失效引用的完备性仍列为 [MW-O2](#证明义务)，不能只凭 Map 编号、指针数值或返回寄存器变元判定该依赖已经满足。
 
 ### 错误类型
 
