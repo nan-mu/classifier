@@ -1,84 +1,31 @@
 //! Integration tests that call Lean4 modules through the Rust FFI surface.
 
-use lean_binding::{common_math, rv32};
+use lean_binding::{classifier_expr, rv32};
 
 #[test]
-fn common_math_add_wraps_at_32() {
-    assert_eq!(common_math::add32(0xffff_ffff, 2), 1);
+fn classifier_expr_add_wraps_at_32() {
+    assert_eq!(classifier_expr::add32(0xffff_ffff, 2), 1);
 }
 
 #[test]
-fn common_math_sub_wraps() {
-    assert_eq!(common_math::sub32(0, 1), 0xffff_ffff);
+fn classifier_expr_sub_wraps() {
+    assert_eq!(classifier_expr::sub32(0, 1), 0xffff_ffff);
 }
 
 #[test]
-fn common_math_and() {
-    assert_eq!(common_math::and32(0b1100, 0b1010), 0b1000);
+fn classifier_expr_and() {
+    assert_eq!(classifier_expr::and32(0b1100, 0b1010), 0b1000);
 }
 
 #[test]
-fn common_math_divu_by_zero_is_all_ones() {
-    assert_eq!(common_math::divu32(42, 0), 0xffff_ffff);
+fn classifier_expr_divu_by_zero_is_all_ones() {
+    assert_eq!(classifier_expr::divu32(42, 0), 0xffff_ffff);
 }
 
 #[test]
-fn common_math_tq_toward_zero() {
+fn classifier_expr_tq_toward_zero() {
     // TQ(-7, 2) = -3 → bit pattern
-    assert_eq!(common_math::tq32((-7i32) as u32, 2), (-3i32) as u32);
-}
-
-#[test]
-fn path_demo_section18_budget() {
-    assert!(common_math::path_demo_check());
-    assert_eq!(common_math::path_demo_nodes(11), 12);
-    assert_eq!(common_math::path_demo_nodes(10), 0);
-}
-
-#[test]
-fn path_demo_snapshot_complete_and_limit() {
-    assert!(common_math::path_demo_check());
-
-    let done: serde_json::Value =
-        serde_json::from_str(&common_math::path_demo_snapshot(11, 11)).expect("json");
-    assert_eq!(done["status"], "complete");
-    assert_eq!(done["reason"], serde_json::Value::Null);
-    assert_eq!(done["fuel"], 0);
-    let nodes = done["nodes"].as_array().expect("nodes");
-    assert_eq!(nodes.len(), 12);
-    assert_eq!(nodes[11]["loc"], "exit");
-    let exprs = nodes[11]["exprs"].as_array().expect("exprs");
-    assert_eq!(exprs.len(), 2);
-    assert_eq!(exprs[0]["reg"], "real32:1");
-    assert_eq!(exprs[0]["rel"], "eq");
-    assert_eq!(exprs[0]["term"], "3");
-    assert_eq!(exprs[1]["role"], "constraint");
-    assert_eq!(exprs[1]["rel"], "geu");
-    assert_eq!(exprs[1]["term"], "3");
-    assert_eq!(nodes[1]["exprs"][1]["rel"], "ltu");
-    assert_eq!(nodes[1]["exprs"][0]["term"], "0");
-    assert_eq!(nodes[2]["exprs"].as_array().unwrap().len(), 1);
-    assert_eq!(nodes[2]["exprs"][0]["term"], "1");
-    let preds = nodes[11]["predicates"].as_array().expect("predicates");
-    // Exit carries return Expr equality; Return Predicate is not emitted yet.
-    assert!(preds.is_empty(), "unexpected predicates {preds:?}");
-
-    // After 10 successful expandOnes with B=10, fuel is 0 and work remains (running).
-    // The next expandOne observes LimitExceeded.
-    let at_limit: serde_json::Value =
-        serde_json::from_str(&common_math::path_demo_snapshot(10, 10)).expect("json");
-    assert_eq!(at_limit["status"], "running");
-    assert_eq!(at_limit["fuel"], 0);
-    assert_eq!(at_limit["work"], serde_json::json!([10]));
-
-    let limited: serde_json::Value =
-        serde_json::from_str(&common_math::path_demo_snapshot(11, 10)).expect("json");
-    assert_eq!(limited["status"], "fail");
-    assert_eq!(limited["reason"], "LimitExceeded");
-    assert_eq!(limited["fuel"], 0);
-    let limited_nodes = limited["nodes"].as_array().expect("nodes");
-    assert_eq!(limited_nodes.len(), 11);
-    assert!(limited_nodes.iter().all(|n| n["loc"] != "exit"));
+    assert_eq!(classifier_expr::tq32((-7i32) as u32, 2), (-3i32) as u32);
 }
 
 #[test]

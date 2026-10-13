@@ -91,7 +91,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 lean_call(move || {
                     barrier.wait();
-                    unsafe { ffi::common_math_add32(3, 4) }
+                    unsafe { ffi::classifier_expr_add32(3, 4) }
                 })
             }));
         }

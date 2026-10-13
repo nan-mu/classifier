@@ -24,8 +24,8 @@ Do not treat `.omp/AGENTS.md` as Cursor policy.
 Refuse create/edit/delete/rename/move/regenerate/format of:
 
 - `doc/**`
-- `*.lean`, `CommonMath/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`,
-  `lean-toolchain`, `lake-manifest.json` when present
+- `*.lean`, `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`,
+  `lakefile.lean`, `lean-toolchain`, `lake-manifest.json` when present
 
 Allowed on those paths: read, search, cite. `lake build` / `lake test` only
 as verification that does not rewrite them.
@@ -76,7 +76,7 @@ supported expand contract is three stateless String FFI calls (via
 - `expand_merge(requestJson)` → exact-config merge verdict JSON
   (`merged` / `reject`). Request is arch-neutral: `taken` + `notTaken[]`
   applied snapshots and `observationModel: HelperOnly` (no program / Meta).
-  Export: `lean_expand_merge` in `CommonMath/Merge.lean`.
+  Export: `lean_expand_merge` in `PathMerge/Merge.lean`.
 
 No Lean expand object stays alive across calls. Legacy snapshot helpers may exist
 for tests; do not grow new product paths on them.

@@ -1,4 +1,4 @@
-//! Thin Rust interface over Lean `@[export]` symbols from `CommonMath` and `RV32IMC`.
+//! Thin Rust interface over Lean `@[export]` symbols from `ClassifierExpr`, `PathMerge`, and `RV32IMC`.
 //!
 //! FFI runs on a fixed pool of [`LEAN_WORKERS`] Lean-initialized OS threads
 //! (`lean_initialize_thread`). The process runtime is initialized once; there is
@@ -25,7 +25,8 @@ pub(crate) mod ffi {
         pub fn lean_finalize_thread();
 
         pub fn initialize_Init(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_CommonMath(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_ClassifierExpr(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_PathMerge(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_RV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
@@ -34,14 +35,11 @@ pub(crate) mod ffi {
         pub fn lean_binding_dec(o: LeanObj);
         pub fn lean_binding_mk_uint32_array(data: *const u32, len: usize) -> LeanObj;
 
-        pub fn common_math_add32(a: u32, b: u32) -> u32;
-        pub fn common_math_sub32(a: u32, b: u32) -> u32;
-        pub fn common_math_and32(a: u32, b: u32) -> u32;
-        pub fn common_math_tq32(a: u32, b: u32) -> u32;
-        pub fn common_math_divu32(a: u32, b: u32) -> u32;
-        pub fn lean_path_demo_check(unused: u32) -> u32;
-        pub fn lean_path_demo_nodes(budget: u32) -> u32;
-        pub fn lean_path_demo_snapshot(steps: u32, budget: u32) -> LeanObj;
+        pub fn classifier_expr_add32(a: u32, b: u32) -> u32;
+        pub fn classifier_expr_sub32(a: u32, b: u32) -> u32;
+        pub fn classifier_expr_and32(a: u32, b: u32) -> u32;
+        pub fn classifier_expr_tq32(a: u32, b: u32) -> u32;
+        pub fn classifier_expr_divu32(a: u32, b: u32) -> u32;
         pub fn lean_rv32_expr_override_keeps(unused: u32) -> u32;
 
         pub fn lean_rv32_decode32(w: u32) -> u32;
@@ -70,7 +68,7 @@ pub(crate) mod ffi {
             exprs_json: LeanObj,
             preds_json: LeanObj,
         ) -> LeanObj;
-        /// Arch-neutral exact-config merge (`CommonMath/Merge.lean`).
+        /// HelperOnly ExactConfig merge (`PathMerge/Merge.lean`).
         pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
     }
 
@@ -114,7 +112,8 @@ pub fn init() {
         ffi::lean_initialize();
         let world = std::ptr::null_mut();
         let _ = ffi::initialize_Init(1, world);
-        let _ = ffi::initialize_classifier_CommonMath(1, world);
+        let _ = ffi::initialize_classifier_ClassifierExpr(1, world);
+        let _ = ffi::initialize_classifier_PathMerge(1, world);
         let _ = ffi::initialize_classifier_RV32IMC(1, world);
         ffi::lean_io_mark_end_initialization();
     });
@@ -123,55 +122,33 @@ pub fn init() {
 pub mod expand {
     use super::rv32;
 
-    /// Arch-neutral exact-config merge (request JSON only).
+    /// HelperOnly ExactConfig merge (request JSON only).
     pub fn merge(request_json: &str) -> String {
         rv32::expand_merge(request_json)
     }
 }
 
-pub mod common_math {
+pub mod classifier_expr {
     use super::{ffi, lean_call};
 
     pub fn add32(a: u32, b: u32) -> u32 {
-        lean_call(move || unsafe { ffi::common_math_add32(a, b) })
+        lean_call(move || unsafe { ffi::classifier_expr_add32(a, b) })
     }
 
     pub fn sub32(a: u32, b: u32) -> u32 {
-        lean_call(move || unsafe { ffi::common_math_sub32(a, b) })
+        lean_call(move || unsafe { ffi::classifier_expr_sub32(a, b) })
     }
 
     pub fn and32(a: u32, b: u32) -> u32 {
-        lean_call(move || unsafe { ffi::common_math_and32(a, b) })
+        lean_call(move || unsafe { ffi::classifier_expr_and32(a, b) })
     }
 
     pub fn tq32(a: u32, b: u32) -> u32 {
-        lean_call(move || unsafe { ffi::common_math_tq32(a, b) })
+        lean_call(move || unsafe { ffi::classifier_expr_tq32(a, b) })
     }
 
     pub fn divu32(a: u32, b: u32) -> u32 {
-        lean_call(move || unsafe { ffi::common_math_divu32(a, b) })
-    }
-
-    /// §18 demo: `B=11` Complete with Exit and `B=10` LimitExceeded.
-    pub fn path_demo_check() -> bool {
-        lean_call(|| unsafe { ffi::lean_path_demo_check(0) == 1 })
-    }
-
-    /// Node count on Complete for budget `B`, else 0.
-    pub fn path_demo_nodes(budget: u32) -> u32 {
-        lean_call(move || unsafe { ffi::lean_path_demo_nodes(budget) })
-    }
-
-    /// JSON snapshot after `steps` expandOne calls (Lean `demoSnapshot`).
-    pub fn path_demo_snapshot(steps: u32, budget: u32) -> String {
-        lean_call(move || unsafe {
-            let obj = ffi::lean_path_demo_snapshot(steps, budget);
-            let cstr = std::ffi::CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
-                .to_string_lossy()
-                .into_owned();
-            ffi::lean_binding_dec(obj);
-            cstr
-        })
+        lean_call(move || unsafe { ffi::classifier_expr_divu32(a, b) })
     }
 }
 
@@ -345,7 +322,7 @@ pub mod rv32 {
         })
     }
 
-    /// Arch-neutral exact-config merge. Request JSON only (no program / Meta).
+    /// HelperOnly ExactConfig merge. Request JSON only (no program / Meta).
     /// See `doc/NodeInference/路径合并FFI.md`.
     pub fn expand_merge(request_json: &str) -> String {
         let request_json = request_json.to_owned();

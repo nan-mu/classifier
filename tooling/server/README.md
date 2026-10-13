@@ -111,7 +111,7 @@ copies and constant add/subtract aliases of one lookup return, requiring that
 first-word equality and an access contained in one four-byte word. Reads and
 subword stores materialize untouched later words through `ExprEffect.inputs`;
 full-word stores can create them directly. Reads write only the real
-destination; stores use CommonMath CellAccess and preserve other bits for
+destination; stores use ClassifierExpr CellAccess and preserve other bits for
 subword writes. Changing a0 does not change the lookup identity. Null/numeric
 pointers, other helper returns, symbolic offsets and cross-word accesses
 reject. The event-local association proves neither lookup success nor actual

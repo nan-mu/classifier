@@ -26,7 +26,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lake_lib.display());
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
     println!("cargo:rustc-link-lib=dylib=classifier_RV32IMC");
-    println!("cargo:rustc-link-lib=dylib=classifier_CommonMath");
+    println!("cargo:rustc-link-lib=dylib=classifier_PathMerge");
+    println!("cargo:rustc-link-lib=dylib=classifier_ClassifierExpr");
     println!("cargo:rustc-link-lib=dylib=leanshared");
     println!("cargo:rustc-link-lib=dylib=Init_shared");
 
