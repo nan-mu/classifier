@@ -27,6 +27,10 @@ Tree `edges` are only forks: `dir` is `taken` | `not_taken`.
 - `phase: "branch_return"` now.
 - Later phases append helper / mapWrite / packetWrite into the same lists without renaming nodes.
 
+## Expand-graph note
+
+Branch observations are written onto the `taken` / `not_taken` *child* expand nodes. The tree builder lifts those tip branches into the parent segment so the parent list ends with `branch`, and does not repeat them at the head of the child lists.
+
 ## Claim
 
 `claim: "heuristic"`, `behavioralEquivalence: "notEstablished"`. Not Lean Term equality.

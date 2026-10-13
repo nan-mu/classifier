@@ -183,6 +183,34 @@ fn find_root(nodes: &HashMap<u32, ExpandNode>, edges: &[&WireEdge]) -> u32 {
         .unwrap_or(0)
 }
 
+fn push_phase1_preds(n: &ExpandNode, preds: &mut Vec<PredAtom>) {
+    push_phase1_preds_filtered(n, preds, false);
+}
+
+fn push_phase1_preds_filtered(n: &ExpandNode, preds: &mut Vec<PredAtom>, skip_branch: bool) {
+    for (index, p) in n.predicates.iter().enumerate() {
+        let kind = normalize_kind(&p.kind);
+        if kind != "branch" && kind != "ret" {
+            continue;
+        }
+        if skip_branch && kind == "branch" {
+            continue;
+        }
+        let atom = PredAtom {
+            node_id: n.id,
+            loc: n.loc.clone(),
+            index,
+            kind: kind.to_string(),
+            fields: p.fields.clone(),
+            fingerprint: fingerprint(kind, &p.fields),
+        };
+        if preds.iter().any(|a| a.fingerprint == atom.fingerprint) {
+            continue;
+        }
+        preds.push(atom);
+    }
+}
+
 fn walk_segment(
     start_id: u32,
     start: StartKind,
@@ -197,23 +225,12 @@ fn walk_segment(
 
     for _ in 0..10_000 {
         let Some(n) = nodes.get(&cur) else { break };
-        for (index, p) in n.predicates.iter().enumerate() {
-            let kind = normalize_kind(&p.kind);
-            if kind != "branch" && kind != "ret" {
-                continue;
-            }
-            let atom = PredAtom {
-                node_id: n.id,
-                loc: n.loc.clone(),
-                index,
-                kind: kind.to_string(),
-                fields: p.fields.clone(),
-                fingerprint: fingerprint(kind, &p.fields),
-            };
-            if preds.iter().any(|a: &PredAtom| a.fingerprint == atom.fingerprint) {
-                continue;
-            }
-            preds.push(atom);
+        // taken/not_taken children already contributed their branch tip to the
+        // parent segment; do not repeat it as the head of this list.
+        if cur == start_id && matches!(start, StartKind::Taken | StartKind::NotTaken) {
+            push_phase1_preds_filtered(n, &mut preds, /*skip_branch*/ true);
+        } else {
+            push_phase1_preds(n, &mut preds);
         }
         if n.loc == "exit" {
             ends_exit = true;
@@ -228,6 +245,14 @@ fn walk_segment(
             .map(|e| e.to)
             .collect();
         if t.is_some() || nt.is_some() {
+            // Branch observations land on the taken/not_taken *children*
+            // (engine writes successor.predicates onto the new node). Lift a
+            // tip branch into this segment so the list ends with branch.
+            for child_id in [t, nt].into_iter().flatten() {
+                if let Some(child) = nodes.get(&child_id) {
+                    push_phase1_preds(child, &mut preds);
+                }
+            }
             taken = t;
             not_taken = nt;
             break;
@@ -343,21 +368,32 @@ mod tests {
 
     #[test]
     fn diamond_aligns_taken_not_taken() {
+        // Branch lives on taken/not_taken children (engine successor write).
         let left = SnapRun {
             arch: "rv32imc".into(),
             nodes: vec![
                 PredNodeIn {
                     id: 0,
                     loc: "0".into(),
-                    predicates: vec![pred("branch", json!({"dir": "taken", "at": "3"}))],
+                    predicates: vec![],
                 },
                 PredNodeIn {
                     id: 1,
+                    loc: "1".into(),
+                    predicates: vec![pred("branch", json!({"dir": "taken", "at": "3"}))],
+                },
+                PredNodeIn {
+                    id: 2,
+                    loc: "2".into(),
+                    predicates: vec![pred("branch", json!({"dir": "notTaken", "at": "3"}))],
+                },
+                PredNodeIn {
+                    id: 3,
                     loc: "exit".into(),
                     predicates: vec![pred("ret", json!({"term": "1"}))],
                 },
                 PredNodeIn {
-                    id: 2,
+                    id: 4,
                     loc: "exit".into(),
                     predicates: vec![pred("ret", json!({"term": "0"}))],
                 },
@@ -373,6 +409,16 @@ mod tests {
                     to: 2,
                     dir: "not_taken".into(),
                 },
+                WireEdge {
+                    from: 1,
+                    to: 3,
+                    dir: "only".into(),
+                },
+                WireEdge {
+                    from: 2,
+                    to: 4,
+                    dir: "only".into(),
+                },
             ],
         };
         let right = left.clone();
@@ -387,9 +433,28 @@ mod tests {
                 kind: StartKind::Create
             }
         ));
-        assert!(report.nodes[0]
+        assert!(
+            report.nodes[0]
+                .left
+                .iter()
+                .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "branch")),
+            "create segment must end with lifted branch from children"
+        );
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken node");
+        assert!(
+            !taken
+                .left
+                .iter()
+                .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "branch")),
+            "taken child must not repeat the fork branch"
+        );
+        assert!(taken
             .left
             .iter()
-            .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "branch")));
+            .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "ret")));
     }
 }
