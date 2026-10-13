@@ -2,9 +2,9 @@ import type {
   ArchKind,
   CompareOutcome,
   CompareRun,
-  PredMatchReport,
-  PredRun,
   SessionSnapshot,
+  TreeReport,
+  TreeSnap,
 } from "./types";
 
 async function postJson(path: string, body: unknown): Promise<SessionSnapshot> {
@@ -76,22 +76,22 @@ export async function compareRuns(
   throw new Error("unexpected compare status");
 }
 
-/** Host fuzzy Predicate align (`claim: heuristic`). Not Lean Term equality. */
-export async function comparePredicates(
-  left: PredRun,
-  right: PredRun,
-): Promise<PredMatchReport> {
-  const res = await fetch("/api/compare/predicates", {
+/** Compare tree of dual-list nodes (`claim: heuristic`). Phase1 branch/ret. */
+export async function compareTree(
+  left: TreeSnap,
+  right: TreeSnap,
+): Promise<TreeReport> {
+  const res = await fetch("/api/compare/tree", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ left, right }),
   });
-  if (!res.ok) throw new Error(`/api/compare/predicates failed with ${res.status}`);
-  const body = (await res.json()) as Partial<PredMatchReport>;
-  if (body.status === "matched" && body.claim === "heuristic") {
-    return body as PredMatchReport;
+  if (!res.ok) throw new Error(`/api/compare/tree failed with ${res.status}`);
+  const body = (await res.json()) as Partial<TreeReport>;
+  if (body.status === "tree" && body.claim === "heuristic") {
+    return body as TreeReport;
   }
-  throw new Error("unexpected predicate-compare status");
+  throw new Error("unexpected compare-tree status");
 }
 
 export type RunStreamEvent = {

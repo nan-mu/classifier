@@ -236,6 +236,63 @@ export type PredMatchReport = {
   locations: PredLocBucket[];
 };
 
+/** Wire start of a dual-list node (`POST /api/compare/tree`). */
+export type StartKind = "create" | "taken" | "not_taken";
+
+/**
+ * Ordered list entry inside a compare-tree node.
+ * Phase 1: start → (branch|ret)* → (branch tip | exit).
+ */
+export type ListEntry =
+  | { tag: "start"; kind: StartKind }
+  | { tag: "pred"; atom: PredAtom }
+  | { tag: "exit" };
+
+/** One compare-tree node: dual ordered predicate lists (not a SemState expand node). */
+export type TreeNode = {
+  id: number;
+  start: StartKind;
+  left: ListEntry[];
+  right: ListEntry[];
+  tipScore?: SoftScore;
+};
+
+/** Fork only: `taken` | `not_taken`. */
+export type TreeEdge = {
+  from: number;
+  to: number;
+  dir: "taken" | "not_taken";
+};
+
+export type TreeArchSummary = {
+  arch: string;
+  expandNodes: number;
+  segments: number;
+};
+
+/** Host compare tree; `claim` stays heuristic until Lean Term equality. */
+export type TreeReport = {
+  status: "tree";
+  claim: "heuristic";
+  behavioralEquivalence: "notEstablished";
+  note: string;
+  phase: string;
+  left: TreeArchSummary;
+  right: TreeArchSummary;
+  nodes: TreeNode[];
+  edges: TreeEdge[];
+};
+
+/**
+ * SnapRun for `POST /api/compare/tree`: arch + expand nodes + edges
+ * (`from`/`to`/`dir`, not Lean compare `src`/`dst`).
+ */
+export type TreeSnap = {
+  arch: string;
+  nodes: PredRunNode[];
+  edges: { from: number; to: number; dir: string }[];
+};
+
 const COMPARE_DIR = {
   only: "OK",
   taken: "Taken",
@@ -267,6 +324,17 @@ export function toPredRun(snap: SessionSnapshot): PredRun {
   return {
     arch: snap.arch,
     nodes: snap.nodes.map(({ id, loc, predicates }) => ({ id, loc, predicates })),
+  };
+}
+
+/** Strip a snapshot to TreeSnap for compare-tree (keeps from/to/dir edges). */
+export function toTreeSnap(snap: SessionSnapshot): TreeSnap {
+  return {
+    arch: snap.arch,
+    nodes: snap.nodes.map(({ id, loc, predicates }) => ({ id, loc, predicates })),
+    edges: snap.edges
+      .filter((e) => e.dir !== "reuse")
+      .map(({ from, to, dir }) => ({ from, to, dir })),
   };
 }
 

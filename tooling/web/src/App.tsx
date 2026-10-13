@@ -20,7 +20,7 @@ import {
 } from "react";
 import "@xyflow/react/dist/style.css";
 import {
-  comparePredicates,
+  compareTree,
   createSession,
   runSessionStream,
   stepSession,
@@ -35,16 +35,16 @@ import {
   insnTextForNode,
   NODE_ROLE_LEGEND,
 } from "./nodeRole";
-import { PredicateCompareView } from "./PredicateCompare";
+import { CompareTreeView } from "./CompareTreeView";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
 import type {
   ArchKind,
-  PredMatchReport,
   PredRow,
   ExprRow,
   SessionSnapshot,
+  TreeReport,
 } from "./types";
-import { toPredRun } from "./types";
+import { toTreeSnap } from "./types";
 import { useForceLayout } from "./useForceLayout";
 import {
   branchSource,
@@ -76,7 +76,7 @@ type RunSlot = {
 type CompareUi =
   | { tag: "idle" }
   | { tag: "expanding"; left: RunSlot; right: RunSlot }
-  | { tag: "ready"; report: PredMatchReport };
+  | { tag: "ready"; report: TreeReport };
 
 function emptySlot(arch: ArchKind): RunSlot {
   return {
@@ -535,7 +535,7 @@ function DebugScreen() {
     }
   }, [apply, flushPendingSnap, snap]);
 
-  const runPredicateCompare = useCallback(async () => {
+  const runCompareTree = useCallback(async () => {
     runAbortRef.current?.abort();
     compareAbortRef.current?.abort();
     const ac = new AbortController();
@@ -585,12 +585,12 @@ function DebugScreen() {
       }
 
       if (ac.signal.aborted || !left || !right) return;
-      const report = await comparePredicates(toPredRun(left), toPredRun(right));
+      const report = await compareTree(toTreeSnap(left), toTreeSnap(right));
       if (ac.signal.aborted) return;
       setCompareUi({ tag: "ready", report });
     } catch (err: unknown) {
       if (!ac.signal.aborted) {
-        setError(err instanceof Error ? err.message : "predicate compare failed");
+        setError(err instanceof Error ? err.message : "compare tree failed");
         setCompareUi({ tag: "idle" });
       }
     } finally {
@@ -603,7 +603,7 @@ function DebugScreen() {
     (next: TabId) => {
       if (next === "compare") {
         setTab("compare");
-        void runPredicateCompare();
+        void runCompareTree();
         return;
       }
       compareAbortRef.current?.abort();
@@ -619,12 +619,15 @@ function DebugScreen() {
           compare: null,
           edgeKey: null,
         }));
+      } else if (!busy && !streaming) {
+        const name = firmwareBytes ? firmwareName : defaultName(next);
+        void boot(next, budget, name, firmwareBytes);
       }
       if (!firmwareBytes) {
         setFirmwareName(defaultName(next));
       }
     },
-    [firmwareBytes, runPredicateCompare],
+    [boot, budget, busy, firmwareBytes, firmwareName, runCompareTree, streaming],
   );
 
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
@@ -851,7 +854,7 @@ function DebugScreen() {
         ) : (
           <Text className="mono muted" fontSize={11}>
             {comparing
-              ? "Predicate heuristic · Term equality not proven"
+              ? "Compare tree · Term equality not proven"
               : `Shift+点击设比较 · 同类型自动折叠 · ${snap?.proof_note ?? ""}`}
           </Text>
         )}
@@ -866,7 +869,7 @@ function DebugScreen() {
           ) : null}
           {compareUi.tag === "expanding" || compareUi.tag === "idle" ? (
             <Flex
-              className="pred-compare panel"
+              className="compare-tree panel"
               flex="1"
               alignItems="center"
               justifyContent="center"
@@ -874,12 +877,12 @@ function DebugScreen() {
               <Text className="mono muted">
                 {compareUi.tag === "expanding"
                   ? "并行展开 rv32imc / ebpf…"
-                  : "准备 Predicate 比较…"}
+                  : "准备树比较…"}
               </Text>
             </Flex>
           ) : null}
           {compareUi.tag === "ready" ? (
-            <PredicateCompareView report={compareUi.report} />
+            <CompareTreeView report={compareUi.report} />
           ) : null}
         </Flex>
       ) : (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toCompareRun, toPredRun, type SessionSnapshot } from "./types";
+import { toCompareRun, toPredRun, toTreeSnap, type SessionSnapshot } from "./types";
 
 function snap(partial: Partial<SessionSnapshot> & Pick<SessionSnapshot, "edges" | "nodes">): SessionSnapshot {
   return {
@@ -80,6 +80,44 @@ describe("toPredRun", () => {
     expect(run).toEqual({
       arch: "ebpf",
       nodes: [{ id: 3, loc: "exit", predicates: [{ kind: "ret", term: "1" }] }],
+    });
+  });
+});
+
+describe("toTreeSnap", () => {
+  it("keeps arch, id/loc/predicates, and from/to/dir edges without reuse", () => {
+    const run = toTreeSnap(
+      snap({
+        arch: "rv32imc",
+        nodes: [
+          {
+            id: 0,
+            loc: "0",
+            exprs: [{ reg: "r0", rel: "eq", term: "1" }],
+            predicates: [{ kind: "branch", dir: "taken", at: "3" }],
+            preds: [],
+          },
+          {
+            id: 1,
+            loc: "exit",
+            exprs: [],
+            predicates: [{ kind: "ret", term: "1" }],
+            preds: [0],
+          },
+        ],
+        edges: [
+          { from: 0, to: 1, dir: "taken" },
+          { from: 1, to: 0, dir: "reuse" },
+        ],
+      }),
+    );
+    expect(run).toEqual({
+      arch: "rv32imc",
+      nodes: [
+        { id: 0, loc: "0", predicates: [{ kind: "branch", dir: "taken", at: "3" }] },
+        { id: 1, loc: "exit", predicates: [{ kind: "ret", term: "1" }] },
+      ],
+      edges: [{ from: 0, to: 1, dir: "taken" }],
     });
   });
 });
