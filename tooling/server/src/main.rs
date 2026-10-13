@@ -3,6 +3,7 @@ mod driver;
 mod engine;
 mod expand;
 mod pred_match;
+mod pred_tree;
 mod rv32_image;
 
 use std::collections::HashMap;
@@ -63,6 +64,7 @@ fn app(state: AppState) -> Router {
         .route("/api/session/{id}", get(get_session))
         .route("/api/compare", post(compare_runs))
         .route("/api/compare/predicates", post(compare_predicates))
+        .route("/api/compare/tree", post(compare_tree))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -218,6 +220,17 @@ async fn compare_predicates(
     let right: pred_match::PredRun =
         serde_json::from_value(body.right).map_err(|_| StatusCode::BAD_REQUEST)?;
     Ok(Json(pred_match::match_predicate_runs(&left, &right)))
+}
+
+/// Compare tree: nodes with dual ordered predicate lists (phase1 branch/ret).
+async fn compare_tree(
+    Json(body): Json<CompareBody>,
+) -> Result<Json<pred_tree::TreeReport>, StatusCode> {
+    let left: pred_tree::SnapRun =
+        serde_json::from_value(body.left).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let right: pred_tree::SnapRun =
+        serde_json::from_value(body.right).map_err(|_| StatusCode::BAD_REQUEST)?;
+    Ok(Json(pred_tree::build_compare_tree(&left, &right)))
 }
 
 fn session_handle(app: &AppState, id: &str) -> Result<Arc<Mutex<Session>>, StatusCode> {
@@ -493,6 +506,39 @@ mod http_tests {
         assert_eq!(report["behavioralEquivalence"], "notEstablished");
         assert_eq!(report["matched"], 1);
         assert_eq!(report["locations"][0]["pairs"][0]["status"], "matched");
+    }
+
+    #[tokio::test]
+    async fn compare_tree_diamond_phase1() {
+        let router = app(new_state());
+        let body = br#"{
+            "left":{
+              "arch":"rv32imc",
+              "nodes":[
+                {"id":0,"loc":"0","predicates":[{"kind":"branch","dir":"taken","at":"3"}]},
+                {"id":1,"loc":"exit","predicates":[{"kind":"ret","term":"1"}]},
+                {"id":2,"loc":"exit","predicates":[{"kind":"ret","term":"0"}]}
+              ],
+              "edges":[{"from":0,"to":1,"dir":"taken"},{"from":0,"to":2,"dir":"not_taken"}]
+            },
+            "right":{
+              "arch":"ebpf",
+              "nodes":[
+                {"id":0,"loc":"0","predicates":[{"kind":"branch","dir":"taken","at":"3"}]},
+                {"id":1,"loc":"exit","predicates":[{"kind":"ret","term":"1"}]},
+                {"id":2,"loc":"exit","predicates":[{"kind":"ret","term":"0"}]}
+              ],
+              "edges":[{"from":0,"to":1,"dir":"taken"},{"from":0,"to":2,"dir":"not_taken"}]
+            }
+        }"#;
+        let (status, report) = call(&router, "POST", "/api/compare/tree", body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["status"], "tree");
+        assert_eq!(report["phase"], "branch_return");
+        assert_eq!(report["nodes"].as_array().unwrap().len(), 3);
+        assert_eq!(report["edges"].as_array().unwrap().len(), 2);
+        assert_eq!(report["nodes"][0]["left"][0]["tag"], "start");
+        assert_eq!(report["nodes"][0]["left"][0]["kind"], "create");
     }
 
     #[tokio::test]

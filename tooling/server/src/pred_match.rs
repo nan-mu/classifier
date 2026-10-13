@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-const MATCH_FLOOR: f64 = 0.35;
+pub const MATCH_FLOOR: f64 = 0.35;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PredRun {
@@ -188,7 +188,7 @@ fn flatten(run: &PredRun) -> Vec<PredAtom> {
     out
 }
 
-fn normalize_kind(kind: &str) -> &str {
+pub fn normalize_kind(kind: &str) -> &str {
     match kind {
         "return" => "ret",
         "map_write" => "mapWrite",
@@ -200,7 +200,7 @@ fn normalize_kind(kind: &str) -> &str {
     }
 }
 
-fn fingerprint(kind: &str, fields: &Map<String, Value>) -> String {
+pub fn fingerprint(kind: &str, fields: &Map<String, Value>) -> String {
     let mut parts = vec![kind.to_string()];
     let mut keys: Vec<&String> = fields.keys().collect();
     keys.sort();
@@ -266,7 +266,7 @@ fn strip_outer_call(s: &str, prefix: &str) -> Option<String> {
     Some(s[open + 1..s.len() - 1].to_string())
 }
 
-fn score_pair(a: &PredAtom, b: &PredAtom) -> SoftScore {
+pub fn score_pair(a: &PredAtom, b: &PredAtom) -> SoftScore {
     let kind = if a.kind == b.kind { 1.0 } else { 0.0 };
     if kind == 0.0 {
         return SoftScore {
