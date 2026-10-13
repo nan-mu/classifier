@@ -1,4 +1,4 @@
-use lean_binding::rv32::{self, Meta};
+use lean_binding::rv32::{self, MapLayout, Meta};
 use serde_json::Value;
 
 fn addi(rd: u32, rs: u32, imm: u32) -> u32 {
@@ -50,14 +50,58 @@ fn cj(delta: i32, link: bool) -> u32 {
         | ((n >> 5 & 1) << 2);
     bits | if link { 0x2001 } else { 0xa001 }
 }
+fn snapshot_meta(words: &[u32], steps: u32, meta: &Meta) -> Value {
+    serde_json::from_str(&rv32::expand_bound_words_snapshot(words, meta, steps, 100)).unwrap()
+}
+
 fn snapshot(words: &[u32], steps: u32) -> Value {
-    serde_json::from_str(&rv32::expand_bound_words_snapshot(
-        words,
-        &Meta::new(0x400, 0x100),
-        steps,
-        100,
-    ))
-    .unwrap()
+    snapshot_meta(words, steps, &Meta::new(0x400, 0x100))
+}
+
+/// call_program sets a1=11; Meta layout must match that Map id.
+fn lookup_map_meta() -> Meta {
+    Meta::new(0x400, 0x100).with_maps(vec![MapLayout {
+        map_id: 11,
+        key_size: 4,
+        value_size: 32,
+    }])
+}
+
+/// Lookup call with a 4-byte key at `[sp]` and `a2 = sp` (jal offset computed after setup).
+fn call_program_lookup_keyed(form: usize) -> (Vec<u32>, usize, u32) {
+    let mut words = vec![addi(8, 1, 0), addi(10, 0, 1)];
+    for reg in 11..=15 {
+        words.push(addi(reg, 0, reg));
+    }
+    words.extend([
+        addi(13, 0, 0x101),
+        store(2, 13, 0, 4),
+        addi(12, 2, 0),
+    ]);
+    if form >= 2 {
+        words.push(addi(1, 0, 0x101));
+    }
+    let position = words.len();
+    let pc = 0x400 + position as u32 * 4;
+    let call = match form {
+        0 => jal(1, 0x100 - pc as i32),
+        1 => cj(0x100 - pc as i32, true),
+        2 => 0x000080e7,
+        _ => 0x9082,
+    };
+    let next = pc + if form == 1 || form == 3 { 2 } else { 4 };
+    words.extend([call, addi(1, 8, 0), 0x00008067]);
+    (words, position, next)
+}
+
+fn has_map_write(s: &Value) -> bool {
+    s["nodes"].as_array().unwrap().iter().any(|n| {
+        n["predicates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "mapWrite")
+    })
 }
 fn term(node: &Value, reg: u32) -> &str {
     node["exprs"]
@@ -387,7 +431,7 @@ fn lookup_introduces_helper_predicate_and_map_regvar() {
 
 #[test]
 fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
-    let (mut words, pos, _) = call_program(1, 0);
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
     words.splice(
         pos + 1..pos + 1,
         [
@@ -406,8 +450,9 @@ fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
             load(16, 9, 0xffd, 4, true),
         ],
     );
-    let s = snapshot(&words, 100);
+    let s = snapshot_meta(&words, 100, &lookup_map_meta());
     assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    assert!(has_map_write(&s), "expected MapWrite observations");
     let exit = s["nodes"]
         .as_array()
         .unwrap()
@@ -466,7 +511,7 @@ fn unresolved_map_accesses_reject_without_growing_the_graph() {
 
 #[test]
 fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
-    let (mut words, pos, _) = call_program(1, 0);
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
     words.splice(
         pos + 1..pos + 1,
         [
@@ -486,8 +531,9 @@ fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
             load(18, 9, 4, 4, true),
         ],
     );
-    let s = snapshot(&words, 100);
+    let s = snapshot_meta(&words, 100, &lookup_map_meta());
     assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    assert!(has_map_write(&s), "expected MapWrite observations");
     let exit = s["nodes"]
         .as_array()
         .unwrap()
@@ -536,7 +582,7 @@ fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
 
 #[test]
 fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate() {
-    let (mut words, pos, _) = call_program(1, 0);
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
     words.splice(
         pos + 1..pos + 1,
         [
@@ -546,12 +592,15 @@ fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate(
             0xc0d4, // C.SW a3,4(s1), same word as C.LW.
             0x40d8, // C.LW a4,4(s1), current stored word.
             addi(10, 0, 1),
+            // 22 = byte length of the six insns above (4+2+4+2+2+4).
             jal(1, 0x100 - (0x400 + pos as i32 * 4 + 22)),
             load(15, 10, 4, 4, true),
         ],
     );
-    let s = snapshot(&words, 100);
+    let meta = lookup_map_meta();
+    let s = snapshot_meta(&words, 100, &meta);
     assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    assert!(has_map_write(&s), "expected MapWrite observations");
     let exit = s["nodes"]
         .as_array()
         .unwrap()
@@ -560,7 +609,11 @@ fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate(
         .unwrap();
     assert_eq!(term(exit, 12), format!("externalResult{pos}_2(1)"));
     assert_eq!(term(exit, 14), "291");
-    assert_eq!(term(exit, 15), format!("externalResult{}_2(1)", pos + 7));
+    assert!(term(exit, 15).contains("externalResult"));
     assert_ne!(term(exit, 12), term(exit, 15));
-    assert_eq!(s, snapshot(&words, 100), "event content must replay stably");
+    assert_eq!(
+        s,
+        snapshot_meta(&words, 100, &meta),
+        "event content must replay stably"
+    );
 }

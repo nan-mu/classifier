@@ -130,11 +130,11 @@ Lean 的 `Cond` 以 `lhs`、`rel`、`rhs` 存储条件，载体取自 `lhs.width
 
 RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构造和 wire 能表示一个类，不表示该类全部机器生成条件已有实现或证明。
 
-- Helper 的调用身份和参数继续沿用既有 Helper 生成，Map helper 的 wire 参数仍为指针项而非数学冻结字节数组。该表示差异在 Map 写入来源检查中保留为缺口。
+- Helper 的调用身份和 ABI 前缀参数继续沿用既有生成；`externalResult` 仍使用 `[helperId, map, keyPtr]`。当 Meta `maps` 提供对应 `mapId` 的 `keySize`/`valueSize`，且键指针经栈上 `readStackBytes` 可读时，lookup 的 helper `args` 在 ABI 前缀后追加冻结键字节（`Term32`，常量 `< 256`）。无布局或读取失败时 `args` 仍仅为 ABI 前缀，不伪造键。
 - Branch 覆盖 `BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`、`C.BEQZ`、`C.BNEZ` 的每个保留方向；取同一执行前关系的两端 solve 后完整项，Taken 使用原关系，NotTaken 使用补关系。`position` 为运行时数组下标加一，原 Expr 比较约束继续保留；确定比较保留一侧时也生成该侧观察。
 - Return 在 `JALR x0,0(ra)` 或 `C.JR ra` 经已有绑定识别为外层 Exit 后，读取执行前关系中 `a0` 的完整 32 位项。程序内返回不生成 Return；完整项缺失拒绝。Exit 的写后完整项检查仍保留，两个时点与实际返回结果的一致性仍需证明。
 - PacketWrite 覆盖 Expr 实际选定为 Packet 的 `SB`、`SH`、`SW`、`C.SW`、`C.SWSP`。资源选择沿用 Stack、Map、Packet 的既有优先级；能取得包别名不改变已选定的 Stack 存储，正常对齐的 `C.SWSP` 通常走 Stack。选定 Packet 后取得 `PacketAccess` 的资源身份与偏移，并保存 Expr 字节拆分使用的同一完整源项，生成一个事件。绑定层以 `Option NodeId` 接收真实执行前节点引用；产品 `inferStep` 与 `rv32Snapshot` 传入来源节点身份，无身份时拒绝 `UndefinedSrc`。局部效果与观察一起组合，后续字节覆写保留旧事件。
-- MapWrite 的构造、解析、渲染与精确比较均支持，但产品 step 当前拒绝已识别的 Map 存储，报告 `UndefinedSrc`。`lookupAddress` 只携带 helper 事件、Map 参数与键指针，未保存完整冻结键；Meta 也没有键长和值布局。没有来源与布局前提时不能生成成功的 MapWrite 或只提交 Map Expr 写入。低层 Expr 的 Map 数值写入切片继续存在，其本身不构成产品 step 成功。
+- MapWrite 在 lookup 观察已带冻结键、Meta 布局匹配且元素内偏移加访问宽度不超过 `valueSize` 时，对 Expr 选定为 Map 的 `SB`/`SH`/`SW`/`C.SW` 发射一条观察（写入事件为当前节点身份，`map`/`key`/`offset`/`source` 取自 lookup 与执行前源寄存器）。缺冻结键、缺布局或越界时拒绝 `UndefinedSrc`；不得只提交 Map Expr 写入。低层 Expr 的 Map 数值切片仍可在观察拒绝前存在于 value step，但不构成产品成功。包侧键缓冲区冻结与 MW-O* 证明义务仍未关闭。
 
 Packet 与 Map 的源项载体宽度不决定窄存储宽度 \(q\)；wire 未添加 \(q\)、字节序或覆盖范围。写入事件与这些属性的关联、访问有效性、别名一致性、真实节点身份的动态区分、历史恢复以及名称外延性仍须依[各类数学义务](../Predicate/谓词定义.md#观察集合累积与可满足性)证明。EBPF 的现有有限 step 切片未接入这次 RV32IMC 的观察生成扩展，不能据 wire 的 64 位支持声称 eBPF 指令覆盖。
 

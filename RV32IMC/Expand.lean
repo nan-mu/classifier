@@ -10,7 +10,8 @@ import ClassifierExpr.Parse
 namespace RV32IMC
 open ClassifierExpr PathMerge
 
-/-! Symbolic indirect targets reject; Map writes require frozen key and layout provenance. -/
+/-! Symbolic indirect targets reject. Map writes need a prior lookup with frozen key bytes
+(Meta `maps` layout + stack `readStackBytes`) recorded on the helper Predicate. -/
 
 /-- Byte length, used to bind sequence indices to a contiguous instruction layout. -/
 def insnLength : Insn → Nat
@@ -97,14 +98,38 @@ private def valueRejection : Insn → RejectReason
   | .C_EBREAK _ => .unsupported
   | _ => .undefinedSrc
 
+/-- Recover map term + frozen key from Pg for the lookup that owns this Map address. -/
+private def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
+    (rs1 rs2 : regidx) (offset width : Nat) :
+    Option (Term × List Term × Nat × Term) := do
+  let (lookupEvent, elementOff, _) ← mapElementAccess Eg rs1 offset width
+  let source ← readReg Eg rs2
+  if source.width != .w32 then none
+  else
+    let p ← Pg.find? fun p => match p with
+      | .helper e .lookup _ => e == lookupEvent
+      | _ => false
+    let (map, frozen) ← lookupFrozenKey p
+    if frozen.isEmpty then none
+    else
+      let layout ← findMapLayout maps map
+      if frozen.length != layout.keySize || elementOff + width > layout.valueSize then none
+      else some (map, frozen, elementOff, solve source)
+
 /-- Each successful store delta touches one resource category, selected by the value step.
-Map effects lack frozen key bytes and layout; Packet observations require a dynamic event. -/
-private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet)
-    (rs1 rs2 : regidx) (offset width : Nat) (event : Option NodeId) : StepResult :=
+MapWrite needs frozen lookup keys + Meta layout; PacketWrite needs a dynamic event. -/
+private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet) (Pg : List Predicate)
+    (maps : List MapLayout) (rs1 rs2 : regidx) (offset width : Nat)
+    (event : Option NodeId) : StepResult :=
   match Ei.entries.head? with
   | some e =>
     match e.reg.kind with
-    | RegKind.map => .reject .undefinedSrc
+    | RegKind.map =>
+      match event, mapWriteObservation Eg Pg maps rs1 rs2 offset width, nextPosition I j with
+      | some event, some (map, key, o, source), some loc =>
+        .candidates [⟨.ok, loc, Ei, [.mapWrite event map key o source]⟩]
+      | _, _, none => .reject .unboundTarget
+      | _, _, _ => .reject .undefinedSrc
     | RegKind.packet =>
       match event, packetBinding Eg rs1 offset width, readReg Eg rs2, nextPosition I j with
       | some event, some access, some source, some loc =>
@@ -120,7 +145,7 @@ PC is derived solely for the value call. Without a dynamic event, resource write
 ordinary value, Branch, and Return callers need no event identity. -/
 def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
     (j : Nat) (σ : SemState) (boundCtx : Option Term := none)
-    (event : Option NodeId := none) : StepResult :=
+    (event : Option NodeId := none) (maps : List MapLayout := []) : StepResult :=
   match I[j]? with
   | none => .reject .unboundTarget
   | some i =>
@@ -206,18 +231,18 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
                       [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
                 | _, _ => .reject .unboundTarget
           | .STORE (imm, rs2, rs1, width) =>
-            emitStore I j Eg Ei rs1 rs2 (immI32 imm) width event
+            emitStore I j Eg Ei σ.predicates maps rs1 rs2 (immI32 imm) width event
           | .C_SW (imm, rs1, rs2) =>
-            emitStore I j Eg Ei (creg2reg_idx rs1) (creg2reg_idx rs2)
+            emitStore I j Eg Ei σ.predicates maps (creg2reg_idx rs1) (creg2reg_idx rs2)
               (imm.toNat <<< 2) 4 event
           | .C_SWSP (imm, rs2) =>
-            emitStore I j Eg Ei sp rs2 (imm.toNat <<< 2) 4 event
+            emitStore I j Eg Ei σ.predicates maps sp rs2 (imm.toNat <<< 2) 4 event
           | _ => emit .ok (nextPosition I j) Ei
 
 /-- Unbound adapter: sequential effects and relative RV32 direct targets work;
 PC-dependent effects and indirect targets require rv32StepBound's static bindings. -/
 def rv32Step (I : Array Insn) (j : Nat) (σ : SemState) : StepResult :=
-  rv32StepBound I none none j σ
+  rv32StepBound I none none j σ none none []
 
 /-- The root is the actual pre-instruction wrapper entry state. -/
 def rv32Init (I : Array Insn) (p : EntryParams) (j0 budget : Nat) :
@@ -830,6 +855,7 @@ structure StepContext where
   returnAddress : Option Nat := none
   helperAddress : Option Nat := none
   boundContext : Option Term := none
+  maps : List MapLayout := []
   deriving Inhabited, Repr
 
 /-- One ISA step: inspect the instruction, generate its observations, then its local values.
@@ -837,7 +863,7 @@ Static bindings stay outside SemState; event identifies this dynamic source node
 def inferStep (I : Array Insn) (context : StepContext)
     (event : NodeId) (j : Nat) (σ : SemState) : StepResult :=
   let fallback := rv32StepBound I context.imageBase context.returnAddress j σ
-    context.boundContext (some event)
+    context.boundContext (some event) context.maps
   match I[j]?, (programOffsets I)[j]?, context.imageBase, context.helperAddress with
   | some i, some offset, some base, some helper =>
     if helperTarget i (base + offset) σ.exprs != some helper then fallback
@@ -846,7 +872,8 @@ def inferStep (I : Array Insn) (context : StepContext)
       | none => .reject .unboundTarget
       | some loc =>
         let Eg := σ.exprs.insertEq (Reg.real32 32) (Term.C32 (base + offset))
-        match RV32IMC.step Eg i context.boundContext, helperPredicate event σ.exprs with
+        match RV32IMC.step Eg i context.boundContext,
+            helperPredicate event σ.exprs context.maps with
         | some link, .ok predicate =>
           match helperExpr predicate with
           | .error reason => .reject reason
@@ -920,7 +947,7 @@ private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
   return results.all fun result =>
     match result with | .reject .undefinedSrc => true | _ => false
 
-/-- Local Map value effects exist, but product success requires unavailable observation inputs. -/
+/-- Without frozen keys / Meta layout, Map stores still reject after local Expr succeeds. -/
 private def mapStoreObservationGapCheck : Bool :=
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
@@ -936,6 +963,38 @@ private def mapStoreObservationGapCheck : Bool :=
       | .reject .undefinedSrc => true
       | _ => false
 
+/-- Frozen lookup key + Meta layout authorize MapWrite on SB/SH/SW (and keep prior observations). -/
+private def mapStoreObservationsCheck : Bool := Id.run do
+  let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
+  let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
+  let lookup : Predicate := .helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)
+  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+    |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd)
+    |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
+  let maps : List MapLayout := [{ mapId := 42, keySize := 4, valueSize := 16 }]
+  let ctx : StepContext := { maps }
+  let stores : List (Insn × Nat) := [
+    (.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 1), 1),
+    (.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 2), 2),
+    (.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4), 4),
+    (.C_SW (0#5, .Cregidx 0#3, .Cregidx 3#3), 4)]
+  for (i, width) in stores do
+    let I := #[i, decodeInsnWord 0x0001]
+    let .candidates [c] := inferStep I ctx 77 0 ⟨E, [lookup]⟩ | return false
+    let want := .mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)
+    if c.P_k != [want] || c.loc != .pos 1 then return false
+    let .ok child := PathMerge.applyLocal ⟨E, [lookup]⟩ c.E_k c.P_k | return false
+    if !child.predicates.contains lookup || !child.predicates.contains want then return false
+    if width == 0 then return false
+  let .candidates [again] := inferStep #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4),
+      decodeInsnWord 0x0001] ctx 78 0
+      ⟨E, [lookup, .mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)]⟩ | return false
+  let .ok kept := PathMerge.applyLocal
+      ⟨E, [lookup, .mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)]⟩
+      again.E_k again.P_k | return false
+  return kept.predicates.contains (.mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)) &&
+    kept.predicates.contains (.mapWrite 78 (Term.C32 42) key 0 (Term.C32 0xaabbccdd))
+
 /-- The skipped sequential instruction makes source node identity differ from instruction index. -/
 private def packetSnapshotEventCheck : Bool :=
   let I := #[Insn.LOAD (0#12, .Regidx 10#5, .Regidx 12#5, true, 4),
@@ -950,6 +1009,7 @@ private def packetSnapshotEventCheck : Bool :=
 #guard packetStoreObservationsCheck
 #guard packetStoreRejectsMissingInputsCheck
 #guard mapStoreObservationGapCheck
+#guard mapStoreObservationsCheck
 #guard packetSnapshotEventCheck
 
 /-- Static program bindings outside SemState / Predicate.
@@ -959,18 +1019,31 @@ structure Meta where
   base : UInt32
   helperAddress : UInt32
   returnAddress : UInt32 := 0x2000
+  maps : List MapLayout := []
   deriving Inhabited, Repr
 
 private def parseMetaU32 (j : Lean.Json) (key : String) : Option UInt32 := do
   let n ← (j.getObjVal? key >>= Lean.Json.getNat?).toOption
   if n ≥ (1 <<< 32) then none else some n.toUInt32
 
+private def parseMapLayout (value : Lean.Json) : Option MapLayout := do
+  let mapId ← (value.getObjVal? "mapId" >>= Lean.Json.getNat?).toOption
+  let keySize ← (value.getObjVal? "keySize" >>= Lean.Json.getNat?).toOption
+  let valueSize ← (value.getObjVal? "valueSize" >>= Lean.Json.getNat?).toOption
+  if keySize > 64 || valueSize == 0 || valueSize > 4096 then none
+  else some { mapId, keySize, valueSize }
+
 private def parseMetaJson (s : String) : Option Meta := do
   let j ← (Lean.Json.parse s).toOption
   let base ← parseMetaU32 j "base"
   let helperAddress ← parseMetaU32 j "helperAddress"
   let returnAddress := (parseMetaU32 j "returnAddress").getD 0x2000
-  some { base, helperAddress, returnAddress }
+  let maps ← match j.getObjVal? "maps" with
+    | .error _ => some []
+    | .ok arr => do
+      let rows ← arr.getArr?.toOption
+      rows.toList.mapM parseMapLayout
+  some { base, helperAddress, returnAddress, maps }
 
 private def boundProgram (insns : Array UInt32) (m : Meta) :
     Except RejectReason (Array Insn × EntryParams × StepContext) :=
@@ -980,7 +1053,13 @@ private def boundProgram (insns : Array UInt32) (m : Meta) :
   let ret := m.returnAddress.toNat
   let extent := I.foldl (fun n i => n + insnLength i) 0
   let p := { smokeEntryParams with tEntry := Term.C32 b, tReturn := Term.C32 ret }
-  let context : StepContext := ⟨some b, some ret, some h, some p.tCtx⟩
+  let context : StepContext := {
+    imageBase := some b
+    returnAddress := some ret
+    helperAddress := some h
+    boundContext := some p.tCtx
+    maps := m.maps
+  }
   if I.isEmpty || b == 0 || b % 4 != 0 || h == 0 || h % 4 != 0 ||
       ret == 0 || ret % 4 != 0 ||
       b + extent > (1 <<< 32) || h == ret ||

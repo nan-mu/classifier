@@ -5,6 +5,13 @@ import PathMerge.Path
 namespace RV32IMC
 open ClassifierExpr PathMerge
 
+/-- Static Map object layout from Meta JSON; keyed by the concrete Map parameter id. -/
+structure MapLayout where
+  mapId : Nat
+  keySize : Nat
+  valueSize : Nat
+  deriving Repr, Inhabited, BEq
+
 structure HelperCall where
   kind : HelperKind
   id : Nat
@@ -36,19 +43,61 @@ def parseHelperCall (Eg : ExprSet) : Except RejectReason HelperCall := do
     args := args ++ [solve t]
   pure ⟨kind, id, args⟩
 
-/-- Capture the dispatcher type and its required arguments before the call writes a0. -/
-def helperPredicate (event : NodeId) (Eg : ExprSet) : Except RejectReason Predicate := do
-  let call ← parseHelperCall Eg
-  pure (.helper event call.kind call.args)
+def findMapLayout (maps : List MapLayout) (mapTerm : Term) : Option MapLayout :=
+  match eval (solve mapTerm) with
+  | some id => maps.find? (fun m => m.mapId == id)
+  | none => none
 
+/-- Byte-valued frozen key/value tail after the ABI prefix. -/
+private def frozenTailOk (tail : List Term) : Bool :=
+  tail.all fun t =>
+    t.width == .w32 &&
+      match t with
+      | .const _ c => c < 256
+      | _ => true
+
+/-- Append frozen key bytes when Meta layout and stack provenance allow; otherwise keep ABI args. -/
+private def freezeLookupArgs (Eg : ExprSet) (maps : List MapLayout) (args : List Term) :
+    List Term :=
+  match args with
+  | [map, keyPtr] =>
+    match findMapLayout maps map with
+    | some layout =>
+      match readStackBytes Eg keyPtr layout.keySize with
+      | some bytes =>
+        if bytes.length == layout.keySize && frozenTailOk bytes then args ++ bytes else args
+      | none => args
+    | none => args
+  | _ => args
+
+/-- Capture the dispatcher type and ABI args; lookup may append frozen key bytes from Meta. -/
+def helperPredicate (event : NodeId) (Eg : ExprSet) (maps : List MapLayout := []) :
+    Except RejectReason Predicate := do
+  let call ← parseHelperCall Eg
+  let args := match call.kind with
+    | .lookup => freezeLookupArgs Eg maps call.args
+    | _ => call.args
+  pure (.helper event call.kind args)
+
+/-- Prefix ABI args drive externalResult; optional frozen tail is ignored here. -/
 private def helperCallOfPredicate (p : Predicate) : Except RejectReason (NodeId × HelperCall) := do
   let .helper event kind args := p | throw .unsupported
   if kind.id ≥ (1 <<< 32) || helperKind kind.id != kind then throw .unsupported
-  if args.length != helperArity kind || args.any (fun t => t.width != .w32) then
-    throw .undefinedSrc
-  pure (event, ⟨kind, kind.id, args⟩)
+  let arity := helperArity kind
+  if args.length < arity then throw .undefinedSrc
+  let abi := args.take arity
+  let tail := args.drop arity
+  if abi.any (fun t => t.width != .w32) || !frozenTailOk tail then throw .undefinedSrc
+  pure (event, ⟨kind, kind.id, abi⟩)
 
-/-- The return item is determined by the call's identity and arguments. -/
+/-- Map term and frozen key bytes from a lookup observation (empty key ⇒ not frozen). -/
+def lookupFrozenKey (p : Predicate) : Option (Term × List Term) :=
+  match p with
+  | .helper _ .lookup (map :: _keyPtr :: frozen) => some (map, frozen)
+  | .helper _ .lookup _ => none
+  | _ => none
+
+/-- The return item is determined by the call's identity and ABI arguments. -/
 private def callReturnTerm (p : Predicate) : Except RejectReason Term := do
   let (event, call) ← helperCallOfPredicate p
   let external := star .w32 (.externalResult event 0) (Term.C32 call.id :: call.args)

@@ -231,6 +231,15 @@ pub mod rv32 {
         s
     }
 
+    /// Static Map layout for lookup key freeze / MapWrite bounds (Lean `MapLayout`).
+    #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MapLayout {
+        pub map_id: u32,
+        pub key_size: u32,
+        pub value_size: u32,
+    }
+
     /// Static program bindings outside SemState / Predicate.
     /// Extend fields here; create/step FFI takes one Meta JSON blob.
     #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -242,6 +251,9 @@ pub mod rv32 {
         /// Synthetic wrapper return; default `0x2000`.
         #[serde(default = "Meta::default_return_address")]
         pub return_address: u32,
+        /// Optional Map layouts; empty keeps MapWrite rejected (no frozen keys).
+        #[serde(default)]
+        pub maps: Vec<MapLayout>,
         /// Forward-compatible bag for future bindings.
         #[serde(flatten)]
         pub extra: serde_json::Map<String, serde_json::Value>,
@@ -257,8 +269,14 @@ pub mod rv32 {
                 base,
                 helper_address,
                 return_address: Self::default_return_address(),
+                maps: Vec::new(),
                 extra: serde_json::Map::new(),
             }
+        }
+
+        pub fn with_maps(mut self, maps: Vec<MapLayout>) -> Self {
+            self.maps = maps;
+            self
         }
 
         pub fn to_json(&self) -> String {

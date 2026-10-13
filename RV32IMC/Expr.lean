@@ -411,8 +411,53 @@ def exprSizedLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
   let effect ← exprSizedLOADEffects Eg rs1 rd offset width isUnsigned boundCtx
   some effect.updates
 
+/-- Stack word and byte-within-word for an SP-affine address term plus byte offset. -/
+def stackSlotFromAddr (Eg : ExprSet) (addr : Term) (byteOffset : Nat) : Option (Reg × Nat) := do
+  let tsp ← readReg Eg sp
+  let (root, off) ← affineAddress (solve addr)
+  let (spRoot, _) ← affineAddress tsp
+  if root != spRoot then none
+  else
+    let address := MNat 32 (off + byteOffset)
+    let within := address % 4
+    let wordAddr := address - within
+    if root.isNone && wordAddr % 4 != 0 then none
+    else
+      let tag := match root with | none => 0 | some ξ => ξ + 1
+      let slot := Reg.sw ((1 <<< 32) + tag * (1 <<< 32) + wordAddr)
+      if (Eg.lookupEq slot).isNone then none
+      else some (slot, within)
+
+/-- Freeze `n` little-endian stack bytes at `addr`. Packet keys are out of scope here. -/
+def readStackBytes (Eg : ExprSet) (addr : Term) (n : Nat) : Option (List Term) := Id.run do
+  if !guardEg Eg then return none
+  if n == 0 then return some []
+  let mut out : List Term := []
+  for j in [:n] do
+    match stackSlotFromAddr Eg addr j with
+    | none => return none
+    | some (slot, within) =>
+      match Eg.lookupEq slot with
+      | some old =>
+        if old.width != .w32 then return none
+        let field := star .w32 (.extract (8 * within) 8 32) [old]
+        let byte := match eval (solve field) with
+          | some c => Term.C32 (c % 256)
+          | none => solve field
+        out := out ++ [byte]
+      | none => return none
+  return some out
+
+/-- Lookup event, element-internal byte offset, and the Map cell for a sized store/load. -/
+def mapElementAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) :
+    Option (NodeId × Nat × CellAccess) := do
+  let (access, _) ← mapAccessInputs Eg rs1 offset width false
+  let source ← readReg Eg rs1
+  let (event, displacement) ← lookupAddress (solve source)
+  some (event, MNat 32 (displacement + offset), access)
+
 /-- Local value effects alone do not authorize a resource observation. Map resolution
-retains lookup identity and a key pointer, but supplies no frozen key bytes or layout. -/
+retains lookup identity; frozen key bytes are Predicate-owned when Meta supplies layout. -/
 def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
     : Option ExprEffect := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
