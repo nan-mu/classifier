@@ -200,17 +200,16 @@ mod stateless_head_ffi {
         let root: Value =
             serde_json::from_str(&rv32::expand_create(&Meta::new(0x400, 0x100))).unwrap();
         let node = &root["nodes"][0];
-        // Predicate wire is Helper-only until Branch/Return land in Lean.
-        let preds = json!([]);
-        let result = step(&words, 0, &node["exprs"].to_string(), &preds.to_string());
+        let empty = json!([]);
+        let result = step(&words, 0, &node["exprs"].to_string(), &empty.to_string());
         assert_eq!(result["status"], "ok");
         assert_eq!(result["reason"], Value::Null);
         assert!(result.get("fuel").is_none());
         let successors = result["successors"].as_array().unwrap();
         assert_eq!(successors.len(), 2);
-        for (successor, dir, rel) in [
-            (&successors[0], "Taken", "ne"),
-            (&successors[1], "NotTaken", "eq"),
+        for (successor, dir, rel, branch_dir) in [
+            (&successors[0], "Taken", "ne", "taken"),
+            (&successors[1], "NotTaken", "eq", "notTaken"),
         ] {
             assert_eq!(successor["dir"], dir);
             assert_eq!(successor["loc"], "1");
@@ -223,13 +222,17 @@ mod stateless_head_ffi {
                 exprs.iter().filter(|e| e["role"] != "constraint").count(),
                 node["exprs"].as_array().unwrap().len()
             );
-            assert_eq!(successor["predicates"], preds);
+            let preds = successor["predicates"].as_array().unwrap();
+            assert_eq!(preds.len(), 1);
+            assert_eq!(preds[0]["kind"], "branch");
+            assert_eq!(preds[0]["dir"], branch_dir);
+            assert_eq!(preds[0]["position"], 1);
             let saved = successor.clone();
             let assigned = step(
                 &words,
                 1,
                 &successor["exprs"].to_string(),
-                &preds.to_string(),
+                &successor["predicates"].to_string(),
             );
             let after = &assigned["successors"][0];
             assert!(after["exprs"]
@@ -237,11 +240,12 @@ mod stateless_head_ffi {
                 .unwrap()
                 .iter()
                 .all(|e| e["role"] != "constraint" || e["reg"] != "real32:10"));
-            assert_eq!(after["predicates"], preds);
+            // ADDI keeps prior Branch observation via mergePredicate.
+            assert_eq!(after["predicates"], successor["predicates"]);
             assert_eq!(*successor, saved);
         }
         assert_eq!(
-            step(&words, 0, &node["exprs"].to_string(), &preds.to_string()),
+            step(&words, 0, &node["exprs"].to_string(), &empty.to_string()),
             result
         );
     }

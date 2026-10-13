@@ -56,7 +56,8 @@ impl Session {
         let insns = rv32_image::words(&image);
         let expand = ExpandSession::create(
             &insns,
-            rv32::Meta::new(program.base_address, program.helper_address),
+            rv32::Meta::new(program.base_address, program.helper_address)
+                .with_maps(program.maps.clone()),
             budget,
         );
         let mut session = Self {
@@ -706,10 +707,11 @@ mod tests {
         assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
         assert_eq!(snap.failed, None, "no instruction rejects");
         assert_eq!(snap.fuel, 0);
-        // Exact-config merge reuses Taken suffixes; counts are below the pre-merge Agenda.
-        assert_eq!(snap.nodes.len(), 542);
-        assert_eq!(snap.edges.iter().filter(|e| e.dir != "reuse").count(), 541);
-        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 26);
+        // Frozen lookup keys + dual SW mapWrite (*value += 1) expand the DAG past the
+        // pre-freeze counts; exact-config reuse stays rare while keys stay symbolic.
+        assert_eq!(snap.nodes.len(), 549);
+        assert_eq!(snap.edges.iter().filter(|e| e.dir != "reuse").count(), 548);
+        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 17);
         assert!(!snap.work.is_empty());
         assert_eq!(snap.work.first(), Some(&snap.focus));
         assert!(snap.edges.iter().all(|e| !snap.work.contains(&e.src)));
@@ -717,6 +719,16 @@ mod tests {
             .predicates
             .iter()
             .any(|p| p.kind == "helper" && p.get_u64("helperId") == Some(1))));
+        assert!(
+            snap.nodes.iter().any(|n| n.predicates.iter().any(|p| p.kind == "branch")),
+            "just_tx has BLTU/BEQ/BNE forks that must emit Branch"
+        );
+        assert!(
+            snap.nodes
+                .iter()
+                .any(|n| n.predicates.iter().any(|p| p.kind == "mapWrite")),
+            "just_tx *value += 1 must emit MapWrite once ELF maps reach Meta"
+        );
         assert!(
             snap.nodes.iter().any(|n| {
                 n.exprs.iter().any(|e| e.reg.starts_with("map32:"))
@@ -738,11 +750,11 @@ mod tests {
         assert_eq!(snap.status, "complete");
         assert_eq!(snap.reason, None);
         assert_eq!(snap.failed, None);
-        assert_eq!(snap.fuel, 455, "569 expansions finish the fixture under merge reuse");
+        assert_eq!(snap.fuel, 187, "837 expansions finish just_tx with mapWrite/packetWrite");
         assert!(snap.work.is_empty());
-        assert_eq!(snap.nodes.len(), 601);
-        assert_eq!(snap.edges.len(), 601);
-        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 30);
+        assert_eq!(snap.nodes.len(), 882);
+        assert_eq!(snap.edges.len(), 881);
+        assert_eq!(snap.nodes.iter().filter(|n| n.loc == "exit").count(), 45);
         assert_eq!(
             snap.nodes
                 .iter()
@@ -750,13 +762,28 @@ mod tests {
                     && n.exprs.iter().any(|e| e.reg.starts_with("map32:")
                         && e.term.starts_with("add32(externalResult")))
                 .count(),
-            14,
+            21,
             "lookup update paths must reach Exit"
         );
         assert!(
-            snap.edges.iter().any(|e| e.dir == "reuse"),
-            "exact-config merge must record at least one reuse edge"
+            snap.nodes
+                .iter()
+                .flat_map(|n| &n.predicates)
+                .filter(|p| p.kind == "mapWrite")
+                .count()
+                >= 2,
+            "u64 *value += 1 is two SW MapWrites (lo then hi with carry)"
         );
+        assert!(snap
+            .nodes
+            .iter()
+            .flat_map(|n| &n.predicates)
+            .any(|p| p.kind == "packetWrite"));
+        assert!(snap
+            .nodes
+            .iter()
+            .flat_map(|n| &n.predicates)
+            .any(|p| p.kind == "ret"));
     }
 
     #[test]

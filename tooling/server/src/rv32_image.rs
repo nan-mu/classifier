@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use std::str::FromStr;
 
+use lean_binding::rv32::MapLayout;
 use riscv_isa::{decode_le_bytes, Instruction, Target};
 
 /// Default XDP fixture used when the client omits an uploaded image.
@@ -17,6 +18,8 @@ pub const FIREWALL_ELF: &[u8] = include_bytes!("../../fixtures/xdp.elf");
 #[cfg(test)]
 const RAW_REGRESSION: &[u8] = include_bytes!("../../fixtures/esp32c3.bin");
 const WRAPPER_RETURN: u32 = 0x2000;
+/// Compact ELF ARRAY maps omit key layout; BPF array index is always 4 bytes.
+const ARRAY_KEY_BYTES: u32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct DecodedInsn {
@@ -36,6 +39,8 @@ pub struct Rv32Program {
     pub image: InsnImage,
     pub base_address: u32,
     pub helper_address: u32,
+    /// Map VMA + key/value sizes for Lean Meta (`mapId` = AOT map address).
+    pub maps: Vec<MapLayout>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,6 +50,42 @@ pub enum ImageError {
     InvalidRange,
     BindingCollision,
     EmptyCode,
+}
+
+/// Wire layout descriptors are field widths in **bits** (xpost Compact ELF V0).
+fn layout_byte_size(layout: &[u8]) -> Option<u32> {
+    let mut bits: u32 = 0;
+    for &w in layout {
+        if w == 0 {
+            return None;
+        }
+        bits = bits.checked_add(u32::from(w))?;
+    }
+    if bits % 8 != 0 {
+        return None;
+    }
+    Some(bits / 8)
+}
+
+fn maps_from_parsed(parsed: &xpost_elf::ParsedContainer) -> Result<Vec<MapLayout>, ImageError> {
+    let mut out = Vec::with_capacity(parsed.maps.len());
+    for m in &parsed.maps {
+        let value_size = layout_byte_size(m.value.as_ref().map(|v| v.as_slice()).unwrap_or(&[]))
+            .filter(|&n| n > 0)
+            .ok_or(ImageError::InvalidContainer)?;
+        let key_size = match m.key.as_ref() {
+            None => ARRAY_KEY_BYTES, // BPF_MAP_TYPE_ARRAY implicit u32 index
+            Some(k) => layout_byte_size(k.as_slice())
+                .filter(|&n| n > 0)
+                .ok_or(ImageError::InvalidContainer)?,
+        };
+        out.push(MapLayout {
+            map_id: m.vma,
+            key_size,
+            value_size,
+        });
+    }
+    Ok(out)
 }
 
 pub fn parse_xdp_elf(bytes: &[u8]) -> Result<Rv32Program, ImageError> {
@@ -81,10 +122,12 @@ pub fn parse_xdp_elf(bytes: &[u8]) -> Result<Rv32Program, ImageError> {
     {
         return Err(ImageError::InvalidRange);
     }
+    let maps = maps_from_parsed(&parsed)?;
     Ok(Rv32Program {
         image,
         base_address: base,
         helper_address: helper,
+        maps,
     })
 }
 
@@ -257,6 +300,15 @@ mod tests {
         assert_eq!(program.helper_address, 0x40380000);
         assert_eq!(program.image.insns.len(), 79);
         assert!(program.image.insns[0].text.contains("ADDI"));
+        // just_tx.c rxcnt: ARRAY key u32, value u64 at AOT 0x403802e8.
+        assert_eq!(
+            program.maps,
+            vec![MapLayout {
+                map_id: 0x4038_02e8,
+                key_size: 4,
+                value_size: 8,
+            }]
+        );
         let firewall = parse_xdp_elf(FIREWALL_ELF).expect("firewall compact ELF");
         assert_eq!(firewall.base_address, 0x40380200);
         assert_eq!(firewall.helper_address, 0x40380000);

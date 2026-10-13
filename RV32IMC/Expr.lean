@@ -207,10 +207,13 @@ private def ctxBaseAlpha (Eg : ExprSet) : Option Nat := Id.run do
   pure base
 
 /-- Stack slots use alphas ≥ 2^32; context bindings occupy the lower namespace.
-Normalize only affine 32-bit addresses, without changing symbolic value terms. -/
+Normalize only affine 32-bit addresses, without changing symbolic value terms.
+`id` wraps a copied term (`C.MV`, eBPF copy) but denotes the identity on values
+(`ID_w a = a`), so peel it before classifying the shape, as `lookupAddress` does. -/
 private def affineAddress : Term → Option (Option Nat × Nat)
   | .const .w32 c => some (none, MNat 32 c)
   | .var .w32 ξ => some (some ξ, 0)
+  | .app .w32 (.id .w32) [a] => affineAddress a
   | .app .w32 (.add .w32) [a, .const .w32 b] => do
       let (root, off) ← affineAddress a
       some (root, MNat 32 (off + b))
@@ -222,6 +225,10 @@ private def affineAddress : Term → Option (Option Nat × Nat)
       some (root, MNat 32 (off + (1 <<< 32) - MNat 32 b))
   | _ => none
 
+#guard affineAddress (.app .w32 (.id .w32)
+  [.app .w32 (.add .w32) [Term.V32 0, Term.C32 0xfffffff0]]) == some (some 0, 0xfffffff0)
+#guard affineAddress (.app .w32 (.add .w32)
+  [.app .w32 (.id .w32) [Term.V32 4], Term.C32 2]) == some (some 4, 2)
 #guard affineAddress (.app .w32 (.add .w32) [Term.V32 4, Term.C32 14]) ==
   some (some 4, 14)
 #guard affineAddress (.app .w32 (.add .w32) [Term.C32 14, Term.V32 4]) ==
@@ -447,6 +454,18 @@ def readStackBytes (Eg : ExprSet) (addr : Term) (n : Nat) : Option (List Term) :
         out := out ++ [byte]
       | none => return none
   return some out
+
+-- A copied SP alias keeps the identity wrapper (`ID_32(add32(sp,-16))`); freezing
+-- key bytes still resolves the same stack word, as the just_tx lookup key requires.
+#guard
+  (let spTerm : Term := Term.V32 0
+   let slot := Reg.sw ((1 <<< 32) + (1 <<< 32) + M 32 (-16))
+   let E := ExprSet.empty
+     |>.insertEq (Reg.real32 2) spTerm
+     |>.insertEq slot (Term.C32 0x01020304)
+   let addr : Term := .app .w32 (.id .w32)
+     [.app .w32 (.add .w32) [spTerm, Term.C32 (M 32 (-16))]]
+   readStackBytes E addr 4 == some [Term.C32 4, Term.C32 3, Term.C32 2, Term.C32 1])
 
 /-- Lookup event, element-internal byte offset, and the Map cell for a sized store/load. -/
 def mapElementAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) :
