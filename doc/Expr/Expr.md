@@ -319,7 +319,7 @@ E_g'=\overline E_g\times E_i.
 
 后继位置不作为额外语义状态。若某实例明确产生 PC 等式，就按实际局部关系分类。Map 元素内写入与包写入的观察由各类谓词维护；栈访问及其余资源访问的观察形式仍须规定。数值传值公式不能代替这些观察。
 
-未选取观察的算术赋值、普通传值及未被识别为最外层正常返回的无条件跳转可以取 \(P_i=\varnothing\)。空局部观察仅表示所用规则未增加观察。它不证明没有副作用。它不证明访问或调用满足全部有效性条件。局部观察集合的元素域为[五类谓词域](../Predicate/谓词定义.md#类型与结构相等)，构造分别见[Helper谓词](../Predicate/Helper谓词.md#生成条件)、[Branch谓词](../Predicate/Branch谓词.md#生成条件)、[Return谓词](../Predicate/Return谓词.md#生成条件)、[MapWrite谓词](../Predicate/MapWrite谓词.md#生成条件)与[PacketWrite谓词](../Predicate/PacketWrite谓词.md#生成条件)。Branch、Return、MapWrite、PacketWrite 及混合观察集合接入 step 的累积规则见[观察累积义务](../Predicate/谓词定义.md#观察集合累积与可满足性)。已绑定 helper 的值关系见[Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)。
+未选取观察的算术赋值、普通传值及未被识别为最外层正常返回的无条件跳转可以取 \(P_i=\varnothing\)。空局部观察仅表示所用规则未增加观察。它不证明没有副作用。它不证明访问或调用满足全部有效性条件。局部观察集合的元素域为[五类谓词域](../Predicate/谓词定义.md#类型与结构相等)，构造分别见[Helper谓词](../Predicate/Helper谓词.md#生成条件)、[Branch谓词](../Predicate/Branch谓词.md#生成条件)、[Return谓词](../Predicate/Return谓词.md#生成条件)、[MapWrite谓词](../Predicate/MapWrite谓词.md#生成条件)与[PacketWrite谓词](../Predicate/PacketWrite谓词.md#生成条件)。混合观察接入 step 的规则见[结构累积及解释义务](../Predicate/谓词定义.md#观察集合累积与可满足性)。已绑定 helper 的值关系见[Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)。
 
 ### 部分值函数与符号提升
 

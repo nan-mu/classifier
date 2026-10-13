@@ -1,47 +1,61 @@
 import { useRef } from "react";
-import { layoutGraph, type NodePosition } from "./layout";
+import { layoutStreaming, type NodePosition } from "./layout";
+import { layoutFinal } from "./layoutFinal";
 import type { GraphEdge, GraphNode } from "./types";
 
 const EMPTY_NODES: GraphNode[] = [];
 const EMPTY_EDGES: GraphEdge[] = [];
 
 export type ForcePosition = NodePosition;
+export type LayoutMode = "fast" | "final";
 
 /**
- * Layered positions. Existing node ids keep their coordinates across graph growth
- * so streaming expand does not reshuffle the whole canvas; only new ids are placed.
- * Pass a new `resetKey` (e.g. session id) to drop the cache.
+ * - `fast`: cheap incremental placement while expanding (no full re-layout).
+ * - `final`: d3-dag on the folded display graph after run completes.
  */
 export function useForceLayout(
-  nodes: GraphNode[] | undefined,
-  edges: GraphEdge[] | undefined,
+  displayNodes: GraphNode[] | undefined,
+  displayEdges: GraphEdge[] | undefined,
   resetKey = "",
+  mode: LayoutMode = "fast",
+  _spacers?: { nodes: GraphNode[]; edges: GraphEdge[] },
 ): Record<string, ForcePosition> {
-  const graphNodes = nodes ?? EMPTY_NODES;
-  const graphEdges = edges ?? EMPTY_EDGES;
+  const shownNodes = displayNodes ?? EMPTY_NODES;
+  const shownEdges = displayEdges ?? EMPTY_EDGES;
+
   const prevRef = useRef<Record<string, ForcePosition>>({});
   const keyRef = useRef("");
   const resetRef = useRef(resetKey);
+  const modeRef = useRef(mode);
 
   if (resetKey !== resetRef.current) {
     resetRef.current = resetKey;
     prevRef.current = {};
     keyRef.current = "";
+    modeRef.current = mode;
   }
 
-  const key = `${graphNodes.map((n) => n.id).join(",")}|${graphEdges
-    .map((e) => `${e.from}->${e.to}`)
-    .join(",")}`;
+  const key = [
+    mode,
+    shownNodes.map((n) => n.id).join(","),
+    shownEdges.map((e) => `${e.from}->${e.to}:${e.dir}`).join(","),
+  ].join("|");
 
   if (key !== keyRef.current) {
     keyRef.current = key;
-    const fresh = layoutGraph(graphNodes, graphEdges);
-    const merged: Record<string, ForcePosition> = {};
-    for (const node of graphNodes) {
-      const id = String(node.id);
-      merged[id] = prevRef.current[id] ?? fresh[id] ?? { x: 0, y: 0 };
+    if (mode === "final") {
+      // First final pass: full DAG. Later focus/fold changes must not yank
+      // every node — only place ids that are still missing.
+      if (Object.keys(prevRef.current).length === 0) {
+        prevRef.current = layoutFinal(shownNodes, shownEdges);
+      } else {
+        prevRef.current = layoutStreaming(shownNodes, shownEdges, prevRef.current);
+      }
+    } else {
+      // Keep prior coords across waves; only place newcomers.
+      prevRef.current = layoutStreaming(shownNodes, shownEdges, prevRef.current);
     }
-    prevRef.current = merged;
+    modeRef.current = mode;
   }
 
   return prevRef.current;

@@ -411,6 +411,8 @@ def exprSizedLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
   let effect ← exprSizedLOADEffects Eg rs1 rd offset width isUnsigned boundCtx
   some effect.updates
 
+/-- Local value effects alone do not authorize a resource observation. Map resolution
+retains lookup identity and a key pointer, but supplies no frozen key bytes or layout. -/
 def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
     : Option ExprEffect := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none

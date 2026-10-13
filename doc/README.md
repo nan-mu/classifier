@@ -9,7 +9,7 @@ create、step、history、merge 与合并步使用数学契约；create 的入�
 1. [位向量](Expr/Term/位向量.md)与[共同数值函数](Expr/Term/数值函数.md)：Expr 右值使用的数值记号与纯数值函数。
 2. [寄存器定义](寄存器定义.md)：四类对象的身份、位宽、值域与相等，只维护定义。
 3. 表达式主题见 [Expr 索引](Expr/Expr.md#索引)。
-4. 谓词与观察集合主题依次读[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)、[Helper 共同定义](Predicate/Helper谓词.md)、[MapLookup谓词](Predicate/MapLookup谓词.md)、[MapUpdate谓词](Predicate/MapUpdate谓词.md)、[MapDelete谓词](Predicate/MapDelete谓词.md)、[OtherHelper谓词](Predicate/OtherHelper谓词.md)、[Branch谓词](Predicate/Branch谓词.md)、[Return谓词](Predicate/Return谓词.md)、[MapWrite谓词](Predicate/MapWrite谓词.md)、[PacketWrite谓词](Predicate/PacketWrite谓词.md)、[Helper 累积与五类观察累积义务](Predicate/谓词定义.md#观察集合累积与可满足性)、[观察集合与历史顺序](Predicate/谓词定义.md#观察集合与历史顺序)。固定程序的观察域为 \(\mathrm{Predicate}_{\mathbf I}\)：Helper 的外部调用观察、Branch 的选定方向与条件、Return 的最外层正常返回结果、MapWrite 的 Map 元素内写入与 PacketWrite 的包写入分别由各所属正文维护。
+4. 谓词与观察集合主题依次读[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)、[Helper 共同定义](Predicate/Helper谓词.md)、[MapLookup谓词](Predicate/MapLookup谓词.md)、[MapUpdate谓词](Predicate/MapUpdate谓词.md)、[MapDelete谓词](Predicate/MapDelete谓词.md)、[OtherHelper谓词](Predicate/OtherHelper谓词.md)、[Branch谓词](Predicate/Branch谓词.md)、[Return谓词](Predicate/Return谓词.md)、[MapWrite谓词](Predicate/MapWrite谓词.md)、[PacketWrite谓词](Predicate/PacketWrite谓词.md)、[五类观察结构累积及解释义务](Predicate/谓词定义.md#观察集合累积与可满足性)、[观察集合与历史顺序](Predicate/谓词定义.md#观察集合与历史顺序)。固定程序的观察域为 \(\mathrm{Predicate}_{\mathbf I}\)：Helper 的外部调用观察、Branch 的选定方向与条件、Return 的最外层正常返回结果、MapWrite 的 Map 元素内写入与 PacketWrite 的包写入分别由各所属正文维护。
 5. [路径](NodeInference/路径.md)：指令序号、机器地址、字节偏移与不透明节点引用的区别，以及方向。
 6. [create](NodeInference/create.md)：按目标架构构造初始语义状态，含 RV32 的入口条件与初始关系；RV32IMC 产品入口的实现对应见[工程模块与迁移](NodeInference/路径合并FFI.md#工程模块与迁移)。
 7. [数学 step](NodeInference/step.md)：接收指令序列、当前指令序号与执行前状态，返回候选的局部语义增量；调用方按既有规则施加组合，其归属[尚待讨论](NodeInference/step.md#状态变换的组合)。统一的 \(\mathrm{Record}_{\mathbf I}\) 与 \(\mathrm{History}_{\mathbf I}\) 见 [共同 History](NodeInference/History.md#逐步记录与统一类型)，记录涵盖 Helper、Branch、Return、MapWrite 与 PacketWrite 的局部结果；混合观察的组合边界见[History 的状态组合定义域](NodeInference/History.md#状态组合的定义域)。RV32IMC 产品 step 的接口差异见[工程边界](NodeInference/路径合并FFI.md#共同接口与实现边界)。
@@ -38,7 +38,7 @@ create、step、history、merge 与合并步使用数学契约；create 的入�
 
 - 闭项求值与 solve 的性质见[solve 的化简与求值](Expr/Term/solve.md#solve-的化简与求值)。单个 Expr 的解释保持见[表达式定义](Expr/Expr.md#关系解释)。
 - 严格覆写的结构性质与更新代数见[关系集合按键覆写](Expr/Expr.md#结构性质)。
-- 比较的互补方向见[比较关系](Expr/Expr.md#位宽与补关系)。指令生成与历史条件见[比较指令处理](NodeInference/Jump/待处理.md)。既有 Helper 谓词累积的性质见[观察集合累积与可满足性](Predicate/谓词定义.md#观察集合累积与可满足性)。
+- 比较的互补方向见[比较关系](Expr/Expr.md#位宽与补关系)。指令生成与历史条件见[比较指令处理](NodeInference/Jump/待处理.md)。五类观察结构累积的集合性质见[观察集合累积与可满足性](Predicate/谓词定义.md#观察集合累积与可满足性)。
 - 局部值效果的类型与纯数值子域解释保持见[局部值效果的类型与解释保持](Expr/Expr.md#局部值效果的类型与解释保持)。低位写回的高位清零见[真实寄存器低位视图与写回](Expr/寄存器/真实寄存器.md#真实寄存器低位视图与写回)。固定与只读值保持见[真实寄存器赋值](Expr/寄存器/真实寄存器.md#真实寄存器赋值)。链接目标类别见[跳转链接值赋值](Expr/寄存器/真实寄存器.md#跳转链接值赋值)。多目标读取见[多目标更新与同一执行前关系](Expr/Expr.md#多目标更新与同一来源)。原子数值规则的旧值返回见[原子数值更新与旧值返回](Expr/寄存器/原子数值更新与旧值返回.md#旧值返回性质)。
 - 对象身份见[寄存器定义](寄存器定义.md)。字段性质见[单元字段读写](Expr/寄存器/单元字段读写.md#字段覆盖性质)。包拼接性质见[包字节读写](Expr/寄存器/包字节.md#拼接与重叠性质)。分类与 \(\sigma_i\) 的性质见[指令结果的前提](Expr/Expr.md#来源与结构性质)。
 - 初态关系的结构性质与代数可满足性见[create 的 RV32 初态性质](NodeInference/create.md#初态及其性质)。
@@ -50,7 +50,7 @@ create、step、history、merge 与合并步使用数学契约；create 的入�
 - Stack、Map 与 Packet 访问的资源身份、范围、权限与对齐条件和访问有效性之间的语义联系，仍须定义或证明；MapWrite 与 PacketWrite 已规定写入观察的构造及生成前提。当前 \(\mathrm{Predicate}_{\mathbf I}\) 包含 Helper、Branch、Return、MapWrite 与 PacketWrite，类型及各类解释入口见[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)。
 - 在累积条件下判定可行性、检测矛盾及约束推理的可靠性仍须定义或证明；现有规则见[累积不等于可行性求解](Predicate/谓词定义.md#累积不等于可行性求解)。
 - helper 调用与写入的动态身份已有局部构造要求，其他事件身份、完整轨迹与顺序观察规则仍须定义，当前边界见[观察集合与历史顺序](Predicate/谓词定义.md#观察集合与历史顺序)及[History 动态身份义务](NodeInference/History.md#局部结果顺序与重复事件)。
-- Branch、Return、MapWrite、PacketWrite 及混合观察集合的累积规则、定义域、入口合法域与历史接入仍须规定，见[五类观察累积义务](Predicate/谓词定义.md#观察集合累积与可满足性)。既有 Helper [结构累积](Predicate/谓词定义.md#结构并集)的集合性质不能代替这些规则；现有局部命题不能直接推出资源访问正确或完整行为等价。
+- 五类混合观察的结构累积已规定；入口语义合法性、各类解释与实际步骤和历史的对应仍须证明，见[观察解释与历史义务](Predicate/谓词定义.md#观察集合累积与可满足性)。这些集合性质与现有局部命题不能直接推出资源访问正确或完整行为等价。产品生成覆盖与缺口见[五类观察的实现对应](NodeInference/路径合并FFI.md#五类观察的实现对应)。
 - 指令操作数所确定的访问对象与实际访问对象的一致性、跨单元一致性及访问有效性的证明。[Expr 指令结果的前提](Expr/Expr.md#指令结果的前提)要求访问对象唯一确定且访问有效，不自动证明具体访问满足它们。
 - 外部调用结果、寄存器变化与调用返回配对。各 helper 的具体返回契约、资源变化与调用安全性，以及七种类型以外的外部调用谓词，仍须定义或证明。
 - 任意循环摘要的可靠性，以及有限退出以外的观察语义。

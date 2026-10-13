@@ -16,18 +16,19 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from "react";
 import "@xyflow/react/dist/style.css";
 import { createSession, runSessionStream, stepSession } from "./api";
 import { insnIndexForNode, localExprs, splitExprs } from "./exprs";
+import { formatExprMath, formatPredChip } from "./formatExpr";
+import { foldSameTypeChains, resolveFoldedId } from "./collapse";
 import {
-  formatRegLabel,
-  groupExprsByKind,
-  kindLabel,
-  parseReg,
-  parseTerm,
-  termToPlain,
-} from "./parse";
+  classifyNodeRole,
+  insnMnemonic,
+  insnTextForNode,
+  NODE_ROLE_LEGEND,
+} from "./nodeRole";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
 import type { ArchKind, ExprRow, PredRow, SessionSnapshot } from "./types";
 import { useForceLayout } from "./useForceLayout";
@@ -37,7 +38,6 @@ import {
   diffExprs,
   diffPredicates,
   edgeKey,
-  formatPred,
   inboundEdges,
   outboundEdges,
   parseEdgeKey,
@@ -57,137 +57,102 @@ const statusLabel: Record<SessionSnapshot["status"], string> = {
   fail: "未完成",
 };
 
-function TermTree({ view, depth = 0 }: { view: ReturnType<typeof parseTerm>; depth?: number }) {
-  const pad = { paddingLeft: depth * 10 };
-  if (view.kind === "const") {
-    return (
-      <Text className="mono term-leaf" style={pad} display="block">
-        const {view.digits}
-      </Text>
-    );
-  }
-  if (view.kind === "var") {
-    return (
-      <Text className="mono term-leaf" style={pad} display="block">
-        var{view.width ?? "?"} : {view.name}
-      </Text>
-    );
-  }
-  if (view.kind === "app") {
-    return (
-      <Box style={pad}>
-        <Text className="mono term-op" display="block">
-          {view.op}(
-        </Text>
-        {view.args.map((arg, i) => (
-          <TermTree key={i} view={arg} depth={depth + 1} />
-        ))}
-        <Text className="mono term-op" display="block">
-          )
-        </Text>
-      </Box>
-    );
-  }
-  const asReg = parseReg(view.text);
-  if (asReg.kind !== "unknown") {
-    return (
-      <Text className="mono term-leaf" style={pad} display="block">
-        {formatRegLabel(asReg)} · {view.text}
-      </Text>
-    );
-  }
-  return (
-    <Text className="mono term-leaf" style={pad} display="block">
-      {view.text}
-    </Text>
-  );
-}
-
-function ExprDetail({ e }: { e: ExprRow }) {
-  const reg = parseReg(e.reg);
-  const term = parseTerm(e.term);
-  return (
-    <Box className="expr-card">
-      <Text className="mono sem-line" display="block">
-        {formatRegLabel(reg)} · {e.rel}{e.role === "constraint" ? " · 比较约束" : ""}
-      </Text>
-      <Text className="mono muted" display="block" fontSize={11}>
-        raw {e.reg} · view {termToPlain(term)}
-      </Text>
-      <TermTree view={term} />
-    </Box>
-  );
-}
-
-function ExprGroups({ exprs }: { exprs: ExprRow[] }) {
+function ExprCapsules({ exprs }: { exprs: ExprRow[] }) {
   if (exprs.length === 0) {
-    return <Text className="mono muted">∅</Text>;
+    return <Text className="mono muted capsule-empty">∅</Text>;
   }
   return (
-    <>
-      {groupExprsByKind(exprs).map(({ kind, rows }) => (
-        <Box key={kind} className="expr-group">
-          <Text className="expr-group__title mono" display="block">
-            {kindLabel[kind]} · {rows.length}
-          </Text>
-          {rows.map((expr, index) => (
-            <ExprDetail key={`${kind}-${expr.reg}-${index}`} e={expr} />
-          ))}
-        </Box>
+    <div className="capsule-row">
+      {exprs.map((e, i) => (
+        <span
+          key={`${e.reg}-${e.rel}-${i}`}
+          className={`capsule${e.role === "constraint" ? " capsule--constraint" : ""}`}
+          title={`${e.reg} ${e.rel} ${e.term}`}
+        >
+          {formatExprMath(e)}
+        </span>
       ))}
-    </>
+    </div>
   );
 }
 
-function PredDetail({ p }: { p: PredRow }) {
-  const kindClass =
-    p.kind === "ret" || p.kind === "return"
-      ? " pred-ret"
-      : p.kind === "helper"
-        ? " pred-helper"
-        : p.kind === "branch"
-          ? " pred-branch"
-          : p.kind === "mapWrite" ||
-              p.kind === "map_write" ||
-              p.kind === "packetWrite" ||
-              p.kind === "packet_write" ||
-              p.kind === "mapLookup" ||
-              p.kind === "map_lookup"
-            ? " pred-effect"
-            : "";
-  return (
-    <Box className={`pred-card${kindClass}`}>
-      <Text className={`mono sem-line${kindClass}`} display="block">
-        {formatPred(p)}
-      </Text>
-      {p.kind === "ret" || p.kind === "return" ? (
-        <TermTree view={parseTerm(typeof p.term === "string" ? p.term : "")} />
-      ) : null}
-      {p.kind === "helper" && Array.isArray(p.args)
-        ? p.args.map((arg, i) => (
-            <Box key={i}>
-              <Text className="mono muted" display="block" fontSize={11}>
-                arg{i}
-              </Text>
-              <TermTree view={parseTerm(String(arg))} />
-            </Box>
-          ))
-        : null}
-    </Box>
-  );
-}
-
-function PredList({ preds }: { preds: PredRow[] }) {
+function PredCapsules({ preds }: { preds: PredRow[] }) {
   if (preds.length === 0) {
-    return <Text className="mono muted">∅</Text>;
+    return <Text className="mono muted capsule-empty">∅</Text>;
+  }
+  return (
+    <div className="capsule-row">
+      {preds.map((p, i) => (
+        <span
+          key={i}
+          className={`capsule capsule--pred capsule--${p.kind}`}
+          title={formatPredChip(p)}
+        >
+          {formatPredChip(p)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SemBlock({ tag, children }: { tag: ReactNode; children: ReactNode }) {
+  return (
+    <div className="sem-block">
+      <span className="sem-tag mono">{tag}</span>
+      <div className="sem-block__body">{children}</div>
+    </div>
+  );
+}
+
+function EgTag() {
+  return (
+    <>
+      E<sub>g</sub>
+    </>
+  );
+}
+
+function EiTag({ on }: { on?: "taken" | "not_taken" | "only" }) {
+  if (on === "taken") {
+    return (
+      <>
+        E<sub>i</sub> on taken
+      </>
+    );
+  }
+  if (on === "not_taken") {
+    return (
+      <>
+        E<sub>i</sub> on not taken
+      </>
+    );
+  }
+  if (on === "only") {
+    return (
+      <>
+        E<sub>i</sub>
+      </>
+    );
   }
   return (
     <>
-      {preds.map((p, i) => (
-        <PredDetail key={i} p={p} />
-      ))}
+      E<sub>i</sub>
     </>
   );
+}
+
+function PgTag() {
+  return (
+    <>
+      P<sub>g</sub>
+    </>
+  );
+}
+
+function eiOnLabel(dir: string | null | undefined): "taken" | "not_taken" | "only" {
+  if (dir === "taken") return "taken";
+  if (dir === "not_taken") return "not_taken";
+  return "only";
 }
 
 export function App() {
@@ -325,29 +290,101 @@ function DebugScreen() {
     return visibleNodeIds(snap, sel.focus, sel.compare, sel.collapseSameLoc);
   }, [snap, sel.focus, sel.compare, sel.collapseSameLoc]);
 
-  const layoutNodes = useMemo(
-    () => (snap ? snap.nodes.filter((n) => visible.has(n.id)) : []),
-    [snap, visible],
-  );
-  const layoutEdges = useMemo(
+  const nodeTypeById = useMemo(() => {
+    const map = new Map<number, string>();
+    if (!snap) return map;
+    const failedId = snap.status === "fail" ? snap.failed : null;
+    for (const node of snap.nodes) {
+      const info = classifyNodeRole({
+        node,
+        edges: snap.edges,
+        insnText: insnTextForNode(node, snap.insns),
+        work: snap.work,
+        failedId,
+      });
+      map.set(node.id, info.nodeType);
+    }
+    return map;
+  }, [snap]);
+
+  const typeFold = useMemo(() => {
+    if (!snap) {
+      return foldSameTypeChains([], [], () => "", new Set());
+    }
+    // Only pin the nodes the user is looking at — protecting the whole
+    // path-to-root used to disable same-type folding on the main spine.
+    const protectedIds = new Set<number>([sel.focus, ...snap.work]);
+    if (sel.compare != null) protectedIds.add(sel.compare);
+    if (snap.status === "fail" && snap.failed != null) protectedIds.add(snap.failed);
+    return foldSameTypeChains(
+      snap.nodes.filter((n) => visible.has(n.id)),
+      snap.edges.filter((e) => visible.has(e.from) && visible.has(e.to)),
+      (id) => nodeTypeById.get(id) ?? "",
+      protectedIds,
+    );
+  }, [snap, visible, sel.focus, sel.compare, nodeTypeById]);
+
+  const displayNodes = useMemo(
     () =>
       snap
-        ? snap.edges.filter((e) => visible.has(e.from) && visible.has(e.to))
+        ? snap.nodes.filter((n) => visible.has(n.id) && !typeFold.hidden.has(n.id))
         : [],
-    [snap, visible],
+    [snap, visible, typeFold],
   );
+  const displayNodeIds = useMemo(
+    () => new Set(displayNodes.map((n) => n.id)),
+    [displayNodes],
+  );
+  const displayEdges = useMemo(() => {
+    if (!snap) return [];
+    const seen = new Set<string>();
+    const out: typeof snap.edges = [];
+    for (const e of snap.edges) {
+      if (!visible.has(e.from) || !visible.has(e.to)) continue;
+      if (typeFold.hidden.has(e.from)) continue;
+      const to = resolveFoldedId(e.to, typeFold);
+      if (!displayNodeIds.has(e.from) || !displayNodeIds.has(to)) continue;
+      if (e.from === to) continue;
+      const key = `${e.from}->${to}:${e.dir}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(to === e.to ? e : { from: e.from, to, dir: e.dir });
+    }
+    return out;
+  }, [snap, visible, typeFold, displayNodeIds]);
 
-  const positions = useForceLayout(layoutNodes, layoutEdges, snap?.id ?? "");
-  const positionCount = Object.keys(positions).length;
+  // While running: cheap incremental placement. After complete/fail: final layout.
+  const layoutMode =
+    snap?.status === "complete" || snap?.status === "fail" ? "final" : "fast";
+  const positions = useForceLayout(
+    displayNodes,
+    displayEdges,
+    `${snap?.id ?? ""}:${layoutMode}`,
+    layoutMode,
+  );
+  const hasPositions = Object.keys(positions).length > 0;
 
+  const finalFitKeyRef = useRef("");
   useEffect(() => {
-    if (streaming || !fitOnceRef.current || positionCount === 0) return;
-    fitOnceRef.current = false;
+    // Never fit on focus/fold churn — that resets the camera on node clicks.
+    if (streaming || !hasPositions) return;
+    let doFit = false;
+    if (fitOnceRef.current) {
+      fitOnceRef.current = false;
+      doFit = true;
+    } else if (layoutMode === "final") {
+      const k = `${snap?.id ?? ""}:final`;
+      if (finalFitKeyRef.current !== k) {
+        finalFitKeyRef.current = k;
+        doFit = true;
+      }
+    }
+    if (!doFit) return;
     const frame = requestAnimationFrame(() => {
       void flow.fitView({ padding: 0.28, duration: 240 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [flow, positionCount, streaming]);
+  }, [flow, streaming, layoutMode, snap?.id, hasPositions]);
 
   const head = snap?.work[0];
   const canStep = Boolean(
@@ -452,10 +489,20 @@ function DebugScreen() {
     const headId = snap.work[0];
     const failedId = snap.status === "fail" ? snap.failed : null;
     const out: StateFlowNode[] = [];
-    for (const node of layoutNodes) {
+    for (const node of displayNodes) {
       const id = String(node.id);
       const pos = positions[id];
       if (!pos) continue;
+      const insnText = insnTextForNode(node, snap.insns);
+      const { role, tags, accessFamily } = classifyNodeRole({
+        node,
+        edges: snap.edges,
+        insnText,
+        work: snap.work,
+        failedId,
+      });
+      const mnemonic = insnMnemonic(insnText);
+      const folded = typeFold.foldedCount.get(node.id);
       out.push({
         id,
         type: "state",
@@ -468,43 +515,44 @@ function DebugScreen() {
           focused: node.id === sel.focus,
           compare: node.id === sel.compare,
           head: node.id === headId,
-          entry: node.id === 0,
           processed: done.has(node.id),
-          failed: failedId != null && node.id === failedId,
-          hasHelper: node.predicates.some((p) => p.kind === "helper"),
-          hasPacket: node.exprs.some((e) => parseReg(e.reg).kind === "packet"),
-          hasRet: node.predicates.some((p) => p.kind === "ret"),
+          role,
+          tags,
+          insnHint: mnemonic || undefined,
+          foldedCount: folded,
+          accessFamily,
         },
         draggable: false,
       });
     }
     return out.length === 0 ? EMPTY_FLOW_NODES : out;
-  }, [done, layoutNodes, positions, sel.compare, sel.focus, snap?.failed, snap?.status, snap?.work]);
+  }, [done, displayNodes, typeFold, positions, sel.compare, sel.focus, snap]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     if (!snap || flowNodes.length === 0) return EMPTY_FLOW_EDGES;
     const placed = new Set(flowNodes.map((n) => n.id));
-    const next = layoutEdges
+    const next = displayEdges
       .filter((edge) => placed.has(String(edge.from)) && placed.has(String(edge.to)))
       .map((edge) => {
         const id = edgeKey(edge);
         const branch = edge.dir === "taken" || edge.dir === "not_taken";
+        const reuse = edge.dir === "reuse";
         return {
           id,
           source: String(edge.from),
           target: String(edge.to),
           sourceHandle: "r",
           targetHandle: "l",
-          type: "default",
+          type: reuse ? "straight" : "default",
           label: edge.dir === "only" ? undefined : edge.dir,
-          className: `flow-edge${branch ? " flow-edge--branch" : ""}${
+          className: `flow-edge${branch ? " flow-edge--branch" : ""}${reuse ? " flow-edge--reuse" : ""}${
             sel.edgeKey === id ? " flow-edge--sel" : ""
           }`,
           labelStyle: { fill: "#c9bfb0", fontSize: 10 },
         };
       });
     return next.length === 0 ? EMPTY_FLOW_EDGES : next;
-  }, [flowNodes, layoutEdges, sel.edgeKey, snap]);
+  }, [flowNodes, displayEdges, sel.edgeKey, snap]);
 
   const dualTakenNotTaken = useMemo(() => {
     if (!snap || !focusedNode) return null;
@@ -587,18 +635,8 @@ function DebugScreen() {
         >
           新建运行
         </Button>
-        <label className="muted collapse-toggle">
-          <input
-            type="checkbox"
-            checked={sel.collapseSameLoc}
-            onChange={(ev) =>
-              setSel((s) => ({ ...s, collapseSameLoc: ev.target.checked }))
-            }
-          />
-          折叠同位置（仅视图）
-        </label>
         <Text className="mono muted" fontSize={11}>
-          快照不可变 · Shift+点击设比较节点 · {snap?.proof_note ?? ""}
+          快照不可变 · Shift+点击设比较 · 同类型自动折叠 · {snap?.proof_note ?? ""}
         </Text>
       </Flex>
 
@@ -678,17 +716,57 @@ function DebugScreen() {
           >
             <Background color="rgba(120,112,98,0.35)" gap={24} />
           </ReactFlow>
+          {snap && flowNodes.length > 0 ? (
+            <div className="node-legend" aria-label="节点类型图例">
+              {NODE_ROLE_LEGEND.map((row) => (
+                <div key={row.role} className="node-legend__row">
+                  <span
+                    className={`node-legend__swatch state-node--role-${row.role}${
+                      row.role.startsWith("reg_") ? " state-node--access" : ""
+                    }`}
+                  />
+                  <span>{row.label}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="canvas-float" aria-label="运行控制">
+            <button
+              type="button"
+              className="canvas-float__btn"
+              onClick={() => void onStep()}
+              disabled={!canStep}
+            >
+              单步（Work 首）
+            </button>
+            <button
+              type="button"
+              className="canvas-float__btn"
+              onClick={() => void onRun()}
+              disabled={!canRun}
+            >
+              运行到结束
+            </button>
+            <span className="mono canvas-float__status">
+              {snap
+                ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
+                    snap.arch
+                  }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}${
+                    runRate ? `  ${runRate}` : ""
+                  }`
+                : "连接中"}
+            </span>
+          </div>
         </Box>
 
-        <Flex className="panel panel--right" width={400} flexDirection="column" minHeight={0}>
-          <Flex className="panel-tabs" gap={6} px={10} pt={10}>
+        <Flex className="panel panel--right" flexDirection="column" minHeight={0}>
+          <Flex className="panel-tabs" gap={6} px={10} pt={8}>
             {(
               [
                 ["node", "节点"],
-                ["step", "单步"],
+                ["step", "边"],
                 ["path", "路径"],
                 ["compare", "比较"],
-                ["dual", "双架构"],
               ] as const
             ).map(([id, label]) => (
               <button
@@ -702,55 +780,47 @@ function DebugScreen() {
             ))}
           </Flex>
 
-          <Box className="panel__body" flex="1" overflow="auto" minHeight={0} px={14} pb={10}>
+          <Box className="panel__body panel__body--state" flex="1" overflow="auto" minHeight={0} px={12} pb={8}>
             {sel.panel === "node" && focusedNode && focusedSplit ? (
               <>
                 <Text className="sem-heading">
-                  执行前快照 · #{focusedNode.id} ·{" "}
-                  {focusedNode.loc === "exit" ? "exit（终态）" : `pos ${focusedNode.loc}`}
+                  #{focusedNode.id}
+                  {focusedNode.loc === "exit" ? " · exit" : ` · pos ${focusedNode.loc}`}
                 </Text>
-                <Text className="sem-sub">Expr（按 RegKind）</Text>
-                <ExprGroups exprs={focusedSplit.eg} />
+                <SemBlock tag={<EgTag />}>
+                  <ExprCapsules exprs={focusedSplit.eg} />
+                </SemBlock>
                 {focusedSplit.eiIn.length > 0 ? (
-                  <>
-                    <Text className="sem-sub sem-sub--gap">到达 Δ（eiIn）</Text>
-                    <ExprGroups exprs={focusedSplit.eiIn} />
-                  </>
+                  <SemBlock tag={<EiTag />}>
+                    <ExprCapsules exprs={focusedSplit.eiIn} />
+                  </SemBlock>
                 ) : null}
-                {focusedSplit.eiOut.map((delta) => (
-                  <Box key={delta.to}>
-                    <Text className="sem-sub sem-sub--gap">
-                      后继 Δ（eiOut）· {delta.dir === "taken" ? "Taken" :
-                        delta.dir === "not_taken" ? "NotTaken" : "Only"} → #{delta.to}
-                    </Text>
-                    <ExprGroups exprs={delta.exprs} />
-                  </Box>
-                ))}
-                <Text className="sem-sub sem-sub--gap">Predicate</Text>
-                <PredList preds={focusedNode.predicates} />
+                {focusedSplit.eiOut
+                  .filter((d) => d.exprs.length > 0)
+                  .map((delta) => (
+                    <SemBlock key={delta.to} tag={<EiTag on={eiOnLabel(delta.dir)} />}>
+                      <ExprCapsules exprs={delta.exprs} />
+                    </SemBlock>
+                  ))}
+                <SemBlock tag={<PgTag />}>
+                  <PredCapsules preds={focusedNode.predicates} />
+                </SemBlock>
                 {dualTakenNotTaken ? (
-                  <>
-                    <Text className="sem-sub sem-sub--gap">出边 Taken / NotTaken</Text>
-                    <Text className="mono sem-line" display="block">
-                      Taken →{" "}
-                      {dualTakenNotTaken.taken.map((e) => `#${e.to}`).join(", ") || "∅"}
-                    </Text>
-                    <Text className="mono sem-line" display="block">
-                      NotTaken →{" "}
-                      {dualTakenNotTaken.notTaken.map((e) => `#${e.to}`).join(", ") ||
-                        "∅"}
-                    </Text>
-                  </>
+                  <Text className="mono muted" display="block" fontSize={11}>
+                    T→{dualTakenNotTaken.taken.map((e) => e.to).join(",") || "∅"}
+                    {" · "}
+                    N→{dualTakenNotTaken.notTaken.map((e) => e.to).join(",") || "∅"}
+                  </Text>
                 ) : null}
               </>
             ) : null}
 
             {sel.panel === "step" && snap ? (
               <>
-                <Text className="sem-heading">单步 / 边详情</Text>
+                <Text className="sem-heading">边</Text>
                 {selectedEdge ? (
                   <>
-                    <Text className="mono sem-line" display="block">
+                    <Text className="mono muted" display="block" fontSize={11}>
                       {selectedEdge.from} —{selectedEdge.dir}→ {selectedEdge.to}
                     </Text>
                     {(() => {
@@ -760,22 +830,22 @@ function DebugScreen() {
                       const delta = localExprs(src.exprs, dst.exprs);
                       return (
                         <>
-                          <Text className="sem-sub">源执行前 Expr 条数 {src.exprs.length}</Text>
-                          <Text className="sem-sub">目标执行前（到达后）Δ</Text>
-                          <ExprGroups exprs={delta} />
-                          <Text className="sem-sub sem-sub--gap">目标 Predicate</Text>
-                          <PredList preds={dst.predicates} />
+                          <SemBlock tag={<EiTag on={eiOnLabel(selectedEdge.dir)} />}>
+                            <ExprCapsules exprs={delta} />
+                          </SemBlock>
+                          <SemBlock tag={<PgTag />}>
+                            <PredCapsules preds={dst.predicates} />
+                          </SemBlock>
                         </>
                       );
                     })()}
                   </>
                 ) : (
-                  <Text className="muted">点击图上的边查看局部效果与目标快照。</Text>
+                  <Text className="muted">点击图上的边。</Text>
                 )}
-                <Text className="sem-sub sem-sub--gap">当前节点入边</Text>
                 {focusedNode
                   ? inboundEdges(focusedNode.id, snap.edges).map((e) => (
-                      <Text key={edgeKey(e)} className="mono sem-line" display="block">
+                      <Text key={edgeKey(e)} className="mono muted" display="block" fontSize={11}>
                         #{e.from} —{e.dir}→ #{e.to}
                       </Text>
                     ))
@@ -785,20 +855,17 @@ function DebugScreen() {
 
             {sel.panel === "path" && snap ? (
               <>
-                <Text className="sem-heading">路径（root → focus）</Text>
-                <Text className="mono muted" display="block">
+                <Text className="sem-heading">路径</Text>
+                <Text className="mono muted" display="block" fontSize={11}>
                   {pathIds.map((id) => `#${id}`).join(" → ")}
                 </Text>
                 {pathIds.map((id) => {
                   const n = snap.nodes.find((x) => x.id === id);
                   if (!n) return null;
                   return (
-                    <Box key={id} className="path-card">
-                      <Text className="mono sem-line" display="block">
-                        #{id} loc={n.loc} E={n.exprs.length} P={n.predicates.length}
-                      </Text>
-                      <PredList preds={n.predicates} />
-                    </Box>
+                    <SemBlock key={id} tag={`#${id}`}>
+                      <PredCapsules preds={n.predicates} />
+                    </SemBlock>
                   );
                 })}
               </>
@@ -806,18 +873,16 @@ function DebugScreen() {
 
             {sel.panel === "compare" ? (
               <>
-                <Text className="sem-heading">两节点比较</Text>
-                <Text className="muted" display="block">
-                  焦点 #{sel.focus}
-                  {sel.compare !== null ? ` · 比较 #${sel.compare}` : " · Shift+点击选第二节点"}
+                <Text className="sem-heading">比较</Text>
+                <Text className="muted" display="block" fontSize={11}>
+                  #{sel.focus}
+                  {sel.compare !== null ? ` · #${sel.compare}` : " · Shift+点击第二节点"}
                 </Text>
                 {focusedNode && compareNode ? (
                   <>
-                    <Text className="sem-sub">
-                      同位置？{" "}
-                      {focusedNode.loc === compareNode.loc
-                        ? `是 (loc ${focusedNode.loc})，引用不同`
-                        : "否"}
+                    <Text className="mono muted" display="block" fontSize={11}>
+                      loc {focusedNode.loc === compareNode.loc ? "=" : "≠"}{" "}
+                      {focusedNode.loc}/{compareNode.loc}
                     </Text>
                     {(() => {
                       const d = diffExprs(focusedNode.exprs, compareNode.exprs);
@@ -827,67 +892,42 @@ function DebugScreen() {
                       );
                       return (
                         <>
-                          <Text className="sem-sub">Expr 新增 {d.added.length}</Text>
-                          {d.added.map((e, i) => (
-                            <ExprDetail key={`a${i}`} e={e} />
-                          ))}
-                          <Text className="sem-sub">Expr 删除 {d.removed.length}</Text>
-                          {d.removed.map((e, i) => (
-                            <ExprDetail key={`r${i}`} e={e} />
-                          ))}
-                          <Text className="sem-sub">Expr 覆写 {d.changed.length}</Text>
-                          {d.changed.map((c, i) => (
-                            <Box key={`c${i}`}>
-                              <Text className="mono muted" display="block">
-                                before {c.before.term}
-                              </Text>
-                              <ExprDetail e={c.after} />
-                            </Box>
-                          ))}
-                          <Text className="sem-sub sem-sub--gap">
-                            Predicate +{pd.added.length} / −{pd.removed.length}
-                          </Text>
-                          {pd.added.map((p, i) => (
-                            <Box key={`pa${i}`}>
-                              <Text className="mono muted" display="block">
-                                +
-                              </Text>
-                              <PredDetail p={p} />
-                            </Box>
-                          ))}
-                          {pd.removed.map((p, i) => (
-                            <Box key={`pr${i}`}>
-                              <Text className="mono muted" display="block">
-                                −
-                              </Text>
-                              <PredDetail p={p} />
-                            </Box>
-                          ))}
+                          {d.added.length > 0 ? (
+                            <SemBlock tag="+E">
+                              <ExprCapsules exprs={d.added} />
+                            </SemBlock>
+                          ) : null}
+                          {d.removed.length > 0 ? (
+                            <SemBlock tag="−E">
+                              <ExprCapsules exprs={d.removed} />
+                            </SemBlock>
+                          ) : null}
+                          {d.changed.length > 0 ? (
+                            <SemBlock tag="ΔE">
+                              <ExprCapsules exprs={d.changed.map((c) => c.after)} />
+                            </SemBlock>
+                          ) : null}
+                          {pd.added.length > 0 ? (
+                            <SemBlock tag="+P">
+                              <PredCapsules preds={pd.added} />
+                            </SemBlock>
+                          ) : null}
+                          {pd.removed.length > 0 ? (
+                            <SemBlock tag="−P">
+                              <PredCapsules preds={pd.removed} />
+                            </SemBlock>
+                          ) : null}
                         </>
                       );
                     })()}
                   </>
                 ) : (
-                  <Text className="muted">需要两个节点引用。</Text>
+                  <Text className="muted">需要两个节点。</Text>
                 )}
               </>
             ) : null}
 
-            {sel.panel === "dual" ? (
-              <>
-                <Text className="sem-heading">双架构比较</Text>
-                <Text className="fail-banner" display="block">
-                  未实现
-                </Text>
-                <Text className="muted" display="block">
-                  eBPF 侧 Step / 观察投影尚未接入核心。此处不伪造一致性结论。
-                </Text>
-              </>
-            ) : null}
-
-            {!focusedNode && sel.panel !== "dual" ? (
-              <Text className="muted">等待节点…</Text>
-            ) : null}
+            {!focusedNode ? <Text className="muted">等待节点…</Text> : null}
           </Box>
 
           <Box className="log-strip">
@@ -904,35 +944,6 @@ function DebugScreen() {
         </Flex>
       </Flex>
 
-      <Flex className="toolbar" alignItems="center" justifyContent="center" gap={12}>
-        <Button
-          type="button"
-          className="toolbar__btn"
-          onClick={() => void onStep()}
-          disabled={!canStep}
-          opacity={canStep ? 1 : 0.45}
-        >
-          单步（Work 首）
-        </Button>
-        <Button
-          type="button"
-          className="toolbar__btn"
-          onClick={() => void onRun()}
-          disabled={!canRun}
-          opacity={canRun ? 1 : 0.45}
-        >
-          运行到结束
-        </Button>
-        <Text className="mono toolbar__status">
-          {snap
-            ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
-                snap.arch
-              }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}${
-                runRate ? `  ${runRate}` : ""
-              }`
-            : "连接中"}
-        </Text>
-      </Flex>
     </Flex>
   );
 }

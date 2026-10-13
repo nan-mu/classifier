@@ -50,8 +50,8 @@ inductive StepResult where
 def updateExpr (E Ei : ExprSet) : ExprSet :=
   ExprSet.override E Ei
 
-/-- Accumulate structurally new observations, retaining distinct helper events.
-An empty local result is identity. -/
+/-- Structural union of all five observation classes. Existing list order is retained,
+then first occurrences of new local members are appended. This is not event history. -/
 def mergePredicate (P Pi : List Predicate) : Except RejectReason (List Predicate) :=
   match Pi with
   | [] => .ok P

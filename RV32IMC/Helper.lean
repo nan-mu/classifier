@@ -42,7 +42,7 @@ def helperPredicate (event : NodeId) (Eg : ExprSet) : Except RejectReason Predic
   pure (.helper event call.kind call.args)
 
 private def helperCallOfPredicate (p : Predicate) : Except RejectReason (NodeId × HelperCall) := do
-  let .helper event kind args := p
+  let .helper event kind args := p | throw .unsupported
   if kind.id ≥ (1 <<< 32) || helperKind kind.id != kind then throw .unsupported
   if args.length != helperArity kind || args.any (fun t => t.width != .w32) then
     throw .undefinedSrc
@@ -76,5 +76,8 @@ def helperExpr (p : Predicate) : Except RejectReason ExprSet := do
 #guard (eval (star .w32 (.externalResult 0 0) [Term.C32 5])).isNone
 #guard solve (star .w32 (.externalResult 0 0) [Term.C32 5]) ==
   star .w32 (.externalResult 0 0) [Term.C32 5]
+#guard match helperExpr (.ret (Term.V32 1)) with
+  | .error .unsupported => true
+  | _ => false
 
 end RV32IMC

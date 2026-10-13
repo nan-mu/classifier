@@ -52,8 +52,8 @@ def PathMerge.exportExpandMerge (requestJson : String) : String
 
 ```json
 {
-  "observationModel": "HelperOnly",
-  "requiredObservations": ["Helper"],
+  "observationModel": "FiveClass",
+  "requiredObservations": ["Helper", "Branch", "Return", "MapWrite", "PacketWrite"],
   "taken": {
     "id": 42,
     "loc": "3",
@@ -73,13 +73,13 @@ def PathMerge.exportExpandMerge (requestJson : String) : String
 
 该对象展示线协议字段，不提供分支来源或后缀覆盖证明。
 
-- `observationModel` 必须为 `"HelperOnly"`。`requiredObservations` 必填，是字符串数组，其成员只能为 `"Helper"`，空数组有效。所需观察为 Branch、Return、MapWrite、PacketWrite 或其他不支持的类别时拒绝，不能通过丢弃该要求继续比较。
+- `observationModel` 接受 `"FiveClass"` 与既有 `"HelperOnly"`。`requiredObservations` 必填且为字符串数组；FiveClass 下只接受 `"Helper"`、`"Branch"`、`"Return"`、`"MapWrite"`、`"PacketWrite"`，HelperOnly 下仍只接受 `"Helper"`，空数组有效。未知模型或不在声明域内的要求均拒绝。HelperOnly 是旧调用方的声明标签，不是状态投影：任一标签下都解析、保留并比较全部五类已提供观察。声明所需类别不能证明调用方提供了该类全部应有观察。
 - `taken` 为单个已到达配置；`notTaken` 为按调用方复用优先级排列的非空后缀入口配置数组。空候选数组以 `EmptyNotTaken` 拒绝。
 - 每个配置的 `id` 是自然数形式的不透明运行时节点引用。同一请求中全部配置的 `id` 必须互异；它们不表示指令序号、地址或记录长度。
 - `loc` 使用当前共同表示：普通位置为非负十进制整数的字符串，存储从零开始的指令数组下标，例如 `"3"` 对应数学文档中的第 4 条指令；正常结束为 `"exit"`。共同 merge 校验其表示并比较解析后的位置，不校验程序范围；运行时负责该位置属于共同程序的位置域。不同节点可以有相同 `loc`，重复到达仍由 `id` 区分。
 - `exprs`、`predicates` 都是数组，表示该配置已施加全部局部更新后的全局状态。普通位置保存待执行指令的执行前状态，`"exit"` 保存最终状态。数学 step 的候选局部增量须先按既有规则组合。现有 step String 导出的后继状态行为见[实现边界](#共同接口与实现边界)。
 
-### Expr 与 Helper 的表示
+### Expr 的表示
 
 Expr 行沿用共享解析与渲染格式，例如：
 
@@ -97,23 +97,56 @@ Expr 行沿用共享解析与渲染格式，例如：
 
 共同 merge 不施加入口寄存器赋值策略或 x0 求零检查，也不限制为某一目标架构的状态。共享 AST 当前的 `externalResult` 和 `inputByte` 应用仍限 32 位；这些表示限制由共同项检查保留，不构成目标指令的调用或内存语义验证。
 
-Helper 行例如：
+### 共同 Predicate JSON
+
+五类 Predicate 的共享线协议由 [ClassifierExpr.Insn](../../ClassifierExpr/Insn.lean)、[Parse](../../ClassifierExpr/Parse.lean) 与 [Render](../../ClassifierExpr/Render.lean)实现；数学构造及各类解释由[谓词定义](../Predicate/谓词定义.md#类型与结构相等)所链接的正文维护。
 
 ```json
-{"kind":"helper","event":8,"helperId":5,"args":[]}
+{"kind":"helper","event":8,"helperId":5,"args":["v32:1"]}
+{"kind":"branch","position":4,"dir":"taken","width":32,"cond":{"lhs":"v32:1","rel":"ltu","rhs":"10"}}
+{"kind":"ret","width":64,"term":"v64:2"}
+{"kind":"mapWrite","event":9,"mapWidth":64,"map":"v64:3","key":["1","v32:4"],"offset":0,"sourceWidth":32,"source":"v32:5"}
+{"kind":"packetWrite","event":10,"packet":2,"offset":0,"width":32,"source":"v32:6"}
 ```
 
-`event` 为自然数调用身份；`helperId` 为小于 `2^32` 的自然数；`args` 为项字符串数组。当前共享解析表示将参数读为 32 位项，各参数须通过上述递归项检查。共同 merge 将 Helper 调用作为不透明观察，不按 helper 编号检查目标专属参数个数或调用语义；空参数数组有效，参数数组长度参与结构比较。不同 `event` 仍表示不同观察，即使 helper 编号和参数相同。
+这些是五个独立 JSON 对象示例；`predicates` 数组可混合包含它们。`ret` 是 Return 的 wire 标签，`return`、`for`、`cmp` 等旧名或未知标签拒绝。Helper 的字段和既有项字符串保持原状。
 
-`predicates` 可以含重复的同结构 Helper 行，比较时按集合成员处理；它不表达重复事件次数或事件顺序。任何非 `helper` 的谓词类别均拒绝。
+- Helper：`event` 为自然数调用身份；`helperId` 为小于 `2^32` 的自然数；`args` 为默认按 32 位解析的项字符串数组，各参数必须为良构 Term32。共同 merge 不按编号检查目标专属参数个数或调用契约，空参数数组有效。
+- Branch：`position` 是从 1 开始的自然数指令序号，必须大于零；与 `loc` 的零基字符串表示分别处理。`dir` 仅接受 `"taken"` 与 `"notTaken"`。`width` 指定两个条件项的相同载体位宽；`cond.lhs`、`cond.rhs` 为项字符串，`cond.rel` 为关系字符串，关系的比较宽度须在载体范围内。共享校验不验证程序上界、该位置是否确为条件分支或方向与机器指令的对应。
+- Return：`width` 为完整返回项载体位宽，`term` 必须解析为该位宽的良构项。共同校验不识别最外层返回。
+- MapWrite：`event` 为写入事件身份，`mapWidth`、`sourceWidth` 分别指定 Map 项与完整源项的载体位宽，`map`、`source` 为项字符串。`key` 是按顺序保存的 Term32 字符串数组，长度参与结构比较，常量键字节须小于 256；符号键项的字节取值、完整冻结来源和与对象布局匹配仍是语义义务。`offset` 为元素值内的自然数字节偏移。
+- PacketWrite：`event` 为写入事件身份，`packet` 为自然数包资源身份，`offset` 为相对包起点的自然数字节偏移；`width` 为完整源项的载体位宽，`source` 为项字符串。一次多字节存储仍只产生一个事件，实际访问宽度另由指令和记录提供。
+
+各位宽字段仅接受 JSON 数字 `32` 或 `64`，并须与实际项位宽一致。两类写入的事件和偏移允许零。所有项均递归检查 AST 的常量范围、寄存器变元、运算符签名、参数个数与宽度；所有必填字段均检查类型。`predicateWellFormed` 提供这一结构检查，不提供资源有效性、动态身份唯一性或指令语义的证明。
+
+Lean 的 `Cond` 以 `lhs`、`rel`、`rhs` 存储条件，载体取自 `lhs.width`；`Predicate` 保存上述五类构造，列表承载全局与局部观察。直接构造这些 Lean 值并不自动满足数学良构域；不经 JSON 的调用方须保证与 `predicateWellFormed` 相同的结构条件及所属规则的语义前提。`PathMerge.applyLocal` 只检查 Expr 键和位宽并作结构累积，不证明 Predicate 生成可靠性。P2 的集合性质是数学正文的证明，尚无对应的混合累积、指令观察覆盖或完整 History 保持的 Lean 定理。
+
+
+新类项字符串的裸常量继承字段位宽；嵌套常量载体与上下文不同则使用 `c32:n` 或 `c64:n`。应用结果载体与上下文不同可用 `t32(term)` 或 `t64(term)`。投影与扩展的跨载体应用显式保留输入位宽：`lowq/v`、`extracto,len/v`、`bswapq/v`，以及 `zextq/w/v`、`sextq/w/v`，其中 `v` 是输入载体，`w` 是输出载体。例如 `zext8/64/32(v32:1)` 保留 32 位输入和 64 位结果。载体相同时保留既有短写法。Helper 与 Expr 的渲染格式未改变。
+
+`predicates` 允许重复同结构成员。结构累积保留已有列表次序，再依局部列表次序追加尚未出现的成员；精确合并仅比较集合成员，不比较排列或重复次数。参数和键数组的内部顺序仍参与每个观察的相等。列表排列、集合相等及有序 History 记录是三种不同的比较范围。
+
+### 五类观察的实现对应
+
+RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构造和 wire 能表示一个类，不表示该类全部机器生成条件已有实现或证明。
+
+- Helper 的调用身份和参数继续沿用既有 Helper 生成，Map helper 的 wire 参数仍为指针项而非数学冻结字节数组。该表示差异在 Map 写入来源检查中保留为缺口。
+- Branch 覆盖 `BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`、`C.BEQZ`、`C.BNEZ` 的每个保留方向；取同一执行前关系的两端 solve 后完整项，Taken 使用原关系，NotTaken 使用补关系。`position` 为运行时数组下标加一，原 Expr 比较约束继续保留；确定比较保留一侧时也生成该侧观察。
+- Return 在 `JALR x0,0(ra)` 或 `C.JR ra` 经已有绑定识别为外层 Exit 后，读取执行前关系中 `a0` 的完整 32 位项。程序内返回不生成 Return；完整项缺失拒绝。Exit 的写后完整项检查仍保留，两个时点与实际返回结果的一致性仍需证明。
+- PacketWrite 覆盖 Expr 实际选定为 Packet 的 `SB`、`SH`、`SW`、`C.SW`、`C.SWSP`。资源选择沿用 Stack、Map、Packet 的既有优先级；能取得包别名不改变已选定的 Stack 存储，正常对齐的 `C.SWSP` 通常走 Stack。选定 Packet 后取得 `PacketAccess` 的资源身份与偏移，并保存 Expr 字节拆分使用的同一完整源项，生成一个事件。绑定层以 `Option NodeId` 接收真实执行前节点引用；产品 `inferStep` 与 `rv32Snapshot` 传入来源节点身份，无身份时拒绝 `UndefinedSrc`。局部效果与观察一起组合，后续字节覆写保留旧事件。
+- MapWrite 的构造、解析、渲染与精确比较均支持，但产品 step 当前拒绝已识别的 Map 存储，报告 `UndefinedSrc`。`lookupAddress` 只携带 helper 事件、Map 参数与键指针，未保存完整冻结键；Meta 也没有键长和值布局。没有来源与布局前提时不能生成成功的 MapWrite 或只提交 Map Expr 写入。低层 Expr 的 Map 数值写入切片继续存在，其本身不构成产品 step 成功。
+
+Packet 与 Map 的源项载体宽度不决定窄存储宽度 \(q\)；wire 未添加 \(q\)、字节序或覆盖范围。写入事件与这些属性的关联、访问有效性、别名一致性、真实节点身份的动态区分、历史恢复以及名称外延性仍须依[各类数学义务](../Predicate/谓词定义.md#观察集合累积与可满足性)证明。EBPF 的现有有限 step 切片未接入这次 RV32IMC 的观察生成扩展，不能据 wire 的 64 位支持声称 eBPF 指令覆盖。
+
+
 
 ## 比较规则
 
-通过全部请求与配置有效性检查后，按 `notTaken` 的数组次序寻找首个与 `taken` 相等的配置。`PathMerge.ExactMerge.sameConfig` 比较完整的 HelperOnly 配置：位置、Expr 值绑定集合、Expr 约束集合和 Helper 观察集合分别相等；运行时节点引用不参与配置相等。互补的比较 Expr 仍参与约束集合比较，当前状态的更新遵守[赋值覆盖全部旧关系](../Expr/Expr.md#赋值覆盖全部旧关系)。
+通过全部请求与配置有效性检查后，按 `notTaken` 的数组次序寻找首个与 `taken` 相等的配置。`PathMerge.ExactMerge.sameConfig` 比较位置、Expr 值绑定集合、Expr 约束集合和五类混合观察集合；运行时节点引用不参与配置相等。互补的比较 Expr 仍参与约束集合比较，当前状态的更新遵守[赋值覆盖全部旧关系](../Expr/Expr.md#赋值覆盖全部旧关系)。
 
-项 AST 的相等由返回等式证明或不等式证明的 `DecidableEq` 判定，Expr 与 Helper 观察沿用该结构相等。各集合通过双向成员检查比较，不比较 JSON 字符串或渲染文本。Expr 和 Predicate 集合的排列次序不影响结果；Helper 重复成员不影响结果。约束的重复拒绝规则仍适用。
+项 AST 的相等由返回等式证明或不等式证明的 `DecidableEq` 判定，Expr、Cond 与五类 Predicate 沿用该结构相等。各集合通过双向成员检查比较，不比较 JSON 字符串或渲染文本。集合排列与 Predicate 重复成员不影响结果；约束的重复拒绝规则仍适用。
 
-项的构造、位宽、寄存器身份、运算符及其固定参数、关系、Expr 角色与 Helper 调用身份均参与结构相等，项及调用的参数序列按次序比较。不作代数等价求解、名称重命名、投影或差异豁免。一个请求内全部配置须有效，全部节点引用须互异，不能因较早候选匹配而忽略后续无效输入。
+项的构造、位宽、寄存器身份、运算符及其固定参数、关系、Expr 角色与五类观察的全部构造分量均参与结构相等。改变 Branch 位置、方向或条件，Return 项，MapWrite 事件、Map 项、键、偏移或源项，PacketWrite 事件、资源、偏移或源项，均阻止精确匹配。项、调用参数及键数组按次序比较。不作代数等价求解、名称重命名、投影或差异豁免；HelperOnly 标签也不能放宽这些比较。一个请求内全部配置须有效，全部节点引用须互异，不能因较早候选匹配而忽略后续无效输入。
 
 ## 结果与调用方动作
 
@@ -139,7 +172,7 @@ Helper 行例如：
 - `UnsupportedObservationModel:<模型>`；`UnsupportedRequiredObservation:<类别>`。
 - `InvalidLocation:<配置标签>` 报告位置字符串无法解析为普通非负下标或 `exit`。
 - `InvalidSnapshot:<配置标签>` 报告共享状态解析、寄存器表示、位宽、Expr 角色或键唯一性检查失败。
-- `InvalidTerm:<配置标签>` 报告递归项或关系参数检查失败；`InvalidPredicate:<配置标签>` 报告 Helper 编号范围、参数位宽或参数项检查失败。
+- `InvalidTerm:<配置标签>` 报告 Expr 递归项或关系参数检查失败；`InvalidPredicate:<配置标签>` 报告已识别类的字段、位宽、递归 AST、关系或构造合法性检查失败。
 - `UnsupportedPredicateKind:<配置标签>:<类别>`；`DuplicateNodeId`；`EmptyNotTaken`。
 
 配置标签为 `taken` 或 `notTaken[k]`，其中 `k` 是从零开始的候选数组下标。`InvalidRequestJSON` 的后缀保留 Lean JSON 解析器给出的错误文字。嵌套字段的类型错误按实际失败的校验阶段报告，诊断不承诺枚举同一请求的全部错误。
@@ -148,19 +181,21 @@ Helper 行例如：
 
 ## 语义范围与证据边界
 
-`scope:"ExactConfig"` 只保证当前 HelperOnly 实现表示中两个配置的完整结构相等。该结果是[精确配置共享判据 D3](Jump/证明义务-路径合并完备.md#配置执行前缀与后续行为)在当前表示中的受限比较结果；其语义解释与后缀引用许可还需要以下证据。
+`scope:"ExactConfig"` 只保证所提供配置在当前五类结构表示中完整相等。该结果是[精确配置共享判据 D3](Jump/证明义务-路径合并完备.md#配置执行前缀与后续行为)的结构比较结果；表示覆盖与数学构造的差异见[五类观察的实现对应](#五类观察的实现对应)，语义解释与后缀引用许可还需要以下证据。
 
 Architecture-Agnostic 是待非 RV32 产品目标建立后检验的研究假设，不是已证明的跨 ISA 验证器性质。ClassifierExpr 共享对象与 PathMerge 的线协议比较不提供目标中立的 create/step 验证门面。现有 EBPF 仅有有限 ALU、入口与 EXIT 的可执行切片及局部行为检查，没有共享预算驱动或与 RV32 对称的展开产品目标；该切片不构成 RV32 产品能力对等或跨 ISA 等价证据。包与上下文访问、资源契约、helper 调用和内部调用返回仍在该 EBPF 可执行切片范围之外。
 
 - 运行时须保证位置有效、相同程序与固定语义语境、同一次分支的两侧来源、配置真实到达及可复用后缀的归属。共同 merge 的结构检查不证明这些事实。
 - 完整数学 `Merged(M)` 仍要求 [e_N](Jump/路径合并-接口契约.md#输入) 的 NotTaken 后缀适用性与完整行为覆盖、`e_T` 的 Taken 记录有效性及到达覆盖，以及 [e_M](Jump/路径合并-接口契约.md#mergedm) 的全称精确复用、前缀连接和后缀引用适用性。此 String 请求不传入或产生这些证明，不得把 `status:"merged"` 当作完整 `Merged(M)` 凭据。
-- 当前 Helper 表示没有完整的 Branch、Return、MapWrite 与 PacketWrite 观察。空观察数组相等不能证明观察齐备。完整 Branch 谓词保留分支位置、选定方向及冻结条件，同一次分支的 Taken 与 NotTaken 观察结构不同，后续 Expr 覆写不删除这些观察。因此当前表示中的分支菱形即使精确匹配，也不能据此宣布五类观察下的 D3 共享或完整语义合并。
+- 全部应有观察的生成与保存仍需证明，空数组相等及 FiveClass 声明不能证明观察齐备。同一次分支的 Taken 与 NotTaken 谓词保留不同方向和条件；后续 Expr 覆写不删除这些观察，因而即使 Expr 汇合也不能据此放宽五类精确相等。没有新类观察的旧 HelperOnly 捕获只能证明其已提供状态的比较结果。
 - 不同 Expr 或观察的更宽共享仍须完成差异依赖、投影行为保持及覆盖义务，见[未决义务](Jump/路径合并-接口契约.md#未决义务)。有限后续一致性仍以 [P1 至 P4](Jump/证明义务-路径合并完备.md#充分性前提) 为前提：共同语境与良构相等、局部结果外延性、后继准备外延性与闭合性、有限局部结果均须成立。动态调用及写入身份如何同时满足外延性与不同动态步骤的区分要求，仍是[动态身份与名称的模型冲突](Jump/证明义务-路径合并完备.md#仍待证明的义务)；[History 的 H-O1 至 H-O4](History.md#证明边界与待证义务)还要求记录来源、路径保持、完整依赖与事件可恢复范围的对应。实际指令语义、共享后的完整历史与无限行为仍须各自证明。
 - 结构不相等只否定精确配置判据，不能作为更宽行为等价的反例。数学拒绝原因中的 `Counterexample` 须有明确否定范围的已证反例；当前导出不产生该结果。
 - 特殊循环仅由满足 `Admit(W)` 及 `e_F` 的 `Escape(W)` 获得许可，见[数学契约](Jump/路径合并-接口契约.md#escapew)。精确匹配、比较失败或回返到分支位置均不建立该准入；当前导出不返回 `Escape`，不生成循环凭据。
-- [PathMerge/Merge.lean](../../PathMerge/Merge.lean) 的项相等判定使用携带等式或不等式证明的 `DecidableEq`；其十项 `#guard` 与 `PathMerge.runMergeChecks` 执行入口覆盖有限线协议回归。`mergeJustDropOverwriteCheck` 使用真实菱形的缩减状态，保留共同约束并检查 `a3` 实际覆写前拒绝、覆写后匹配；`mergeComplementaryOverwriteCheck` 检查互补约束仍拒绝，写无关寄存器仍拒绝，实际覆写比较左值后再精确匹配。这些有限实例不建立 P1 至 P4、完整 `Merged(M)` 或一般指令语义正确性。[MergeCheck.lean](../../MergeCheck.lean) 提供 `lake env lean --run MergeCheck.lean` 入口；实际执行结果由对应验证记录提供。
+- [PathMerge/Merge.lean](../../PathMerge/Merge.lean) 的项、Cond 与 Predicate 相等判定使用携带等式或不等式证明的 `DecidableEq`。`#guard` 与 `PathMerge.runMergeChecks` 覆盖有限 wire 回归，包括混合重排与重复成员成功、各类构造字段差异拒绝、全部候选有效性和旧声明标签不投影。`mergeJustDropOverwriteCheck` 与 `mergeComplementaryOverwriteCheck` 是不含新类观察的旧表示缩减实例，只检验 Expr 覆写前后及互补约束；不能作为新 Branch 累积后的汇合依据。这些实例不建立 P1 至 P4、完整 `Merged(M)` 或一般指令语义正确性。[MergeCheck.lean](../../MergeCheck.lean) 提供 `lake env lean --run MergeCheck.lean` 入口；实际执行结果由对应验证记录提供。
 
 ## just_drop 实际菱形诊断
+以下历史诊断均沿用当时未生成新类观察的捕获与报告，不作为五类生成扩展后的 live 复用结论；新版本复查需保留完整混合观察，并以严格相等预期拒绝仍有互补 Branch 成员的两侧。
+
 
 以下指令标签 `j11` 至 `j18` 使用捕获图与线协议的零基数组下标；例如 `j11` 对应数学规格中的第 12 条指令。节点编号仅标识这次捕获，复查时须按指令和分支来源重新定位。
 
@@ -225,7 +260,7 @@ Cursor 提供的 U2 live 报告 `.omp/u2-tooling-live-report.md` 记录：在 `a
 ### U3 重新链接后的 live 复查
 
 1. Cursor 先适配 tooling 绑定与链接顺序，将服务重新链接到 U3 的 ClassifierExpr、PathMerge、RV32IMC 共享库；随后按[服务端接口](../../tooling/server/README.md)通过 `POST /api/session` 分别上传真实 `just_drop.elf` 与 `merge_try.elf` 的 `image_b64`，对各会话执行 `POST /api/session/<id>/run` 并保留返回快照。只设置显示名称而省略镜像仍使用默认镜像。按实际指令位置和边的方向定位两侧到达，保留完整 `exprs`、`predicates`、后继边及本次节点引用；`merge_try.elf` 使用自身的指令和分支来源，不沿用 just_drop 的下标或节点引用。
-2. 对 just_drop 的捕获状态构造完整请求，分别比较 `loc:"15"`、`loc:"17"` 与 `loc:"18"` 的配置对。前两对预期为 `NoExactConfigMatch`，最后一对预期为 `scope:"ExactConfig"` 的成功；Taken 与 NotTaken 标签须遵守外层分支的真实来源，不得只抽取 `a3` 行代替完整状态。
+2. 对重新捕获状态构造完整请求，比较对应 `loc:"15"`、`loc:"17"` 与 `loc:"18"` 的配置对。Taken 与 NotTaken 标签须遵守外层分支的真实来源，不得只抽取 `a3` 行代替完整状态。旧 U3 空观察记录在最终覆写后曾匹配；五类生成扩展后，只要保留不同 Branch 成员，即使 `loc:"18"` 的 Expr 相等仍应返回 `NoExactConfigMatch`，不能丢弃观察重现旧成功。
 3. 跟踪重新链接后服务的外层 frame 候选集合、每次实际交给 merge 端口的完整请求及原始响应，核对镜像、状态来源、可复用后缀归属与最终阶段。just_drop 按新捕获定位 `loc:"18"` 的真实比较；merge_try 按其实际汇合配置核对。源码重放结果、Cursor handoff 测量、受控 Lean 成功及切换前 U2 测量不能替代 U3 的 live 请求响应证据。
 4. 对两个 `/run` 返回快照分别检查 `dir:"reuse"` 边和节点的 `merge_reuse_from` 引用，确认匹配响应被应用为保留各自前缀的后缀引用，并检查该复用范围的重复后缀是否停止展开。只有真实请求、原始响应及引用动作均被观察到，才能报告 live 复用成功。
 

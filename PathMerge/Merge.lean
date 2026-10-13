@@ -55,6 +55,7 @@ end
 private instance : DecidableEq ClassifierExpr.Term := termDecEq
 deriving instance DecidableEq for ClassifierExpr.Expr
 deriving instance DecidableEq for ClassifierExpr.HelperKind
+deriving instance DecidableEq for ClassifierExpr.Cond
 deriving instance DecidableEq for ClassifierExpr.Predicate
 
 private def sameSet [DecidableEq α] (xs ys : List α) : Bool :=
@@ -62,8 +63,8 @@ private def sameSet [DecidableEq α] (xs ys : List α) : Bool :=
     ys.all (fun y => xs.any (fun x => decide (y = x)))
 
 /-- Exact equality of the current representation: location and both Expr roles,
-then Helper observation membership. Set order and predicate multiplicity do not matter;
-argument order, event identity, widths, operators and all AST children do matter.
+then all five observation classes by membership. Set order and predicate multiplicity
+do not matter; argument/key order, event identity, widths, operators and all AST children do matter.
 The parser still requires unique value keys and structurally unique constraints. -/
 def sameConfig (a b : Node) : Bool :=
   decide (a.loc = b.loc) &&
@@ -124,11 +125,6 @@ private def validRel (w : Width) : Rel → Bool
     boundedWidth q w.bits
   | _ => true
 
--- Helper observations are opaque. The bounded ID and w32 argument representation
--- are current shared-parser limits, not a target's helper arity or call semantics.
-private def validPredicate : Predicate → Bool
-  | .helper _ kind args => kind.id < (1 <<< 32) &&
-    args.all (fun t => t.width == .w32) && validTerms args
 
 private def snapshot (label : String) (j : Lean.Json) :
     Except String (Nat × Node) := do
@@ -140,15 +136,18 @@ private def snapshot (label : String) (j : Lean.Json) :
     | none => throw ("InvalidLocation:" ++ label)
   let exprs ← arrayField j "exprs"
   let predicates ← arrayField j "predicates"
-  for p in predicates do
+  let parsedPredicates ← predicates.toList.mapM fun p => do
     let kind ← stringField p "kind"
-    if kind != "helper" then throw ("UnsupportedPredicateKind:" ++ label ++ ":" ++ kind)
-  let some state := parseSemStateJson (Lean.Json.arr exprs).compress
-      (Lean.Json.arr predicates).compress | throw ("InvalidSnapshot:" ++ label)
+    if !["helper", "branch", "ret", "mapWrite", "packetWrite"].contains kind then
+      throw ("UnsupportedPredicateKind:" ++ label ++ ":" ++ kind)
+    -- parsePredicateJson applies predicateWellFormed for every recognized class.
+    let some predicate := parsePredicateJson p | throw ("InvalidPredicate:" ++ label)
+    pure predicate
+  let some state := parseSemStateJson (Lean.Json.arr exprs).compress "[]" |
+    throw ("InvalidSnapshot:" ++ label)
   if !state.exprs.toList.all (fun e => validRel e.reg.width e.rel && validTerm e.term) then
     throw ("InvalidTerm:" ++ label)
-  if !state.predicates.all validPredicate then throw ("InvalidPredicate:" ++ label)
-  pure (id, ⟨loc, state⟩)
+  pure (id, ⟨loc, ⟨state.exprs, parsedPredicates⟩⟩)
 
 /-- Validate all evidence before selecting the first exactly equal ordered suffix entry.
 Snapshots are already-applied global states. Position validity, common origin, history,
@@ -156,11 +155,14 @@ reusable-suffix validity and coverage certificates remain the caller's obligatio
 def select (requestJson : String) : Except String (Nat × Nat) := do
   let j ← (Lean.Json.parse requestJson).mapError (fun e => "InvalidRequestJSON:" ++ e)
   let model ← stringField j "observationModel"
-  if model != "HelperOnly" then throw ("UnsupportedObservationModel:" ++ model)
+  if model != "HelperOnly" && model != "FiveClass" then
+    throw ("UnsupportedObservationModel:" ++ model)
   let requirements ← arrayField j "requiredObservations"
   for value in requirements do
     let name ← value.getStr?.mapError (fun _ => "MissingOrInvalidField:requiredObservations")
-    if name != "Helper" then throw ("UnsupportedRequiredObservation:" ++ name)
+    if !(if model == "HelperOnly" then name == "Helper"
+        else ["Helper", "Branch", "Return", "MapWrite", "PacketWrite"].contains name) then
+      throw ("UnsupportedRequiredObservation:" ++ name)
   let (takenId, taken) ← snapshot "taken" (← field j "taken")
   let candidates ← arrayField j "notTaken"
   if candidates.isEmpty then throw "EmptyNotTaken"
@@ -190,19 +192,19 @@ end PathMerge.ExactMerge
 namespace PathMerge
 open ClassifierExpr
 
-/-- Stateless exact-config oracle over the CURRENT Helper-only representation.
-The request carries the observation model, required observations and already-applied
-GLOBAL configurations; IDs are opaque natural references. Location uses a zero-based
-nonnegative decimal string or `exit`, with program validity owned by the runtime.
+/-- Stateless exact-config oracle over the five-class structural representation.
+HelperOnly remains a legacy declaration accepting only Helper requirements; it never
+projects supplied states. FiveClass accepts requirements for all five classes.
+GLOBAL configurations carry opaque natural IDs. Location uses a zero-based nonnegative
+decimal string or `exit`, with program validity owned by the runtime.
 All candidates validate before the first equal ordered NotTaken entry is selected.
 No state is rewritten and no instruction is executed.
 
 `scope: ExactConfig` proves only equality in this representation. Authentic history,
 common program/semantic context, branch origin, suffix validity and e_N/e_T/e_M remain
-external obligations. Missing Branch/Return/MapWrite/PacketWrite observations cannot
-certify the full five-observation Merged(M) contract. Requiring them rejects even equal
-supplied states. Malformed evidence and unequal configs reject with InsufficientEvidence;
-this export produces neither a behavioral Counterexample nor an Escape certificate.
+external obligations. Declared requirements do not prove observation completeness.
+Malformed evidence and unequal configs reject with InsufficientEvidence; this export
+produces neither a behavioral Counterexample nor an Escape certificate.
 
 C ABI: boxed Lean request String → boxed Lean JSON String. -/
 @[export lean_expand_merge]
@@ -334,9 +336,11 @@ private def mergeUnsupportedCheck : Bool :=
   ["Branch", "Return", "MapWrite", "PacketWrite", "Unknown"].all
     (fun kind => mergeRejects (mergeRequestFixture taken candidate ("[\"" ++ kind ++ "\"]"))
       "UnsupportedRequiredObservation:") &&
-  mergeRejects (mergeRequestFixture taken candidate "[\"Helper\"]" "FiveClass")
+  mergeRejects (mergeRequestFixture taken candidate "[\"Unknown\"]" "FiveClass")
+    "UnsupportedRequiredObservation:" &&
+  mergeRejects (mergeRequestFixture taken candidate "[\"Helper\"]" "Unknown")
     "UnsupportedObservationModel:" &&
-  ["branch", "return", "mapWrite", "packetWrite", "cmp", "ret"].all
+  ["return", "cmp", "for", "unknown"].all
     (fun kind =>
       let unsupported := mergeSnapshotFixture 18 "1" "[]" ("[{\"kind\":\"" ++ kind ++ "\"}]")
       mergeRejects (mergeRequestFixture taken unsupported) "UnsupportedPredicateKind:" &&
@@ -382,6 +386,87 @@ private def mergeReuses (request : String) (reuseFrom taken : Nat) : Bool :=
 private def mergeStateSnapshotFixture (id : Nat) (loc : String) (state : SemState) : String :=
   mergeSnapshotFixture id loc ("[" ++ renderExprSetJson state.exprs ++ "]")
     ("[" ++ renderPredicatesJson state.predicates ++ "]")
+
+private def mergeFiveClassRequirements : String :=
+  "[\"Helper\",\"Branch\",\"Return\",\"MapWrite\",\"PacketWrite\"]"
+
+private def mergeMixedPredicates : List Predicate :=
+  [.helper 7 .clock [Term.C32 1],
+   .branch 1 .taken ⟨Term.V32 1, .ltu, Term.C32 4⟩,
+   .ret (Term.V64 2),
+   .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
+   .packetWrite 9 2 0 (Term.V32 5)]
+
+private def mergeMixedRequest (a b : List Predicate) (model : String := "FiveClass") : String :=
+  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨ExprSet.empty, a⟩)
+    (mergeStateSnapshotFixture 17 "1" ⟨ExprSet.empty, b⟩)
+    (if model == "HelperOnly" then "[\"Helper\"]" else mergeFiveClassRequirements) model
+
+private def mergeMixedSetCheck : Bool :=
+  let ps := mergeMixedPredicates
+  mergeReuses (mergeMixedRequest ps (ps.reverse ++ ps)) 17 42 &&
+    mergeReuses (mergeMixedRequest ps ps.reverse "HelperOnly") 17 42 &&
+    match mergePredicate [ps[0]!, ps[1]!] (ps.reverse ++ ps) with
+    | .ok result => result == [ps[0]!, ps[1]!, ps[4]!, ps[3]!, ps[2]!] &&
+      ExactMerge.sameConfig ⟨.pos 1, ⟨ExprSet.empty, result⟩⟩
+        ⟨.pos 1, ⟨ExprSet.empty, ps⟩⟩
+    | .error _ => false
+
+private def mergeChangedClassFieldCheck : Bool :=
+  let branch := mergeMixedPredicates[1]!
+  let mapWrite := mergeMixedPredicates[3]!
+  let packetWrite := mergeMixedPredicates[4]!
+  let cases : List (Predicate × List Predicate) := [
+    (branch, [
+      .branch 2 .taken ⟨Term.V32 1, .ltu, Term.C32 4⟩,
+      .branch 1 .notTaken ⟨Term.V32 1, .ltu, Term.C32 4⟩,
+      .branch 1 .taken ⟨Term.V32 2, .ltu, Term.C32 4⟩,
+      .branch 1 .taken ⟨Term.V32 1, .leu, Term.C32 4⟩,
+      .branch 1 .taken ⟨Term.V32 1, .ltu, Term.C32 5⟩,
+      .branch 1 .taken ⟨Term.V64 1, .ltu, Term.C64 4⟩]),
+    (.branch 1 .taken ⟨Term.V32 1, .ltuN 8, Term.C32 4⟩,
+      [.branch 1 .taken ⟨Term.V32 1, .ltuN 16, Term.C32 4⟩]),
+    (.ret (Term.V64 2), [.ret (Term.V64 3), .ret (Term.V32 2)]),
+    (mapWrite, [
+      .mapWrite 10 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
+      .mapWrite 8 (Term.V64 6) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
+      .mapWrite 8 (Term.V32 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 2, Term.C32 1] 0 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1] 0 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 1 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 6),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V64 4)]),
+    (packetWrite, [
+      .packetWrite 10 2 0 (Term.V32 5),
+      .packetWrite 9 3 0 (Term.V32 5),
+      .packetWrite 9 2 1 (Term.V32 5),
+      .packetWrite 9 2 0 (Term.V32 6),
+      .packetWrite 9 2 0 (Term.V64 5)])]
+  cases.all fun (original, variants) =>
+    variants.all fun changed =>
+      let a := mergeMixedPredicates ++ [original]
+      let b := mergeMixedPredicates.filter (· != original) ++ [changed]
+      mergeRejects (mergeMixedRequest a b) "NoExactConfigMatch" &&
+        mergeRejects (mergeMixedRequest a b "HelperOnly") "NoExactConfigMatch"
+
+private def mergeMalformedMixedCheck : Bool :=
+  let valid := mergeSnapshotFixture 42
+  let badRows := [
+    "{\"kind\":\"branch\",\"position\":0,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eq\",\"rhs\":\"1\"}}",
+    "{\"kind\":\"branch\",\"position\":1,\"dir\":\"ok\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eq\",\"rhs\":\"1\"}}",
+    "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"v64:1\",\"rel\":\"eq\",\"rhs\":\"1\"}}",
+    "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eqN33\",\"rhs\":\"1\"}}",
+    "{\"kind\":\"ret\",\"width\":16,\"term\":\"1\"}",
+    "{\"kind\":\"ret\",\"width\":64,\"term\":\"v32:1\"}",
+    "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"v64:1\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}",
+    "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"256\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}",
+    "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32,\"source\":\"add32(v64:1,2)\"}",
+    "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32}"]
+  badRows.all fun row =>
+    let invalid := mergeSnapshotFixture 18 "1" "[]" ("[" ++ row ++ "]")
+    -- All snapshots validate, even after an earlier equal candidate.
+    mergeRejects (mergeRequestFixture valid (mergeSnapshotFixture 17 ++ "," ++ invalid)
+      mergeFiveClassRequirements "FiveClass") "InvalidPredicate:"
 
 -- Reduced just_drop.elf diamond: outer branch node 12 has Taken descendants
 -- 27 -> 30 and NotTaken descendants 28 -> 31. Wire locations are zero-based.
@@ -460,8 +545,11 @@ private def mergeComplementaryOverwriteCheck : Bool :=
 #guard mergeOpaqueHelpersCheck
 #guard mergeJustDropOverwriteCheck
 #guard mergeComplementaryOverwriteCheck
+#guard mergeMixedSetCheck
+#guard mergeChangedClassFieldCheck
+#guard mergeMalformedMixedCheck
 
-/-- Execute the existing ten finite wire regressions and show two actual export responses.
+/-- Execute finite wire regressions, including mixed-class equality and field sensitivity.
 This does not establish general instruction semantics, runtime scheduling, full-observation
 merge, or the caller's history and suffix certificates. The standalone main lives in
 `MergeCheck.lean`, outside the PathMerge library imports. -/
@@ -478,6 +566,9 @@ def runMergeChecks : IO UInt32 := do
     ("mergeOpaqueIdsCheck", mergeOpaqueIdsCheck),
     ("mergeSharedRepresentationCheck", mergeSharedRepresentationCheck),
     ("mergeOpaqueHelpersCheck", mergeOpaqueHelpersCheck),
+    ("mergeMixedSetCheck", mergeMixedSetCheck),
+    ("mergeChangedClassFieldCheck", mergeChangedClassFieldCheck),
+    ("mergeMalformedMixedCheck", mergeMalformedMixedCheck),
     ("mergeJustDropOverwriteCheck", mergeJustDropOverwriteCheck),
     ("mergeComplementaryOverwriteCheck", mergeComplementaryOverwriteCheck)]
   let mut failed := false

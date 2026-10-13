@@ -27,9 +27,26 @@ def HelperKind.id : HelperKind → Nat
   | .printk => 6 | .checksum => 28 | .adjustTail => 65
   | .unsupported id => id
 
-/-- Helper-call observations only. The documents also define Branch, Return, MapWrite and PacketWrite predicate kinds, which this type does not yet carry. -/
+/-- Selected conditional successor; separate from history's unconditional direction. -/
+inductive BranchDirection where
+  | taken | notTaken
+  deriving DecidableEq, BEq, Repr, Inhabited
+
+/-- Frozen comparison terms. Same-width terms and relation ranges require validation. -/
+structure Cond where
+  lhs : Term
+  rel : Rel
+  rhs : Term
+  deriving BEq, Repr, Inhabited
+
+/-- Five observation classes (`doc/Predicate/谓词定义.md`).
+Resource provenance, byte-valued symbolic keys and dynamic identities are semantic premises. -/
 inductive Predicate where
   | helper (event : NodeId) (kind : HelperKind) (args : List Term)
+  | branch (position : Nat) (dir : BranchDirection) (cond : Cond)
+  | ret (term : Term)
+  | mapWrite (event : NodeId) (map : Term) (key : List Term) (offset : Nat) (source : Term)
+  | packetWrite (event : NodeId) (packet : Nat) (offset : Nat) (source : Term)
   deriving BEq, Repr, Inhabited
 
 inductive Location where

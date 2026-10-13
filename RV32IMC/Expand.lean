@@ -10,7 +10,7 @@ import ClassifierExpr.Parse
 namespace RV32IMC
 open ClassifierExpr PathMerge
 
-/-! MVP gaps: symbolic indirect targets reject; resource Predicates remain undefined. -/
+/-! Symbolic indirect targets reject; Map writes require frozen key and layout provenance. -/
 
 /-- Byte length, used to bind sequence indices to a contiguous instruction layout. -/
 def insnLength : Insn → Nat
@@ -49,12 +49,12 @@ private def emit (dir : Direction) (loc : Option Location) (Ei : ExprSet) : Step
   | some k => .candidates [⟨dir, k, Ei, []⟩]
   | none => .reject .unboundTarget
 
-/-- Require a0's complete equality on a bound Exit, from the post-instruction state. -/
+/-- Capture a0's complete pre-return term only after the wrapper Exit is recognized. -/
 private def emitIndirect (loc : Option Location) (Eg Ei : ExprSet) : StepResult :=
   match loc with
   | some .exit =>
-    match (updateExpr Eg Ei).lookupEq (Reg.real32 10) with
-    | some _ => .candidates [⟨.ok, .exit, Ei, []⟩]
+    match Eg.lookupEq (Reg.real32 10) with
+    | some t => .candidates [⟨.ok, .exit, Ei, [.ret t]⟩]
     | none => .reject .undefinedSrc
   | _ => emit .ok loc Ei
 
@@ -66,10 +66,12 @@ private def branchRel : bop → Rel
   | .BLTU => .ltu
   | .BGEU => .geu
 
-private def emitComparison (dir : Direction) (loc : Option Location) (Ei : ExprSet)
-    (e : Expr) : StepResult :=
+private def emitComparison (dir : BranchDirection) (loc : Option Location) (Ei : ExprSet)
+    (e : Expr) (position : Nat) (lhs : Term) : StepResult :=
+  let direction := match dir with | .taken => Direction.taken | .notTaken => .notTaken
   match loc with
-  | some k => .candidates [⟨dir, k, Ei.insertConstraint e, []⟩]
+  | some k => .candidates [⟨direction, k, Ei.insertConstraint e,
+      [.branch position dir ⟨lhs, e.rel, e.term⟩]⟩]
   | none => .reject .unboundTarget
 
 private def indirectTarget (offsets : Array Nat) (base returnAddr : Option Nat)
@@ -95,10 +97,30 @@ private def valueRejection : Insn → RejectReason
   | .C_EBREAK _ => .unsupported
   | _ => .undefinedSrc
 
+/-- Each successful store delta touches one resource category, selected by the value step.
+Map effects lack frozen key bytes and layout; Packet observations require a dynamic event. -/
+private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet)
+    (rs1 rs2 : regidx) (offset width : Nat) (event : Option NodeId) : StepResult :=
+  match Ei.entries.head? with
+  | some e =>
+    match e.reg.kind with
+    | RegKind.map => .reject .undefinedSrc
+    | RegKind.packet =>
+      match event, packetBinding Eg rs1 offset width, readReg Eg rs2, nextPosition I j with
+      | some event, some access, some source, some loc =>
+        .candidates [⟨.ok, loc, Ei,
+          [.packetWrite event access.κ access.offset source]⟩]
+      | _, _, _, none => .reject .unboundTarget
+      | _, _, _, _ => .reject .undefinedSrc
+    | _ => emit .ok (nextPosition I j) Ei
+  | none => emit .ok (nextPosition I j) Ei
+
 /-- Static layout/return bindings are captured by the Step closure, never stored in SemState.
-PC is derived from the layout solely for the value call; Candidates contain its local E_k and P_k. -/
+PC is derived solely for the value call. Without a dynamic event, resource writes reject;
+ordinary value, Branch, and Return callers need no event identity. -/
 def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
-    (j : Nat) (σ : SemState) (boundCtx : Option Term := none) : StepResult :=
+    (j : Nat) (σ : SemState) (boundCtx : Option Term := none)
+    (event : Option NodeId := none) : StepResult :=
   match I[j]? with
   | none => .reject .unboundTarget
   | some i =>
@@ -126,13 +148,15 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
               let takenE := Expr.mkRel (Reg.real32 rs1.toNat) rel t2
               let fallE := Expr.mkRel (Reg.real32 rs1.toNat) rel.compl t2
               match takenE.decideWith t1 with
-              | some true => emitComparison .taken takenLoc Ei takenE
-              | some false => emitComparison .notTaken fallLoc Ei fallE
+              | some true => emitComparison .taken takenLoc Ei takenE (j + 1) t1
+              | some false => emitComparison .notTaken fallLoc Ei fallE (j + 1) t1
               | none =>
                 match takenLoc, fallLoc with
                 | some taken, some fall => .candidates [
-                    ⟨.taken, taken, Ei.insertConstraint takenE, []⟩,
-                    ⟨.notTaken, fall, Ei.insertConstraint fallE, []⟩]
+                    ⟨.taken, taken, Ei.insertConstraint takenE,
+                      [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
+                    ⟨.notTaken, fall, Ei.insertConstraint fallE,
+                      [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
                 | _, _ => .reject .unboundTarget
             | _, _ => .reject .undefinedSrc
           | .JALR (imm, rs1, rd) =>
@@ -171,14 +195,23 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
               let takenLoc := directTarget offsets j (2 * s 8 imm.toNat)
               let fallLoc := nextPosition I j
               match takenE.decideWith t1 with
-              | some true => emitComparison .taken takenLoc Ei takenE
-              | some false => emitComparison .notTaken fallLoc Ei fallE
+              | some true => emitComparison .taken takenLoc Ei takenE (j + 1) t1
+              | some false => emitComparison .notTaken fallLoc Ei fallE (j + 1) t1
               | none =>
                 match takenLoc, fallLoc with
                 | some taken, some fall => .candidates [
-                    ⟨.taken, taken, Ei.insertConstraint takenE, []⟩,
-                    ⟨.notTaken, fall, Ei.insertConstraint fallE, []⟩]
+                    ⟨.taken, taken, Ei.insertConstraint takenE,
+                      [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
+                    ⟨.notTaken, fall, Ei.insertConstraint fallE,
+                      [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
                 | _, _ => .reject .unboundTarget
+          | .STORE (imm, rs2, rs1, width) =>
+            emitStore I j Eg Ei rs1 rs2 (immI32 imm) width event
+          | .C_SW (imm, rs1, rs2) =>
+            emitStore I j Eg Ei (creg2reg_idx rs1) (creg2reg_idx rs2)
+              (imm.toNat <<< 2) 4 event
+          | .C_SWSP (imm, rs2) =>
+            emitStore I j Eg Ei sp rs2 (imm.toNat <<< 2) 4 event
           | _ => emit .ok (nextPosition I j) Ei
 
 /-- Unbound adapter: sequential effects and relative RV32 direct targets work;
@@ -209,7 +242,8 @@ def rv32Snapshot (I : Array Insn) (p : EntryParams) (j0 steps budget : Nat) : St
   match rv32Init I p j0 budget with
   | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
   | .ok ws => snapshotAfter I.size
-      (fun _ => rv32StepBound I (entryBase I p j0) (const32? p.tReturn)) ws steps
+      (fun event j σ => rv32StepBound I (entryBase I p j0) (const32? p.tReturn)
+        j σ none (some event)) ws steps
 
 /-- One instruction per word, with compressed encodings in the low halfword. -/
 def decodeInsnWord (w : UInt32) : Insn :=
@@ -335,7 +369,8 @@ private def smokeCompleteExitCheck : Bool :=
       g.nodes.size == 4 && g.edges.size == 3 &&
         g.nodes.any (fun n => PathMerge.isExit n.loc &&
           initialEqCheck n.state.exprs (Reg.real32 10) (Term.C32 8)) &&
-        g.nodes.all (fun n => n.state.predicates.isEmpty)
+        g.nodes.all (fun n => if PathMerge.isExit n.loc then
+          n.state.predicates == [.ret (Term.C32 8)] else n.state.predicates.isEmpty)
     | _ => false
 
 private def smokeRejectsWithoutExitCheck : Bool :=
@@ -457,13 +492,16 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
       taken.E_k.entries.isEmpty && fall.E_k.entries.isEmpty &&
       taken.E_k.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
       fall.E_k.constraints == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
-      taken.P_k.isEmpty && fall.P_k.isEmpty &&
+      taken.P_k == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
+      fall.P_k == [.branch 1 .notTaken ⟨lhs, .geu, rhs⟩] &&
       match PathMerge.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
       | .ok child =>
         match PathMerge.applyLocal child (ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0)) [] with
         | .ok overwritten => overwritten.exprs.constraints.isEmpty &&
             child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
-            child.exprs.lookupEq (Reg.real32 1) == some lhs
+            child.exprs.lookupEq (Reg.real32 1) == some lhs &&
+            overwritten.predicates == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
+            overwritten.exprs.lookupEq (Reg.real32 1) == some (Term.C32 0)
         | _ => false
       | _ => false
   | _ => false
@@ -483,8 +521,9 @@ private def symbolicBtypeRelationsCheck : Bool :=
     | .candidates [taken, fall] => taken.dir == .taken && fall.dir == .notTaken &&
         taken.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel rhs] &&
         fall.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
-        taken.P_k.isEmpty && fall.P_k.isEmpty &&
-        match PathMerge.applyLocal (SemState.mk E []) taken.E_k [] with
+        taken.P_k == [.branch 1 .taken ⟨lhs, rel, rhs⟩] &&
+        fall.P_k == [.branch 1 .notTaken ⟨lhs, rel.compl, rhs⟩] &&
+        match PathMerge.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
         | .ok child => child.exprs.lookupEq (Reg.real32 1) == some lhs && child.exprs.keysUnique
         | _ => false
     | _ => false
@@ -499,7 +538,9 @@ private def concreteBltuFeasibleSideCheck : Bool :=
       |>.insertEq (Reg.real32 2) (Term.C32 b)
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [c] => c.dir == dir && c.loc == loc &&
-        c.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] && c.P_k.isEmpty
+        c.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] &&
+        c.P_k == [.branch 1 (if dir == .taken then .taken else .notTaken)
+          ⟨Term.C32 a, rel, Term.C32 b⟩]
     | _ => false
 
 /-- A symbolic branch cannot bind to the middle of a full-width instruction. -/
@@ -545,8 +586,13 @@ private def esp32c3OpeningCheck : Bool :=
           (solve (addStar .w32 p.tData (Term.C32 14)))] &&
         fall.state.exprs.constraints == [Expr.mkRel (Reg.real32 11) .geu
           (solve (addStar .w32 p.tData (Term.C32 14)))] &&
-        taken.state.predicates.isEmpty && fall.state.predicates.isEmpty &&
-        returned.state.predicates == taken.state.predicates &&
+        taken.state.predicates == [.branch 5 .taken
+          ⟨solve (addStar .w32 p.tData p.tLen), .ltu,
+            solve (addStar .w32 p.tData (Term.C32 14))⟩] &&
+        fall.state.predicates == [.branch 5 .notTaken
+          ⟨solve (addStar .w32 p.tData p.tLen), .geu,
+            solve (addStar .w32 p.tData (Term.C32 14))⟩] &&
+        returned.state.predicates == taken.state.predicates ++ [.ret (Term.C32 2)] &&
         initialEqCheck returned.state.exprs (Reg.real32 10) (Term.C32 2) &&
         match ws.edges[4]?, ws.edges[5]? with
         | some te, some fe => te.src == 4 && fe.src == 4 &&
@@ -610,7 +656,8 @@ private def symbolicBranchesCheck : Bool :=
       a.E_k.entries.isEmpty && b.E_k.entries.isEmpty &&
       a.E_k.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op) tb] &&
       b.E_k.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op).compl tb] &&
-      a.P_k.isEmpty && b.P_k.isEmpty
+      a.P_k == [.branch 1 .taken ⟨ta, branchRel op, tb⟩] &&
+      b.P_k == [.branch 1 .notTaken ⟨ta, (branchRel op).compl, tb⟩]
     | _ => false
 
 private def compressedBranchesCheck : Bool :=
@@ -623,7 +670,8 @@ private def compressedBranchesCheck : Bool :=
       let rel := if word == 0xc011 then Rel.eq else Rel.ne
       a.E_k.constraints == [Expr.mkRel (Reg.real32 8) rel (Term.C32 0)] &&
       b.E_k.constraints == [Expr.mkRel (Reg.real32 8) rel.compl (Term.C32 0)] &&
-      a.P_k.isEmpty && b.P_k.isEmpty
+      a.P_k == [.branch 1 .taken ⟨Term.V32 3, rel, Term.C32 0⟩] &&
+      b.P_k == [.branch 1 .notTaken ⟨Term.V32 3, rel.compl, Term.C32 0⟩]
     | _ => false
 
 #guard symbolicBranchesCheck
@@ -669,7 +717,7 @@ private def esp32c3DeepFrontierCheck : Bool :=
     | .inl _ => false
     | .inr ws =>
       ws.nodes.size == 43 && ws.fuel == 474 && ws.work == [40, 41, 42] &&
-      ws.nodes.any (fun n => n.loc == .exit && n.state.predicates.isEmpty &&
+      ws.nodes.any (fun n => n.loc == .exit && n.state.predicates.contains (.ret (Term.C32 2)) &&
         initialEqCheck n.state.exprs (Reg.real32 10) (Term.C32 2)) &&
       (match ws.nodes[40]?, expandOne I.size stepFn ws with
         | some blocked, .inl (.fail .undefinedSrc g) =>
@@ -691,13 +739,13 @@ private def helperObservationMergeCheck : Bool :=
     | _ => false) &&
   renderPredicateJson p == "{\"kind\":\"helper\",\"event\":8,\"helperId\":5,\"args\":[]}"
 
-/-- C.JR and full JALR require a0's equality for Exit, without adding a predicate. -/
+/-- C.JR and full JALR freeze the complete symbolic pre-return a0 on wrapper Exit. -/
 private def boundReturnExprCheck : Bool :=
   let E := ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000)
     |>.insertEq (Reg.real32 10) (Term.V32 123)
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
     match rv32StepBound I (some 0x1000) (some 0x2000) 0 ⟨E, []⟩ with
-    | .candidates [c] => c.loc == .exit && c.P_k.isEmpty &&
+    | .candidates [c] => c.loc == .exit && c.P_k == [.ret (Term.V32 123)] &&
         initialEqCheck (updateExpr E c.E_k) (Reg.real32 10) (Term.V32 123)
     | _ => false) &&
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
@@ -708,6 +756,17 @@ private def boundReturnExprCheck : Bool :=
   (match rv32StepBound (decodeProgram #[0x00008067]) (some 0x1000) (some 0x2002)
       0 ⟨E, []⟩ with
     | .reject .unboundTarget => true
+    | _ => false) &&
+  (match rv32StepBound (decodeProgram #[0x00008067, 0x0001])
+      (some 0x1000) (some 0x2000) 0
+      ⟨ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x1004), []⟩ with
+    | .candidates [c] => c.loc == .pos 1 && c.P_k.isEmpty
+    | _ => false) &&
+  (match rv32StepBound (decodeProgram #[0x00008067])
+      (some 0x1000) (some 0x2000) 0
+      ⟨ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000)
+        |>.insertConstraint (Expr.mkRel (Reg.real32 10) .eq (Term.V32 123)), []⟩ with
+    | .reject .undefinedSrc => true
     | _ => false)
 
 /-- Packet loads are repeatable symbolic Terms; unrelated/unbound bases reject. -/
@@ -777,7 +836,8 @@ structure StepContext where
 Static bindings stay outside SemState; event identifies this dynamic source node. -/
 def inferStep (I : Array Insn) (context : StepContext)
     (event : NodeId) (j : Nat) (σ : SemState) : StepResult :=
-  let fallback := rv32StepBound I context.imageBase context.returnAddress j σ context.boundContext
+  let fallback := rv32StepBound I context.imageBase context.returnAddress j σ
+    context.boundContext (some event)
   match I[j]?, (programOffsets I)[j]?, context.imageBase, context.helperAddress with
   | some i, some offset, some base, some helper =>
     if helperTarget i (base + offset) σ.exprs != some helper then fallback
@@ -796,6 +856,101 @@ def inferStep (I : Array Insn) (context : StepContext)
         | _, .error reason => .reject reason
         | none, _ => .reject .undefinedSrc
   | _, _, _, _ => fallback
+
+/-- Ordinary and compressed stores emit one complete-source event and little-endian bytes.
+The misaligned concrete SP case selects Packet rather than an aligned Stack word. -/
+private def packetStoreObservationsCheck : Bool := Id.run do
+  let p := { smokeEntryParams with tData := Term.C32 0x4000, tLen := Term.C32 64 }
+  let .ok σ := buildE0 p | return false
+  let value := Term.C32 0xaabbccdd
+  let E := σ.exprs.insertEq (Reg.real32 12) p.tData
+    |>.insertEq (Reg.real32 2) (Term.C32 0x4001)
+    |>.insertEq (Reg.real32 11) value
+    |>.insertEq (Reg.packet p.αCtx 20) (Term.C32 99)
+  let cases : List (Insn × Nat × Nat) := [
+    (.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 1), 2, 1),
+    (.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 2), 2, 2),
+    (.STORE (4#12, .Regidx 11#5, .Regidx 12#5, 4), 4, 4),
+    (.C_SW (1#5, .Cregidx 4#3, .Cregidx 3#3), 4, 4),
+    (.C_SWSP (1#6, .Regidx 11#5), 5, 4)]
+  for (i, offset, bytes) in cases do
+    let I := #[i, decodeInsnWord 0x0001]
+    let .candidates [c] := inferStep I {} 77 0 ⟨E, []⟩ | return false
+    if c.P_k != [.packetWrite 77 p.αCtx offset value] ||
+        c.E_k.entries.length != bytes || c.loc != .pos 1 ||
+        !c.E_k.entries.all (fun e => e.reg.kind == .packet) then return false
+    for j in List.range bytes do
+      if c.E_k.lookupEq (Reg.packet p.αCtx (offset + j)) !=
+          some (Term.C32 ((0xaabbccdd >>> (8 * j)) &&& 0xff)) then return false
+    let .ok child := PathMerge.applyLocal ⟨E, []⟩ c.E_k c.P_k | return false
+    if child.exprs.lookupEq (Reg.packet p.αCtx 20) != some (Term.C32 99) then return false
+    let .candidates [again] := inferStep I {} 78 0 child | return false
+    let .ok repeated := PathMerge.applyLocal child again.E_k again.P_k | return false
+    if repeated.predicates != [.packetWrite 77 p.αCtx offset value,
+        .packetWrite 78 p.αCtx offset value] then return false
+  let I := #[Insn.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 2), decodeInsnWord 0x0001]
+  let symbolic := Term.V32 900
+  let symbolicE := E.insertEq (Reg.real32 11) symbolic
+  let .candidates [c] := inferStep I {} 77 0 ⟨symbolicE, []⟩ | return false
+  if c.P_k != [.packetWrite 77 p.αCtx 2 symbolic] ||
+      c.E_k.lookupEq (Reg.packet p.αCtx 2) !=
+        some (star .w32 (.extract 0 8 32) [symbolic]) ||
+      c.E_k.lookupEq (Reg.packet p.αCtx 3) !=
+        some (star .w32 (.extract 8 8 32) [symbolic]) then return false
+  let .ok child := PathMerge.applyLocal ⟨symbolicE, []⟩ c.E_k c.P_k | return false
+  let .ok overwritten := PathMerge.applyLocal child
+    (ExprSet.empty.insertEq (Reg.real32 11) (Term.C32 0)) [] | return false
+  if overwritten.predicates != [.packetWrite 77 p.αCtx 2 symbolic] then return false
+  let zeroI := #[Insn.STORE (0#12, zreg, .Regidx 12#5, 1), decodeInsnWord 0x0001]
+  let .candidates [zero] := inferStep zeroI {} 79 0 ⟨E, []⟩ | return false
+  return zero.P_k == [.packetWrite 79 p.αCtx 0 (Term.C32 0)] &&
+    zero.E_k.lookupEq (Reg.packet p.αCtx 0) == some (Term.C32 0)
+
+private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
+  let .ok σ := buildE0 smokeEntryParams | return false
+  let E := σ.exprs.insertEq (Reg.real32 12) smokeEntryParams.tData
+    |>.insertEq (Reg.real32 11) (Term.C32 7)
+  let store := Insn.STORE (0#12, .Regidx 11#5, .Regidx 12#5, 4)
+  let I := #[store, decodeInsnWord 0x0001]
+  let missing : ExprSet := { entries := E.entries.filter (fun e => e.reg != Reg.real32 11) }
+  let results := [rv32StepBound I none none 0 ⟨E, []⟩,
+    inferStep I {} 77 0 ⟨missing, []⟩,
+    inferStep #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 28#5, 4),
+      decodeInsnWord 0x0001] {} 77 0 ⟨E, []⟩]
+  return results.all fun result =>
+    match result with | .reject .undefinedSrc => true | _ => false
+
+/-- Local Map value effects exist, but product success requires unavailable observation inputs. -/
+private def mapStoreObservationGapCheck : Bool :=
+  let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
+  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+    |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd)
+    |>.insertEq (Reg.real32 2) pointer
+    |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
+  let stores := [1, 2, 4].map (fun width =>
+    Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, width)) ++
+    [.C_SW (0#5, .Cregidx 0#3, .Cregidx 3#3), .C_SWSP (0#6, .Regidx 11#5)]
+  stores.all fun i =>
+    (step E i).isSome &&
+      match inferStep #[i, decodeInsnWord 0x0001] {} 77 0 ⟨E, []⟩ with
+      | .reject .undefinedSrc => true
+      | _ => false
+
+/-- The skipped sequential instruction makes source node identity differ from instruction index. -/
+private def packetSnapshotEventCheck : Bool :=
+  let I := #[Insn.LOAD (0#12, .Regidx 10#5, .Regidx 12#5, true, 4),
+    Insn.BTYPE (8#13, zreg, zreg, .BEQ),
+    Insn.ITYPE (0#12, zreg, zreg, .ADDI),
+    Insn.STORE (0#12, zreg, .Regidx 12#5, 1),
+    decodeInsnWord 0x00008067]
+  let json := rv32Snapshot I smokeEntryParams 0 3 5
+  json.contains (renderPredicateJson (.packetWrite 2 smokeEntryParams.αCtx 0 (Term.C32 0))) &&
+    !(json.contains (renderPredicateJson (.packetWrite 3 smokeEntryParams.αCtx 0 (Term.C32 0))))
+
+#guard packetStoreObservationsCheck
+#guard packetStoreRejectsMissingInputsCheck
+#guard mapStoreObservationGapCheck
+#guard packetSnapshotEventCheck
 
 /-- Static program bindings outside SemState / Predicate.
 Extend fields here (and in Meta JSON); do not grow create/step FFI arity.

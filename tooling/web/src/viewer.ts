@@ -7,7 +7,7 @@ export type ViewerSelection = {
   edgeKey: string | null;
   /** View-only: hide non-focused arrivals that share a program location. */
   collapseSameLoc: boolean;
-  panel: "node" | "step" | "path" | "compare" | "dual";
+  panel: "node" | "step" | "path" | "compare";
 };
 
 export function edgeKey(e: Pick<GraphEdge, "from" | "to" | "dir">): string {
