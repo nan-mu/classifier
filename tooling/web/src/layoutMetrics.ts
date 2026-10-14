@@ -95,6 +95,7 @@ export function buildDisplayGraph(snap: SessionSnapshot): {
     if (!node) return "";
     return classifyNodeRole({
       node,
+      nodes: snap.nodes,
       edges: snap.edges,
       insnText: insnTextForNode(node, snap.insns),
       work: snap.work,

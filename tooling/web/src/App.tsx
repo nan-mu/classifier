@@ -372,6 +372,7 @@ function DebugScreen() {
     for (const node of snap.nodes) {
       const info = classifyNodeRole({
         node,
+        nodes: snap.nodes,
         edges: snap.edges,
         insnText: insnTextForNode(node, snap.insns),
         work: snap.work,
@@ -663,6 +664,7 @@ function DebugScreen() {
       const insnText = insnTextForNode(node, snap.insns);
       const { role, tags, accessFamily } = classifyNodeRole({
         node,
+        nodes: snap.nodes,
         edges: snap.edges,
         insnText,
         work: snap.work,

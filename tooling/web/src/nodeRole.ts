@@ -1,12 +1,14 @@
 import { parseReg, type RegKind } from "./parse";
 import type { ExprRow, GraphEdge, GraphNode, InsnRow, PredRow } from "./types";
+import { diffPredicates } from "./viewer";
 
 /**
  * Visual role for CSS accent. Priority: control/predicates → insn class →
  * access target (reg kind) → plain.
  *
- * First-line chips are the **节点类型** (predicates + markers). Memory is never
- * labeled bare「访存」— target is Packet / Map / Stack / Real.
+ * First-line chips (`tags`) are **arrival** predicates P_i only (delta vs parent),
+ * plus structural markers (入口/出口/拒绝). Path history, P_g, and insn class do
+ * not appear in the title.
  */
 export type NodeRole =
   | "failed"
@@ -32,7 +34,7 @@ export type NodeRole =
 export type NodeRoleInfo = {
   role: NodeRole;
   label: string;
-  /** 节点类型 chips (first line). */
+  /** 节点类型 chips (first line) — from P_i / structural markers. */
   tags: string[];
   /** Stable key for same-type folding (= sorted tags). */
   nodeType: string;
@@ -212,14 +214,24 @@ export function dominantRegRole(exprs: ExprRow[]): NodeRole | null {
   return "reg_real";
 }
 
+/** Predicates that arrive on this node (P_i), not the accumulated P_g. */
+export function arrivalPredicates(node: GraphNode, nodes: GraphNode[]): PredRow[] {
+  const parent = nodes.find((n) => node.preds.includes(n.id));
+  if (!parent) return node.predicates;
+  return diffPredicates(parent.predicates, node.predicates).added;
+}
+
 export function classifyNodeRole(input: {
   node: GraphNode;
+  nodes?: GraphNode[];
   edges: GraphEdge[];
   insnText?: string;
   work?: readonly number[];
   failedId?: number | null;
 }): NodeRoleInfo {
   const { node, edges, insnText, work, failedId } = input;
+  const nodes = input.nodes ?? [node];
+  const pi = arrivalPredicates(node, nodes);
   const roles: NodeRole[] = [];
   const tags: string[] = [];
   let accessFamily = false;
@@ -241,17 +253,14 @@ export function classifyNodeRole(input: {
     pushTag(ROLE_LABEL.entry);
   }
 
-  let hasPredTag = false;
-  for (const p of node.predicates) {
+  for (const p of pi) {
     const chip = predChip(p);
-    if (chip) {
-      pushTag(chip);
-      hasPredTag = true;
-    }
+    if (chip) pushTag(chip);
     const r = roleFromPred(p);
     if (r) roles.push(r);
   }
 
+  // Color hints below are not title chips (path / insn / E_g are historical or side).
   const inbound = edges.filter((e) => e.to === node.id);
   const outbound = edges.filter((e) => e.from === node.id);
   if (
@@ -260,57 +269,33 @@ export function classifyNodeRole(input: {
     outbound.some((e) => e.dir === "reuse")
   ) {
     roles.push("merge");
-    pushTag(ROLE_LABEL.merge);
   }
 
   const outTaken = outbound.some((e) => e.dir === "taken");
   const outNotTaken = outbound.some((e) => e.dir === "not_taken");
-  if (outTaken && outNotTaken) {
-    roles.push("branch");
-    pushTag(ROLE_LABEL.branch);
-  }
+  if (outTaken && outNotTaken) roles.push("branch");
 
   const inTaken = inbound.some((e) => e.dir === "taken");
   const inNotTaken = inbound.some((e) => e.dir === "not_taken");
-  if (inTaken && !inNotTaken) {
-    roles.push("arm_taken");
-    pushTag(ROLE_LABEL.arm_taken);
-  }
-  if (inNotTaken && !inTaken) {
-    roles.push("arm_not_taken");
-    pushTag(ROLE_LABEL.arm_not_taken);
-  }
+  if (inTaken && !inNotTaken) roles.push("arm_taken");
+  if (inNotTaken && !inTaken) roles.push("arm_not_taken");
 
   const mnemonic = insnMnemonic(insnText);
   if (isMemoryMnemonic(mnemonic)) {
-    // Virtual-register access: type is the target, not a generic「访存」.
     accessFamily = true;
-    const target = dominantRegRole(node.exprs) ?? "reg_real";
-    roles.push(target);
-    pushTag(ROLE_LABEL[target]);
+    roles.push(dominantRegRole(node.exprs) ?? "reg_real");
   } else if (isJumpMnemonic(mnemonic)) {
     roles.push("jump");
-    pushTag(ROLE_LABEL.jump);
   } else if (isBranchMnemonic(mnemonic)) {
     roles.push("branch");
-    pushTag(ROLE_LABEL.branch);
   } else if (isAluMnemonic(mnemonic)) {
     roles.push("alu");
-    pushTag(ROLE_LABEL.alu);
   }
 
   const regRole = dominantRegRole(node.exprs);
-  if (regRole && !accessFamily) {
-    roles.push(regRole);
-    if (!hasPredTag && !isJumpMnemonic(mnemonic) && !isAluMnemonic(mnemonic) && !isBranchMnemonic(mnemonic)) {
-      pushTag(ROLE_LABEL[regRole]);
-    }
-  }
+  if (regRole && !accessFamily) roles.push(regRole);
 
-  if (work?.includes(node.id)) {
-    roles.push("ready");
-    pushTag(ROLE_LABEL.ready);
-  }
+  if (work?.includes(node.id)) roles.push("ready");
 
   if (tags.length === 0) {
     roles.push("plain");
