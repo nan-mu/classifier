@@ -66,11 +66,13 @@ private def summary (name : String) (j : Json) : Except String String := do
   pure (name ++ ": status=" ++ status ++ " conclusion=" ++ conclusion ++
     " positions=" ++ toString positions.size ++ " " ++ String.intercalate " " tallies)
 
-private def checkReport (j : Json) : Except String Unit := do
+private def checkReport (j : Json) (expectedConclusion : String) : Except String Unit := do
   if (← fieldString j "status") != "compared" then throw ("comparison rejected: " ++ j.compress)
-  if (← fieldString j "status") != "compared" || (← fieldString j "claim") != "structural" ||
+  if (← fieldString j "claim") != "structural" ||
       (← fieldString j "behavioralEquivalence") != "notEstablished" then
     throw "missing structural-only report constants"
+  if (← fieldString j "conclusion") != expectedConclusion then
+    throw ("unexpected comparison conclusion: " ++ j.compress)
 
 private def checks : Except String (List String) := do
   let ebpfResponse := EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram ebpfMeta 60 60
@@ -84,25 +86,36 @@ private def checks : Except String (List String) := do
       (fieldString n "loc").toOption == some "36") then
     throw "eBPF fixture missing failed helper slot 36"
   let ebpf ← snapshotRun "ebpf" ebpfResponse
-  -- Observed fixture/model frontier, not a comparison-interface property: RV32IMC
-  -- stops at instruction index 3 with UndefinedSrc. smokeEntryParams binds only
-  -- x8 among callee-saved registers (to the entry-position term), while word 49702
-  -- is c.swsp s1,4(sp), spilling x9, whose equality the frozen entry does not supply.
-  -- Hence only four positions overlap. Unmarked eBPF reaches the native helper at
-  -- raw slot 36; marking the resource instead stops at the unbound LDDW at slot 34.
-  let rv32 ← snapshotRun "rv32imc" (RV32IMC.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60)
+  -- Observed fixture/model frontier, not a comparison-interface property: the
+  -- product wrapper binds all savedRegs to the entry-position term. In particular,
+  -- x9's spill at index 3 has a source. RV32IMC now stops with UnboundTarget at
+  -- index 34 (failed node 56), after producing 63 nodes and 62 edges.
+  -- Unmarked eBPF reaches the unsupported native helper at raw slot 36.
+  let rv32Response := RV32IMC.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60
+  let rv32Snapshot ← Json.parse rv32Response
+  let rv32Status ← fieldString rv32Snapshot "status"
+  let rv32Reason ← fieldString rv32Snapshot "reason"
+  let rv32Failed ← (← rv32Snapshot.getObjVal? "failed").getNat?
+  let rv32Nodes ← fieldArray rv32Snapshot "nodes"
+  let rv32Edges ← fieldArray rv32Snapshot "edges"
+  if rv32Status != "fail" || rv32Reason != "UnboundTarget" || rv32Failed != 56 ||
+      rv32Nodes.size != 63 || rv32Edges.size != 62 then
+    throw "RV32 fixture did not reach the observed bound-wrapper frontier"
+  if !rv32Nodes.any (fun n => ((n.getObjVal? "id") >>= Json.getNat?).toOption == some rv32Failed &&
+      (fieldString n "loc").toOption == some "34") then
+    throw "RV32 fixture missing failed target slot 34"
+  let rv32 ← snapshotRun "rv32imc" rv32Response
   let self ← report ebpf ebpf
   let cross ← report rv32 ebpf
   let dropped ← report ebpf (← droppedRun ebpf)
-  for j in [self, cross, dropped] do checkReport j
-  if (← fieldString self "conclusion") != "sameStructure" then throw "identical-run control differs"
-  let crossConclusion ← fieldString cross "conclusion"
-  if !["differs", "coverageDiffers"].contains crossConclusion then throw "real architecture representations unexpectedly coincide"
-  if (← fieldString dropped "conclusion") != "coverageDiffers" then throw "dropped node did not change coverage"
+  checkReport self "sameStructure"
+  checkReport cross "coverageDiffers"
+  checkReport dropped "coverageDiffers"
   let ps ← fieldArray dropped "positions"
   if !ps.any (fun p => (fieldString p "verdict").toOption == some "OnlyLeft") then
     throw "dropped entry position did not produce OnlyLeft"
-  pure [← summary "identical-ebpf" self, ← summary "rv32imc-vs-ebpf" cross,
+  pure [s!"rv32imc-frontier: status={rv32Status} reason={rv32Reason} failed={rv32Failed} nodeCount={rv32Nodes.size} edgeCount={rv32Edges.size} loc=34",
+    ← summary "identical-ebpf" self, ← summary "rv32imc-vs-ebpf" cross,
     cross.compress, ← summary "dropped-ebpf-node" dropped]
 
 /-- Finite fixture diagnostics only; not imported by any library. -/

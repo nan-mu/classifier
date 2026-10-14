@@ -293,13 +293,11 @@ def smokeEntryParams : EntryParams := {
   tLen := Term.V32 EntryVar.len
   ιWifi := 1 -- Synthetic IFINDEX_WIFI for this smoke fixture.
   αCtx := 0
-  -- The fixture first reads a callee-saved register at index 7: c.swsp s0,8(sp).
-  -- x8 ∈ R_s is a legal r_entry; it is otherwise unbound in the frozen entry model.
-  -- Binding x8 to the concrete entry-address term tEntry = C32 0x1000 (not a free
-  -- variable) preserves the documented frontier without inventing a saved-register
-  -- entry equality: rEntry=x11 blocks at index 7; rEntry=x8 reaches index 25's
-  -- LHU symbolic-offset block.
-  rEntry := Reg.real32 8
+  -- The synthetic fixture first spills s0 at index 7: c.swsp s0,8(sp).
+  -- Keep R_entry = {x8} minimal: x8 retains the concrete entry-position term,
+  -- so this smoke run reaches index 25's LHU symbolic-offset block.
+  -- Product create and boundProgram use the whole savedRegs set instead.
+  rEntries := [Reg.real32 8]
 }
 
 /-- addi a0,zero,7; addi a0,a0,1; jalr zero,ra,0. -/
@@ -325,7 +323,7 @@ private def smokeE0RealCheck : Bool :=
       initialEqCheck σ.exprs (Reg.real32 6) p.tReturn &&
       initialEqCheck σ.exprs (Reg.real32 7) p.tFrame &&
       initialEqCheck σ.exprs (Reg.real32 10) p.tCtx &&
-      initialEqCheck σ.exprs p.rEntry p.tEntry &&
+      p.rEntries.all (fun r => initialEqCheck σ.exprs r p.tEntry) &&
       (σ.exprs.lookupEq (Reg.real32 9)).isNone &&
       (σ.exprs.lookupEq (Reg.real32 32)).isNone
 
@@ -344,7 +342,7 @@ private def smokeE0CtxCheck : Bool :=
       initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 5)) (Term.C32 0)
 
 private def smokeEntryFreshKeyCheck : Bool :=
-  let p := { smokeEntryParams with rEntry := Reg.real32 9 }
+  let p := { smokeEntryParams with rEntries := [Reg.real32 9] }
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
@@ -353,13 +351,39 @@ private def smokeEntryFreshKeyCheck : Bool :=
       (buildEBase p).entries.length == 7 &&
       (σ.exprs.lookupEq (Reg.real32 8)).isNone
 
+private def smokeMultipleEntriesCheck : Bool :=
+  let p := { smokeEntryParams with rEntries := [Reg.real32 8, Reg.real32 9] }
+  match buildE0 p with
+  | .error _ => false
+  | .ok σ =>
+    σ.exprs.keysUnique && σ.exprs.entries.length == 15 &&
+      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 9 &&
+      p.rEntries.all (fun r => initialEqCheck σ.exprs r p.tEntry) &&
+      (buildEBase p).entries.length == 7
+
 private def smokeRaEntryCheck : Bool :=
-  let p := { smokeEntryParams with rEntry := Reg.real32 1 }
+  let p := { smokeEntryParams with rEntries := [Reg.real32 1] }
   match buildE0 p with
   | .error _ => false
   | .ok σ => σ.exprs.entries.length == 13 &&
-      initialEqCheck σ.exprs p.rEntry p.tReturn &&
+      p.rEntries.all (fun r => initialEqCheck σ.exprs r p.tReturn) &&
       initialEqCheck σ.exprs (Reg.real32 6) p.tReturn
+
+private def smokeEmptyEntriesCheck : Bool :=
+  let p := { smokeEntryParams with rEntries := [] }
+  match buildE0 p with
+  | .error _ => false
+  | .ok σ => σ.exprs.keysUnique && σ.exprs.entries.length == 13 &&
+      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 7 &&
+      initialEqCheck σ.exprs (Reg.real32 1) p.tReturn
+
+private def smokeMixedRaEntriesCheck : Bool :=
+  let p := { smokeEntryParams with rEntries := [Reg.real32 1, Reg.real32 8, Reg.real32 9] }
+  match buildE0 p with
+  | .error _ => false
+  | .ok σ => σ.exprs.keysUnique && σ.exprs.entries.length == 15 &&
+      p.rEntries.all (fun r => initialEqCheck σ.exprs r
+        (if r == Reg.real32 1 then p.tReturn else p.tEntry))
 
 private def smokeConcreteDataEndCheck : Bool :=
   let p := { smokeEntryParams with tData := Term.C32 4096, tLen := Term.C32 64, αCtx := 100 }
@@ -380,7 +404,10 @@ private def smokeInitialRootCheck : Bool :=
         initialEqCheck root.state.exprs (Reg.ctx32 smokeEntryParams.αCtx) smokeEntryParams.tData
 
 private def smokeInvalidEntryCheck : Bool :=
-  [{ smokeEntryParams with rEntry := Reg.real32 32 },
+  [{ smokeEntryParams with rEntries := [Reg.real32 32] },
+   { smokeEntryParams with rEntries := [Reg.real32 8, Reg.real32 32] },
+   { smokeEntryParams with rEntries := [Reg.real32 8, Reg.real32 8] },
+   { smokeEntryParams with rEntries := [Reg.real32 1, Reg.real32 1] },
    { smokeEntryParams with tData := Term.C64 4096 },
    { smokeEntryParams with tSp := Term.C32 1 },
    { smokeEntryParams with tEntry := Term.C32 0 }].all fun p =>
@@ -434,7 +461,10 @@ private def smokeEmptyPredicateMergeCheck : Bool :=
 #guard smokeE0RealCheck
 #guard smokeE0CtxCheck
 #guard smokeEntryFreshKeyCheck
+#guard smokeMultipleEntriesCheck
 #guard smokeRaEntryCheck
+#guard smokeEmptyEntriesCheck
+#guard smokeMixedRaEntriesCheck
 #guard smokeConcreteDataEndCheck
 #guard smokeInitialRootCheck
 #guard smokeInvalidEntryCheck
@@ -1058,7 +1088,8 @@ private def boundProgram (insns : Array UInt32) (m : Meta) :
   let h := m.helperAddress.toNat
   let ret := m.returnAddress.toNat
   let extent := I.foldl (fun n i => n + insnLength i) 0
-  let p := { smokeEntryParams with tEntry := Term.C32 b, tReturn := Term.C32 ret }
+  let p := { smokeEntryParams with
+    tEntry := Term.C32 b, tReturn := Term.C32 ret, rEntries := savedRegs }
   let context : StepContext := {
     imageBase := some b
     returnAddress := some ret
@@ -1090,7 +1121,9 @@ private def validateMeta (m : Meta) : Except RejectReason Unit :=
   else .ok ()
 
 private def entryParamsOf (m : Meta) : EntryParams :=
-  { smokeEntryParams with tEntry := Term.C32 m.base.toNat, tReturn := Term.C32 m.returnAddress.toNat }
+  { smokeEntryParams with
+    tEntry := Term.C32 m.base.toNat, tReturn := Term.C32 m.returnAddress.toNat,
+    rEntries := savedRegs }
 
 /-- Fail create without a fuel field (budget is Rust-owned). -/
 private def createFailJson (reason : RejectReason) : String :=
@@ -1171,6 +1204,11 @@ private def statelessStepCheck : Bool :=
            s!"[{exprs}]" s!"[{preds}]" ==
            s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, next.nodes[1]!.loc, next.nodes[1]!.state)}]}"
        | _ => false) &&
+      p.rEntries == savedRegs &&
+      (entryParamsOf { base := 0x400, helperAddress := 0x100 }).rEntries == savedRegs &&
+      state.exprs.keysUnique && state.exprs.entries.length == 25 &&
+      (state.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 19 &&
+      savedRegs.all (fun r => initialEqCheck state.exprs r p.tEntry) &&
       exportRv32ExpandStep #[] metaJson 0 0 "[]" "[]" ==
         headFailJson .invalidEntry &&
       !(exportRv32ExpandCreate metaJson).contains "\"fuel\":" &&

@@ -71,6 +71,8 @@ lean_ebpf_expand_bound_words_snapshot (insns : Array UInt64)
 
 eBPF 控制流相对于原始槽位，最外层返回由 EXIT 识别。Meta 没有 RV32 的 `base`、`helperAddress`、`returnAddress` 或 `maps` 契约字段；原生 helper 与 Map 元素访问的边界见[观察实现对应](#五类观察的实现对应)。
 
+RV32 Meta 契约保持为 `base`、`helperAddress`、`returnAddress`（默认 `0x2000`）与 `maps`。RV32 的 create 与 step/预算快照适配器均在 Lean 内取 `rEntries := savedRegs`，入口值遵循[wrapper 调用约定假设](create.md#承载入口位置的寄存器)；无需新增 Rust Meta 字段。RV32 解析器继续忽略未知字段。
+
 ### eBPF create、step 与快照响应
 
 create 成功响应的字段与 RV32 create 相同：

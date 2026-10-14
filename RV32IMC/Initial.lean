@@ -26,7 +26,7 @@ structure EntryParams where
   tLen    : Term
   ιWifi   : Nat
   αCtx    : Nat
-  rEntry  : Reg
+  rEntries : List Reg
 
 private def leaf32 : Term → Bool
   | .const .w32 c => c < (1 <<< 32)
@@ -36,6 +36,10 @@ private def leaf32 : Term → Bool
 private def validEntryReg (r : Reg) : Bool :=
   r.kind == .real && r.width == .w32 &&
     (r.alpha == 1 || r.alpha == 8 || r.alpha == 9 || (11 ≤ r.alpha && r.alpha < 32))
+
+/-- Callee-saved registers s0..s11 retain the wrapper's entry-position term. -/
+def savedRegs : List Reg :=
+  [8, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27].map Reg.real32
 
 /-- The seven intentional real-register entry bindings, before the entry overwrite. -/
 def buildEBase (p : EntryParams) : ExprSet :=
@@ -48,15 +52,15 @@ def buildEBase (p : EntryParams) : ExprSet :=
     |>.insertEq (Reg.real32 7) p.tFrame
     |>.insertEq (Reg.real32 10) p.tCtx
 
-/-- The call overwrites ra with tReturn; any other entry register retains tEntry. -/
+/-- The call overwrites ra with tReturn; other entry registers retain tEntry. -/
 def buildEReal0 (p : EntryParams) : ExprSet :=
-  let Ebase := buildEBase p
-  if p.rEntry == Reg.real32 1 then Ebase
-  else updateExpr Ebase (ExprSet.empty.insertEq p.rEntry p.tEntry)
+  p.rEntries.foldl (fun E r =>
+    if r == Reg.real32 1 then E else E.insertEq r p.tEntry) (buildEBase p)
 
 /-- Validate the real-register input contract. Concrete entry=0 and misaligned SP fail. -/
 def buildRealE0 (p : EntryParams) : Except RejectReason ExprSet := do
-  if !validEntryReg p.rEntry then throw .invalidEntry
+  if !p.rEntries.all validEntryReg ||
+      p.rEntries.eraseDups.length != p.rEntries.length then throw .invalidEntry
   if ![p.tEntry, p.tReturn, p.tFrame, p.tSp, p.tCtx].all leaf32 then
     throw .invalidEntry
   match p.tEntry with
