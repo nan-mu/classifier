@@ -920,4 +920,98 @@ mod tests {
         assert_eq!(pred_kinds(&build_list(Some(&left))), vec!["ret", "ret"]);
         assert_eq!(pred_kinds(&build_list(Some(&right))), vec!["ret", "ret"]);
     }
+
+    #[test]
+    fn compare_list_omits_start_entry() {
+        let snap = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
+        let report = build_compare_tree(&snap, &snap);
+        assert!(
+            report.nodes[0]
+                .left
+                .iter()
+                .all(|e| !matches!(e, ListEntry::Start { .. }))
+        );
+        assert!(matches!(
+            &report.nodes[0].left[0],
+            ListEntry::Pred { atom } if atom.kind == "branch"
+        ));
+    }
+
+    #[test]
+    fn one_arm_taken_stays_on_the_parent_segment() {
+        let helper = pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]}));
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "57", vec![helper.clone()]),
+                enode(
+                    1,
+                    "58",
+                    vec![helper, pred("branch", json!({"dir": "taken", "at": "57"}))],
+                ),
+            ],
+            vec![edge(0, 1, "taken")],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(report.nodes.len(), 1);
+        assert!(report.edges.is_empty());
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);
+        assert_eq!(report.nodes[0].start, StartKind::Create);
+    }
+
+    #[test]
+    fn one_arm_not_taken_stays_on_the_parent_segment() {
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "43", vec![]),
+                enode(
+                    1,
+                    "44",
+                    vec![pred("branch", json!({"dir": "notTaken", "at": "43"}))],
+                ),
+            ],
+            vec![edge(0, 1, "not_taken")],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(report.nodes.len(), 1);
+        assert!(report.edges.is_empty());
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch"]);
+    }
+
+    #[test]
+    fn one_arm_then_two_arm_fork_splits_only_at_the_fork() {
+        let helper = pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]}));
+        let branch = pred("branch", json!({"dir": "taken", "at": "43"}));
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "43", vec![helper.clone()]),
+                enode(1, "44", vec![helper.clone(), branch.clone()]),
+                enode(
+                    2,
+                    "exit",
+                    vec![helper.clone(), branch.clone(), pred("ret", json!({"term": "1"}))],
+                ),
+                enode(
+                    3,
+                    "exit",
+                    vec![helper, branch, pred("ret", json!({"term": "0"}))],
+                ),
+            ],
+            vec![
+                edge(0, 1, "taken"),
+                edge(1, 2, "taken"),
+                edge(1, 3, "not_taken"),
+            ],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(report.nodes.len(), 3);
+        assert_eq!(report.edges.len(), 2);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);
+        assert_eq!(
+            report.edges.iter().map(|e| e.dir).collect::<Vec<_>>(),
+            vec!["taken", "not_taken"]
+        );
+    }
 }
