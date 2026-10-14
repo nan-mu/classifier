@@ -27,8 +27,9 @@ Lake 构建 Lean 和服务端、安装前端依赖，然后启动 API 和 Vite�
 界面接受 xpost 的 Compact XDP ELF。默认使用 `tooling/fixtures/just_tx.elf`
 （来自 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`）。
 服务端通过 `xpost-elf` 提取代码镜像、程序基址和 helper dispatcher 地址。
-Lean 识别 helper 调用，生成寄存器表达式并继续展开。Helper Predicate 接口
-目前返回空列表，map 内存语义尚未实现。
+Lean 识别 helper 调用，生成 Helper 观察与返回表达式并继续展开。
+RV32 走 32 位分派器约定；原生 eBPF `call imm` 走独立的 64 位约定。
+Map 布局可由 Meta `maps` 提供（just_tx 与 RV32 AOT map 行共用）。
 
 ## 构建与检查
 
