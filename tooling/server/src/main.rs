@@ -1,5 +1,6 @@
 mod bpf_image;
 mod driver;
+mod ebpf_disasm;
 mod engine;
 mod expand;
 mod pred_match;
@@ -177,7 +178,7 @@ async fn create_session(
         Arch::Ebpf => {
             let program =
                 bpf_image::extract_insn_words(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
-            let meta = ebpf::Meta::just_tx_unbound_map();
+            let meta = ebpf::Meta::just_tx();
             app.pool
                 .run(move || {
                     Arc::new(Mutex::new(Session::new_ebpf(
@@ -562,9 +563,8 @@ mod http_tests {
             let (status, done) = task.await.expect("join");
             assert_eq!(status, StatusCode::OK);
             assert_eq!(done["status"], "fail");
-            // Budget 4 reaches the idx-3 x9 spill before LimitExceeded.
-            assert_eq!(done["reason"], "UndefinedSrc");
-            assert_eq!(done["nodes"].as_array().expect("nodes").len(), 4);
+            // Budget 4 exhausts before the UnboundTarget frontier at loc 34.
+            assert_eq!(done["reason"], "LimitExceeded");
         }
     }
 }

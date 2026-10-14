@@ -639,53 +639,18 @@ body {
   min-height: 0;
 }
 
-.compare-tree-node {
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border: 1px solid rgba(120, 108, 90, 0.45);
-  border-radius: 12px;
-  background: rgba(40, 36, 30, 0.85);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
-}
-
-.compare-tree-node__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.compare-tree-node__badge {
-  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  color: var(--accent);
-  text-transform: lowercase;
-}
-
-.compare-tree-node__badge--create {
-  border-color: rgba(120, 160, 130, 0.5);
-}
-
-.compare-tree-node__badge--taken {
-  border-color: rgba(160, 120, 150, 0.5);
-}
-
-.compare-tree-node__badge--not_taken {
-  border-color: rgba(120, 140, 170, 0.5);
-}
-
-.compare-tree-node__tip {
-  font-size: 10px;
-  margin-left: auto;
+/* Compare tree reuses `.state-node`; widen for dual L/R lists. */
+.state-node.compare-tree-node {
+  max-width: none;
+  min-width: 280px;
+  padding-bottom: 8px;
 }
 
 .compare-tree-node__cols {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+  margin-top: 6px;
 }
 
 .compare-tree-node__col {

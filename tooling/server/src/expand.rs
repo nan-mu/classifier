@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::bpf_image::BpfProgram;
+use crate::ebpf_disasm;
 use crate::engine::ExpandSession;
 use crate::rv32_image::{self, InsnImage};
 
@@ -53,12 +54,12 @@ impl DisplayInsns {
                     text: insn.text.clone(),
                 })
                 .collect(),
-            Self::Ebpf(words) => words
-                .iter()
+            Self::Ebpf(words) => ebpf_disasm::disasm_words(words)
+                .into_iter()
                 .enumerate()
-                .map(|(j, word)| InsnOut {
+                .map(|(j, text)| InsnOut {
                     j: j as u32,
-                    text: format!("{j:04} {word:016x}"),
+                    text,
                 })
                 .collect(),
         }
@@ -520,9 +521,11 @@ mod tests {
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.nodes[0].loc, "0");
         assert_eq!(eq_term(&snap.nodes[0], "real32:0"), Some("0"));
-        // Entry binds context cells + callee-saved x8; stack cells are materialised on first access.
+        // Entry binds context cells + R_s (x8/x9/x18..x27) to t_entry; stack cells on first access.
         assert_eq!(eq_term(&snap.nodes[0], "context32:0"), Some("v32:4"));
-        assert_eq!(snap.nodes[0].exprs.len(), 14);
+        assert_eq!(eq_term(&snap.nodes[0], "real32:8"), eq_term(&snap.nodes[0], "real32:9"));
+        assert!(eq_term(&snap.nodes[0], "real32:9").is_some());
+        assert_eq!(snap.nodes[0].exprs.len(), 25);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
         assert!(snap.log[0].msg.contains("just_tx.elf"));
@@ -608,7 +611,7 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.program, "upload.elf");
         assert_eq!(snap.insns.len(), 79);
-        assert_eq!(snap.nodes[0].exprs.len(), 14);
+        assert_eq!(snap.nodes[0].exprs.len(), 25);
     }
 
     #[test]
@@ -621,7 +624,7 @@ mod tests {
             8,
             bpf_image::DEFAULT_BPF_NAME.into(),
             program,
-            ebpf::Meta::just_tx_unbound_map(),
+            ebpf::Meta::just_tx(),
         );
         let snap = session.snapshot();
         assert_eq!(snap.arch, "ebpf");
@@ -786,31 +789,33 @@ mod tests {
     }
 
     #[test]
-    fn just_tx_stops_at_undefined_src_on_x9_spill() {
-        // Entry Meta binds only x8 among callee-saved regs; c.swsp s1,4(sp) at idx 3
-        // reads unbound x9 → UndefinedSrc (omp eBPF handoff frontier).
+    fn just_tx_budget_512_exhausts_after_passing_x9_spill() {
+        // Product entry binds R_s (incl. x8/x9); idx-3 no longer UndefinedSrc.
         let mut session = default_session("s", 512);
         session.run_all();
         let snap = session.snapshot();
         assert_eq!(snap.status, "fail");
-        assert_eq!(snap.reason.as_deref(), Some("UndefinedSrc"));
-        assert_eq!(snap.failed, Some(3));
-        assert_eq!(snap.nodes.len(), 4);
-        assert_eq!(snap.nodes[3].loc, "3");
-        assert!(snap.nodes.iter().all(|node| node.loc != "exit"));
+        assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
+        assert!(
+            snap.nodes.len() > 4,
+            "must pass early x9 spill; nodes={}",
+            snap.nodes.len()
+        );
     }
 
     #[test]
-    fn just_tx_larger_budget_still_stops_at_undefined_src() {
-        // Extra fuel does not pass idx 3 until entry Meta also binds x9.
+    fn just_tx_budget_1024_completes() {
         let mut session = default_session("s", 1024);
         session.run_all();
         let snap = session.snapshot();
-        assert_eq!(snap.status, "fail");
-        assert_eq!(snap.reason.as_deref(), Some("UndefinedSrc"));
-        assert_eq!(snap.failed, Some(3));
-        assert_eq!(snap.nodes.len(), 4);
-        assert_eq!(snap.nodes[3].loc, "3");
+        assert_eq!(snap.status, "complete");
+        assert_eq!(snap.reason, None);
+        assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
+        assert!(
+            snap.nodes.len() >= 40,
+            "partial graph nodes={}",
+            snap.nodes.len()
+        );
     }
 
     #[test]

@@ -426,6 +426,14 @@ pub mod ebpf {
     }
 
     impl Meta {
+        /// Product just_tx Meta: entry only; LDDW immediates use encoded bits (srcType 0).
+        pub fn just_tx() -> Self {
+            Self {
+                entry: Entry::just_tx(),
+                resource_locations: vec![],
+            }
+        }
+
         /// just_tx with slot 34 map LDDW marked unbound (`term: null`).
         pub fn just_tx_unbound_map() -> Self {
             Self {
