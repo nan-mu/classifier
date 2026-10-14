@@ -1,4 +1,4 @@
-import { Box, Flex, Text } from "@kuma-ui/core";
+import { Box, Flex } from "@kuma-ui/core";
 import {
   Background,
   ConnectionMode,
@@ -7,6 +7,7 @@ import {
   ReactFlow,
   type Edge,
   type Node,
+  type NodeMouseHandler,
   type NodeProps,
   type ReactFlowInstance,
 } from "@xyflow/react";
@@ -38,6 +39,7 @@ type TreeFlowData = {
   left: ListEntry[];
   right: ListEntry[];
   tipScore?: SoftScore;
+  selected: boolean;
 };
 
 type TreeFlowNode = Node<TreeFlowData, "tree">;
@@ -46,6 +48,19 @@ function startRole(start: StartKind): string {
   if (start === "taken") return "arm_taken";
   if (start === "not_taken") return "arm_not_taken";
   return "entry";
+}
+
+function bary(neighbors: string[], order: Map<string, number>): number {
+  if (neighbors.length === 0) return Number.POSITIVE_INFINITY;
+  let sum = 0;
+  let n = 0;
+  for (const id of neighbors) {
+    const i = order.get(id);
+    if (i === undefined) continue;
+    sum += i;
+    n += 1;
+  }
+  return n === 0 ? Number.POSITIVE_INFINITY : sum / n;
 }
 
 function layoutTree(
@@ -147,36 +162,16 @@ function layoutTree(
   return out;
 }
 
-function bary(neighbors: string[], order: Map<string, number>): number {
-  if (neighbors.length === 0) return Number.POSITIVE_INFINITY;
-  let sum = 0;
-  let n = 0;
-  for (const id of neighbors) {
-    const i = order.get(id);
-    if (i === undefined) continue;
-    sum += i;
-    n += 1;
-  }
-  return n === 0 ? Number.POSITIVE_INFINITY : sum / n;
-}
-
 function EntryChip({ entry }: { entry: ListEntry }) {
   if (entry.tag === "start") {
-    return (
-      <span className={`capsule capsule--start capsule--start-${entry.kind}`}>
-        {entry.kind}
-      </span>
-    );
+    return <span className="capsule capsule--meta">{entry.kind}</span>;
   }
   if (entry.tag === "exit") {
-    return <span className="capsule capsule--exit">exit</span>;
+    return <span className="capsule capsule--meta">exit</span>;
   }
   const row = atomToPred(entry.atom);
   return (
-    <span
-      className={`capsule capsule--pred capsule--${row.kind}`}
-      title={`#${entry.atom.node_id} · ${formatPred(row)}`}
-    >
+    <span className="capsule" title={`#${entry.atom.node_id} · ${formatPred(row)}`}>
       {formatPredChip(row)}
     </span>
   );
@@ -197,7 +192,9 @@ function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
   const role = startRole(data.start);
   return (
     <div
-      className={`state-node state-node--role-${role} compare-tree-node`}
+      className={`state-node state-node--role-${role} compare-tree-node${
+        data.selected ? " compare-tree-node--selected" : ""
+      }`}
       style={{ width: NODE_W, minHeight: NODE_H }}
     >
       <Handle id="l" type="target" position={Position.Left} style={handleStyle} />
@@ -236,9 +233,11 @@ const nodeTypes = { tree: TreeNodeView };
 
 type Props = {
   report: TreeReport;
+  selectedId: number | null;
+  onSelectNode: (id: number) => void;
 };
 
-export function CompareTreeView({ report }: Props) {
+export function CompareTreeView({ report, selectedId, onSelectNode }: Props) {
   const positions = useMemo(
     () => layoutTree(report.nodes, report.edges),
     [report.nodes, report.edges],
@@ -260,12 +259,13 @@ export function CompareTreeView({ report }: Props) {
           left: n.left,
           right: n.right,
           tipScore: n.tipScore,
+          selected: selectedId === n.id,
         },
         draggable: false,
       });
     }
     return out;
-  }, [positions, report.nodes]);
+  }, [positions, report.nodes, selectedId]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     const placed = new Set(flowNodes.map((n) => n.id));
@@ -289,7 +289,6 @@ export function CompareTreeView({ report }: Props) {
       void instance.fitView({ padding: 0.28, duration: 240 });
       return;
     }
-    // Large trees: keep cards readable; pan from the create root leftward.
     const root =
       flowNodes.find((n) => n.data.start === "create") ??
       [...flowNodes].sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y)[0]!;
@@ -317,28 +316,22 @@ export function CompareTreeView({ report }: Props) {
     return () => cancelAnimationFrame(id);
   }, [frameCamera, flowNodes.length, report.phase]);
 
+  const onNodeClick = useCallback<NodeMouseHandler>(
+    (_event, node) => {
+      onSelectNode(Number(node.id));
+    },
+    [onSelectNode],
+  );
+
   return (
-    <Flex className="compare-tree panel" flex="1" flexDirection="column" minHeight={0} minWidth={0}>
-      <Box className="compare-tree__header" px={14} pt={12} pb={10}>
-        <Text className="compare-tree__title" display="block">
-          claim={report.claim} · behavioralEquivalence={report.behavioralEquivalence} · phase=
-          {report.phase}
-        </Text>
-        <Text className="mono muted" display="block" fontSize={12} style={{ marginTop: 4 }}>
-          {report.left.arch} expand {report.left.expandNodes} / seg {report.left.segments} ·{" "}
-          {report.right.arch} expand {report.right.expandNodes} / seg {report.right.segments} · nodes{" "}
-          {report.nodes.length} · forks {report.edges.length}
-        </Text>
-        <Text className="muted" display="block" fontSize={11} style={{ marginTop: 6 }}>
-          {report.note}. Term equality is not proven.
-        </Text>
-      </Box>
+    <Flex className="compare-tree panel panel--canvas" flex="1" flexDirection="column" minHeight={0} minWidth={0}>
       <Box className="compare-tree__canvas" flex="1" minHeight={0} position="relative">
         <ReactFlow
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={nodeTypes}
           onInit={onInit}
+          onNodeClick={onNodeClick}
           nodesDraggable={false}
           nodesFocusable={false}
           elementsSelectable={false}

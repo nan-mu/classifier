@@ -35,6 +35,7 @@ import {
   insnTextForNode,
   NODE_ROLE_LEGEND,
 } from "./nodeRole";
+import { CompareDetailPanel, CompareSummaryPanel } from "./ComparePanels";
 import { CompareTreeView } from "./CompareTreeView";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
 import type {
@@ -42,6 +43,7 @@ import type {
   PredRow,
   ExprRow,
   SessionSnapshot,
+  TreeNode,
   TreeReport,
 } from "./types";
 import { toTreeSnap } from "./types";
@@ -215,6 +217,39 @@ function eiOnLabel(dir: string | null | undefined): "taken" | "not_taken" | "onl
   return "only";
 }
 
+function CompareReadyLayout({
+  report,
+  nodeId,
+  detailSide,
+  onSelectNode,
+  onDetailSide,
+}: {
+  report: TreeReport;
+  nodeId: number | null;
+  detailSide: "left" | "right";
+  onSelectNode: (id: number) => void;
+  onDetailSide: (side: "left" | "right") => void;
+}) {
+  const node: TreeNode | null =
+    nodeId == null ? null : (report.nodes.find((n) => n.id === nodeId) ?? null);
+  return (
+    <>
+      <CompareSummaryPanel report={report} node={node} />
+      <CompareTreeView
+        report={report}
+        selectedId={nodeId}
+        onSelectNode={onSelectNode}
+      />
+      <CompareDetailPanel
+        report={report}
+        node={node}
+        side={detailSide}
+        onSide={onDetailSide}
+      />
+    </>
+  );
+}
+
 export function App() {
   return (
     <ReactFlowProvider>
@@ -241,6 +276,10 @@ function DebugScreen() {
   const [error, setError] = useState<string | null>(null);
   const [runRate, setRunRate] = useState<string | null>(null);
   const [compareUi, setCompareUi] = useState<CompareUi>({ tag: "idle" });
+  const [compareSel, setCompareSel] = useState<{
+    nodeId: number | null;
+    detailSide: "left" | "right";
+  }>({ nodeId: null, detailSide: "left" });
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -588,6 +627,7 @@ function DebugScreen() {
       if (ac.signal.aborted || !left || !right) return;
       const report = await compareTree(toTreeSnap(left), toTreeSnap(right));
       if (ac.signal.aborted) return;
+      setCompareSel({ nodeId: null, detailSide: "left" });
       setCompareUi({ tag: "ready", report });
     } catch (err: unknown) {
       if (!ac.signal.aborted) {
@@ -884,7 +924,17 @@ function DebugScreen() {
             </Flex>
           ) : null}
           {compareUi.tag === "ready" ? (
-            <CompareTreeView report={compareUi.report} />
+            <CompareReadyLayout
+              report={compareUi.report}
+              nodeId={compareSel.nodeId}
+              detailSide={compareSel.detailSide}
+              onSelectNode={(id) =>
+                setCompareSel((s) => ({ ...s, nodeId: id }))
+              }
+              onDetailSide={(detailSide) =>
+                setCompareSel((s) => ({ ...s, detailSide }))
+              }
+            />
           ) : null}
         </Flex>
       ) : (

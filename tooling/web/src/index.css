@@ -630,13 +630,30 @@ body {
   overflow: hidden;
 }
 
-.compare-tree__title {
-  font-size: 14px;
-  color: var(--accent);
-}
-
 .compare-tree__canvas {
   min-height: 0;
+}
+
+.compare-tree-node--selected {
+  outline: 1px solid rgba(226, 207, 171, 0.65);
+  box-shadow: 0 0 0 1px rgba(226, 207, 171, 0.25);
+}
+
+.compare-align {
+  padding: 2px 0;
+  line-height: 1.45;
+}
+
+.compare-align--both {
+  color: var(--muted);
+}
+
+.compare-align--left {
+  color: #c09088;
+}
+
+.compare-align--right {
+  color: #8aadc0;
 }
 
 /* Compare tree reuses `.state-node`; widen for dual L/R lists. */
