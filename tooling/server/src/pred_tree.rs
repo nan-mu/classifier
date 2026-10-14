@@ -1,16 +1,10 @@
-//! Cross-arch compare tree.
+//! Compare tree of expand segments.
 //!
-//! Each tree node is a node (distinct from expand/step SemState nodes). It holds
-//! two ordered predicate lists. Comparison happens inside the node.
-//!
-//! List shape:
-//! - starts with create | taken | not_taken
-//! - ends with branch | exit
-//! Phase 1 includes Branch + Return only.
+//! Each node lists the ordered local predicate arrivals (P_i) along one segment.
+//! `matchStatus` is `pass` only when both sides exist, exit flags match, and the
+//! normalize-key LCS has no extras.
 
-use crate::pred_match::{
-    fingerprint, normalize_kind, score_pair, PredAtom, PredIn, PredNodeIn, SoftScore, MATCH_FLOOR,
-};
+use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -31,14 +25,21 @@ pub enum ListEntry {
     Exit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MatchStatus {
+    Pass,
+    Fail,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Node {
     pub id: u32,
     pub start: StartKind,
     pub left: Vec<ListEntry>,
     pub right: Vec<ListEntry>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "tipScore")]
-    pub tip_score: Option<SoftScore>,
+    #[serde(rename = "matchStatus")]
+    pub match_status: MatchStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,25 +96,40 @@ struct ExpandNode {
 }
 
 #[derive(Debug, Clone)]
+enum LocalKey {
+    Normalized(String),
+    Unparsed,
+}
+
+#[derive(Debug, Clone)]
+struct Arrival {
+    atom: PredAtom,
+    key: LocalKey,
+}
+
+#[derive(Debug, Clone)]
 struct Segment {
-    expand_id: u32,
     start: StartKind,
-    preds: Vec<PredAtom>,
+    preds: Vec<Arrival>,
     taken: Option<u32>,
     not_taken: Option<u32>,
+    fork_id: Option<u32>,
     ends_exit: bool,
 }
 
+const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence";
+
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
-    let left_segs = segments_from_snap(left);
-    let right_segs = segments_from_snap(right);
+    let mut unparsed_seq = 0u64;
+    let left_segs = segments_from_snap(left, &mut unparsed_seq);
+    let right_segs = segments_from_snap(right, &mut unparsed_seq);
     let (nodes, edges) = align_trees(&left_segs, &right_segs);
     TreeReport {
         status: "tree",
         claim: "crossPred",
         behavioral_equivalence: "notEstablished",
-        note: "phase1 branch/ret fingerprints are CrossPred normalize JSON",
-        phase: "branch_return",
+        note: NOTE,
+        phase: "local_increment",
         left: ArchSummary {
             arch: left.arch.clone(),
             expand_nodes: left.nodes.len(),
@@ -129,7 +145,7 @@ pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     }
 }
 
-fn segments_from_snap(run: &SnapRun) -> HashMap<u32, Segment> {
+fn segments_from_snap(run: &SnapRun, unparsed_seq: &mut u64) -> HashMap<u32, Segment> {
     let nodes: HashMap<u32, ExpandNode> = run
         .nodes
         .iter()
@@ -151,18 +167,27 @@ fn segments_from_snap(run: &SnapRun) -> HashMap<u32, Segment> {
     }
     let root = find_root(&nodes, &edges);
     let mut q = VecDeque::new();
-    q.push_back((root, StartKind::Create));
+    q.push_back((root, StartKind::Create, None));
     let mut seen = HashSet::new();
-    while let Some((start_id, start_kind)) = q.pop_front() {
+    while let Some((start_id, start_kind, parent_id)) = q.pop_front() {
         if !seen.insert(start_id) {
             continue;
         }
-        let seg = walk_segment(&run.arch, start_id, start_kind, &nodes, &edges);
+        let seg = walk_segment(
+            &run.arch,
+            start_id,
+            start_kind,
+            parent_id,
+            &nodes,
+            &edges,
+            unparsed_seq,
+        );
+        let fork = seg.fork_id;
         if let Some(t) = seg.taken {
-            q.push_back((t, StartKind::Taken));
+            q.push_back((t, StartKind::Taken, fork));
         }
         if let Some(n) = seg.not_taken {
-            q.push_back((n, StartKind::NotTaken));
+            q.push_back((n, StartKind::NotTaken, fork));
         }
         segs.insert(start_id, seg);
     }
@@ -183,37 +208,60 @@ fn find_root(nodes: &HashMap<u32, ExpandNode>, edges: &[&WireEdge]) -> u32 {
         .unwrap_or(0)
 }
 
-fn push_phase1_preds(arch: &str, n: &ExpandNode, preds: &mut Vec<PredAtom>) {
-    push_phase1_preds_filtered(arch, n, preds, false);
+fn is_cross_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "helper" | "branch" | "ret" | "mapWrite" | "packetWrite"
+    )
 }
 
-fn push_phase1_preds_filtered(
-    arch: &str,
-    n: &ExpandNode,
-    preds: &mut Vec<PredAtom>,
-    skip_branch: bool,
-) {
-    for (index, p) in n.predicates.iter().enumerate() {
-        let kind = normalize_kind(&p.kind);
-        if kind != "branch" && kind != "ret" {
-            continue;
-        }
-        if skip_branch && kind == "branch" {
-            continue;
-        }
-        let atom = PredAtom {
-            node_id: n.id,
-            loc: n.loc.clone(),
-            index,
-            kind: kind.to_string(),
-            fields: p.fields.clone(),
-            fingerprint: cross_fingerprint(arch, kind, &p.fields),
-        };
-        if preds.iter().any(|a| a.fingerprint == atom.fingerprint) {
-            continue;
-        }
-        preds.push(atom);
+fn field_str(fields: &Map<String, Value>, key: &str) -> String {
+    match fields.get(key) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(other) => other.to_string(),
+        None => String::new(),
     }
+}
+
+fn pred_key(kind: &str, fields: &Map<String, Value>) -> String {
+    let kind = normalize_kind(kind);
+    if kind == "ret" {
+        return format!("ret:{}", field_str(fields, "term"));
+    }
+    if kind == "helper" {
+        let args = match fields.get("args") {
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    other => other.to_string(),
+                })
+                .collect::<Vec<_>>()
+                .join(","),
+            _ => String::new(),
+        };
+        return format!(
+            "helper:{}:{}:{args}",
+            field_str(fields, "event"),
+            field_str(fields, "helperId")
+        );
+    }
+    format!("{kind}:{}", predicate_wire(kind, fields))
+}
+
+fn local_rows<'a>(parent: &[PredIn], node: &'a [PredIn]) -> Vec<(usize, &'a PredIn)> {
+    let parent_keys: HashSet<String> = parent
+        .iter()
+        .map(|p| pred_key(&p.kind, &p.fields))
+        .collect();
+    node.iter()
+        .enumerate()
+        .filter(|(_, p)| !parent_keys.contains(&pred_key(&p.kind, &p.fields)))
+        .collect()
 }
 
 /// Measured just_tx packet ends plus the shared rxcnt map (`0x403802e8`).
@@ -239,33 +287,73 @@ fn predicate_wire(kind: &str, fields: &Map<String, Value>) -> String {
     Value::Object(obj).to_string()
 }
 
-fn cross_fingerprint(arch: &str, kind: &str, fields: &Map<String, Value>) -> String {
-    lean_binding::cross_pred::normalize(cross_env_json(arch), &predicate_wire(kind, fields))
-        .unwrap_or_else(|| fingerprint(kind, fields))
+fn arrival_key(arch: &str, kind: &str, fields: &Map<String, Value>) -> LocalKey {
+    if !is_cross_kind(kind) {
+        return LocalKey::Unparsed;
+    }
+    match lean_binding::cross_pred::normalize(cross_env_json(arch), &predicate_wire(kind, fields)) {
+        Some(json) => LocalKey::Normalized(json),
+        None => LocalKey::Unparsed,
+    }
+}
+
+fn push_arrival(
+    arch: &str,
+    node: &ExpandNode,
+    index: usize,
+    pred: &PredIn,
+    preds: &mut Vec<Arrival>,
+    unparsed_seq: &mut u64,
+) {
+    let kind = normalize_kind(&pred.kind).to_string();
+    let key = arrival_key(arch, &kind, &pred.fields);
+    let fingerprint = match &key {
+        LocalKey::Normalized(json) => json.clone(),
+        LocalKey::Unparsed => {
+            let id = *unparsed_seq;
+            *unparsed_seq += 1;
+            format!("unparsed:{id}")
+        }
+    };
+    preds.push(Arrival {
+        atom: PredAtom {
+            node_id: node.id,
+            loc: node.loc.clone(),
+            index,
+            kind,
+            fields: pred.fields.clone(),
+            fingerprint,
+        },
+        key,
+    });
 }
 
 fn walk_segment(
     arch: &str,
     start_id: u32,
     start: StartKind,
+    parent_id: Option<u32>,
     nodes: &HashMap<u32, ExpandNode>,
     edges: &[&WireEdge],
+    unparsed_seq: &mut u64,
 ) -> Segment {
+    let mut parent_preds = parent_id
+        .and_then(|id| nodes.get(&id))
+        .map(|n| n.predicates.clone())
+        .unwrap_or_default();
     let mut preds = Vec::new();
     let mut cur = start_id;
     let mut taken = None;
     let mut not_taken = None;
+    let mut fork_id = None;
     let mut ends_exit = false;
 
     for _ in 0..10_000 {
         let Some(n) = nodes.get(&cur) else { break };
-        // taken/not_taken children already contributed their branch tip to the
-        // parent segment; do not repeat it as the head of this list.
-        if cur == start_id && matches!(start, StartKind::Taken | StartKind::NotTaken) {
-            push_phase1_preds_filtered(arch, n, &mut preds, /*skip_branch*/ true);
-        } else {
-            push_phase1_preds(arch, n, &mut preds);
+        for (index, pred) in local_rows(&parent_preds, &n.predicates) {
+            push_arrival(arch, n, index, pred, &mut preds, unparsed_seq);
         }
+        parent_preds = n.predicates.clone();
         if n.loc == "exit" {
             ends_exit = true;
             break;
@@ -279,16 +367,9 @@ fn walk_segment(
             .map(|e| e.to)
             .collect();
         if t.is_some() || nt.is_some() {
-            // Branch observations land on the taken/not_taken *children*
-            // (engine writes successor.predicates onto the new node). Lift a
-            // tip branch into this segment so the list ends with branch.
-            for child_id in [t, nt].into_iter().flatten() {
-                if let Some(child) = nodes.get(&child_id) {
-                    push_phase1_preds(arch, child, &mut preds);
-                }
-            }
             taken = t;
             not_taken = nt;
+            fork_id = Some(cur);
             break;
         }
         if only.len() == 1 {
@@ -299,11 +380,11 @@ fn walk_segment(
     }
 
     Segment {
-        expand_id: start_id,
         start,
         preds,
         taken,
         not_taken,
+        fork_id,
         ends_exit,
     }
 }
@@ -313,13 +394,13 @@ fn align_trees(
     right: &HashMap<u32, Segment>,
 ) -> (Vec<Node>, Vec<Edge>) {
     let left_root = left
-        .values()
-        .find(|s| s.start == StartKind::Create)
-        .map(|s| s.expand_id);
+        .iter()
+        .find(|(_, s)| s.start == StartKind::Create)
+        .map(|(id, _)| *id);
     let right_root = right
-        .values()
-        .find(|s| s.start == StartKind::Create)
-        .map(|s| s.expand_id);
+        .iter()
+        .find(|(_, s)| s.start == StartKind::Create)
+        .map(|(id, _)| *id);
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
@@ -345,7 +426,7 @@ fn align_trees(
             start,
             left: build_list(lseg),
             right: build_list(rseg),
-            tip_score: tip_soft(lseg, rseg),
+            match_status: match_status(lseg, rseg),
         });
         if let Some((from, dir)) = parent_edge {
             edges.push(Edge { from, to: id, dir });
@@ -370,28 +451,79 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
         return Vec::new();
     };
     let mut list = vec![ListEntry::Start { kind: seg.start }];
-    for atom in &seg.preds {
-        list.push(ListEntry::Pred { atom: atom.clone() });
+    for arrival in &seg.preds {
+        list.push(ListEntry::Pred {
+            atom: arrival.atom.clone(),
+        });
     }
-    let tip_is_ret = seg.preds.last().map(|a| a.kind == "ret").unwrap_or(false);
+    let tip_is_ret = seg
+        .preds
+        .last()
+        .map(|a| a.atom.kind == "ret")
+        .unwrap_or(false);
     if seg.ends_exit && !tip_is_ret {
         list.push(ListEntry::Exit);
     }
     list
 }
 
-fn tip_soft(l: Option<&Segment>, r: Option<&Segment>) -> Option<SoftScore> {
-    let la = l.and_then(|s| s.preds.last())?;
-    let ra = r.and_then(|s| s.preds.last())?;
-    let score = score_pair(la, ra);
-    let _ = MATCH_FLOOR;
-    Some(score)
+fn match_status(left: Option<&Segment>, right: Option<&Segment>) -> MatchStatus {
+    let (Some(left), Some(right)) = (left, right) else {
+        return MatchStatus::Fail;
+    };
+    if left.ends_exit != right.ends_exit {
+        return MatchStatus::Fail;
+    }
+    let left_keys: Vec<&LocalKey> = left.preds.iter().map(|a| &a.key).collect();
+    let right_keys: Vec<&LocalKey> = right.preds.iter().map(|a| &a.key).collect();
+    if lcs_has_extra(&left_keys, &right_keys) {
+        MatchStatus::Fail
+    } else {
+        MatchStatus::Pass
+    }
+}
+
+fn keys_equal(left: &LocalKey, right: &LocalKey) -> bool {
+    match (left, right) {
+        (LocalKey::Normalized(a), LocalKey::Normalized(b)) => a == b,
+        _ => false,
+    }
+}
+
+fn lcs_has_extra(left: &[&LocalKey], right: &[&LocalKey]) -> bool {
+    let n = left.len();
+    let m = right.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in 1..=n {
+        for j in 1..=m {
+            if keys_equal(left[i - 1], right[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+            }
+        }
+    }
+    let mut i = n;
+    let mut j = m;
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && keys_equal(left[i - 1], right[j - 1]) {
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            return true;
+        } else {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const CROSS: &str = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"14"}]}}}"#;
 
     fn pred(kind: &str, fields: serde_json::Value) -> PredIn {
         PredIn {
@@ -400,103 +532,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn diamond_aligns_taken_not_taken() {
-        // Branch lives on taken/not_taken children (engine successor write).
-        let left = SnapRun {
-            arch: "rv32imc".into(),
-            nodes: vec![
-                PredNodeIn {
-                    id: 0,
-                    loc: "0".into(),
-                    predicates: vec![],
-                },
-                PredNodeIn {
-                    id: 1,
-                    loc: "1".into(),
-                    predicates: vec![pred("branch", json!({"dir": "taken", "at": "3"}))],
-                },
-                PredNodeIn {
-                    id: 2,
-                    loc: "2".into(),
-                    predicates: vec![pred("branch", json!({"dir": "notTaken", "at": "3"}))],
-                },
-                PredNodeIn {
-                    id: 3,
-                    loc: "exit".into(),
-                    predicates: vec![pred("ret", json!({"term": "1"}))],
-                },
-                PredNodeIn {
-                    id: 4,
-                    loc: "exit".into(),
-                    predicates: vec![pred("ret", json!({"term": "0"}))],
-                },
-            ],
-            edges: vec![
-                WireEdge {
-                    from: 0,
-                    to: 1,
-                    dir: "taken".into(),
-                },
-                WireEdge {
-                    from: 0,
-                    to: 2,
-                    dir: "not_taken".into(),
-                },
-                WireEdge {
-                    from: 1,
-                    to: 3,
-                    dir: "only".into(),
-                },
-                WireEdge {
-                    from: 2,
-                    to: 4,
-                    dir: "only".into(),
-                },
-            ],
-        };
-        let right = left.clone();
-        let report = build_compare_tree(&left, &right);
-        assert_eq!(report.status, "tree");
-        assert_eq!(report.claim, "crossPred");
-        assert_eq!(report.behavioral_equivalence, "notEstablished");
-        assert_eq!(report.phase, "branch_return");
-        assert_eq!(
-            pred_fingerprint(&report.nodes[0].left, "branch"),
-            "branch|at=3|dir=taken",
-            "incomplete branch wire falls back to the soft fingerprint"
-        );
-        assert_eq!(report.nodes.len(), 3);
-        assert_eq!(report.edges.len(), 2);
-        assert!(matches!(
-            report.nodes[0].left[0],
-            ListEntry::Start {
-                kind: StartKind::Create
-            }
-        ));
-        assert!(
-            report.nodes[0]
-                .left
-                .iter()
-                .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "branch")),
-            "create segment must end with lifted branch from children"
-        );
-        let taken = report
-            .nodes
-            .iter()
-            .find(|n| n.start == StartKind::Taken)
-            .expect("taken node");
-        assert!(
-            !taken
-                .left
-                .iter()
-                .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "branch")),
-            "taken child must not repeat the fork branch"
-        );
-        assert!(taken
-            .left
-            .iter()
-            .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "ret")));
+    fn rv_bound() -> PredIn {
+        pred(
+            "branch",
+            json!({"position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}),
+        )
+    }
+
+    fn enode(id: u32, loc: &str, predicates: Vec<PredIn>) -> PredNodeIn {
+        PredNodeIn {
+            id,
+            loc: loc.into(),
+            predicates,
+        }
+    }
+
+    fn edge(from: u32, to: u32, dir: &str) -> WireEdge {
+        WireEdge {
+            from,
+            to,
+            dir: dir.into(),
+        }
+    }
+
+    fn run(arch: &str, nodes: Vec<PredNodeIn>, edges: Vec<WireEdge>) -> SnapRun {
+        SnapRun {
+            arch: arch.into(),
+            nodes,
+            edges,
+        }
+    }
+
+    fn pred_kinds(list: &[ListEntry]) -> Vec<&str> {
+        list.iter()
+            .filter_map(|e| match e {
+                ListEntry::Pred { atom } => Some(atom.kind.as_str()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn pred_fingerprint<'a>(list: &'a [ListEntry], kind: &str) -> &'a str {
@@ -512,6 +585,257 @@ mod tests {
         let parsed: Value =
             serde_json::from_str(&predicate_wire(kind, fields.as_object().unwrap())).unwrap();
         assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn diamond_keeps_branch_on_successor() {
+        let left = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![]),
+                enode(
+                    1,
+                    "1",
+                    vec![pred("branch", json!({"dir": "taken", "at": "3"}))],
+                ),
+                enode(
+                    2,
+                    "2",
+                    vec![pred("branch", json!({"dir": "notTaken", "at": "3"}))],
+                ),
+                enode(3, "exit", vec![pred("ret", json!({"term": "1"}))]),
+                enode(4, "exit", vec![pred("ret", json!({"term": "0"}))]),
+            ],
+            vec![
+                edge(0, 1, "taken"),
+                edge(0, 2, "not_taken"),
+                edge(1, 3, "only"),
+                edge(2, 4, "only"),
+            ],
+        );
+        let report = build_compare_tree(&left, &left);
+        assert_eq!(report.status, "tree");
+        assert_eq!(report.claim, "crossPred");
+        assert_eq!(report.behavioral_equivalence, "notEstablished");
+        assert_eq!(report.phase, "local_increment");
+        assert_eq!(report.note, NOTE);
+        assert_eq!(report.nodes.len(), 3);
+        assert_eq!(report.edges.len(), 2);
+        let create = &report.nodes[0];
+        assert_eq!(create.start, StartKind::Create);
+        assert_eq!(create.match_status, MatchStatus::Pass);
+        assert_eq!(pred_kinds(&create.left), Vec::<&str>::new());
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken node");
+        assert_eq!(pred_kinds(&taken.left), vec!["branch", "ret"]);
+        assert_eq!(pred_fingerprint(&taken.left, "branch"), "unparsed:0",);
+        assert_ne!(
+            pred_fingerprint(&taken.left, "branch"),
+            "branch|at=3|dir=taken"
+        );
+        assert_eq!(taken.match_status, MatchStatus::Fail);
+        let wire = serde_json::to_value(taken).unwrap();
+        assert!(wire.get("tipScore").is_none());
+        assert_eq!(wire["matchStatus"], "fail");
+    }
+
+    #[test]
+    fn normalized_child_branch_passes_without_lifting() {
+        let snap = run(
+            "rv32imc",
+            vec![enode(0, "0", vec![]), enode(1, "1", vec![rv_bound()])],
+            vec![edge(0, 1, "taken")],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), Vec::<&str>::new());
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken");
+        assert_eq!(pred_kinds(&taken.left), vec!["branch"]);
+        assert_eq!(pred_fingerprint(&taken.left, "branch"), CROSS);
+        assert_eq!(pred_fingerprint(&taken.right, "branch"), CROSS);
+        assert_eq!(taken.match_status, MatchStatus::Pass);
+    }
+
+    #[test]
+    fn segment_lists_all_five_kinds_in_walk_order() {
+        let snap = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "0",
+                vec![
+                    pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]})),
+                    pred("branch", json!({"dir": "taken", "at": "3"})),
+                    pred("return", json!({"term": "1"})),
+                    pred("map_write", json!({"offset": 4})),
+                    pred("packet_write", json!({"offset": 8})),
+                ],
+            )],
+            vec![],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(
+            pred_kinds(&report.nodes[0].left),
+            vec!["helper", "branch", "ret", "mapWrite", "packetWrite"]
+        );
+    }
+
+    #[test]
+    fn unknown_kind_stays_on_the_list_and_fails() {
+        let snap = run(
+            "rv32imc",
+            vec![enode(0, "0", vec![pred("mapLookup", json!({"addr": "1"}))])],
+            vec![],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["mapLookup"]);
+        assert_eq!(
+            pred_fingerprint(&report.nodes[0].left, "mapLookup"),
+            "unparsed:0"
+        );
+        assert_eq!(
+            pred_fingerprint(&report.nodes[0].right, "mapLookup"),
+            "unparsed:1"
+        );
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+    }
+
+    #[test]
+    fn only_edge_drops_inherited_predicates() {
+        let helper = pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]}));
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![helper.clone()]),
+                enode(
+                    1,
+                    "1",
+                    vec![helper, pred("packetWrite", json!({"offset": 4}))],
+                ),
+            ],
+            vec![edge(0, 1, "only")],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(report.nodes.len(), 1);
+        assert_eq!(
+            pred_kinds(&report.nodes[0].left),
+            vec!["helper", "packetWrite"]
+        );
+    }
+
+    #[test]
+    fn taken_head_diffs_against_the_fork() {
+        let helper = pred("helper", json!({"event": 7, "helperId": 1, "args": ["42"]}));
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![helper.clone()]),
+                enode(
+                    1,
+                    "1",
+                    vec![helper, pred("branch", json!({"dir": "taken", "at": "9"}))],
+                ),
+            ],
+            vec![edge(0, 1, "taken")],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper"]);
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken");
+        assert_eq!(pred_kinds(&taken.left), vec!["branch"]);
+    }
+
+    #[test]
+    fn duplicate_normalized_arrivals_stay_and_pass() {
+        let snap = run(
+            "rv32imc",
+            vec![enode(0, "10", vec![rv_bound(), rv_bound()])],
+            vec![],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch", "branch"]);
+        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), CROSS);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+    }
+
+    #[test]
+    fn null_normalize_does_not_match_its_clone() {
+        let snap = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "0",
+                vec![pred("branch", json!({"dir": "taken", "at": "3"}))],
+            )],
+            vec![],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(
+            pred_fingerprint(&report.nodes[0].left, "branch"),
+            "unparsed:0"
+        );
+        assert_eq!(
+            pred_fingerprint(&report.nodes[0].right, "branch"),
+            "unparsed:1"
+        );
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+    }
+
+    #[test]
+    fn empty_sides_pass() {
+        let snap = run("rv32imc", vec![enode(0, "0", vec![])], vec![]);
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), Vec::<&str>::new());
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+    }
+
+    #[test]
+    fn missing_side_fails() {
+        let left = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
+        let right = run("ebpf", vec![], vec![]);
+        let report = build_compare_tree(&left, &right);
+        assert_eq!(report.nodes.len(), 1);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch"]);
+        assert!(report.nodes[0].right.is_empty());
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+    }
+
+    #[test]
+    fn exit_mismatch_fails_when_keys_match() {
+        let left = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
+        let right = run("rv32imc", vec![enode(0, "exit", vec![rv_bound()])], vec![]);
+        let report = build_compare_tree(&left, &right);
+        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), CROSS);
+        assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), CROSS);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+    }
+
+    #[test]
+    fn extra_predicate_fails() {
+        let left = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
+        let right = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "10",
+                vec![rv_bound(), pred("ret", json!({"term": "1"}))],
+            )],
+            vec![],
+        );
+        let report = build_compare_tree(&left, &right);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch"]);
+        assert_eq!(pred_kinds(&report.nodes[0].right), vec!["branch", "ret"]);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
     }
 
     #[test]
@@ -535,35 +859,36 @@ mod tests {
 
     #[test]
     fn compare_tree_cross_pred_bound_taken() {
-        let cross = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"14"}]}}}"#;
-        let left = SnapRun {
-            arch: "rv32imc".into(),
-            nodes: vec![PredNodeIn {
-                id: 0,
-                loc: "10".into(),
-                predicates: vec![pred(
+        let cross = CROSS;
+        let left = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "10",
+                vec![pred(
                     "branch",
                     json!({"position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}),
                 )],
-            }],
-            edges: vec![],
-        };
-        let right = SnapRun {
-            arch: "ebpf".into(),
-            nodes: vec![PredNodeIn {
-                id: 0,
-                loc: "6".into(),
-                predicates: vec![pred(
+            )],
+            vec![],
+        );
+        let right = run(
+            "ebpf",
+            vec![enode(
+                0,
+                "6",
+                vec![pred(
                     "branch",
                     json!({"position":6,"dir":"taken","width":64,"cond":{"lhs":"id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))","rel":"gtu","rhs":"zext32/64/32(extract0,32(add32(v32:4,128)))"}}),
                 )],
-            }],
-            edges: vec![],
-        };
+            )],
+            vec![],
+        );
         let report = build_compare_tree(&left, &right);
         assert_eq!(report.claim, "crossPred");
         assert_eq!(report.behavioral_equivalence, "notEstablished");
         assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), cross);
         assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), cross);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
     }
 }

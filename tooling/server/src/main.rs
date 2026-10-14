@@ -242,7 +242,7 @@ async fn compare_predicates(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-/// Compare tree: nodes with dual ordered predicate lists (phase1 branch/ret).
+/// Compare tree: local P_i lists and `matchStatus` (`pass` or `fail`).
 async fn compare_tree(
     Json(body): Json<CompareBody>,
 ) -> Result<Json<pred_tree::TreeReport>, StatusCode> {
@@ -530,7 +530,7 @@ mod http_tests {
     }
 
     #[tokio::test]
-    async fn compare_tree_diamond_phase1() {
+    async fn compare_tree_diamond_local_increment() {
         let router = app(new_state());
         let body = br#"{
             "left":{
@@ -557,11 +557,13 @@ mod http_tests {
         assert_eq!(report["status"], "tree");
         assert_eq!(report["claim"], "crossPred");
         assert_eq!(report["behavioralEquivalence"], "notEstablished");
-        assert_eq!(report["phase"], "branch_return");
+        assert_eq!(report["phase"], "local_increment");
         assert_eq!(report["nodes"].as_array().unwrap().len(), 3);
         assert_eq!(report["edges"].as_array().unwrap().len(), 2);
         assert_eq!(report["nodes"][0]["left"][0]["tag"], "start");
         assert_eq!(report["nodes"][0]["left"][0]["kind"], "create");
+        assert_eq!(report["nodes"][0]["matchStatus"], "fail");
+        assert!(report["nodes"][0].get("tipScore").is_none());
     }
 
     #[tokio::test]
