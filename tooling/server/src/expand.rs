@@ -660,6 +660,12 @@ mod tests {
     }
 
     #[test]
+    fn ebpf_product_maps_match_just_tx_elf() {
+        let elf = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF).expect("just_tx.elf");
+        assert_eq!(ebpf::Meta::just_tx_product().maps, elf.maps);
+    }
+
+    #[test]
     fn ebpf_just_tx_create_and_one_step() {
         use crate::bpf_image;
         let program = bpf_image::extract_insn_words(bpf_image::DEFAULT_BPF).expect("bpf");
@@ -669,7 +675,7 @@ mod tests {
             8,
             bpf_image::DEFAULT_BPF_NAME.into(),
             program,
-            ebpf::Meta::just_tx(),
+            ebpf::Meta::just_tx_product(),
         );
         let snap = session.snapshot();
         assert_eq!(snap.arch, "ebpf");

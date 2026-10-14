@@ -119,6 +119,17 @@ fn default_name(arch: Arch) -> &'static str {
     }
 }
 
+/// Slot 34 stays bound to the just_tx rxcnt map.
+/// Map rows come from `just_tx.elf`, the same layout RV32 create uses.
+fn ebpf_product_meta() -> ebpf::Meta {
+    let maps = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF)
+        .expect("just_tx.elf")
+        .maps;
+    let mut meta = ebpf::Meta::just_tx_product();
+    meta.maps = maps;
+    meta
+}
+
 fn default_bytes(arch: Arch) -> &'static [u8] {
     match arch {
         Arch::Rv32imc => rv32_image::DEFAULT_ELF,
@@ -178,7 +189,7 @@ async fn create_session(
         Arch::Ebpf => {
             let program =
                 bpf_image::extract_insn_words(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
-            let meta = ebpf::Meta::just_tx();
+            let meta = ebpf_product_meta();
             app.pool
                 .run(move || {
                     Arc::new(Mutex::new(Session::new_ebpf(

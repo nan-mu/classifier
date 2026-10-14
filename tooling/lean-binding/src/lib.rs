@@ -388,6 +388,9 @@ pub mod ebpf {
         pub term: Option<String>,
     }
 
+    /// Same wire record as `rv32::MapLayout`. Fields are mapId, keySize, and valueSize.
+    pub type MapLayout = super::rv32::MapLayout;
+
     /// Entry terms and packet/stack identities for `buildE0`.
     #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -423,14 +426,21 @@ pub mod ebpf {
         pub entry: Entry,
         #[serde(default)]
         pub resource_locations: Vec<ResourceLocation>,
+        /// Optional map layouts. Empty leaves map ops without a frozen layout.
+        #[serde(default)]
+        pub maps: Vec<MapLayout>,
     }
 
     impl Meta {
-        /// Product just_tx Meta: entry only; LDDW immediates use encoded bits (srcType 0).
+        /// AOT VMA of the just_tx rxcnt map in `just_tx.elf`.
+        const JUST_TX_MAP_VMA: u32 = 0x4038_02e8;
+
+        /// Entry only. LDDW immediates use encoded bits, srcType 0.
         pub fn just_tx() -> Self {
             Self {
                 entry: Entry::just_tx(),
                 resource_locations: vec![],
+                maps: vec![],
             }
         }
 
@@ -442,11 +452,54 @@ pub mod ebpf {
                     slot: 34,
                     term: None,
                 }],
+                maps: vec![],
+            }
+        }
+
+        /// just_tx with slot 34 bound to the shared rxcnt map. The term is that VMA as a decimal C64.
+        pub fn just_tx_product() -> Self {
+            let map = MapLayout {
+                map_id: Self::JUST_TX_MAP_VMA,
+                key_size: 4,
+                value_size: 8,
+            };
+            Self {
+                entry: Entry::just_tx(),
+                resource_locations: vec![ResourceLocation {
+                    slot: 34,
+                    term: Some(map.map_id.to_string()),
+                }],
+                maps: vec![map],
             }
         }
 
         pub fn to_json(&self) -> String {
             serde_json::to_string(self).expect("eBPF Meta JSON")
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Meta;
+
+        #[test]
+        fn just_tx_product_json_binds_slot_34_and_map() {
+            assert_eq!(
+                Meta::just_tx_product().to_json(),
+                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":"1077412584"}],"maps":[{"mapId":1077412584,"keySize":4,"valueSize":8}]}"#
+            );
+        }
+
+        #[test]
+        fn just_tx_and_unbound_map_stay_empty_of_layouts() {
+            assert_eq!(
+                Meta::just_tx().to_json(),
+                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[],"maps":[]}"#
+            );
+            assert_eq!(
+                Meta::just_tx_unbound_map().to_json(),
+                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":null}],"maps":[]}"#
+            );
         }
     }
 
