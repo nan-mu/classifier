@@ -10,7 +10,7 @@ import {
   type NodeProps,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { formatPredChip } from "./formatExpr";
 import {
   atomToPred,
@@ -24,9 +24,14 @@ import { formatPred } from "./viewer";
 
 const NODE_W = 300;
 const NODE_H = 132;
-const GAP_X = 340;
-const GAP_Y = 156;
+/** Column stride: wide enough that dual-list cards stay readable at mid zoom. */
+const GAP_X = 380;
+/** Row stride: card minHeight + gutter; barycenter keeps order, this keeps clearance. */
+const GAP_Y = 168;
 const BARY_PASSES = 8;
+/** Above this, fitView hits minZoom and cards become unreadable — frame the root instead. */
+const FIT_ALL_MAX_NODES = 24;
+const ROOT_FRAME_ZOOM = 0.55;
 
 type TreeFlowData = {
   start: StartKind;
@@ -238,10 +243,7 @@ export function CompareTreeView({ report }: Props) {
     () => layoutTree(report.nodes, report.edges),
     [report.nodes, report.edges],
   );
-
-  const onInit = useCallback((instance: ReactFlowInstance<TreeFlowNode, Edge>) => {
-    void instance.fitView({ padding: 0.28, duration: 240 });
-  }, []);
+  const flowRef = useRef<ReactFlowInstance<TreeFlowNode, Edge> | null>(null);
 
   const flowNodes = useMemo<TreeFlowNode[]>(() => {
     const out: TreeFlowNode[] = [];
@@ -281,6 +283,40 @@ export function CompareTreeView({ report }: Props) {
       }));
   }, [flowNodes, report.edges]);
 
+  const frameCamera = useCallback((instance: ReactFlowInstance<TreeFlowNode, Edge>) => {
+    if (flowNodes.length === 0) return;
+    if (flowNodes.length <= FIT_ALL_MAX_NODES) {
+      void instance.fitView({ padding: 0.28, duration: 240 });
+      return;
+    }
+    // Large trees: keep cards readable; pan from the create root leftward.
+    const root =
+      flowNodes.find((n) => n.data.start === "create") ??
+      [...flowNodes].sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y)[0]!;
+    const zoom = ROOT_FRAME_ZOOM;
+    const pane = document.querySelector(".compare-tree__canvas .react-flow") as HTMLElement | null;
+    const pw = pane?.clientWidth ?? 960;
+    const ph = pane?.clientHeight ?? 640;
+    const x = pw * 0.22 - root.position.x * zoom - (NODE_W * zoom) / 2;
+    const y = ph * 0.5 - root.position.y * zoom - (NODE_H * zoom) / 2;
+    void instance.setViewport({ x, y, zoom }, { duration: 240 });
+  }, [flowNodes]);
+
+  const onInit = useCallback(
+    (instance: ReactFlowInstance<TreeFlowNode, Edge>) => {
+      flowRef.current = instance;
+      frameCamera(instance);
+    },
+    [frameCamera],
+  );
+
+  useEffect(() => {
+    const instance = flowRef.current;
+    if (!instance) return;
+    const id = requestAnimationFrame(() => frameCamera(instance));
+    return () => cancelAnimationFrame(id);
+  }, [frameCamera, flowNodes.length, report.phase]);
+
   return (
     <Flex className="compare-tree panel" flex="1" flexDirection="column" minHeight={0} minWidth={0}>
       <Box className="compare-tree__header" px={14} pt={12} pb={10}>
@@ -308,7 +344,7 @@ export function CompareTreeView({ report }: Props) {
           elementsSelectable={false}
           connectionMode={ConnectionMode.Loose}
           fitView={false}
-          minZoom={0.15}
+          minZoom={0.12}
           maxZoom={2}
           proOptions={{ hideAttribution: false }}
           colorMode="dark"
