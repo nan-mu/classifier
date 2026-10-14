@@ -81,6 +81,11 @@ impl WaveBatchPolicy {
     }
 }
 
+/// UI step counter: a call that expands 0 heads still bills 1 so progress ticks stay monotonic.
+fn billable_heads(expanded: u32) -> u32 {
+    expanded.max(1)
+}
+
 pub struct BatchTick {
     pub cont: bool,
     pub steps: u32,
@@ -201,7 +206,7 @@ impl Session {
             return;
         }
         let n = self.expand.step_wave(1);
-        self.steps = self.steps.saturating_add(n.max(1));
+        self.steps = self.steps.saturating_add(billable_heads(n));
         self.after_expand();
     }
 
@@ -211,7 +216,7 @@ impl Session {
             return;
         }
         let n = self.expand.step_wave(lean_binding::LEAN_WORKERS);
-        self.steps = self.steps.saturating_add(n.max(1));
+        self.steps = self.steps.saturating_add(billable_heads(n));
         self.after_expand();
     }
 
@@ -229,7 +234,7 @@ impl Session {
                 break;
             }
             let n = self.expand.step_wave(lean_binding::LEAN_WORKERS);
-            let advanced = n.max(1);
+            let advanced = billable_heads(n);
             self.steps = self.steps.saturating_add(advanced);
             heads = heads.saturating_add(advanced);
             self.after_expand();
