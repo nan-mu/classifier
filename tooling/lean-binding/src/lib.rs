@@ -92,6 +92,10 @@ pub(crate) mod ffi {
 
         /// Structural same/diff of two run snapshots (`PathMerge/Compare.lean`).
         pub fn lean_compare_run_same_diff(request_json: LeanObj) -> LeanObj;
+
+        /// CrossPred normalize (`ClassifierExpr.exportCrossPredNormalize`).
+        /// Success is CrossPred JSON. Failure is the four characters `null`.
+        pub fn lean_cross_pred_normalize(env_json: LeanObj, pred_json: LeanObj) -> LeanObj;
     }
 
     #[cfg(test)]
@@ -592,5 +596,64 @@ pub mod compare {
             let req = lean_string(&request_json);
             take_string(ffi::lean_compare_run_same_diff(req))
         })
+    }
+}
+
+/// CrossPred normalize (`lean_cross_pred_normalize`).
+pub mod cross_pred {
+    use super::{ffi, lean_call};
+    use std::ffi::CStr;
+
+    unsafe fn take_string(obj: ffi::LeanObj) -> String {
+        let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
+            .to_string_lossy()
+            .into_owned();
+        ffi::lean_binding_dec(obj);
+        s
+    }
+
+    unsafe fn lean_string(s: &str) -> ffi::LeanObj {
+        use std::ffi::CString;
+        let c = CString::new(s).expect("JSON contains NUL");
+        ffi::lean_binding_mk_string(c.as_ptr())
+    }
+
+    /// `None` when Lean returns the ABI failure marker `null`.
+    pub fn normalize(env_json: &str, pred_json: &str) -> Option<String> {
+        let env_json = env_json.to_owned();
+        let pred_json = pred_json.to_owned();
+        let raw = lean_call(move || unsafe {
+            let env = lean_string(&env_json);
+            let pred = lean_string(&pred_json);
+            take_string(ffi::lean_cross_pred_normalize(env, pred))
+        });
+        if raw == "null" {
+            None
+        } else {
+            Some(raw)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::normalize;
+
+        const ENV_R: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"}"#;
+        const ENV_E: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
+        const BOUND_RT: &str = r#"{"kind":"branch","position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}"#;
+        const BOUND_ET: &str = r#"{"kind":"branch","position":6,"dir":"taken","width":64,"cond":{"lhs":"id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))","rel":"gtu","rhs":"zext32/64/32(extract0,32(add32(v32:4,128)))"}}"#;
+        const CROSS: &str = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"14"}]}}}"#;
+
+        #[test]
+        fn cross_pred_bound_taken_pair_matches() {
+            assert_eq!(normalize(ENV_R, BOUND_RT).as_deref(), Some(CROSS));
+            assert_eq!(normalize(ENV_E, BOUND_ET).as_deref(), Some(CROSS));
+        }
+
+        #[test]
+        fn cross_pred_bad_json_is_none() {
+            assert_eq!(normalize("{", BOUND_RT), None);
+            assert_eq!(normalize(ENV_R, "{"), None);
+        }
     }
 }
