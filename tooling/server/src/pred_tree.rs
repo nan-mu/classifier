@@ -1,8 +1,8 @@
 //! Compare tree of expand segments.
 //!
 //! Each node lists the ordered local predicate arrivals (P_i) along one segment.
-//! `matchStatus` is `pass` only when both sides exist, exit flags match, and the
-//! normalize-key LCS has no extras.
+//! `matchStatus` is `pass` only when both sides exist, exit flags match, every
+//! arrival is normalized, and `lean_cross_pred_unify` reports `ok` and `pass`.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -471,51 +471,34 @@ fn match_status(left: Option<&Segment>, right: Option<&Segment>) -> MatchStatus 
     let (Some(left), Some(right)) = (left, right) else {
         return MatchStatus::Fail;
     };
-    if left.ends_exit != right.ends_exit {
+    let Some(request) = unify_request(left, right) else {
         return MatchStatus::Fail;
-    }
-    let left_keys: Vec<&LocalKey> = left.preds.iter().map(|a| &a.key).collect();
-    let right_keys: Vec<&LocalKey> = right.preds.iter().map(|a| &a.key).collect();
-    if lcs_has_extra(&left_keys, &right_keys) {
-        MatchStatus::Fail
-    } else {
-        MatchStatus::Pass
+    };
+    match lean_binding::cross_pred::unify(&request) {
+        Some(result) if result.ok && result.pass && left.ends_exit == right.ends_exit => {
+            MatchStatus::Pass
+        }
+        _ => MatchStatus::Fail,
     }
 }
 
-fn keys_equal(left: &LocalKey, right: &LocalKey) -> bool {
-    match (left, right) {
-        (LocalKey::Normalized(a), LocalKey::Normalized(b)) => a == b,
-        _ => false,
-    }
+fn unify_request(left: &Segment, right: &Segment) -> Option<String> {
+    Some(format!(
+        r#"{{"left":[{}],"right":[{}]}}"#,
+        normalized_body(&left.preds)?,
+        normalized_body(&right.preds)?,
+    ))
 }
 
-fn lcs_has_extra(left: &[&LocalKey], right: &[&LocalKey]) -> bool {
-    let n = left.len();
-    let m = right.len();
-    let mut dp = vec![vec![0usize; m + 1]; n + 1];
-    for i in 1..=n {
-        for j in 1..=m {
-            if keys_equal(left[i - 1], right[j - 1]) {
-                dp[i][j] = dp[i - 1][j - 1] + 1;
-            } else {
-                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
-            }
+fn normalized_body(arrivals: &[Arrival]) -> Option<String> {
+    let mut parts = Vec::with_capacity(arrivals.len());
+    for arrival in arrivals {
+        match &arrival.key {
+            LocalKey::Normalized(json) => parts.push(json.as_str()),
+            LocalKey::Unparsed => return None,
         }
     }
-    let mut i = n;
-    let mut j = m;
-    while i > 0 || j > 0 {
-        if i > 0 && j > 0 && keys_equal(left[i - 1], right[j - 1]) {
-            i -= 1;
-            j -= 1;
-        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-            return true;
-        } else {
-            return true;
-        }
-    }
-    false
+    Some(parts.join(","))
 }
 
 #[cfg(test)]
@@ -890,5 +873,51 @@ mod tests {
         assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), cross);
         assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), cross);
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+    }
+
+    fn fixture_segment(jsons: &[&str]) -> Segment {
+        Segment {
+            start: StartKind::Create,
+            preds: jsons
+                .iter()
+                .enumerate()
+                .map(|(index, json)| Arrival {
+                    atom: PredAtom {
+                        node_id: 0,
+                        loc: "0".into(),
+                        index,
+                        kind: "ret".into(),
+                        fields: Map::new(),
+                        fingerprint: (*json).to_string(),
+                    },
+                    key: LocalKey::Normalized((*json).to_string()),
+                })
+                .collect(),
+            taken: None,
+            not_taken: None,
+            fork_id: None,
+            ends_exit: false,
+        }
+    }
+
+    #[test]
+    fn var_rename_fingerprints_differ_and_unify_passes() {
+        let left_var = r#"{"kind":"ret","payload":{"kind":"var","name":4}}"#;
+        let left_reg = r#"{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":2}}"#;
+        let right_var = r#"{"kind":"ret","payload":{"kind":"var","name":9}}"#;
+        let right_reg = r#"{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":5}}"#;
+        let left = fixture_segment(&[left_var, left_reg]);
+        let right = fixture_segment(&[right_var, right_reg]);
+        assert_ne!(
+            left.preds[0].atom.fingerprint,
+            right.preds[0].atom.fingerprint
+        );
+        assert_ne!(
+            left.preds[1].atom.fingerprint,
+            right.preds[1].atom.fingerprint
+        );
+        assert_eq!(match_status(Some(&left), Some(&right)), MatchStatus::Pass);
+        assert_eq!(pred_kinds(&build_list(Some(&left))), vec!["ret", "ret"]);
+        assert_eq!(pred_kinds(&build_list(Some(&right))), vec!["ret", "ret"]);
     }
 }

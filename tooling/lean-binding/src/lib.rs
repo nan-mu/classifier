@@ -96,6 +96,10 @@ pub(crate) mod ffi {
         /// CrossPred normalize (`ClassifierExpr.exportCrossPredNormalize`).
         /// Success is CrossPred JSON. Failure is the four characters `null`.
         pub fn lean_cross_pred_normalize(env_json: LeanObj, pred_json: LeanObj) -> LeanObj;
+
+        /// CrossPred unify (`ClassifierExpr.exportCrossPredUnify`).
+        /// Success is unify JSON. Failure is the four characters `null`.
+        pub fn lean_cross_pred_unify(request_json: LeanObj) -> LeanObj;
     }
 
     #[cfg(test)]
@@ -634,9 +638,39 @@ pub mod cross_pred {
         }
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct UnifyResult {
+        pub ok: bool,
+        pub pass: bool,
+    }
+
+    /// `None` when Lean returns the ABI failure marker `null`.
+    pub fn unify(request_json: &str) -> Option<UnifyResult> {
+        let request_json = request_json.to_owned();
+        let raw = lean_call(move || unsafe {
+            let req = lean_string(&request_json);
+            take_string(ffi::lean_cross_pred_unify(req))
+        });
+        parse_unify(&raw)
+    }
+
+    fn parse_unify(raw: &str) -> Option<UnifyResult> {
+        if raw == "null" {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+        let ok = value.get("ok")?.as_bool()?;
+        let pass = match value.get("pass") {
+            Some(bit) => bit.as_bool()?,
+            None if !ok => false,
+            None => return None,
+        };
+        Some(UnifyResult { ok, pass })
+    }
+
     #[cfg(test)]
     mod tests {
-        use super::normalize;
+        use super::{normalize, unify, UnifyResult};
 
         const ENV_R: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"}"#;
         const ENV_E: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
@@ -654,6 +688,23 @@ pub mod cross_pred {
         fn cross_pred_bad_json_is_none() {
             assert_eq!(normalize("{", BOUND_RT), None);
             assert_eq!(normalize(ENV_R, "{"), None);
+        }
+
+        #[test]
+        fn cross_pred_unify_var_rename_passes() {
+            let request = r#"{"left":[{"kind":"ret","payload":{"kind":"var","name":4}},{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":2}}],"right":[{"kind":"ret","payload":{"kind":"var","name":9}},{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":5}}]}"#;
+            assert_eq!(
+                unify(request),
+                Some(UnifyResult {
+                    ok: true,
+                    pass: true
+                })
+            );
+        }
+
+        #[test]
+        fn cross_pred_unify_bad_json_is_none() {
+            assert_eq!(unify("{"), None);
         }
     }
 }

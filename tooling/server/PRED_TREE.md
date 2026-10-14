@@ -14,7 +14,7 @@ Each node has:
 - `left` / `right`: ordered list entries for the two architectures
 - `matchStatus`: `pass` | `fail`
 
-`pass` means both sides are present, the exit flags are equal, and the LCS of normalize keys has no `onlyLeft` or `onlyRight` slot. Every other case is `fail`, including a one-sided arm, an exit mismatch, and an extra predicate. `matchStatus` is not behavioral equivalence.
+`pass` means both sides are present, every arrival is normalized CrossPred JSON, the exit flags are equal, and `lean_cross_pred_unify` returns `{"ok":true,"pass":true}`. The node is `fail` when a side is missing, an arrival is unparsed, the exit flags differ, the response is `null`, or the response is `{"ok":false}` or `{"ok":true,"pass":false}`. `matchStatus` is not behavioral equivalence.
 
 List entries:
 
@@ -40,4 +40,4 @@ A parsed arrival stores CrossPred JSON from `lean_cross_pred_normalize` in `fing
 - `ebpf` uses the same `packetBase` and map, with `packetEnd` `add32(v32:4,128)`.
 - Any other arch uses `{}`.
 
-A `null` result stores `unparsed:<id>`. That key matches nothing, including another null result. Equality uses the normalize JSON only. LCS keys are those JSON strings. On equal DP scores the backtrack prefers `onlyRight`.
+A `null` normalize result stores `unparsed:<id>`. Any unparsed arrival fails the node. When every arrival on both sides is normalized, the server sends those JSON texts, in list order, as `{"left":[...],"right":[...]}`. A variable rename can pass when the fingerprint strings differ. The `left` and `right` lists stay on the node for display.
