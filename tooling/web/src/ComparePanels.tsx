@@ -13,6 +13,7 @@ import {
   type TreeNode,
   type TreeReport,
 } from "./types";
+import { formatPred } from "./viewer";
 
 type DetailSide = "left" | "right";
 
@@ -210,7 +211,7 @@ function EntryDetail({ entry }: { entry: ListEntry }) {
   return (
     <div className="compare-entry" style={{ marginBottom: 10 }}>
       <div className="capsule-row" style={{ marginBottom: 4 }}>
-        <span className="capsule" title={`#${entry.atom.node_id} @ ${entry.atom.loc}`}>
+        <span className="capsule" title={formatPred(row)}>
           {formatPredChip(row)}
         </span>
       </div>

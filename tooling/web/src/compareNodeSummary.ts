@@ -6,6 +6,8 @@ export type AlignRow =
   | { status: "onlyLeft"; left: ListEntry }
   | { status: "onlyRight"; right: ListEntry };
 
+export type MatchStatus = "pass" | "fail";
+
 export type NodeDiffSummary = {
   id: number;
   start: TreeNode["start"];
@@ -89,6 +91,11 @@ export function summarizeTreeNode(node: TreeNode): NodeDiffSummary {
     rightExit,
     verdict,
   };
+}
+
+/** `same` is pass. `diff` and `coverage` are fail until the server sends `matchStatus`. */
+export function matchStatusOf(node: TreeNode): MatchStatus {
+  return summarizeTreeNode(node).verdict === "same" ? "pass" : "fail";
 }
 
 export function formatEntryLine(entry: ListEntry): string {

@@ -639,6 +639,16 @@ body {
   min-height: 0;
 }
 
+.compare-tree-node--pass {
+  --role-accent: #6ec8b0;
+  --role-tint: rgba(24, 52, 46, 0.94);
+}
+
+.compare-tree-node--fail {
+  --role-accent: #e08a78;
+  --role-tint: rgba(58, 30, 26, 0.95);
+}
+
 .compare-tree-node--selected {
   outline: 1px solid rgba(226, 207, 171, 0.65);
   box-shadow: 0 0 0 1px rgba(226, 207, 171, 0.25);

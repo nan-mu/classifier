@@ -183,9 +183,8 @@ export function formatPred(p: PredRow): string {
     return args.length === 0 ? name : `${name}(${args.join(", ")})`;
   }
   if (p.kind === "branch") {
-    const at = predStr(p, "at") || predStr(p, "loc") || predStr(p, "position") || "?";
     const dir = predStr(p, "dir") || "?";
-    return `branch ${dir} #${at}`;
+    return `branch ${dir}`;
   }
   if (p.kind === "mapWrite" || p.kind === "map_write") {
     const off = predStr(p, "offset");

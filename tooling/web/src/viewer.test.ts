@@ -58,6 +58,18 @@ describe("rejected nodes", () => {
   });
 });
 
+describe("branch predicates", () => {
+  it("labels a branch by direction and drops the program position", () => {
+    expect(formatPred({ kind: "branch", dir: "taken", at: "58", position: 58 })).toBe(
+      "branch taken",
+    );
+    expect(formatPred({ kind: "branch", dir: "not_taken", loc: "12" })).toBe(
+      "branch not_taken",
+    );
+    expect(formatPred({ kind: "branch" })).toBe("branch ?");
+  });
+});
+
 describe("helper predicates", () => {
   it("formats known and unknown helper ids", () => {
     const lookup: PredRow = {

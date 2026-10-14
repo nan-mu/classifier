@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alignListEntries, summarizeTreeNode } from "./compareNodeSummary";
+import { alignListEntries, matchStatusOf, summarizeTreeNode } from "./compareNodeSummary";
 import type { ListEntry, TreeNode } from "./types";
 
 function pred(fp: string, kind = "helper"): ListEntry {
@@ -88,5 +88,36 @@ describe("summarizeTreeNode", () => {
       "both",
       "both",
     ]);
+  });
+
+  it("collapses same to pass and both mismatch verdicts to fail", () => {
+    const same: TreeNode = {
+      id: 1,
+      start: "create",
+      left: [pred("a")],
+      right: [pred("a")],
+    };
+    const coverage: TreeNode = {
+      id: 2,
+      start: "taken",
+      left: [pred("a"), pred("extra")],
+      right: [pred("a")],
+    };
+    const diff: TreeNode = {
+      id: 3,
+      start: "not_taken",
+      left: [pred("only-left")],
+      right: [pred("only-right")],
+    };
+    const exitMismatch: TreeNode = {
+      id: 4,
+      start: "create",
+      left: [pred("a"), { tag: "exit" }],
+      right: [pred("a")],
+    };
+    expect(matchStatusOf(same)).toBe("pass");
+    expect(matchStatusOf(coverage)).toBe("fail");
+    expect(matchStatusOf(diff)).toBe("fail");
+    expect(matchStatusOf(exitMismatch)).toBe("fail");
   });
 });

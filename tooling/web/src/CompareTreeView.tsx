@@ -12,25 +12,25 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { matchStatusOf, type MatchStatus } from "./compareNodeSummary";
+import { layoutCompareTree } from "./compareTreeLayout";
 import { formatPredChip } from "./formatExpr";
 import {
   atomToPred,
   type ListEntry,
-  type SoftScore,
   type StartKind,
-  type TreeNode,
   type TreeReport,
 } from "./types";
 import { formatPred } from "./viewer";
 
+const MATCH_LEGEND = [
+  { status: "pass", label: "谓词一致" },
+  { status: "fail", label: "谓词不一致" },
+] as const;
+
 const NODE_W = 300;
 const NODE_H = 132;
 const PREVIEW_MAX = 3;
-/** Column stride: wide enough that dual-list cards stay readable at mid zoom. */
-const GAP_X = 380;
-/** Row stride matches fixed NODE_H + gutter so siblings never overlap. */
-const GAP_Y = 168;
-const BARY_PASSES = 8;
 /** Above this, fitView hits minZoom and cards become unreadable — frame the root instead. */
 const FIT_ALL_MAX_NODES = 24;
 const ROOT_FRAME_ZOOM = 0.55;
@@ -42,130 +42,12 @@ type TreeFlowData = {
   right: ListEntry[];
   leftArch: string;
   rightArch: string;
-  tipScore?: SoftScore;
+  match: MatchStatus;
   selected: boolean;
   onSelect: (id: number) => void;
 };
 
 type TreeFlowNode = Node<TreeFlowData, "tree">;
-
-function startRole(start: StartKind): string {
-  if (start === "taken") return "arm_taken";
-  if (start === "not_taken") return "arm_not_taken";
-  return "entry";
-}
-
-function bary(neighbors: string[], order: Map<string, number>): number {
-  if (neighbors.length === 0) return Number.POSITIVE_INFINITY;
-  let sum = 0;
-  let n = 0;
-  for (const id of neighbors) {
-    const i = order.get(id);
-    if (i === undefined) continue;
-    sum += i;
-    n += 1;
-  }
-  return n === 0 ? Number.POSITIVE_INFINITY : sum / n;
-}
-
-function layoutTree(
-  nodes: TreeNode[],
-  edges: TreeReport["edges"],
-): Record<string, { x: number; y: number }> {
-  if (nodes.length === 0) return {};
-  const ids = nodes.map((n) => String(n.id));
-  const idSet = new Set(ids);
-  const children = new Map<string, string[]>();
-  const parents = new Map<string, string[]>();
-  const indeg = new Map<string, number>();
-  const edgeDir = new Map<string, string>();
-
-  for (const id of ids) {
-    children.set(id, []);
-    parents.set(id, []);
-    indeg.set(id, 0);
-  }
-  for (const e of edges) {
-    const from = String(e.from);
-    const to = String(e.to);
-    if (!idSet.has(from) || !idSet.has(to) || from === to) continue;
-    children.get(from)!.push(to);
-    parents.get(to)!.push(from);
-    indeg.set(to, (indeg.get(to) ?? 0) + 1);
-    edgeDir.set(`${from}->${to}`, e.dir);
-  }
-  for (const id of ids) {
-    children.get(id)!.sort((a, b) => {
-      const ra = edgeDir.get(`${id}->${a}`) === "taken" ? 0 : 1;
-      const rb = edgeDir.get(`${id}->${b}`) === "taken" ? 0 : 1;
-      return ra - rb || Number(a) - Number(b);
-    });
-  }
-
-  const roots = ids.filter((id) => (indeg.get(id) ?? 0) === 0);
-  const start = roots.length > 0 ? roots : [ids[0]!];
-  const depth = new Map<string, number>();
-  const q = [...start];
-  for (const r of start) depth.set(r, 0);
-  while (q.length > 0) {
-    const id = q.shift()!;
-    const d = depth.get(id) ?? 0;
-    for (const child of children.get(id) ?? []) {
-      const next = d + 1;
-      const prev = depth.get(child);
-      if (prev === undefined || next > prev) {
-        depth.set(child, next);
-        q.push(child);
-      }
-    }
-  }
-  for (const id of ids) {
-    if (!depth.has(id)) depth.set(id, 0);
-  }
-
-  const maxDepth = Math.max(0, ...depth.values());
-  const layers: string[][] = Array.from({ length: maxDepth + 1 }, () => []);
-  for (const id of ids) {
-    layers[depth.get(id) ?? 0]!.push(id);
-  }
-  for (const layer of layers) {
-    layer.sort((a, b) => Number(a) - Number(b));
-  }
-
-  for (let pass = 0; pass < BARY_PASSES; pass++) {
-    for (let d = 1; d <= maxDepth; d++) {
-      const layer = layers[d]!;
-      const prev = layers[d - 1]!;
-      const order = new Map(prev.map((id, i) => [id, i]));
-      layer.sort((a, b) => {
-        const ba = bary(parents.get(a) ?? [], order);
-        const bb = bary(parents.get(b) ?? [], order);
-        return ba - bb || Number(a) - Number(b);
-      });
-    }
-    for (let d = maxDepth - 1; d >= 0; d--) {
-      const layer = layers[d]!;
-      const next = layers[d + 1]!;
-      const order = new Map(next.map((id, i) => [id, i]));
-      layer.sort((a, b) => {
-        const ba = bary(children.get(a) ?? [], order);
-        const bb = bary(children.get(b) ?? [], order);
-        return ba - bb || Number(a) - Number(b);
-      });
-    }
-  }
-
-  const out: Record<string, { x: number; y: number }> = {};
-  for (let d = 0; d <= maxDepth; d++) {
-    const row = layers[d] ?? [];
-    const totalH = Math.max(0, row.length - 1) * GAP_Y;
-    const y0 = -totalH / 2;
-    row.forEach((id, i) => {
-      out[id] = { x: d * GAP_X, y: y0 + i * GAP_Y };
-    });
-  }
-  return out;
-}
 
 function EntryChip({ entry }: { entry: ListEntry }) {
   if (entry.tag === "start") {
@@ -176,7 +58,7 @@ function EntryChip({ entry }: { entry: ListEntry }) {
   }
   const row = atomToPred(entry.atom);
   return (
-    <span className="capsule" title={`#${entry.atom.node_id} · ${formatPred(row)}`}>
+    <span className="capsule" title={formatPred(row)}>
       {formatPredChip(row)}
     </span>
   );
@@ -206,33 +88,17 @@ function PreviewCol({
   );
 }
 
-function TipScore({ score }: { score: SoftScore }) {
-  const pct = Math.round(Math.max(0, Math.min(1, score.overall)) * 100);
-  return (
-    <span
-      className="mono muted state-node__meta"
-      title={`分支末端启发式相似度 ${score.overall.toFixed(2)}`}
-    >
-      tip {pct}%
-    </span>
-  );
-}
-
 const handleStyle = { opacity: 0, width: 8, height: 8 };
 
 function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
-  const role = startRole(data.start);
   return (
     <div
-      className={`state-node state-node--role-${role} compare-tree-node${
+      className={`state-node compare-tree-node compare-tree-node--${data.match}${
         data.selected ? " compare-tree-node--selected" : ""
       }`}
       style={{ width: NODE_W, height: NODE_H }}
     >
       <Handle id="l" type="target" position={Position.Left} style={handleStyle} />
-      <div className="state-node__header">
-        {data.tipScore ? <TipScore score={data.tipScore} /> : null}
-      </div>
       <button
         type="button"
         className="state-node__title compare-tree-node__select"
@@ -282,7 +148,7 @@ export function CompareTreeView({
   fitRequest = 0,
 }: Props) {
   const positions = useMemo(
-    () => layoutTree(report.nodes, report.edges),
+    () => layoutCompareTree(report.nodes, report.edges),
     [report.nodes, report.edges],
   );
   const flowRef = useRef<ReactFlowInstance<TreeFlowNode, Edge> | null>(null);
@@ -311,7 +177,7 @@ export function CompareTreeView({
           right: n.right,
           leftArch,
           rightArch,
-          tipScore: n.tipScore,
+          match: matchStatusOf(n),
           selected: false,
           onSelect: onSelectStable,
         },
@@ -340,6 +206,8 @@ export function CompareTreeView({
         target: String(e.to),
         sourceHandle: "r",
         targetHandle: "l",
+        type: "smoothstep",
+        pathOptions: { borderRadius: 12, offset: 0 },
         label: e.dir,
         className: "flow-edge flow-edge--branch",
         labelStyle: { fill: "#c9bfb0", fontSize: 10 },
@@ -437,6 +305,14 @@ export function CompareTreeView({
         >
           <Background color="rgba(120,112,98,0.35)" gap={24} />
         </ReactFlow>
+        <div className="node-legend" aria-label="谓词比较图例">
+          {MATCH_LEGEND.map((row) => (
+            <div key={row.status} className="node-legend__row">
+              <span className={`node-legend__swatch compare-tree-node--${row.status}`} />
+              <span>{row.label}</span>
+            </div>
+          ))}
+        </div>
       </Box>
     </Flex>
   );
