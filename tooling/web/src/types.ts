@@ -254,6 +254,8 @@ export type TreeNode = {
   start: StartKind;
   left: ListEntry[];
   right: ListEntry[];
+  /** Server pass/fail; preferred over client LCS when present. */
+  matchStatus?: "pass" | "fail";
   tipScore?: SoftScore;
 };
 

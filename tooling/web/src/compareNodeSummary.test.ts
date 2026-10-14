@@ -119,5 +119,7 @@ describe("summarizeTreeNode", () => {
     expect(matchStatusOf(coverage)).toBe("fail");
     expect(matchStatusOf(diff)).toBe("fail");
     expect(matchStatusOf(exitMismatch)).toBe("fail");
+    expect(matchStatusOf({ ...coverage, matchStatus: "pass" })).toBe("pass");
+    expect(matchStatusOf({ ...same, matchStatus: "fail" })).toBe("fail");
   });
 });

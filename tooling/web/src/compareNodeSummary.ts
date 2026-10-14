@@ -93,8 +93,11 @@ export function summarizeTreeNode(node: TreeNode): NodeDiffSummary {
   };
 }
 
-/** `same` is pass. `diff` and `coverage` are fail until the server sends `matchStatus`. */
+/** Prefer server `matchStatus`. Else fold client LCS verdict (`same`→pass, else fail). */
 export function matchStatusOf(node: TreeNode): MatchStatus {
+  if (node.matchStatus === "pass" || node.matchStatus === "fail") {
+    return node.matchStatus;
+  }
   return summarizeTreeNode(node).verdict === "same" ? "pass" : "fail";
 }
 

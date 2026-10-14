@@ -76,7 +76,7 @@ export async function compareRuns(
   throw new Error("unexpected compare status");
 }
 
-/** Compare tree of dual-list nodes (`claim: crossPred`). Phase1 branch/ret. */
+/** Compare tree of dual-list nodes (`claim: crossPred`, local P_i + matchStatus). */
 export async function compareTree(
   left: TreeSnap,
   right: TreeSnap,
