@@ -18,21 +18,23 @@ Helper谓词是 `Predicate` 中 `helper` 类的元素，其类型为：
 - [MapDelete谓词](MapDelete谓词.md)
 - [OtherHelper谓词](OtherHelper谓词.md)
 
-32 位分派约定为：\(a_0=\mathrm{Real}_{32}(10)\) 保存 helper 编号，\(a_j=\mathrm{Real}_{32}(10+j)\)（\(1\le j\le5\)）保存附加参数，返回寄存器为 \(r_{\mathrm{ret}}=a_0\)。这是指定调用约定，不将原生 eBPF 的参数位置与此约定混同。
+RV32 的 32 位分派器约定为：\(a_0=\mathrm{Real}_{32}(10)\) 保存 helper 编号，\(a_j=\mathrm{Real}_{32}(10+j)\)（\(1\le j\le n(h)\)）保存附加参数，返回寄存器为 \(r_{\mathrm{ret}}=a_0\)。
 
-\(\mathrm{Real}_{32}\) 为按机器寄存器编号构造真实寄存器标记的记号；\(a_0\)、\(a_j\) 与 \(r_{\mathrm{ret}}\) 均属于 32 位真实寄存器集合，其值域为 \(\mathbb B_{32}\)，即 32 位位向量集合。下标 \(j\) 为附加参数的位置。
+原生 eBPF `call imm` 使用独立的 64 位约定：编号 \(k\in\mathbb B_{32}\) 由指令立即数提供，\(a_j=\mathrm{Real}_{64}(j)\)（\(1\le j\le n(h)\)）保存附加参数，返回寄存器为 \(r_{\mathrm{ret}}=\mathrm{Real}_{64}(0)\)。
 
-类型集合 \(H\) 包含以下七个带名称的类型。编号函数 \(\operatorname{id}:H\to\mathbb B_{32}\) 与参数个数 \(n:H\to\mathbb N\) 定义为：
+\(\mathrm{Real}_w\) 为按机器编号构造真实寄存器标记的记号，载体宽度 \(w\) 在 RV32 中为 32，在原生 eBPF 中为 64；参数和返回寄存器的值域均为 \(\mathbb B_w\)。原生 eBPF 取得完整 64 位等式，不以寄存器低 32 位投影复用 RV32 分派规则。
 
-- `BPF_FUNC_MAP_LOOKUP_ELEM`：编号 1，参数 \((a_1,a_2)\)，\(n=2\)。
-- `BPF_FUNC_MAP_UPDATE_ELEM`：编号 2，参数 \((a_1,a_2,a_3,a_4)\)，\(n=4\)。
-- `BPF_FUNC_MAP_DELETE_ELEM`：编号 3，参数 \((a_1,a_2)\)，\(n=2\)。
-- `BPF_FUNC_KTIME_GET_NS`：编号 5，无附加参数，\(n=0\)。
-- `BPF_FUNC_TRACE_PRINTK`：编号 6，参数 \((a_1,a_2,a_3,a_4,a_5)\)，\(n=5\)。
-- `BPF_FUNC_CSUM_DIFF`：编号 28，参数 \((a_1,a_2,a_3,a_4,a_5)\)，\(n=5\)。
-- `BPF_FUNC_XDP_ADJUST_TAIL`：编号 65，参数 \((a_1,a_2)\)，\(n=2\)。
+两种约定使用相同的类型集合 \(H\)。编号函数 \(\operatorname{id}:H\to\mathbb B_{32}\) 与参数个数 \(n:H\to\mathbb N\) 定义为：
 
-\(\operatorname{id}\) 给出类型的 32 位分派编号，\(n\) 给出所需附加参数的数量，\(\mathbb N\) 为包含零的自然数集合；这里的参数个数不包含编号寄存器 \(a_0\)。时钟类型也必须读取 \(a_0\)，但不要求 \(a_1,\ldots,a_5\) 已定义。
+- `BPF_FUNC_MAP_LOOKUP_ELEM`：编号 1，\(n=2\)。
+- `BPF_FUNC_MAP_UPDATE_ELEM`：编号 2，\(n=4\)。
+- `BPF_FUNC_MAP_DELETE_ELEM`：编号 3，\(n=2\)。
+- `BPF_FUNC_KTIME_GET_NS`：编号 5，\(n=0\)。
+- `BPF_FUNC_TRACE_PRINTK`：编号 6，\(n=5\)。
+- `BPF_FUNC_CSUM_DIFF`：编号 28，\(n=5\)。
+- `BPF_FUNC_XDP_ADJUST_TAIL`：编号 65，\(n=2\)。
+
+\(\operatorname{id}\) 给出 32 位类型编号，\(n\) 给出 ABI 参数数量，\(\mathbb N\) 为包含零的自然数集合；参数数量不包含编号。RV32 时钟调用仍须读取 \(a_0\) 的编号等式；原生 eBPF 时钟调用直接使用立即数编号。两者均不要求附加参数寄存器已定义。
 
 \(H\) 另含确定的未支持编号对应的类型 \(\operatorname{unsupported}(k)\)，其中 \(k\in\mathbb B_{32}\setminus\{1,2,3,5,6,28,65\}\)，规定其编号为 \(k\)、\(n=0\)。
 
@@ -42,19 +44,19 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 ### 字节项数组
 
-\(\mathrm{BytesTerm}(n)\) 是长度恰好为 \(n\in\mathbb N\) 的有序字节符号项数组：
+\(\mathrm{BytesTerm}_w(n)\) 是载体宽度 \(w\in\{32,64\}\)、长度恰好为 \(n\in\mathbb N\) 的有序字节符号项数组：
 
 \[
-\mathrm{BytesTerm}(n):=
-\left\{(b_1,\ldots,b_n)\in\mathrm{Term}_{32}^{n}:
+\mathrm{BytesTerm}_w(n):=
+\left\{(b_1,\ldots,b_n)\in\mathrm{Term}_{w}^{n}:
 \forall(\nu,\theta)\ \forall j\in\{1,\ldots,n\},\
 \llbracket b_j\rrbracket_{\nu,\theta}\in\mathbb B_8
 \right\}.
 \]
 
-其中 \(b_j\) 为第 \(j\) 个 32 位有限符号项，\(\nu,\theta\) 遍历 [Expr 项解释](../Expr/Term/Term.md#term)允许的赋值与解释补全，\(\mathbb B_8\subset\mathbb B_{32}\) 是[位向量值集](../Expr/Term/位向量.md#位向量)的包含关系。每项承载一个 8 位字节，高 24 位为零。数组的位置从 1 开始；\(n=0\) 时数组为空。数组按位置逐项结构相等，重复项保留。
+其中 \(b_j\) 为第 \(j\) 个 \(w\) 位有限符号项，\(\nu,\theta\) 遍历 [Expr 项解释](../Expr/Term/Term.md#term)允许的赋值与解释补全，\(\mathbb B_8\subset\mathbb B_w\) 是[位向量值集](../Expr/Term/位向量.md#位向量)的包含关系。每项承载一个 8 位字节，高 \(w-8\) 位为零。数组的位置从 1 开始；\(n=0\) 时数组为空。数组按位置逐项结构相等，重复项保留。既有记号 \(\mathrm{BytesTerm}(n)\) 表示 \(\mathrm{BytesTerm}_{32}(n)\)。
 
-字节项沿用[包字节的 32 位项表示](../Expr/寄存器/包字节.md#读取拼接与写入拆分)。从较宽单元取得字节时，使用[字段投影与零扩展](../Expr/寄存器/单元字段读写.md#单元字段读写)的 \(q=8,v=32\) 实例；从已有包字节项取得字节时，使用[零扩展](../Expr/Term/数值函数.md#截取与扩展)的 \(Z_{8\to32}^{(32),\star}\) 固定字节语义。这些运算保留调用时的符号值表达式，不要求折叠为常元。
+从较宽单元取得字节时，使用[字段投影与零扩展](../Expr/寄存器/单元字段读写.md#单元字段读写)的 \(q=8\) 实例，再按所选载体零扩展；从已有包字节项取得字节时，使用[零扩展](../Expr/Term/数值函数.md#截取与扩展)固定字节语义。读取单元的位宽与字节项的载体宽度分别确定。这些运算保留调用时的符号值表达式；能折叠为常元时，字节项为 \(C_w(c)\)，其中 \(0\le c<256\)。
 
 在固定 \((\nu,\theta)\) 下，字节数组的解释为：
 
@@ -64,7 +66,7 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 \llbracket b_n\rrbracket_{\nu,\theta})\in\mathbb B_8^n.
 \]
 
-其中左侧为 \(\mathrm{BytesTerm}(n)\) 数组的逐项解释，右侧为长度恰好是 \(n\) 的有序字节值数组；\(\nu,\theta\) 与字节项类型定义中的解释参数相同。
+其中左侧为 \(\mathrm{BytesTerm}_w(n)\) 数组的逐项解释，右侧为长度恰好是 \(n\) 的有序字节值数组；\(\nu,\theta\) 与字节项类型定义中的解释参数相同。
 
 ### 解释参数
 
@@ -86,114 +88,132 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 ### eBPF
 
-一般 eBPF helper 与 BTF CALL 的Helper谓词构造无定义，见[指令参数与规则定义域](../NodeInference/step.md#局部规则的合法域)。
+操作码 `0x85` 且 `dst=src=off=0` 的 `call imm` 触发原生 helper 调用，立即数作为 32 位编号。按[共同类型与参数数量](#类型定义)选择 \(h\)，并按[生成条件](#生成条件)从执行前关系取得所需完整参数。调用必须具有下一原始槽位；成功时生成调用观察、[返回效果及 lookup 关联](#生成的-expr)，沿 OK 方向到达下一槽位。其余 `0x85` 形式、BTF CALL 与 CALLX 不在该规则的定义域内。
 
 ## 生成条件
 
-\(E_g\) 为执行前的有效 [Expr 关系](../Expr/Expr.md#表达式分量)，其完整值绑定分量为 \(\mathcal V_g\)。\(P_g\) 为执行前的[观察集合](谓词定义.md#类型与结构相等)。三个 Map 构造要求调用参数的 Map 项唯一指向调用时已知布局的对象。
+\(E_g\) 为执行前的有效 [Expr 关系](../Expr/Expr.md#表达式分量)，其完整值绑定分量为 \(\mathcal V_g\)。\(P_g\) 为执行前的[观察集合](谓词定义.md#类型与结构相等)。调用约定确定载体宽度 \(w\)、参数标记 \(a_j\) 与返回标记 \(r_{\mathrm{ret}}\)，见[类型定义](#类型定义)。
 
-分派编号要求 \(\mathcal V_g\) 中存在唯一的完整等式 \(a_0=u_0\)，且其右侧项经求值确定类型 \(h\in H\)：
+RV32 分派编号要求 \(\mathcal V_g\) 中存在唯一的完整等式 \(a_0=u_0\)，且其右侧项经求值确定编号：
 
 \[
 (a_0=u_0)\in\mathcal V_g,\qquad u_0\in\mathrm{Term}_{32},
-\qquad D_{32}(\operatorname{solve}(u_0))=\operatorname{id}(h).
+\qquad k=D_{32}(\operatorname{solve}(u_0))\in\mathbb B_{32}.
 \]
 
-\(u_0\) 为编号寄存器的 32 位右侧项；\(\operatorname{solve}\) 为保留位宽的整项折叠，\(D_{32}\) 为 32 位项的部分数值求值，有定义时取值属于 \(\mathbb B_{32}\)。
+\(u_0\) 为编号寄存器的 32 位右侧项；\(\operatorname{solve}\) 为保留位宽的整项折叠，\(D_{32}\) 为 32 位项的部分数值求值。原生 eBPF 的 \(k\) 直接取自 `call imm` 的立即数，不读取编号寄存器。两种约定均选择满足 \(\operatorname{id}(h)=k\) 的唯一 \(h\in H\)，包括未支持类型。
 
 每个所需参数要求同一 \(E_g\) 中存在唯一的完整等式 \(a_j=u_j\)，其中 \(1\le j\le n(h)\)：
 
 \[
 \forall j\in\{1,\ldots,n(h)\},\quad
-(a_j=u_j)\in\mathcal V_g,\qquad u_j\in\mathrm{Term}_{32},
-\qquad t_j=\operatorname{solve}(u_j)\in\mathrm{Term}_{32}.
+(a_j=u_j)\in\mathcal V_g,\qquad u_j\in\mathrm{Term}_{w},
+\qquad t_j=\operatorname{solve}(u_j)\in\mathrm{Term}_{w}.
 \]
 
-\(u_j\) 为第 \(j\) 个参数寄存器的 32 位右侧项，折叠后的项为参数向量中的 \(t_j\)。
+\(u_j\) 为第 \(j\) 个参数寄存器的完整右侧项，折叠后的项为 ABI 参数向量 \(\vec t=(t_1,\ldots,t_{n(h)})\) 的第 \(j\) 项。
 
-只有低位关系或不等式不满足这个要求；Stack、Map、Packet 标记也不能替代所要求的真实参数寄存器。参数项可以是符号项，不要求数值可求。
+只有低位关系或不等式不满足这个要求；Stack、Map、Packet 标记也不能替代所要求的真实参数寄存器。参数项可以是符号项，不要求数值可求。未被该类型使用的参数不参与校验。共同构造对 \(P_g\) 无成员前提。
 
-未被该类型使用的参数不参与校验。
+ABI 调用观察保存调用身份、类型及完整 ABI 参数前缀；共同取源成功即可生成该观察及返回效果。lookup 在布局和栈来源足以读取完整键时，在前缀后追加按地址递增、小端单元拆分的冻结字节项；否则保留原前缀，不补造字节，也不因此拒绝 RV32 或原生 eBPF 调用。整个观察参数数组使用同一载体宽度：RV32 为 32，原生 eBPF 为 64；冻结尾与 ABI 前缀同宽。三个 Map 谓词的完整字节事件是下列部分精化，其读取前提决定精化是否有定义，不增加 ABI 调用的成功前提。
 
-Helper谓词构造对 \(P_g\) 无成员前提。
-
-分派编号属于上述七个已命名类型，且满足共同前提及所选 Map 构造的生成条件时，生成 Helper 谓词：
+令 \(\mathcal L\) 为调用时给定的部分地址解释，其输入为 \(\mathrm{Term}_{32}\cup\mathrm{Term}_{64}\) 中的地址项，输出为唯一资源对象、起始字节偏移及该对象的规范单元布局；对象类别和单元标记使用[资源寄存器定义](../寄存器定义.md)。Map 布局还给出键、值字节长度，分别记作 \(L_k(t_m;\mathcal L)\)、\(L_v(t_m;\mathcal L)\)，其中 \(t_m\) 是唯一指向该 Map 对象的参数项。所需长度和字节读取均有定义时，完整事件的构造为：
 
 \[
-\operatorname{makeHelperPredicate}(\varepsilon,E_g):=
+\operatorname{makeHelperPredicate}(\varepsilon,E_g,h,\vec t,\mathcal L,w):=
 \begin{cases}
 \operatorname{mapLookup}(\varepsilon,t_1,
-\operatorname{readBytes}(E_g,t_2,L_k(t_1))),
+\operatorname{readBytes}(E_g,t_2,L_k(t_1;\mathcal L),\mathcal L,w)),
 &h=\mathrm{MAP\_LOOKUP},\\
 \operatorname{mapUpdate}(\varepsilon,t_1,
-\operatorname{readBytes}(E_g,t_2,L_k(t_1)),
-\operatorname{readBytes}(E_g,t_3,L_v(t_1)),t_4),
+\operatorname{readBytes}(E_g,t_2,L_k(t_1;\mathcal L),\mathcal L,w),
+\operatorname{readBytes}(E_g,t_3,L_v(t_1;\mathcal L),\mathcal L,w),t_4),
 &h=\mathrm{MAP\_UPDATE},\\
 \operatorname{mapDelete}(\varepsilon,t_1,
-\operatorname{readBytes}(E_g,t_2,L_k(t_1))),
+\operatorname{readBytes}(E_g,t_2,L_k(t_1;\mathcal L),\mathcal L,w)),
 &h=\mathrm{MAP\_DELETE},\\
 \operatorname{helper}(\varepsilon,h,\vec t),&h\in H_{\mathrm{other}}.
 \end{cases}
 \]
 
-其中 \(\operatorname{makeHelperPredicate}\) 是以调用身份、执行前 Expr 关系为输入、取值于 \(\mathrm{Helper}\) 的部分构造；\(h,t_j,\vec t\) 由同一 \(E_g\) 按上述编号与参数等式取得。三个 \(\mathrm{MAP\_*}\) 标签分别为编号 1、2、3 的已命名类型；\(H_{\mathrm{other}}\) 见[OtherHelper 类型定义](OtherHelper谓词.md#类型定义)。\(L_k(t_m)\)、\(L_v(t_m)\) 分别为 Map 参数项 \(t_m\) 唯一指向对象的键、值字节长度；调用时该对象及所需布局已知是相应长度有定义的前提。\(\operatorname{readBytes}\) 的定义见[调用时的字节读取](#调用时的字节读取)。
+\(\operatorname{makeHelperPredicate}\) 取值于 \(\mathrm{Helper}\)，\(\varepsilon\) 为调用身份，\(h,\vec t\) 已按共同取源确定；三个 \(\mathrm{MAP\_*}\) 标签分别为编号 1、2、3 的已命名类型。\(H_{\mathrm{other}}\) 见[OtherHelper 类型定义](OtherHelper谓词.md#类型定义)，包含未支持类型。\(\operatorname{readBytes}\) 见[调用时的字节读取](#调用时的字节读取)。
 
-成功生成 \(p=\operatorname{makeHelperPredicate}(\varepsilon,E_g)\) 后，本步骤的局部观察集合为：
+若上述完整事件构造成功得到 \(p\)，其局部观察集合为：
 
 \[
 P_i:=\{p\}.
 \]
 
-其中 \(p\in\mathrm{Helper}\) 为本次调用的观察，\(P_i\) 为本步骤的谓词分量。
+其中 \(p\in\mathrm{Helper}\) 为本次调用的完整事件，\(P_i\) 为该精化的谓词分量。ABI 观察与完整事件的表示对应须满足[实现对应中的义务](../NodeInference/路径合并FFI.md#五类观察的实现对应)。
 
 ### 生成的 Expr
 
-成功生成调用谓词 \(p\) 后，创建真实返回寄存器的完整等式：
+共同取源成功后，由调用身份与 ABI 参数前缀构造同载体外部结果项：
 
 \[
-r_{\mathrm{ret}}=t_{32}.
+e_w:=\operatorname{externalResult}_{\varepsilon,0}^{w}
+(C_w(\operatorname{id}(h)),t_1,\ldots,t_{n(h)}).
 \]
 
-其中 \(t_{32}\in\mathrm{Term}_{32}\) 是由本次调用的身份与参数确定的返回项，\(r_{\mathrm{ret}}\) 为该调用约定的真实返回寄存器。
+其中 \(e_w\in\mathrm{Term}_w\)，\(\operatorname{externalResult}_{\varepsilon,0}^{w}\) 是以事件身份 \(\varepsilon\)、结果分量 0 标记的未解释外部运算；其所有参数与结果均为 \(w\) 位。编号常元保证参数数组非空。冻结字节尾不参与这个结果项，外部运算的解释补全见[解释参数](#解释参数)。
 
-若 \(p\in\mathrm{MapLookup}\)，还创建虚拟 Map 的完整等式：
+返回项按类型确定：
 
 \[
-\mathrm{Map}_{32}(\alpha)=R_{32}^{\varepsilon}(r_{\mathrm{ret}}).
+t_{\mathrm{ret}}:=
+\begin{cases}
+C_w(2^w-1),&h=\operatorname{unsupported}(k),\\
+Z_{16\to w}^{(w),\star}(e_w),&h=\mathrm{BPF\_FUNC\_CSUM\_DIFF},\\
+e_w,&\text{otherwise}.
+\end{cases}
 \]
 
-其中 \(\mathrm{Map}_{32}(\alpha)\) 使用[寄存器定义](../寄存器定义.md)的 Map 单元标记，标识 \(\alpha\) 由本次调用确定；\(\varepsilon\) 为同一次调用的身份，\(R_{32}^{\varepsilon}(r_{\mathrm{ret}})\) 为[调用返回时刻的真实寄存器变元](../Expr/Term/Term.md#叶子与运算符)。
-其他类型只创建真实返回等式；这些完整等式按[关系集合按键覆写](../Expr/Expr.md#关系集合按键覆写)写入 Expr 分量。
+\(t_{\mathrm{ret}}\in\mathrm{Term}_w\) 为完整返回项；\(Z_{16\to w}^{(w),\star}\) 为[低位零扩展的符号提升](../Expr/Term/数值函数.md#截取与扩展)，保留低 16 位并将高 \(w-16\) 位清零。未支持编号生成 \(n=0\) 的 OtherHelper 调用观察，返回载体全一常元。
+
+创建真实返回寄存器的完整等式：
+
+\[
+r_{\mathrm{ret}}=t_{\mathrm{ret}}.
+\]
+
+\(r_{\mathrm{ret}}\) 是该调用约定的真实返回标记。lookup 还创建虚拟 Map 的完整等式：
+
+\[
+\mathrm{Map}_{w}(\alpha_{\varepsilon,0})=R_{w}^{\varepsilon}(r_{\mathrm{ret}}).
+\]
+
+\(\alpha_{\varepsilon,0}\) 标识本次调用事件命名空间中、字节偏移 0 的首个 Map 单元，使用[Map 标记](../寄存器定义.md)；\(R_w^\varepsilon(r_{\mathrm{ret}})\) 为[调用返回时刻的真实寄存器变元](../Expr/Term/Term.md#叶子与运算符)。RV32 的单元为 4 字节，覆盖 \([0,4)\)，返回标记为 \(\mathrm{Real}_{32}(10)\)；原生 eBPF 的单元为 8 字节，覆盖 \([0,8)\)，返回标记为 \(\mathrm{Real}_{64}(0)\)。其他类型只创建真实返回等式；完整等式按[关系集合按键覆写](../Expr/Expr.md#关系集合按键覆写)写入 Expr 分量。
 
 ### 调用时的字节读取
 
-给定同一调用前关系 \(E_g\)、缓冲区地址项 \(t_b\in\mathrm{Term}_{32}\) 及所需字节数 \(n\in\mathbb N\)，定义部分读取：
+给定同一调用前关系 \(E_g\)、缓冲区地址项 \(t_b\in\mathrm{Term}_{w}\)、所需字节数 \(n\in\mathbb N\)、资源布局与地址解析依据 \(\mathcal L\) 及载体宽度 \(w\in\{32,64\}\)，定义部分读取：
 
 \[
-\operatorname{readBytes}(E_g,t_b,n)
-:=(b_1,\ldots,b_n)\in\mathrm{BytesTerm}(n).
+\operatorname{readBytes}(E_g,t_b,n,\mathcal L,w)
+:=(b_1,\ldots,b_n)\in\mathrm{BytesTerm}_w(n).
 \]
 
-其中 \(b_j\) 是从地址项 \(t_b\) 指向的缓冲区取得的第 \(j\) 个有限符号字节值项，按内存地址递增排列；对象与起始字节偏移由该地址项确定，所需范围由字节数 \(n\) 确定，规范单元、字段位置及字节序按该对象的布局与访问规则确定，\(E_g\) 提供这些单元的完整旧值项。每个 \(b_j\) 依[字节项数组](#字节项数组)中的已有字节投影取得。
+其中 \(b_j\) 是从地址项 \(t_b\) 指向的缓冲区取得的第 \(j\) 个有限符号字节值项，按内存地址递增排列；对象与起始字节偏移由 \(\mathcal L\) 对该地址项的解析确定，所需范围由字节数 \(n\) 确定。规范单元、字段位置及字节序按该对象的布局与访问规则确定，\(E_g\) 提供完整旧值项。每个 \(b_j\) 依[字节项数组](#字节项数组)中的字节投影取得。
 
 读取的定义域要求：
 
-- 调用时地址项 \(t_b\) 指向唯一缓冲区对象，且其布局与访问规则确定所需 \(n\) 个字节的资源单元及字段。
+- 调用时地址项 \(t_b\) 指向唯一缓冲区对象，且 \(\mathcal L\) 确定所需 \(n\) 个字节的资源单元及字段。
 - 读取满足所属资源的访问条件。
 - \(E_g\) 为每个所需单元提供唯一、位宽匹配的完整等式。
 - 全部字节投影有定义。
 
-保存的是调用时取得的有限符号项，而非供以后再次解引用的缓冲区地址。键和值均使用这个读取；生成时读取完整数组。后续覆写缓冲区不修改已保存的项。读取的对象或字段不能确定、源项或投影不足时，\(\operatorname{readBytes}\) 无定义。
+保存的是调用时取得的有限符号项；完整 Map 事件的键和值均使用这个读取。后续覆写缓冲区不修改已保存的项。读取的对象或字段不能确定、源项或投影不足时，\(\operatorname{readBytes}\) 无定义。
 
 ### 错误类型
 
-已选定 helper 分派的步骤在下列任一情形下构造无定义，不生成谓词或局部观察集合，必须[拒绝本次处理](../NodeInference/step.md#无定义时的处理)：
+共同 ABI 调用构造在下列任一情形下无定义，不生成调用观察或返回效果，必须[拒绝本次处理](../NodeInference/step.md#无定义时的处理)：
 
-- 必需的调用参数或分派信息缺失或不唯一。
-- \(E_g\) 无效。
-- \(a_0\) 或任一所需 \(a_j\) 的完整等式缺失、不唯一，或位宽不符。
-- \(D_{32}(\operatorname{solve}(u_0))\) 无定义。
-- 类型编号为未支持编号时，没有相应规则，拒绝本次 step。
+- 指令形式不在[触发定义域](#触发逻辑)内，或必需的调用绑定、顺序后继缺失。
+- \(E_g\) 的完整值键不唯一或关系位宽无效。
+- 任一所需 \(a_j\) 的完整等式缺失、不唯一，或载体位宽不符。
+- RV32 编号寄存器 \(a_0\) 的完整 32 位等式缺失、不唯一，或 \(D_{32}(\operatorname{solve}(u_0))\) 无定义。
+
+完整 Map 事件的附加读取定义域见各子谓词的生成条件。
 
 ## 数学性质
 
@@ -201,13 +221,13 @@ OtherHelper 生成的唯一性与参数齐备见[命题 H1](OtherHelper谓词.md
 
 引理 M5 与命题 H2 的对象为调用产生的真实返回等式与 lookup 的虚拟 Map 等式。
 
-**引理 M5（lookup 关联的结构有效性）。** lookup 产生两个互异键的 32 位完整等式，其中一个写真实返回标记，另一个建立虚拟 Map 关联；之后覆写 \(a_0\) 不改变已经构造的真实寄存器变元身份。
+**引理 M5（lookup 关联的结构有效性）。** 对固定调用约定的载体宽度 \(w\)，lookup 产生两个互异键的 \(w\) 位完整等式，其中一个写真实返回标记，另一个建立虚拟 Map 关联；之后覆写 \(r_{\mathrm{ret}}\) 不改变已经构造的真实寄存器变元身份。
 
-**证明。** Real 与 Map 类别不交，因此两个键不同。返回项与真实寄存器变元均为 32 位，与左侧位宽匹配。变元身份固定了调用事件与寄存器标记，后续覆写不修改已有项。\(\square\)
+**证明。** Real 与 Map 类别不交，因此两个键不同。返回项与真实寄存器变元均为 \(w\) 位，与左侧位宽匹配。变元身份固定了调用事件与寄存器标记，后续覆写不修改已有项。\(\square\)
 
-**命题 H2（返回更新的有限性与位宽）。** 对生成成功的 \(p\)，调用生成的 Expr 集合含真实返回键，lookup 另含一个虚拟 Map 键；集合有限、位宽匹配且键唯一，覆写不改变其余 Expr 键。
+**命题 H2（返回更新的有限性与位宽）。** 对共同取源成功的调用，生成的 Expr 集合含真实返回键，lookup 另含一个虚拟 Map 键；集合有限、位宽匹配且键唯一，覆写不改变其余 Expr 键。
 
-**证明。** 结果项与真实寄存器变元均为 32 位。lookup 的两个左侧分别属于 Real 与 Map，键互异；其他类型只有返回键。覆写结论由[按键覆写](../Expr/Expr.md#关系集合按键覆写)的定义得到。结论限于所选值更新的结构性质。\(\square\)
+**证明。** 结果项与真实寄存器变元均为所选约定的 \(w\) 位。lookup 的两个左侧分别属于 Real 与 Map，键互异；其他类型只有返回键。覆写结论由[按键覆写](../Expr/Expr.md#关系集合按键覆写)的定义得到。结论限于所选值更新的结构性质。\(\square\)
 
 **命题 H3（动态调用区分）。** 同一种 Helper 构造的两个元素若调用身份 \(\varepsilon\ne\varepsilon'\)，则两谓词不同，在集合合并后均保留。
 

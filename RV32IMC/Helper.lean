@@ -1,34 +1,16 @@
 import RV32IMC.Initial
 import RV32IMC.Expr
 import PathMerge.Path
+import ClassifierExpr.MapLayout
 
 namespace RV32IMC
 open ClassifierExpr PathMerge
-
-/-- Static Map object layout from Meta JSON; keyed by the concrete Map parameter id. -/
-structure MapLayout where
-  mapId : Nat
-  keySize : Nat
-  valueSize : Nat
-  deriving Repr, Inhabited, BEq
 
 structure HelperCall where
   kind : HelperKind
   id : Nat
   args : List Term
   deriving Repr
-
-def helperKind (id : Nat) : HelperKind :=
-  match id with
-  | 1 => .lookup | 2 => .update | 3 => .delete | 5 => .clock
-  | 6 => .printk | 28 => .checksum | 65 => .adjustTail
-  | n => .unsupported n
-
-def helperArity : HelperKind → Nat
-  | .lookup | .delete | .adjustTail => 2
-  | .update => 4
-  | .printk | .checksum => 5
-  | .clock | .unsupported _ => 0
 
 def parseHelperCall (Eg : ExprSet) : Except RejectReason HelperCall := do
   if !guardEg Eg then throw .localReject
@@ -42,11 +24,6 @@ def parseHelperCall (Eg : ExprSet) : Except RejectReason HelperCall := do
     if t.width != .w32 then throw .undefinedSrc
     args := args ++ [solve t]
   pure ⟨kind, id, args⟩
-
-def findMapLayout (maps : List MapLayout) (mapTerm : Term) : Option MapLayout :=
-  match eval (solve mapTerm) with
-  | some id => maps.find? (fun m => m.mapId == id)
-  | none => none
 
 /-- Byte-valued frozen key/value tail after the ABI prefix. -/
 private def frozenTailOk (tail : List Term) : Bool :=

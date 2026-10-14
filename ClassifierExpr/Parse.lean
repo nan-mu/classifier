@@ -167,11 +167,6 @@ def parseExprJson (value : Lean.Json) : Option Expr := do
   let term ← parseTerm (← jsonString value "term") reg.width
   if term.width != reg.width then none else pure ⟨reg, rel, term⟩
 
-private def helperKind (id : Nat) : HelperKind :=
-  match id with
-  | 1 => .lookup | 2 => .update | 3 => .delete | 5 => .clock | 6 => .printk
-  | 28 => .checksum | 65 => .adjustTail | id => .unsupported id
-
 private def boundedWidth (q bits : Nat) : Bool := 0 < q && q ≤ bits
 
 /-- Validate the existing operators' carrier widths, arities and numeric parameters.
@@ -191,8 +186,8 @@ private def predicateOpSignature (w : Width) (op : Op) (args : List Term) : Bool
   | .bswap q v => (q == 16 || q == 32 || q == 64) &&
     q ≤ v && q ≤ w.bits && input v
   | .mergeLow q v => v == w.bits && boundedWidth q v && uniform 2
-  | .externalResult _ _ => w == .w32 && !args.isEmpty &&
-    args.all (fun t => t.width == .w32)
+  | .externalResult _ _ => (w == .w32 || w == .w64) && !args.isEmpty &&
+    args.all (fun t => t.width == w)
   | .inputByte _ => w == .w32 && match args with
     | [base, address] => base.width == address.width
     | _ => false
@@ -223,7 +218,8 @@ dynamic identity uniqueness remain semantic obligations. -/
 def predicateWellFormed : Predicate → Bool
   | .helper _ kind args =>
     kind.id < 2 ^ 32 && helperKind kind.id == kind &&
-      args.all (fun t => t.width == .w32) && predicateTermsWellFormed args
+      (args.all (fun t => t.width == .w32) || args.all (fun t => t.width == .w64)) &&
+      predicateTermsWellFormed args
   | .branch position _ cond =>
     0 < position && cond.lhs.width == cond.rhs.width &&
       predicateRelWellFormed cond.lhs.width cond.rel &&
@@ -441,7 +437,7 @@ private def malformedPredicateCheck : Bool :=
     .app .w64 (.inputByte 1) [Term.V64 1, Term.V64 2],
     .app .w32 (.inputByte 1) [Term.V32 1, Term.V64 2]]
   let badPredicates := [Predicate.helper 0 (.unsupported 4294967296) [],
-    .helper 0 .lookup [Term.V64 1],
+    .helper 0 .lookup [Term.V64 1, Term.V32 2],
     .branch 0 .taken ⟨Term.C32 0, .eq, Term.C32 0⟩,
     .branch 1 .taken ⟨Term.C32 0, .eqN 0, Term.C32 0⟩,
     .branch 1 .taken ⟨Term.C32 0, .bitsnz 33, Term.C32 0⟩,
@@ -487,6 +483,19 @@ private def fiveClassSemStateCheck : Bool :=
 #guard renderPredicateJson (.helper 42 .lookup [Term.C32 1, Term.V32 2]) ==
   "{\"kind\":\"helper\",\"event\":42,\"helperId\":1,\"args\":[\"1\",\"v32:2\"]}"
 #guard !predicateWellFormed (.helper 0 (.unsupported 1) [])
+#guard
+  let p := Predicate.helper 42 .lookup
+    [Term.C64 1077412584, Term.app .w64 (.add .w64) [Term.V64 0, Term.C64 4]]
+  predicateWellFormed p &&
+    ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p
+#guard
+  let p := Predicate.ret
+    (Term.app .w64 (.externalResult 42 0) [Term.C64 1, Term.V64 2, Term.V64 3])
+  predicateWellFormed p &&
+    ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p
+#guard !predicateWellFormed (.helper 42 .lookup [Term.C64 1, Term.V32 2])
+#guard !predicateWellFormed (.ret
+  (Term.app .w64 (.externalResult 42 0) [Term.C64 1, Term.V32 2]))
 #guard constraintRoundTripCheck
 #guard (parseSemStateJson "[]" "[{\"kind\":\"cmp\",\"width\":32,\"rel\":\"eq\",\"lhs\":\"0\",\"rhs\":\"0\"}]").isNone
 #guard (parseSemStateJson "[]" "[{\"kind\":\"ret\",\"term\":\"2\"}]").isNone

@@ -37,7 +37,7 @@ def expr (E : ExprSet) (i : Insn) : Option ExprSet := do
   | .lddw _ _ _ => none
   -- EBPF.Memory.exprEffects refuses standalone continuation slots.
   | .continuation => none
-  -- EBPF.Memory.exprEffects refuses helpers without a native helper contract.
+  -- EBPF.Step owns native full-width helper observations and return effects.
   | .callHelper _ => none
   | .mov w dst src =>
     if dst ≥ 10 then none else do

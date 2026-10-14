@@ -9,6 +9,7 @@ open ClassifierExpr PathMerge
 structure Meta where
   entry : EntryParams
   resourceLocations : List ResourceLocation := []
+  maps : List MapLayout := []
   deriving Repr, Inhabited
 
 private def jsonNat (value : Lean.Json) (key : String) : Option Nat :=
@@ -45,7 +46,7 @@ private def parseResourceLocation (value : Lean.Json) : Option ResourceLocation 
 
 /-- Parse the eBPF Meta wire schema. Missing entry fields, malformed terms,
 non-leaf entry terms, oversized packets and duplicate resource slots reject
-without accepting a partial binding. Absent resourceLocations means empty. -/
+without accepting a partial binding. Absent resourceLocations/maps means empty. -/
 def parseMetaJson (text : String) : Option Meta := do
   let value ← (Lean.Json.parse text).toOption
   let entry ← parseEntry (← (value.getObjVal? "entry").toOption)
@@ -54,16 +55,22 @@ def parseMetaJson (text : String) : Option Meta := do
     | .ok field => do
       let rows ← field.getArr?.toOption
       rows.toList.mapM parseResourceLocation
+  let maps ← match value.getObjVal? "maps" with
+    | .error _ => some []
+    | .ok field => do
+      let rows ← field.getArr?.toOption
+      rows.toList.mapM parseMapLayout
   let slots := resourceLocations.map (·.slot)
   if slots.eraseDups.length != slots.length then none
-  else some { entry, resourceLocations }
+  else some { entry, resourceLocations, maps }
 
 /-- Decode without compacting LDDW: all control locations remain raw slots.
 Resource provenance is a caller premise, not inferred from integer immediates. -/
 def boundProgram (words : Array UInt64) (m : Meta) :
     Except RejectReason (Array Insn × StepContext) :=
   if words.isEmpty then .error .invalidEntry
-  else .ok (decodeProgram words, { entry := m.entry, resourceLocations := m.resourceLocations })
+  else .ok (decodeProgram words,
+    { entry := m.entry, resourceLocations := m.resourceLocations, maps := m.maps })
 
 /-- The root contains the actual pre-instruction eBPF entry state. -/
 def ebpfInit (I : Array Insn) (p : EntryParams) (j0 budget : Nat) :
@@ -145,6 +152,10 @@ private def fixtureMetaJson : String :=
 
 private def unmarkedMetaJson : String := s!"\{\"entry\":{fixtureEntryJson}}"
 
+/-- Exact native product binding, including the shared rxcnt Map layout. -/
+def productMetaJson : String :=
+  "{\"entry\":{\"tCtx\":\"v64:1\",\"tSp\":\"v64:0\",\"tData\":\"v32:4\",\"packetBytes\":128,\"alphaCtx\":0,\"packetId\":0,\"stackId\":0},\"resourceLocations\":[{\"slot\":34,\"term\":\"1077412584\"}],\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}"
+
 private def createCheck : Bool :=
   let response := exportEbpfExpandCreate fixtureMetaJson
   response.contains "\"status\":\"running\"" && response.contains "\"loc\":\"0\"" &&
@@ -184,7 +195,7 @@ private def laterStepsCheck : Bool := Id.run do
   let unmarked : StepContext := { entry := justTxEntry }
   let plain := ebpfSnapshot I unmarked 0 200 200
   let marked := ebpfSnapshot I justTxContext 0 200 200
-  return failedSlotCheck plain "Unsupported" 36 &&
+  return failedSlotCheck plain "UndefinedSrc" 38 &&
     failedSlotCheck marked "UnboundTarget" 34 &&
     exportEbpfBoundWordsSnapshot justTxProgram unmarkedMetaJson 200 200 == plain &&
     exportEbpfBoundWordsSnapshot justTxProgram fixtureMetaJson 200 200 == marked
@@ -193,10 +204,10 @@ private def laterStepsCheck : Bool := Id.run do
 singleton; compilation of this finite fixture is not a general semantic proof. -/
 private def earlyExitCheck : Bool := Id.run do
   let I := decodeProgram justTxProgram
-  let .ok ws := ebpfInit I justTxEntry 0 200 | return false
-  -- This fixture fails before any packet store; event 0 adds no write observation.
-  let .fail .unsupported graph := expand I.size (ebpfStep I { entry := justTxEntry } 0) ws
-    | return false
+  let some m := parseMetaJson productMetaJson | return false
+  let .ok (_, context) := boundProgram justTxProgram m | return false
+  let .ok ws := ebpfInit I context.entry 0 1024 | return false
+  let .complete graph := expand I.size (ebpfStep I context 0) ws | return false
   let some compare := graph.nodes.find? (fun node => node.loc == .pos 5) | return false
   let some lhs := compare.state.exprs.lookupEq (Reg.real64 1) | return false
   let some rhs := compare.state.exprs.lookupEq (Reg.real64 2) | return false
@@ -206,6 +217,33 @@ private def earlyExitCheck : Bool := Id.run do
     node.state.predicates.contains (.branch 6 .taken ⟨lhs, .gtu, rhs⟩) &&
     node.state.predicates.filter (fun p => match p with | .ret _ => true | _ => false) ==
       [.ret (Term.C64 1)]
+
+/-- Finite end-to-end smoke through the actual product Meta parser and snapshot. -/
+private def productSnapshotCheck : Bool := (do
+  let m ← parseMetaJson productMetaJson
+  let (_, productContext) ← (boundProgram justTxProgram m).toOption
+  let I := decodeProgram justTxProgram
+  let short ← (Lean.Json.parse (ebpfSnapshot I productContext 0 400 1024)).toOption
+  let shortStatus ← (short.getObjVal? "status" >>= Lean.Json.getStr?).toOption
+  let shortReason ← (short.getObjVal? "reason").toOption
+  let response := ebpfSnapshot I productContext 0 2000 1024
+  let value ← (Lean.Json.parse response).toOption
+  let status ← (value.getObjVal? "status" >>= Lean.Json.getStr?).toOption
+  let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
+  pure (shortStatus == "running" && shortReason == Lean.Json.null && status == "complete" &&
+    nodes.any (fun node =>
+      (node.getObjVal? "loc" >>= Lean.Json.getStr?).toOption == some "exit" &&
+      ((node.getObjVal? "predicates" >>= Lean.Json.getArr?).toOption.getD #[]).any
+        (fun p => (p.getObjVal? "kind" >>= Lean.Json.getStr?).toOption == some "ret")) &&
+    nodes.any (fun node =>
+      ((node.getObjVal? "predicates" >>= Lean.Json.getArr?).toOption.getD #[]).any
+        (fun p => (p.getObjVal? "helperId" >>= Lean.Json.getNat?).toOption == some 1)) &&
+    nodes.any (fun node =>
+      ((node.getObjVal? "exprs" >>= Lean.Json.getArr?).toOption.getD #[]).any (fun e =>
+        (e.getObjVal? "reg" >>= Lean.Json.getStr?).toOption == some "real64:0" &&
+        (e.getObjVal? "rel" >>= Lean.Json.getStr?).toOption == some "eq" &&
+        ((e.getObjVal? "term" >>= Lean.Json.getStr?).toOption.getD "").contains
+          "externalResult")))).getD false
 
 private def parseRejectsCheck : Bool :=
   let badCtx := fixtureEntryJson.replace "v64:1" "v32:1"
@@ -220,6 +258,17 @@ private def resourceTermCheck : Bool :=
   (parseMetaJson unmarkedMetaJson).isSome && (parseMetaJson compound).isSome &&
     ["v32:9", "add64(v64:9)", "not-a-term"].all (fun term =>
       (parseMetaJson s!"\{\"entry\":{fixtureEntryJson},\"resourceLocations\":[\{\"slot\":34,\"term\":\"{term}\"}]}").isNone)
+
+private def mapMetaCheck : Bool := Id.run do
+  let some m := parseMetaJson productMetaJson | return false
+  let .ok (_, context) := boundProgram justTxProgram m | return false
+  let some absent := parseMetaJson unmarkedMetaJson | return false
+  return m.maps == [⟨1077412584, 4, 8⟩] && context.maps == m.maps &&
+    absent.maps.isEmpty &&
+    ["null", "{}", "[{\"mapId\":42,\"keySize\":65,\"valueSize\":8}]",
+      "[{\"mapId\":42,\"keySize\":4,\"valueSize\":0}]",
+      "[{\"mapId\":42,\"keySize\":4,\"valueSize\":4097}]"].all (fun maps =>
+        (parseMetaJson s!"\{\"entry\":{fixtureEntryJson},\"maps\":{maps}}").isNone)
 
 private def budgetCheck : Bool :=
   let response := exportEbpfBoundWordsSnapshot justTxProgram fixtureMetaJson 1 0
@@ -237,7 +286,7 @@ private def budgetCheck : Bool :=
 #guard (decodeProgram justTxProgram)[36]? == some (.callHelper 1)
 #guard (decodeProgram justTxProgram)[57]? == some .exit
 #guard match ebpfStep (decodeProgram justTxProgram) justTxContext 36 36 SemState.empty with
-  | .reject .unsupported => true
+  | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep (decodeProgram justTxProgram) justTxContext 57 57
     ⟨ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
@@ -248,8 +297,10 @@ private def budgetCheck : Bool :=
 #guard statelessStepCheck
 #guard laterStepsCheck
 #guard earlyExitCheck
+#guard productSnapshotCheck
 #guard parseRejectsCheck
 #guard resourceTermCheck
 #guard budgetCheck
+#guard mapMetaCheck
 
 end EBPF

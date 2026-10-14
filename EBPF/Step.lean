@@ -1,5 +1,5 @@
 import EBPF.Encode
-import EBPF.Memory
+import EBPF.Helper
 import PathMerge.Path
 
 namespace EBPF
@@ -14,6 +14,7 @@ structure ResourceLocation where
 structure StepContext where
   entry : EntryParams
   resourceLocations : List ResourceLocation := []
+  maps : List MapLayout := []
   deriving Repr, Inhabited
 
 private def fullReg (E : ExprSet) (r : Nat) : Option Term := do
@@ -76,15 +77,20 @@ private def wideImmediate (I : Array Insn) (context : StepContext) (j dst : Nat)
   pure ⟨.ok, .pos (j + 2), ExprSet.empty.insertEq (Reg.real64 dst) value, []⟩
 
 /-- All operands come from the executing pre-state. EXIT captures full-width r0;
-falling off the sequence is never a return. Native helper contracts are undefined
-in doc/NodeInference/step.md and doc/Predicate/Helper谓词.md. -/
+falling off the sequence is never a return. Native helper calls freeze full-width
+ABI observations and write r0, anchoring lookup Map word zero. -/
 def ebpfStep (I : Array Insn) (context : StepContext) (event : NodeId)
     (j : Nat) (σ : SemState) : StepResult :=
   match I[j]? with
   | none => .reject .unboundTarget
   | some (.illegal _) => .reject .localReject
   | some .continuation => .reject .localReject
-  | some (.callHelper _) => .reject .unsupported
+  | some (.callHelper id) =>
+    if j + 1 ≥ I.size then .reject .unboundTarget
+    else match parseHelperCall σ.exprs id.toNat with
+      | .error reason => .reject reason
+      | .ok call => .candidates [⟨.ok, .pos (j + 1), helperExpr event call,
+          [.helper event call.kind (freezeLookupArgs context.entry σ.exprs context.maps call)]⟩]
   | some (.jcond width op dst src offset) =>
     match branchCandidates I j σ.exprs width op dst src offset with
     | .error reason => .reject reason
@@ -103,14 +109,14 @@ def ebpfStep (I : Array Insn) (context : StepContext) (event : NodeId)
     | none => .reject .undefinedSrc
   | some i@(.mov _ _ _) | some i@(.add _ _ _)
   | some i@(.ldx _ _ _ _) | some i@(.stx _ _ _ _) =>
-    match exprEffects context.entry event σ.exprs i with
+    match exprEffects context.entry event σ.exprs i context.maps with
     | .error reason => .reject reason
     | .ok (effect, predicates) => if j + 1 < I.size then
         .candidates [⟨.ok, .pos (j + 1), effect.delta, predicates⟩]
       else .reject .unboundTarget
 
 private def checkContext : StepContext :=
-  ⟨⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 0, 0, 0⟩, []⟩
+  { entry := ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 0, 0, 0⟩ }
 
 private def aluExitSequenceCheck : Bool := Id.run do
   let I := decodeProgram #[0x00000007000000b7, 0x0000000100000007, 0x95]
@@ -283,8 +289,15 @@ private def branchCheck : Bool := Id.run do
   | _ => false
 #guard match ebpfStep #[.callHelper 1, .exit] checkContext 0 0
     ⟨ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
-  | .reject .unsupported => true
+  | .reject .undefinedSrc => true
   | _ => false
+#guard match ebpfStep #[.callHelper 1] checkContext 0 0 SemState.empty with
+  | .reject .unboundTarget => true
+  | _ => false
+#guard oneCandidateCheck
+    (ebpfStep #[.callHelper 999, .exit] checkContext 7 0 SemState.empty)
+    .ok (.pos 1) (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 18446744073709551615))
+    [.helper 7 (.unsupported 999) []]
 #guard oneCandidateCheck
     (ebpfStep #[.exit] checkContext 0 0
       ⟨ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1), []⟩)

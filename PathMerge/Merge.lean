@@ -86,38 +86,9 @@ private def arrayField (j : Lean.Json) (key : String) : Except String (Array Lea
 
 private def boundedWidth (q bits : Nat) : Bool := 0 < q && q ≤ bits
 
-private def opSignature (w : Width) (op : Op) (args : List Term) : Bool :=
-  let uniform (n : Nat) := args.length == n && args.all (fun t => t.width == w)
-  match op with
-  | .add v | .sub v | .mullo v | .shl v | .lshr v | .ashr v | .ltu v | .lts v =>
-    w == v && uniform 2
-  | .neg v | .id v => w == v && uniform 1
-  | .and q | .or q | .xor q => boundedWidth q w.bits && uniform 2
-  | .low q v => v == w.bits && boundedWidth q v && uniform 1
-  | .extract o len v => v == w.bits && 0 < len && o + len ≤ v && uniform 1
-  | .zext q out v | .sext q out v =>
-    w == out && boundedWidth q w.bits && 0 < q && q ≤ v &&
-      args.length == 1 && args.all (fun t => t.width.bits == v)
-  | .bswap q v => v == w.bits && (q == 16 || q == 32 || q == 64) &&
-    q ≤ v && uniform 1
-  | .mergeLow q v => v == w.bits && boundedWidth q v && uniform 2
-  | .externalResult _ _ => w == .w32 && !args.isEmpty &&
-    args.all (fun t => t.width == .w32)
-  | .inputByte _ => w == .w32 && uniform 2
-
-mutual
-  def validTerm : Term → Bool
-    | .const w c => c < 2 ^ w.bits
-    | .var _ _ => true
-    | .regVar _ r => r.valid && r.kind == .real
-    | .app w op args => opSignature w op args && validTerms args
-  termination_by t => sizeOf t
-
-  private def validTerms : List Term → Bool
-    | [] => true
-    | t :: ts => validTerm t && validTerms ts
-  termination_by ts => sizeOf ts
-end
+/-- Snapshot value terms use the same structural carrier/arity contract as
+predicate terms, including cross-carrier projections and native helper results. -/
+def validTerm (t : Term) : Bool := predicateWellFormed (.ret t)
 
 def validRel (w : Width) : Rel → Bool
   | .eqN q | .neN q | .ltuN q | .leuN q | .gtuN q | .geuN q

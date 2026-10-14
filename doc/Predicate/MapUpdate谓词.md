@@ -5,13 +5,13 @@
 MapUpdate 的元素记作 \(\operatorname{mapUpdate}(\varepsilon,t_m,\vec k,\vec v,t_f)\)，其类型为：
 
 \[
-\mathrm{MapUpdate}:=\bigsqcup_{(L_k,L_v)\in\mathbb N^2}
-\bigl(\mathcal I_{\mathrm{call}}\times\mathrm{Term}_{32}
-\times\mathrm{BytesTerm}(L_k)\times\mathrm{BytesTerm}(L_v)
-\times\mathrm{Term}_{32}\bigr).
+\mathrm{MapUpdate}:=\bigsqcup_{w\in\{32,64\},\,(L_k,L_v)\in\mathbb N^2}
+\bigl(\mathcal I_{\mathrm{call}}\times\mathrm{Term}_{w}
+\times\mathrm{BytesTerm}_w(L_k)\times\mathrm{BytesTerm}_w(L_v)
+\times\mathrm{Term}_{w}\bigr).
 \]
 
-其中 \(\varepsilon\) 为调用身份，\(t_m\) 为 32 位 Map 参数项，\(\vec k\) 与 \(\vec v\) 分别为长度 \(L_k,L_v\) 的冻结键、值字节数组，\(t_f\in\mathrm{Term}_{32}\) 为调用时提交的 flags 项。\(L_k,L_v\) 来自同一已知 Map 布局，长度标签由数组长度确定。
+其中 \(\varepsilon\) 为调用身份，\(t_m\in\mathrm{Term}_{w}\) 为 Map 参数项，\(\vec k\in\mathrm{BytesTerm}_w(L_k)\) 与 \(\vec v\in\mathrm{BytesTerm}_w(L_v)\) 分别为冻结键、值字节数组，\(t_f\in\mathrm{Term}_{w}\) 为调用时提交的 flags 项。\(w\) 是[调用约定](Helper谓词.md#类型定义)的载体宽度，\(L_k,L_v\) 来自同一已知 Map 布局；长度标签由数组长度确定，位宽标签由各项确定。
 
 MapUpdate 解释为更新调用事件：
 
@@ -24,33 +24,33 @@ MapUpdate 解释为更新调用事件：
 \llbracket t_f\rrbracket_{\nu,\theta}).
 \]
 
-其中 \(\mathsf{mapUpdate}\) 为更新调用标签，\(\varepsilon\) 为调用身份，Map 与 flags 项解释为 32 位值，键和值数组分别解释为 \(L_k,L_v\) 个字节；\(\nu,\theta\) 是[Helper 解释](Helper谓词.md#解释参数)的赋值与补全。此事件描述调用时提交的参数，本身不证明更新成功。成功结果及修改如何反映到 Expr 关系仍归[既有 helper 语义](Helper谓词.md#生成的-expr)及其未完成契约。
+其中 \(\mathsf{mapUpdate}\) 为更新调用标签，\(\varepsilon\) 为调用身份，Map 与 flags 项解释为 \(w\) 位值，键和值数组分别解释为 \(L_k,L_v\) 个字节；\(\nu,\theta\) 是[Helper 解释](Helper谓词.md#解释参数)的赋值与补全。此事件描述调用时提交的参数，本身不证明更新成功。返回项由[共同结果规则](Helper谓词.md#生成的-expr)确定；更新成功及资源修改的语义契约仍为[义务 H-U](#数学性质)。
 
 ## 触发逻辑
 
 ### RV32IMC
 
-满足[共同调用触发条件](Helper谓词.md#触发逻辑)且分派编号确定为 2 时，选择 MapUpdate。调用参数位置仍为 \((a_1,a_2,a_3,a_4)\)，分别提供 Map 参数项、键缓冲区地址项、值缓冲区地址项及 flags 项。
+满足[RV32 分派器触发条件](Helper谓词.md#rv32imc)且编号确定为 2 时，选择更新类别。四个 ABI 参数依次提供 Map 参数项、键缓冲区地址项、值缓冲区地址项及 flags 项；参数位置与载体见[共同约定](Helper谓词.md#类型定义)。
 
 ### eBPF
 
-适用[共同 eBPF 定义域](Helper谓词.md#ebpf)。
+满足[原生 eBPF 调用触发条件](Helper谓词.md#ebpf)且立即数编号为 2 时，选择更新类别。四个 ABI 参数的意义与 RV32 相同；取源及返回效果按[共同规则](Helper谓词.md#生成条件)处理。
 
 ## 生成条件
 
-[共同参数取源](Helper谓词.md#生成条件)成功后，令 \(t_m=t_1\)、\(t_f=t_4\)。调用时 \(t_m\) 唯一指向的 Map 对象布局须给出键、值字节长度 \(L_k(t_m)\)、\(L_v(t_m)\)，且地址项 \(t_2,t_3\) 指向的对象分别满足所需长度的读取条件。生成时从同一 \(E_g\) 分别读取：
+[共同参数取源](Helper谓词.md#生成条件)成功后，令 \(t_m=t_1\)、\(t_f=t_4\)，其中 \(\mathcal L,w\) 是共同规则给定的布局与载体。完整事件要求 \(t_m\) 唯一指向的 Map 对象布局给出键、值字节长度 \(L_k(t_m;\mathcal L)\)、\(L_v(t_m;\mathcal L)\)，且地址项 \(t_2,t_3\) 指向的对象分别满足所需长度的读取条件。从同一 \(E_g\) 分别读取：
 
 \[
 (\vec k,\vec v):=
-\bigl(\operatorname{readBytes}(E_g,t_2,L_k(t_m)),
-\operatorname{readBytes}(E_g,t_3,L_v(t_m))\bigr).
+\bigl(\operatorname{readBytes}(E_g,t_2,L_k(t_m;\mathcal L),\mathcal L,w),
+\operatorname{readBytes}(E_g,t_3,L_v(t_m;\mathcal L),\mathcal L,w)\bigr).
 \]
 
-其中 \(\vec k\in\mathrm{BytesTerm}(L_k(t_m))\)、\(\vec v\in\mathrm{BytesTerm}(L_v(t_m))\) 为完整键和值数据；\(t_2,t_3\) 为调用前的缓冲区地址项。两个读取均有定义时生成 \(\operatorname{mapUpdate}(\varepsilon,t_m,\vec k,\vec v,t_f)\)。冻结语义见[调用时的字节读取](Helper谓词.md#调用时的字节读取)。
+其中 \(\vec k\in\mathrm{BytesTerm}_w(L_k(t_m;\mathcal L))\)、\(\vec v\in\mathrm{BytesTerm}_w(L_v(t_m;\mathcal L))\) 为完整键和值数据；\(t_2,t_3\) 为调用前的缓冲区地址项。两个读取均有定义时生成完整事件 \(\operatorname{mapUpdate}(\varepsilon,t_m,\vec k,\vec v,t_f)\)。冻结语义见[调用时的字节读取](Helper谓词.md#调用时的字节读取)。
 
 ### 错误类型
 
-Map 参数与键读取的错误沿用[MapLookup 错误类型](MapLookup谓词.md#错误类型)。另有以下值读取错误时，构造无定义，按[共同拒绝规则](Helper谓词.md#错误类型)处理：
+Map 参数与键读取的精化错误沿用[MapLookup 错误类型](MapLookup谓词.md#错误类型)。以下值读取错误也使完整字节事件无定义；精化与 ABI 调用成功的边界见[共同生成条件](Helper谓词.md#生成条件)：
 
 - 调用时 Map 对象布局的值长度不能确定。
 - 值缓冲区的内存读取依据不足。

@@ -123,7 +123,7 @@ C.ADDI、C.LI、C.ANDI 使用已符号扩展的六位立即数；C.LUI 的上位
 
 异常处理、特权状态与未选定的外部语义须独立定义：RV32 的 ECALL、EBREAK、C.EBREAK、MRET、SRET、WFI、SFENCE.VMA 未给出成功规则；eBPF 的 LDDW 平台变量子类型、旧 LD ABS/IND、CALLX、MAY_GOTO 也未给出相应完整规则。LOAD_ACQ、STORE_REL、STX ATOMIC 只具有各 Expr 正文定义的数值关系，未包含并发与排序观察。
 
-外部 helper 或 BTF CALL 没有通用算术结果；调用前 R0 不能充当返回值。符合现有 32 位分派器调用约定的已绑定 helper 使用[Helper谓词](../Predicate/Helper谓词.md)，其返回结果采用[结果赋值](../Predicate/Helper谓词.md#生成的-expr)。原生 eBPF `call` 的立即数直接给出 helper 编号，参数为 64 位 \(r_1,\ldots,r_5\)，返回为 64 位 \(r_0\)；现有 Helper 规则要求 32 位分派编号、参数和返回项，不能将原生寄存器低位投影后套用该规则。原生调用的观察、完整返回值及寄存器变化契约尚未定义，因此这一切片没有成功调用规则，拒绝处理。BTF 调用或其他独立契约也须给出各自的观察与结果规则，不能生成成功的空调用效果。
+符合现有 32 位分派器调用约定的已绑定 helper 使用[Helper谓词](../Predicate/Helper谓词.md)，其返回结果采用[结果赋值](../Predicate/Helper谓词.md#生成的-expr)。原生 eBPF `call imm` 按[独立的原生调用约定](../Predicate/Helper谓词.md#ebpf)处理：先要求下一原始槽位存在，再检查执行前关系的键唯一性与类型有效性，按立即数编号选择 helper 类型并取得该类型所需的完整参数。成功时产生调用观察与返回效果，以 OK 方向顺序推进；参数数量由共同类型确定，时钟与未支持编号均不读取附加参数。BTF CALL、CALLX 及其余非法调用形式不在该成功规则的定义域内，不能生成成功的空调用效果。
 
 RV32 普通指令的合法域依据为 [RV32I](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html)。压缩形式的依据为 [C 扩展](https://docs.riscv.org/reference/isa/v20260120/unpriv/c-st-ext.html)。eBPF 的依据为 [BPF ISA](https://docs.kernel.org/bpf/standardization/instruction-set.html)。指令登记见 [IANA 指令登记表](https://www.iana.org/assignments/bpf-instructions/bpf-instructions.xhtml)。Linux BPF 定义见 [Linux BPF 定义](https://github.com/torvalds/linux/blob/master/include/uapi/linux/bpf.h)。LLVM 扩展定义见 [LLVM 扩展定义](https://llvm.googlesource.com/llvm-project/+/17bfc00f7c4a424d7b5dc6da575865833701fd1a%5E%21/)。
 
@@ -146,7 +146,7 @@ RV32 普通指令的合法域依据为 [RV32I](https://docs.riscv.org/reference/
 - 普通数值赋值、算术或链接值：使用[真实寄存器值规则](../Expr/寄存器/真实寄存器.md#真实寄存器赋值)。各类数值规则见[数值规则索引](../Expr/寄存器/真实寄存器.md#算术与位运算赋值)。
 - 访问对象已确定的资源读写：根据对象类别选择规则。栈采用[栈规则](../Expr/寄存器/虚拟栈.md#虚拟栈读写)。Map 采用[Map 规则](../Expr/寄存器/虚拟映射.md#虚拟映射读写)，元素内写入另按[MapWrite 生成条件](../Predicate/MapWrite谓词.md#生成条件)取得局部观察。包采用[包规则](../Expr/寄存器/包字节.md#包字节读写)，实际存储另按[PacketWrite 生成条件](../Predicate/PacketWrite谓词.md#生成条件)取得局部观察。共享字段函数见[字段读写](../Expr/寄存器/单元字段读写.md#单元字段读写)。
 - 访问对象已确定的原子数值操作：使用[原子数值更新与旧值返回](../Expr/寄存器/原子数值更新与旧值返回.md#原子数值更新与旧值返回)，一次取得全部右侧。
-- 已识别为 helper 调用的指令实例：调用观察按 [helper Predicate](../Predicate/Helper谓词.md)创建。调用观察建立后，按 [Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)取得返回赋值与 Map 关联，并保留调用自身的链接效果。
+- 已识别为 helper 调用的指令实例：调用观察按 [helper Predicate](../Predicate/Helper谓词.md)创建，并按 [Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)取得返回赋值与 Map 关联。RV32 分派器调用还保留调用自身的链接效果；原生 eBPF helper 按顺序后继推进。
 - 条件分支：Expr 的取源和候选规则见[比较指令处理](Jump/待处理.md)。采用这些规则后，进入[条件方向选择](#选择条件后继方向)；各保留候选的 Branch 谓词按[Branch 生成条件](../Predicate/Branch谓词.md#生成条件)生成。
 - 无条件跳转或其他所选规则不增加值与观察的操作：保留其控制处理要求，进入[后继位置绑定](#绑定后继位置)。
 - 所选局部规则无定义：拒绝本次处理；不能以空效果代替缺失语义。

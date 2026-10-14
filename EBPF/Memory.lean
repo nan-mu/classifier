@@ -1,6 +1,7 @@
 import EBPF.Initial
 import EBPF.Expr
 import ClassifierExpr.Virtual
+import ClassifierExpr.MapLayout
 
 namespace EBPF
 open ClassifierExpr PathMerge
@@ -28,6 +29,31 @@ def relativeOffset (root address : Term) : Option Int :=
       | .const .w64 r, .const .w64 a => some (s 64 (M 64 (Int.ofNat a - Int.ofNat r)))
       | _, _ => none
   termination_by sizeOf address
+
+/-- Lookup-result provenance at full eBPF width. Numeric pointers, other helpers
+and sums of symbolic bases do not establish a Map identity. -/
+def lookupAddress64 : Term → Option (Nat × Int × Term)
+  | .app .w64 (.id .w64) [a] => lookupAddress64 a
+  | .app .w64 (.externalResult event 0) [id, map, key] =>
+    if eval (solve id) == some 1 && map.width == .w64 && key.width == .w64 then
+      some (event, 0, map)
+    else none
+  | .app .w64 (.add .w64) [a, b] =>
+    match eval (solve a), eval (solve b) with
+    | none, some c => do
+      let (event, offset, map) ← lookupAddress64 a
+      pure (event, offset + s 64 c, map)
+    | some c, none => do
+      let (event, offset, map) ← lookupAddress64 b
+      pure (event, offset + s 64 c, map)
+    | _, _ => none
+  | .app .w64 (.sub .w64) [a, b] =>
+    match eval (solve a), eval (solve b) with
+    | none, some c => do
+      let (event, offset, map) ← lookupAddress64 a
+      pure (event, offset - s 64 c, map)
+    | _, _ => none
+  | _ => none
 
 /-- Unit zero starts at tSp-4. A fixed stride is injective because unit < 128. -/
 def stackUnitReg (resource unit : Nat) : Reg := Reg.sw (128 * resource + unit)
@@ -74,6 +100,16 @@ def readAccess (E : ExprSet) (a : ResolvedAccess) : Except RejectReason (ExprSet
       shift := shift + part.bits
     pure (.empty, value)
 
+/-- Frozen little-endian stack bytes. Cell reads widen each extracted 32-bit
+stack field with zStar 8 .w64 32; unavailable bytes are never materialized. -/
+def stackBytes (p : EntryParams) (E : ExprSet) (addr : Term) (n : Nat) :
+    Option (List Term) := do
+  let displacement ← relativeOffset p.tSp addr
+  (List.range n).mapM fun j => do
+    let .cells parts ← stackParts p (displacement + Int.ofNat j) 1 | none
+    let (_, value) ← (readAccess E (.cells parts)).toOption
+    pure value
+
 /-- The packet base is exactly the widened context data cell yielded by LDX W.
 Using the same read path prevents drift between classification and loaded aliases.
 Missing context data contents authorize no packet candidate. -/
@@ -82,9 +118,12 @@ def packetRoot (p : EntryParams) (E : ExprSet) : Option Term := do
   pure value
 
 /-- Resolve against the executing full base equality, never against a mutable
-entry-register name. Content availability is checked by readAccess/writeAccess. -/
+entry-register name. Content availability is checked by readAccess/writeAccess.
+Lookup anchors word zero; other Map words have no implicit content relation
+and accesses reject undefinedSrc until such a relation is explicitly available. -/
 def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
-    (bytes : Nat) (isWrite : Bool) : Except RejectReason ResolvedAccess := do
+    (bytes : Nat) (isWrite : Bool) (maps : List MapLayout := []) :
+    Except RejectReason ResolvedAccess := do
   let _ := isWrite
   if base > 10 || !E.keysUnique || !E.wellTyped ||
       ![1, 2, 4, 8].contains bytes then throw .undefinedSrc
@@ -102,12 +141,21 @@ def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
       let o := displacement + offset
       if o ≥ 0 && o.toNat + bytes ≤ p.packetBytes then
         candidates := .packet ⟨p.κPacket, o.toNat, bytes, .little, some p.tData⟩ :: candidates
+  if let some (event, displacement, mapTerm) := lookupAddress64 address then
+    if let some layout := findMapLayout maps mapTerm then
+      let rel := displacement + offset
+      if rel ≥ 0 && rel.toNat + bytes ≤ layout.valueSize &&
+          rel.toNat % 8 + bytes ≤ 8 then
+        let o := rel.toNat
+        candidates := .cells [⟨Reg.mapDword event (o - o % 8),
+          8 * (o % 8), 8 * bytes⟩] :: candidates
   match candidates with
   | [a] => pure a
   | _ => throw .undefinedSrc
 
-/-- All partial fields read the old snapshot. Whole units, including both halves
-of a DW store, require no old cell equality. -/
+/-- All partial fields read the old snapshot. Whole Stack units, including both
+halves of a DW store, require no old equality. Map writes require an existing
+content relation; layout bounds alone never materialize another Map word. -/
 def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except RejectReason ExprSet := do
   if source.width != .w64 then throw .undefinedSrc
   match a with
@@ -121,6 +169,7 @@ def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except Reje
     let mut shift := 0
     for part in parts do
       if (updates.lookupEq part.reg).isSome then throw .undefinedSrc
+      if part.reg.kind == .map && (E.lookupEq part.reg).isNone then throw .undefinedSrc
       let field := if shift == 0 then source else lshrStar .w64 source (Term.C64 shift)
       let some written := part.write E field | throw .undefinedSrc
       updates := updates.override written
@@ -130,21 +179,21 @@ def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except Reje
 /-- Memory effects distinguish first-read inputs from simultaneous assignments.
 Packet stores carry their observation with the byte updates, using the same
 complete pre-state source. The existing MOV/ADD rules are reused; control flow
-and helper classes are refused. -/
-def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn) :
-    Except RejectReason (ExprEffect × List Predicate) := do
+and helper classes belong to Step, not this value-effect dispatcher. -/
+def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn)
+    (maps : List MapLayout := []) : Except RejectReason (ExprEffect × List Predicate) := do
   if !E.keysUnique || !E.wellTyped then throw .undefinedSrc
   match i with
   | .ldx bytes dst base offset =>
     if dst > 9 then throw .undefinedSrc
-    let access ← resolveAccess p E base offset bytes false
+    let access ← resolveAccess p E base offset bytes false maps
     let (inputs, value) ← readAccess E access
     pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst) value⟩, [])
   | .stx bytes base src offset =>
     if src > 10 then throw .undefinedSrc
     let some source := E.lookupEq (Reg.real64 src) | throw .undefinedSrc
     if source.width != .w64 then throw .undefinedSrc
-    let access ← resolveAccess p E base offset bytes true
+    let access ← resolveAccess p E base offset bytes true maps
     let updates ← writeAccess E access source
     let predicates := match access with
       | .packet a => [.packetWrite event a.κ a.offset source]
@@ -155,11 +204,7 @@ def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn) :
     pure (⟨.empty, updates⟩, [])
   | .exit => pure (⟨.empty, .empty⟩, [])
   | .illegal _ => throw .localReject
-  | .jcond _ _ _ _ _ => throw .unsupported
-  | .ja _ => throw .unsupported
-  | .lddw _ _ _ => throw .unsupported
-  | .continuation => throw .unsupported
-  | .callHelper _ => throw .unsupported
+  | _ => throw .localReject
 
 private def memoryEntry : EntryParams :=
   ⟨Term.V64 1, Term.V64 0, Term.V32 2, 16, 3, 4, 5⟩
@@ -238,5 +283,49 @@ private def partialStackCheck : Bool := Id.run do
   let .ok σ := buildE0 p | return false
   let .error .undefinedSrc := resolveAccess p σ.exprs 1 0 4 false | return false
   return true
+
+private def lookupPointer : Term :=
+  star .w64 (.externalResult 7 0) [Term.C64 1, Term.C64 42, Term.V64 9]
+
+private def lookupMemoryCheck : Bool := Id.run do
+  let .ok σ := buildE0 memoryEntry | return false
+  let maps : List MapLayout := [⟨42, 4, 16⟩]
+  let E := σ.exprs.insertEq (Reg.real64 0) lookupPointer
+    |>.insertEq (Reg.mapDword 7 0) (Term.regVar 7 (Reg.real64 0))
+  let .ok (.cells [part]) := resolveAccess memoryEntry E 0 0 8 false maps | return false
+  let .ok (_, value) := readAccess E (.cells [part]) | return false
+  let .ok updates := writeAccess E (.cells [part]) (Term.C64 99) | return false
+  let .ok (_, next) := readAccess (E.override updates) (.cells [part]) | return false
+  let .ok unanchored := resolveAccess memoryEntry E 0 8 8 false maps | return false
+  let .error .undefinedSrc := readAccess E unanchored | return false
+  let .error .undefinedSrc := writeAccess E unanchored (Term.C64 99) | return false
+  let .error .undefinedSrc := resolveAccess memoryEntry E 0 7 2 false maps | return false
+  let .error .undefinedSrc := resolveAccess memoryEntry E 0 (-1) 1 false maps | return false
+  let .error .undefinedSrc := resolveAccess memoryEntry E 0 16 1 false maps | return false
+  let .error .undefinedSrc := resolveAccess memoryEntry E 0 0 8 false | return false
+  return part.reg == Reg.mapDword 7 0 && part.bits == 64 &&
+    value == Term.regVar 7 (Reg.real64 0) && next == Term.C64 99
+
+#guard lookupMemoryCheck
+#guard lookupAddress64 (idStar .w64 lookupPointer) == some (7, 0, Term.C64 42)
+#guard lookupAddress64
+  (subStar .w64 (addStar .w64 lookupPointer (Term.C64 8)) (Term.C64 4)) ==
+    some (7, 4, Term.C64 42)
+#guard lookupAddress64 (addStar .w64 (Term.C64 8) lookupPointer) ==
+  some (7, 8, Term.C64 42)
+#guard (lookupAddress64 (Term.C64 42)).isNone
+#guard (lookupAddress64 (addStar .w64 lookupPointer (Term.V64 3))).isNone
+#guard (lookupAddress64 (star .w64 (.externalResult 7 0)
+  [Term.C64 2, Term.C64 42, Term.V64 9])).isNone
+#guard (lookupAddress64 (star .w64 (.externalResult 7 1)
+  [Term.C64 1, Term.C64 42, Term.V64 9])).isNone
+#guard Id.run do
+  let .ok σ := buildE0 memoryEntry | return false
+  let ptr := addStar .w64 memoryEntry.tSp (Term.C64 (M 64 (-4)))
+  let E := σ.exprs.insertEq (stackUnitReg 5 0) (Term.C32 0x11223344)
+  return stackBytes memoryEntry E ptr 4 ==
+    some [Term.C64 0x44, Term.C64 0x33, Term.C64 0x22, Term.C64 0x11] &&
+    (stackBytes memoryEntry σ.exprs ptr 4).isNone &&
+    (stackBytes memoryEntry E ptr 5).isNone
 
 end EBPF

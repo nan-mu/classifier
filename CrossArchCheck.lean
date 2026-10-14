@@ -15,7 +15,7 @@ private def rv32Words : Array UInt32 :=
     13931299, 14980131, 16028963, 17677, 16562, 17442, 17554, 321, 32898]
 
 private def ebpfMeta :=
-  "{\"entry\":{\"tCtx\":\"v64:1\",\"tSp\":\"v64:0\",\"tData\":\"v32:4\",\"packetBytes\":128,\"alphaCtx\":0,\"packetId\":0,\"stackId\":0}}"
+  EBPF.productMetaJson
 private def rv32Meta :=
   "{\"base\":1077412352,\"helperAddress\":1077411840,\"returnAddress\":8192,\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}"
 
@@ -75,22 +75,23 @@ private def checkReport (j : Json) (expectedConclusion : String) : Except String
     throw ("unexpected comparison conclusion: " ++ j.compress)
 
 private def checks : Except String (List String) := do
-  let ebpfResponse := EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram ebpfMeta 60 60
+  let ebpfResponse := EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram ebpfMeta 2000 1024
   let ebpfSnapshot ← Json.parse ebpfResponse
-  if (fieldString ebpfSnapshot "status").toOption != some "fail" ||
-      (fieldString ebpfSnapshot "reason").toOption != some "Unsupported" then
-    throw "eBPF fixture did not stop at the unsupported native helper"
-  let failed ← (← ebpfSnapshot.getObjVal? "failed").getNat?
+  let ebpfStatus ← fieldString ebpfSnapshot "status"
+  if ebpfStatus != "complete" then
+    throw ("eBPF product fixture did not complete: " ++ ebpfSnapshot.compress)
   let ebpfNodes ← fieldArray ebpfSnapshot "nodes"
-  if !ebpfNodes.any (fun n => ((n.getObjVal? "id") >>= Json.getNat?).toOption == some failed &&
-      (fieldString n "loc").toOption == some "36") then
-    throw "eBPF fixture missing failed helper slot 36"
+  let ebpfEdges ← fieldArray ebpfSnapshot "edges"
+  if ebpfNodes.size != 539 || ebpfEdges.size != 538 then
+    throw "eBPF fixture did not reach the observed native-helper terminal graph"
+  if !ebpfNodes.any (fun n => (fieldString n "loc").toOption == some "exit") then
+    throw "eBPF fixture missing EXIT terminal"
   let ebpf ← snapshotRun "ebpf" ebpfResponse
   -- Observed fixture/model frontier, not a comparison-interface property: the
   -- product wrapper binds all savedRegs to the entry-position term. In particular,
   -- x9's spill at index 3 has a source. RV32IMC now stops with UnboundTarget at
   -- index 34 (failed node 56), after producing 63 nodes and 62 edges.
-  -- Unmarked eBPF reaches the unsupported native helper at raw slot 36.
+  -- Native eBPF binds the same Map id and reaches EXIT without rejecting helpers.
   let rv32Response := RV32IMC.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60
   let rv32Snapshot ← Json.parse rv32Response
   let rv32Status ← fieldString rv32Snapshot "status"
@@ -114,7 +115,8 @@ private def checks : Except String (List String) := do
   let ps ← fieldArray dropped "positions"
   if !ps.any (fun p => (fieldString p "verdict").toOption == some "OnlyLeft") then
     throw "dropped entry position did not produce OnlyLeft"
-  pure [s!"rv32imc-frontier: status={rv32Status} reason={rv32Reason} failed={rv32Failed} nodeCount={rv32Nodes.size} edgeCount={rv32Edges.size} loc=34",
+  pure [s!"ebpf-terminal: status={ebpfStatus} nodeCount={ebpfNodes.size} edgeCount={ebpfEdges.size} loc=exit",
+    s!"rv32imc-frontier: status={rv32Status} reason={rv32Reason} failed={rv32Failed} nodeCount={rv32Nodes.size} edgeCount={rv32Edges.size} loc=34",
     ← summary "identical-ebpf" self, ← summary "rv32imc-vs-ebpf" cross,
     cross.compress, ← summary "dropped-ebpf-node" dropped]
 

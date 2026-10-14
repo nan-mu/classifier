@@ -1062,13 +1062,6 @@ private def parseMetaU32 (j : Lean.Json) (key : String) : Option UInt32 := do
   let n ← (j.getObjVal? key >>= Lean.Json.getNat?).toOption
   if n ≥ (1 <<< 32) then none else some n.toUInt32
 
-private def parseMapLayout (value : Lean.Json) : Option MapLayout := do
-  let mapId ← (value.getObjVal? "mapId" >>= Lean.Json.getNat?).toOption
-  let keySize ← (value.getObjVal? "keySize" >>= Lean.Json.getNat?).toOption
-  let valueSize ← (value.getObjVal? "valueSize" >>= Lean.Json.getNat?).toOption
-  if keySize > 64 || valueSize == 0 || valueSize > 4096 then none
-  else some { mapId, keySize, valueSize }
-
 private def parseMetaJson (s : String) : Option Meta := do
   let j ← (Lean.Json.parse s).toOption
   let base ← parseMetaU32 j "base"

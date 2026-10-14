@@ -85,7 +85,7 @@ def renderExprJson (e : Expr) : String :=
 
 def renderPredicateJson : Predicate → String
   | .helper event kind args =>
-    let args := String.intercalate "," (args.map fun t => s!"\"{renderTerm t}\"")
+    let args := String.intercalate "," (args.map fun t => s!"\"{renderTermAt .w32 t}\"")
     s!"\{\"kind\":\"helper\",\"event\":{event},\"helperId\":{kind.id},\"args\":[{args}]}"
   | .branch position dir cond =>
     let direction := match dir with | .taken => "taken" | .notTaken => "notTaken"

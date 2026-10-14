@@ -2,18 +2,18 @@
 
 ## 类型定义
 
-令 \(H_{\mathrm{other}}\) 为 \(H\) 中除 `BPF_FUNC_MAP_LOOKUP_ELEM`、`BPF_FUNC_MAP_UPDATE_ELEM`、`BPF_FUNC_MAP_DELETE_ELEM` 以外的类型。OtherHelper 保留原有的 32 位参数向量构造：
+令 \(H_{\mathrm{other}}\) 为 \(H\) 中除 `BPF_FUNC_MAP_LOOKUP_ELEM`、`BPF_FUNC_MAP_UPDATE_ELEM`、`BPF_FUNC_MAP_DELETE_ELEM` 以外的类型，包含未支持类型。OtherHelper 保存统一载体宽度的 ABI 参数向量：
 
 \[
-\mathrm{OtherHelper}:=\mathrm{Helper}_{32}
-:=\bigsqcup_{h\in H_{\mathrm{other}}}
+\mathrm{OtherHelper}:=
+\bigcup_{h\in H_{\mathrm{other}},\,w\in\{32,64\}}
 \bigl(\mathcal I_{\mathrm{call}}\times\{h\}\times
-\mathrm{Term}_{32}^{n(h)}\bigr).
+\mathrm{Term}_{w}^{n(h)}\bigr).
 \]
 
-其中 \(\mathcal I_{\mathrm{call}}\) 为动态调用身份集合，\(\{h\}\) 为 helper 类型的单元素集合，\(\times\) 为笛卡尔积，\(\mathrm{Term}_{32}^{n(h)}\) 为长度恰好是 \(n(h)\) 的 32 位有限符号项向量集合。
+其中 \(\mathcal I_{\mathrm{call}}\) 为动态调用身份集合，\(\{h\}\) 为 helper 类型的单元素集合，\(\times\) 为笛卡尔积，\(\mathrm{Term}_{w}^{n(h)}\) 为长度恰好是 \(n(h)\) 的同宽有限符号项向量集合。\(w\) 由[调用约定](Helper谓词.md#类型定义)确定；空向量不额外携带位宽标签。
 
-令 \(\vec t=(t_1,\ldots,t_{n(h)})\) 为参数向量，其中每个 \(t_j\) 为 32 位参数项；参数个数为零时，向量为空。OtherHelper 的元素记作 \(\operatorname{helper}(\varepsilon,h,\vec t)\)，其中 \(h\in H_{\mathrm{other}}\)；其调用身份、类型及参数向量均参与结构相等。
+令 \(\vec t=(t_1,\ldots,t_{n(h)})\) 为参数向量，其中每个 \(t_j\in\mathrm{Term}_w\)；参数个数为零时向量为空。OtherHelper 的元素记作 \(\operatorname{helper}(\varepsilon,h,\vec t)\)，其中 \(h\in H_{\mathrm{other}}\)；其调用身份、类型及参数向量均参与结构相等。
 
 调用身份、helper 类型及参数位置见[Helper 共同约定](Helper谓词.md#类型定义)，\(\nu,\theta\) 见[解释参数](Helper谓词.md#解释参数)；\(\mathsf{helper}\) 为事件的类别标签。
 
@@ -35,7 +35,7 @@ OtherHelper 解释为事件记录：
 
 ### eBPF
 
-适用[共同 eBPF 定义域](Helper谓词.md#ebpf)。
+满足[原生 eBPF 调用触发条件](Helper谓词.md#ebpf)且立即数选择的类型属于 \(H_{\mathrm{other}}\) 时，选择 OtherHelper。参数数量与取源按[共同规则](Helper谓词.md#生成条件)处理；时钟及未支持类型均为空参数向量。
 
 ## 生成条件
 
@@ -47,7 +47,7 @@ OtherHelper 解释为事件记录：
 
 ## 数学性质
 
-**命题 H1（OtherHelper 生成的唯一性与参数齐备）。** 在有效 \(E_g\)、既定调用参数及固定 \(\varepsilon\) 下，若分派类型属于 \(H_{\mathrm{other}}\)，则成功生成的 OtherHelper 谓词唯一，并具有恰好 \(n(h)\) 个 32 位参数项。
+**命题 H1（OtherHelper 生成的唯一性与参数齐备）。** 在有效 \(E_g\)、既定调用约定、固定调用指令及固定 \(\varepsilon\) 下，若所选类型属于 \(H_{\mathrm{other}}\)，则成功生成的 OtherHelper 谓词唯一，并具有恰好 \(n(h)\) 个所选载体宽度 \(w\) 的参数项。
 
 **证明。** 已命名编号互异，未支持类型由其确定编号给出，因此 \(h\) 唯一。完整等式的键唯一使每个参数项唯一，solve 是确定的；构造逐一取得所需的 \(n(h)\) 个项。\(\square\)
 

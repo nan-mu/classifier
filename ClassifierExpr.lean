@@ -3,6 +3,7 @@ import ClassifierExpr.Reg
 import ClassifierExpr.Numeric
 import ClassifierExpr.Op
 import ClassifierExpr.Term
+import ClassifierExpr.MapLayout
 import ClassifierExpr.Expr
 import ClassifierExpr.Virtual
 import ClassifierExpr.Direction

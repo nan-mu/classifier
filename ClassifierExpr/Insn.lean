@@ -27,6 +27,18 @@ def HelperKind.id : HelperKind → Nat
   | .printk => 6 | .checksum => 28 | .adjustTail => 65
   | .unsupported id => id
 
+def helperKind (id : Nat) : HelperKind :=
+  match id with
+  | 1 => .lookup | 2 => .update | 3 => .delete | 5 => .clock
+  | 6 => .printk | 28 => .checksum | 65 => .adjustTail
+  | n => .unsupported n
+
+def helperArity : HelperKind → Nat
+  | .lookup | .delete | .adjustTail => 2
+  | .update => 4
+  | .printk | .checksum => 5
+  | .clock | .unsupported _ => 0
+
 /-- Selected conditional successor; separate from history's unconditional direction. -/
 inductive BranchDirection where
   | taken | notTaken

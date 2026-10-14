@@ -35,6 +35,10 @@ def Reg.ctx64 (α : Nat) : Reg := .ctx .w64 α
 def Reg.mapWord (resource byteOffset : Nat) : Reg :=
   .map32 ((resource + byteOffset) * (resource + byteOffset + 1) / 2 + byteOffset)
 
+/-- An eight-byte Map word at a byte offset in a lookup-result namespace. -/
+def Reg.mapDword (resource byteOffset : Nat) : Reg :=
+  ⟨.map, .w64, (resource + byteOffset) * (resource + byteOffset + 1) / 2 + byteOffset⟩
+
 /-- Cantor pairing keeps resource identity and byte offset distinct, without a fixed stride. -/
 def Reg.packet (κ offset : Nat) : Reg :=
   ⟨.packet, .w32, (κ + offset) * (κ + offset + 1) / 2 + offset⟩
