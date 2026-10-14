@@ -86,7 +86,14 @@ export async function compareTree(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ left, right }),
   });
-  if (!res.ok) throw new Error(`/api/compare/tree failed with ${res.status}`);
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).trim();
+    throw new Error(
+      detail
+        ? `/api/compare/tree failed with ${res.status}: ${detail.slice(0, 160)}`
+        : `/api/compare/tree failed with ${res.status}`,
+    );
+  }
   const body = (await res.json()) as Partial<TreeReport>;
   if (body.status === "tree" && body.claim === "heuristic") {
     return body as TreeReport;

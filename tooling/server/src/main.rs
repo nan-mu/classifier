@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -56,6 +56,10 @@ struct CompareBody {
     right: Value,
 }
 
+/// Dual just_tx compare-tree JSON is ~3 MiB (RV32 ~900 + eBPF ~500 nodes with predicates).
+/// Axum's default 2 MiB cap returns 413 and the Vite proxy surfaces that as a failed fetch.
+const API_BODY_LIMIT: usize = 32 * 1024 * 1024;
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/api/session", post(create_session))
@@ -66,6 +70,7 @@ fn app(state: AppState) -> Router {
         .route("/api/compare", post(compare_runs))
         .route("/api/compare/predicates", post(compare_predicates))
         .route("/api/compare/tree", post(compare_tree))
+        .layer(DefaultBodyLimit::max(API_BODY_LIMIT))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }
@@ -404,7 +409,7 @@ mod http_tests {
         router: &Router,
         method: &str,
         uri: &str,
-        body: &'static [u8],
+        body: impl AsRef<[u8]>,
     ) -> (StatusCode, serde_json::Value) {
         let response = router
             .clone()
@@ -413,7 +418,7 @@ mod http_tests {
                     .method(method)
                     .uri(uri)
                     .header("content-type", "application/json")
-                    .body(Body::from(body))
+                    .body(Body::from(body.as_ref().to_vec()))
                     .expect("request"),
             )
             .await
@@ -555,6 +560,20 @@ mod http_tests {
         assert_eq!(report["edges"].as_array().unwrap().len(), 2);
         assert_eq!(report["nodes"][0]["left"][0]["tag"], "start");
         assert_eq!(report["nodes"][0]["left"][0]["kind"], "create");
+    }
+
+    #[tokio::test]
+    async fn compare_tree_accepts_bodies_over_default_2mib() {
+        let router = app(new_state());
+        // Product dual just_tx trees are ~2.9 MiB; stay just above Axum's old 2 MiB default.
+        let pad = "x".repeat(2 * 1024 * 1024 + 64 * 1024);
+        let body = format!(
+            r#"{{"left":{{"arch":"rv32imc","nodes":[{{"id":0,"loc":"0","predicates":[{{"kind":"ret","term":"{pad}"}}]}}],"edges":[]}},"right":{{"arch":"ebpf","nodes":[{{"id":0,"loc":"0","predicates":[{{"kind":"ret","term":"1"}}]}}],"edges":[]}}}}"#
+        );
+        assert!(body.len() > 2 * 1024 * 1024);
+        let (status, report) = call(&router, "POST", "/api/compare/tree", body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["status"], "tree");
     }
 
     #[tokio::test]
