@@ -38,13 +38,17 @@ Cursor never edits the frozen side. It delegates through the `omp` CLI and keeps
 the integration and the final verification. Delegation is two hops, and the
 second one is omp's own:
 
-1. **Cursor → omp main session.** A one-shot brief, run non-interactively:
-   `omp -p @.cursor/omp-handoff-<task>.md`.
+1. **Cursor → omp main session.** A one-shot brief, run non-interactively via
+   **interactive fish** so the local `omp` wrapper injects `QWEN_API_KEY`
+   (non-interactive `fish -c` exits `config.fish` before the function loads):
+   `fish -ic 'omp -p @.cursor/omp-handoff-<task>.md'`.
+   Keep the repo default model (`qianwen/...` in `.omp/config.yml`). Do not
+   retarget the dispatcher to a bare `deepseek/...` id.
 2. **omp main session → `spec-author`.** `.omp/config.yml` runs that session on a
-   DeepSeek model, and no CLI flag makes a session *be* a named agent (`omp --help`
-   has `--model`, not `--agent`). `.omp/AGENTS.md` therefore requires it to spawn
-   `spec-author` — pinned to `openai-codex/gpt-6.1-sol:high` — for every `doc/` or
-   Lean edit, and forbids it from editing those paths itself.
+   DeepSeek-via-QWEN model, and no CLI flag makes a session *be* a named agent
+   (`omp --help` has `--model`, not `--agent`). `.omp/AGENTS.md` therefore
+   requires it to spawn `spec-author` — pinned to `openai-codex/gpt-6.1-sol:high`
+   — for every `doc/` or Lean edit, and forbids it from editing those paths itself.
 
 **Briefs address the dispatcher, never assert an identity.** Asking for the spawn
 is the contract:
