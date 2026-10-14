@@ -21,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
 use engine::InferencePool;
-use expand::{Arch, Session, Snapshot};
+use expand::{Arch, Session, Snapshot, WaveBatchPolicy};
 use futures_util::future::FutureExt;
 use futures_util::StreamExt;
 use lean_binding::compare;
@@ -220,7 +220,10 @@ async fn compare_predicates(
         serde_json::from_value(body.left).map_err(|_| StatusCode::BAD_REQUEST)?;
     let right: pred_match::PredRun =
         serde_json::from_value(body.right).map_err(|_| StatusCode::BAD_REQUEST)?;
-    Ok(Json(pred_match::match_predicate_runs(&left, &right)))
+    tokio::task::spawn_blocking(move || pred_match::match_predicate_runs(&left, &right))
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// Compare tree: nodes with dual ordered predicate lists (phase1 branch/ret).
@@ -231,7 +234,10 @@ async fn compare_tree(
         serde_json::from_value(body.left).map_err(|_| StatusCode::BAD_REQUEST)?;
     let right: pred_tree::SnapRun =
         serde_json::from_value(body.right).map_err(|_| StatusCode::BAD_REQUEST)?;
-    Ok(Json(pred_tree::build_compare_tree(&left, &right)))
+    tokio::task::spawn_blocking(move || pred_tree::build_compare_tree(&left, &right))
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 fn session_handle(app: &AppState, id: &str) -> Result<Arc<Mutex<Session>>, StatusCode> {
@@ -309,17 +315,12 @@ async fn run_ws_loop(mut socket: WebSocket, session: Arc<Mutex<Session>>, pool: 
                 let session = Arc::clone(&session);
                 move || {
                     let mut session = session.lock().expect("session");
-                    if !session.is_running() {
-                        return (false, session.steps(), session.snapshot());
-                    }
-                    session.step_wave();
-                    let cont = session.is_running();
-                    (cont, session.steps(), session.snapshot())
+                    session.drive_batch(WaveBatchPolicy::default_ws())
                 }
             })
             .await;
 
-        let (cont, steps, snap) = match stepped {
+        let tick = match stepped {
             Ok(v) => v,
             Err(_) => {
                 let err = RunEvent {
@@ -338,6 +339,9 @@ async fn run_ws_loop(mut socket: WebSocket, session: Arc<Mutex<Session>>, pool: 
                 return;
             }
         };
+        let cont = tick.cont;
+        let steps = tick.steps;
+        let snap = tick.snapshot;
 
         let kind = if cont { "step" } else { "done" };
         let event = RunEvent {

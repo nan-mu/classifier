@@ -66,13 +66,34 @@ impl DisplayInsns {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct WaveBatchPolicy {
+    pub max_waves: u32,
+    pub max_heads_expanded: u32,
+}
+
+impl WaveBatchPolicy {
+    pub fn default_ws() -> Self {
+        Self {
+            max_waves: 8,
+            max_heads_expanded: 64,
+        }
+    }
+}
+
+pub struct BatchTick {
+    pub cont: bool,
+    pub steps: u32,
+    pub snapshot: Snapshot,
+}
+
 /// HTTP session metadata around the server-owned expand engine.
 /// Rust owns step/run-to-completion; each `step_once` calls Lean stateless head expansion.
 pub struct Session {
     id: String,
     arch: Arch,
     name: String,
-    image: DisplayInsns,
+    insn_outs: Vec<InsnOut>,
     budget: u32,
     steps: u32,
     focus: u32,
@@ -98,11 +119,13 @@ impl Session {
                 .with_maps(program.maps.clone()),
             budget,
         );
+        let image = DisplayInsns::Rv32(image);
+        let insn_outs = image.outs();
         let mut session = Self {
             id: id.into(),
             arch,
             name,
-            image: DisplayInsns::Rv32(image),
+            insn_outs,
             budget,
             steps: 0,
             focus: 0,
@@ -130,11 +153,13 @@ impl Session {
         let words = program.words;
         let insn_len = words.len();
         let expand = ExpandSession::create_ebpf(&words, meta, budget);
+        let image = DisplayInsns::Ebpf(words);
+        let insn_outs = image.outs();
         let mut session = Self {
             id: id.into(),
             arch: Arch::Ebpf,
             name,
-            image: DisplayInsns::Ebpf(words),
+            insn_outs,
             budget,
             steps: 0,
             focus: 0,
@@ -190,8 +215,37 @@ impl Session {
         self.after_expand();
     }
 
+    pub fn drive_batch(&mut self, policy: WaveBatchPolicy) -> BatchTick {
+        if !self.expand.is_running() {
+            return BatchTick {
+                cont: false,
+                steps: self.steps,
+                snapshot: self.snapshot(),
+            };
+        }
+        let mut heads = 0u32;
+        for _ in 0..policy.max_waves {
+            if !self.expand.is_running() {
+                break;
+            }
+            let n = self.expand.step_wave(lean_binding::LEAN_WORKERS);
+            let advanced = n.max(1);
+            self.steps = self.steps.saturating_add(advanced);
+            heads = heads.saturating_add(advanced);
+            self.after_expand();
+            if heads >= policy.max_heads_expanded {
+                break;
+            }
+        }
+        BatchTick {
+            cont: self.expand.is_running(),
+            steps: self.steps,
+            snapshot: self.snapshot(),
+        }
+    }
+
     fn after_expand(&mut self) {
-        let lean = self.lean_value();
+        let lean = self.expand.lean_snapshot();
         let status = lean["status"].as_str().unwrap_or("fail");
         match status {
             "complete" => self.push_log("complete"),
@@ -205,8 +259,8 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> Snapshot {
-        let lean = self.lean_value();
-        let (nodes, edges) = graph_from_lean(&lean);
+        let lean = self.expand.lean_snapshot();
+        let (nodes, edges) = graph_from_lean(lean);
         let work = lean_u32_list(&lean["work"]);
         let status = lean["status"].as_str().unwrap_or("fail");
         let reason = match &lean["reason"] {
@@ -232,7 +286,7 @@ impl Session {
             focus: self.focus,
             arch: self.arch.as_str(),
             program: self.name.clone(),
-            insns: self.image.outs(),
+            insns: self.insn_outs.clone(),
             nodes,
             edges,
             log: self
@@ -248,22 +302,8 @@ impl Session {
         }
     }
 
-    fn lean_value(&self) -> Value {
-        serde_json::from_str(&self.expand.snapshot_json()).unwrap_or_else(|_| {
-            serde_json::json!({
-                "status": "fail",
-                "reason": "LeanJson",
-                "failed": null,
-                "fuel": 0,
-                "work": [],
-                "nodes": [],
-                "edges": [],
-            })
-        })
-    }
-
     fn sync_focus_from_lean(&mut self) {
-        let lean = self.lean_value();
+        let lean = self.expand.lean_snapshot();
         if lean["status"] == "fail" {
             if let Some(failed) = lean["failed"].as_u64() {
                 self.focus = failed as u32;
@@ -424,7 +464,7 @@ pub struct Snapshot {
     pub proof_note: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct InsnOut {
     pub j: u32,
     pub text: String,
@@ -648,6 +688,27 @@ mod tests {
             "xdp.elf".into(),
             rv32_image::parse_xdp_elf(rv32_image::FIREWALL_ELF).expect("firewall fixture"),
         )
+    }
+
+    #[test]
+    fn drive_batch_advances_multiple_waves_before_one_snapshot() {
+        let mut session = firewall_session("batch", 128);
+        for _ in 0..64 {
+            if session.snapshot().work.len() >= 2 || !session.is_running() {
+                break;
+            }
+            session.step_once();
+        }
+        let steps_before = session.steps();
+        let nodes_before = session.snapshot().nodes.len();
+        let tick = session.drive_batch(WaveBatchPolicy {
+            max_waves: 4,
+            max_heads_expanded: 64,
+        });
+        assert!(tick.steps > steps_before);
+        assert!(tick.snapshot.nodes.len() > nodes_before);
+        assert_eq!(tick.steps, session.steps());
+        assert_eq!(tick.cont, session.is_running());
     }
 
     #[test]

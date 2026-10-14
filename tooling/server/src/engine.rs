@@ -320,6 +320,11 @@ impl ExpandSession {
         self.snapshot.to_string()
     }
 
+    /// Borrow the applied expand graph (no stringify/parse).
+    pub fn lean_snapshot(&self) -> &Value {
+        &self.snapshot
+    }
+
     #[cfg(test)]
     fn run_to_completion(&mut self, budget: u32) {
         for _ in 0..budget.saturating_add(1) {
