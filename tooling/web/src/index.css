@@ -961,6 +961,10 @@ body {
   gap: 5px;
 }
 
+.capsule__times {
+  color: #e6c200;
+}
+
 .capsule {
   display: inline-flex;
   align-items: center;

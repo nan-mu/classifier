@@ -560,8 +560,8 @@ mod http_tests {
         assert_eq!(report["phase"], "local_increment");
         assert_eq!(report["nodes"].as_array().unwrap().len(), 3);
         assert_eq!(report["edges"].as_array().unwrap().len(), 2);
-        assert_eq!(report["nodes"][0]["left"][0]["tag"], "start");
-        assert_eq!(report["nodes"][0]["left"][0]["kind"], "create");
+        assert_eq!(report["nodes"][0]["left"][0]["tag"], "pred");
+        assert_eq!(report["nodes"][0]["left"][0]["atom"]["kind"], "branch");
         assert_eq!(report["nodes"][0]["matchStatus"], "fail");
         assert!(report["nodes"][0].get("tipScore").is_none());
     }

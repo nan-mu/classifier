@@ -12,6 +12,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { cardChips, type CardChip } from "./aggregateWriteChips";
 import { matchStatusOf, type MatchStatus } from "./compareNodeSummary";
 import { layoutCompareTree } from "./compareTreeLayout";
 import { formatPredChip } from "./formatExpr";
@@ -50,9 +51,6 @@ type TreeFlowData = {
 type TreeFlowNode = Node<TreeFlowData, "tree">;
 
 function EntryChip({ entry }: { entry: ListEntry }) {
-  if (entry.tag === "start") {
-    return <span className="capsule capsule--meta">{entry.kind}</span>;
-  }
   if (entry.tag === "exit") {
     return <span className="capsule capsule--meta">exit</span>;
   }
@@ -64,6 +62,17 @@ function EntryChip({ entry }: { entry: ListEntry }) {
   );
 }
 
+function ChipView({ chip }: { chip: CardChip }) {
+  if (chip.tag === "writes") {
+    return (
+      <span className="capsule">
+        {chip.kind} <span className="capsule__times">×</span>{chip.count}
+      </span>
+    );
+  }
+  return <EntryChip entry={chip.entry} />;
+}
+
 function PreviewCol({
   label,
   entries,
@@ -71,14 +80,15 @@ function PreviewCol({
   label: string;
   entries: ListEntry[];
 }) {
-  const shown = entries.slice(0, PREVIEW_MAX);
-  const overflow = entries.length - shown.length;
+  const chips = cardChips(entries);
+  const shown = chips.slice(0, PREVIEW_MAX);
+  const overflow = chips.length - shown.length;
   return (
     <div className="compare-tree-node__col">
       <span className="mono muted compare-tree-node__side">{label}</span>
       <div className="compare-tree-node__chips">
-        {shown.map((e, i) => (
-          <EntryChip key={`${label}-${i}`} entry={e} />
+        {shown.map((chip, i) => (
+          <ChipView key={`${label}-${i}`} chip={chip} />
         ))}
         {overflow > 0 ? (
           <span className="mono muted compare-tree-node__more">+{overflow}</span>
@@ -103,7 +113,7 @@ function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
         type="button"
         className="state-node__title compare-tree-node__select"
         aria-pressed={data.selected}
-        aria-label={`节点 ${data.id} ${data.start}`}
+        aria-label={`节点 ${data.id}`}
         onClick={(ev) => {
           ev.stopPropagation();
           data.onSelect(data.id);
@@ -117,7 +127,6 @@ function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
         }}
       >
         #{data.id}
-        <span className="state-node__loc"> · {data.start}</span>
       </button>
       <div className="compare-tree-node__cols">
         <PreviewCol label={`L · ${data.leftArch}`} entries={data.left} />

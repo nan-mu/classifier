@@ -193,13 +193,6 @@ function FieldList({ fields }: { fields: Record<string, unknown> }) {
 }
 
 function EntryDetail({ entry }: { entry: ListEntry }) {
-  if (entry.tag === "start") {
-    return (
-      <Text className="mono" display="block" fontSize={12} style={{ marginBottom: 8 }}>
-        start · {entry.kind}
-      </Text>
-    );
-  }
   if (entry.tag === "exit") {
     return (
       <Text className="mono" display="block" fontSize={12} style={{ marginBottom: 8 }}>

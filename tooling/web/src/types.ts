@@ -239,12 +239,7 @@ export type PredMatchReport = {
 /** Wire start of a dual-list node (`POST /api/compare/tree`). */
 export type StartKind = "create" | "taken" | "not_taken";
 
-/**
- * Ordered list entry inside a compare-tree node.
- * Phase 1: start → (branch|ret)* → (branch tip | exit).
- */
 export type ListEntry =
-  | { tag: "start"; kind: StartKind }
   | { tag: "pred"; atom: PredAtom }
   | { tag: "exit" };
 

@@ -20,7 +20,6 @@ pub enum StartKind {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "tag", rename_all = "camelCase")]
 pub enum ListEntry {
-    Start { kind: StartKind },
     Pred { atom: PredAtom },
     Exit,
 }
@@ -366,17 +365,25 @@ fn walk_segment(
             .filter(|e| e.dir == "only")
             .map(|e| e.to)
             .collect();
-        if t.is_some() || nt.is_some() {
-            taken = t;
-            not_taken = nt;
-            fork_id = Some(cur);
-            break;
+        match (t, nt) {
+            (Some(next_t), Some(next_n)) => {
+                taken = Some(next_t);
+                not_taken = Some(next_n);
+                fork_id = Some(cur);
+                break;
+            }
+            (Some(next), None) | (None, Some(next)) => {
+                cur = next;
+                continue;
+            }
+            (None, None) => {
+                if only.len() == 1 {
+                    cur = only[0];
+                    continue;
+                }
+                break;
+            }
         }
-        if only.len() == 1 {
-            cur = only[0];
-            continue;
-        }
-        break;
     }
 
     Segment {
@@ -450,7 +457,7 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
     let Some(seg) = seg else {
         return Vec::new();
     };
-    let mut list = vec![ListEntry::Start { kind: seg.start }];
+    let mut list = Vec::new();
     for arrival in &seg.preds {
         list.push(ListEntry::Pred {
             atom: arrival.atom.clone(),
@@ -633,17 +640,12 @@ mod tests {
             vec![edge(0, 1, "taken")],
         );
         let report = build_compare_tree(&snap, &snap);
-        assert_eq!(pred_kinds(&report.nodes[0].left), Vec::<&str>::new());
+        assert_eq!(report.nodes.len(), 1);
+        assert!(report.edges.is_empty());
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch"]);
+        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), CROSS);
+        assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), CROSS);
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
-        let taken = report
-            .nodes
-            .iter()
-            .find(|n| n.start == StartKind::Taken)
-            .expect("taken");
-        assert_eq!(pred_kinds(&taken.left), vec!["branch"]);
-        assert_eq!(pred_fingerprint(&taken.left, "branch"), CROSS);
-        assert_eq!(pred_fingerprint(&taken.right, "branch"), CROSS);
-        assert_eq!(taken.match_status, MatchStatus::Pass);
     }
 
     #[test]
@@ -714,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn taken_head_diffs_against_the_fork() {
+    fn one_arm_keeps_the_new_branch_without_repeating_the_helper() {
         let helper = pred("helper", json!({"event": 7, "helperId": 1, "args": ["42"]}));
         let snap = run(
             "rv32imc",
@@ -729,13 +731,8 @@ mod tests {
             vec![edge(0, 1, "taken")],
         );
         let report = build_compare_tree(&snap, &snap);
-        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper"]);
-        let taken = report
-            .nodes
-            .iter()
-            .find(|n| n.start == StartKind::Taken)
-            .expect("taken");
-        assert_eq!(pred_kinds(&taken.left), vec!["branch"]);
+        assert_eq!(report.nodes.len(), 1);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);
     }
 
     #[test]
@@ -925,16 +922,11 @@ mod tests {
     fn compare_list_omits_start_entry() {
         let snap = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
         let report = build_compare_tree(&snap, &snap);
-        assert!(
-            report.nodes[0]
-                .left
-                .iter()
-                .all(|e| !matches!(e, ListEntry::Start { .. }))
-        );
-        assert!(matches!(
-            &report.nodes[0].left[0],
-            ListEntry::Pred { atom } if atom.kind == "branch"
-        ));
+        let left = serde_json::to_value(&report.nodes[0].left).unwrap();
+        let rows = left.as_array().unwrap();
+        assert!(rows.iter().all(|e| e["tag"] != "start"));
+        assert_eq!(rows[0]["tag"], "pred");
+        assert_eq!(rows[0]["atom"]["kind"], "branch");
     }
 
     #[test]
@@ -991,7 +983,11 @@ mod tests {
                 enode(
                     2,
                     "exit",
-                    vec![helper.clone(), branch.clone(), pred("ret", json!({"term": "1"}))],
+                    vec![
+                        helper.clone(),
+                        branch.clone(),
+                        pred("ret", json!({"term": "1"})),
+                    ],
                 ),
                 enode(
                     3,

@@ -22,7 +22,6 @@ export type NodeDiffSummary = {
 };
 
 function entryKey(entry: ListEntry): string {
-  if (entry.tag === "start") return `start:${entry.kind}`;
   if (entry.tag === "exit") return "exit";
   return `pred:${entry.atom.fingerprint}`;
 }
@@ -102,7 +101,6 @@ export function matchStatusOf(node: TreeNode): MatchStatus {
 }
 
 export function formatEntryLine(entry: ListEntry): string {
-  if (entry.tag === "start") return `start ${entry.kind}`;
   if (entry.tag === "exit") return "exit";
   return formatPred(atomToPred(entry.atom));
 }

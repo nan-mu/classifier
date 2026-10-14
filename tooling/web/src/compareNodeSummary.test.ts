@@ -18,21 +18,10 @@ function pred(fp: string, kind = "helper"): ListEntry {
 
 describe("alignListEntries", () => {
   it("pairs equal fingerprints in order", () => {
-    const left: ListEntry[] = [
-      { tag: "start", kind: "create" },
-      pred("a"),
-      pred("b"),
-      { tag: "exit" },
-    ];
-    const right: ListEntry[] = [
-      { tag: "start", kind: "create" },
-      pred("a"),
-      pred("b"),
-      { tag: "exit" },
-    ];
+    const left: ListEntry[] = [pred("a"), pred("b"), { tag: "exit" }];
+    const right: ListEntry[] = [pred("a"), pred("b"), { tag: "exit" }];
     const rows = alignListEntries(left, right);
-    expect(rows.every((r) => r.status === "both")).toBe(true);
-    expect(rows).toHaveLength(4);
+    expect(rows.map((r) => r.status)).toEqual(["both", "both", "both"]);
   });
 
   it("marks only-left and only-right inserts", () => {
@@ -62,27 +51,15 @@ describe("summarizeTreeNode", () => {
     const node: TreeNode = {
       id: 1,
       start: "create",
-      left: [
-        { tag: "start", kind: "create" },
-        pred("a"),
-        pred("b"),
-        { tag: "exit" },
-      ],
-      right: [
-        { tag: "start", kind: "create" },
-        pred("b"),
-        pred("a"),
-        pred("b"),
-        { tag: "exit" },
-      ],
+      left: [pred("a"), pred("b"), { tag: "exit" }],
+      right: [pred("b"), pred("a"), pred("b"), { tag: "exit" }],
     };
     const s = summarizeTreeNode(node);
-    expect(s.both).toBe(4);
+    expect(s.both).toBe(3);
     expect(s.onlyLeft).toBe(0);
     expect(s.onlyRight).toBe(1);
     expect(s.verdict).toBe("coverage");
     expect(s.aligned.map((r) => r.status)).toEqual([
-      "both",
       "onlyRight",
       "both",
       "both",

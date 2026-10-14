@@ -15,11 +15,8 @@ function pred(kind: string, fields: Record<string, unknown> = {}): ListEntry {
 }
 
 describe("cardChips", () => {
-  it("drops start entries and keeps a branch chip", () => {
-    const chips = cardChips([
-      { tag: "start", kind: "taken" },
-      pred("branch", { dir: "taken" }),
-    ]);
+  it("keeps a branch chip", () => {
+    const chips = cardChips([pred("branch", { dir: "taken" })]);
     expect(chips).toEqual([{ tag: "entry", entry: pred("branch", { dir: "taken" }) }]);
   });
 
@@ -35,7 +32,7 @@ describe("cardChips", () => {
   it("collapses a consecutive packetWrite run and leaves other kinds", () => {
     const chips = cardChips([
       pred("branch", { dir: "taken" }),
-      pred("packet_write", { offset: 0 }),
+      pred("packetWrite", { offset: 0 }),
       pred("packetWrite", { offset: 4 }),
       pred("helper", { helperId: 1 }),
       pred("mapWrite", { offset: 1 }),
