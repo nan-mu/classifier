@@ -10,4 +10,5 @@ import ClassifierExpr.Direction
 import ClassifierExpr.Insn
 import ClassifierExpr.Parse
 import ClassifierExpr.Render
+import ClassifierExpr.CrossPred
 import ClassifierExpr.Ffi

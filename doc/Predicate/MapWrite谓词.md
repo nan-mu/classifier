@@ -138,6 +138,14 @@ P_i:=\{\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,t)\}.
 
 这个结论限于 Expr 更新对固定对象的作用。MapWrite 在全状态中按[结构并集](谓词定义.md#结构并集)保留；其与真实写入及历史的对应仍需满足下列义务。
 
+### 跨架构变更观察与生成缺口
+
+M6 的直接写入与完整 Helper 更新、删除使用[统一 CrossMutation](跨架构谓词.md#条件与各类观察)。写入字节按[观察规范化](跨架构谓词.md#观察规范化)从冻结源项和本次指令的宽度、字节序取得；缺少访问元数据时保留 `source`。MW-O1 至 MW-O3 与跨架构 CP-Bytes 共同约束这些来源。
+
+原生 eBPF `just_tx` 在非空 lookup 后继执行 Map 元素写入：原始槽 38 的双字读取取得 `r0` 指向元素的值，槽 39 对 `r1` 加一，槽 40 的 `STX DW` 将该值写回元素。未确定的 lookup-null 条件保留两侧，产品 Meta 提供 Map 布局，因此已探索前沿包含这次写入。M6 的观测缺失来自生成规则，而非该前沿没有 Map 写入。
+
+工程对应：[程序槽数据](../../EBPF/JustTxProgram.lean)、[Step 的取源与调用](../../EBPF/Step.lean)、[Expand 的产品 Meta 与完整前沿检查](../../EBPF/Expand.lean)以及[Memory 的写入分派](../../EBPF/Memory.lean)。`resolveAccess` 将该元素解析为 Map 双字单元，`exprEffects` 写入该单元的 Expr；其 `.cells` 分支返回空谓词列表，只有包分支生成 PacketWrite，所以尚未生成 MapWrite。生成器还需复用对应 lookup 的完整冻结键并提交同次写入观察；该缺口保持未实现，规范化不补造源观察。
+
 ### 证明义务
 
 - **MW-O1（宽度、字节序与事件身份）。** 五分量构造自身无法表达写入宽度与字节序。须证明每个动态写入身份 \(\varepsilon\) 唯一关联其固有属性 \((q,e)\)，并使生成校验、解释与历史读取采用同一关联。同一 Term32 源项用于 `SB` 与 `SW` 时，覆盖范围分别由各自的宽度确定。若该关联无法证明，则构造需增分量，由操作者裁定。
