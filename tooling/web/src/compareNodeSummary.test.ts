@@ -57,4 +57,36 @@ describe("summarizeTreeNode", () => {
     expect(s.onlyLeft).toBe(1);
     expect(s.onlyRight).toBe(0);
   });
+
+  it("LCS keeps left subsequence when right inserts a duplicate key", () => {
+    const node: TreeNode = {
+      id: 1,
+      start: "create",
+      left: [
+        { tag: "start", kind: "create" },
+        pred("a"),
+        pred("b"),
+        { tag: "exit" },
+      ],
+      right: [
+        { tag: "start", kind: "create" },
+        pred("b"),
+        pred("a"),
+        pred("b"),
+        { tag: "exit" },
+      ],
+    };
+    const s = summarizeTreeNode(node);
+    expect(s.both).toBe(4);
+    expect(s.onlyLeft).toBe(0);
+    expect(s.onlyRight).toBe(1);
+    expect(s.verdict).toBe("coverage");
+    expect(s.aligned.map((r) => r.status)).toEqual([
+      "both",
+      "onlyRight",
+      "both",
+      "both",
+      "both",
+    ]);
+  });
 });

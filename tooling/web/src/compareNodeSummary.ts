@@ -25,46 +25,40 @@ function entryKey(entry: ListEntry): string {
   return `pred:${entry.atom.fingerprint}`;
 }
 
-/** Ordered align of dual ListEntry sequences (fingerprint / start / exit keys). */
+/**
+ * Deterministic LCS on entryKey. On DP ties prefer onlyRight so a contiguous
+ * left subsequence stays matched when right has an insert (see regression test).
+ */
 export function alignListEntries(left: ListEntry[], right: ListEntry[]): AlignRow[] {
+  const n = left.length;
+  const m = right.length;
+  const dp: number[][] = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (entryKey(left[i - 1]!) === entryKey(right[j - 1]!)) {
+        dp[i]![j] = dp[i - 1]![j - 1]! + 1;
+      } else {
+        dp[i]![j] = Math.max(dp[i - 1]![j]!, dp[i]![j - 1]!);
+      }
+    }
+  }
   const out: AlignRow[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < left.length && j < right.length) {
-    const lk = entryKey(left[i]!);
-    const rk = entryKey(right[j]!);
-    if (lk === rk) {
-      out.push({ status: "both", left: left[i]!, right: right[j]! });
-      i += 1;
-      j += 1;
-      continue;
-    }
-    const rightHasLeft = right.slice(j + 1).some((e) => entryKey(e) === lk);
-    const leftHasRight = left.slice(i + 1).some((e) => entryKey(e) === rk);
-    if (rightHasLeft && !leftHasRight) {
-      out.push({ status: "onlyRight", right: right[j]! });
-      j += 1;
-    } else if (leftHasRight && !rightHasLeft) {
-      out.push({ status: "onlyLeft", left: left[i]! });
-      i += 1;
-    } else if (rightHasLeft && leftHasRight) {
-      out.push({ status: "onlyLeft", left: left[i]! });
-      i += 1;
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && entryKey(left[i - 1]!) === entryKey(right[j - 1]!)) {
+      out.push({ status: "both", left: left[i - 1]!, right: right[j - 1]! });
+      i -= 1;
+      j -= 1;
+    } else if (j > 0 && (i === 0 || dp[i]![j - 1]! >= dp[i - 1]![j]!)) {
+      out.push({ status: "onlyRight", right: right[j - 1]! });
+      j -= 1;
     } else {
-      out.push({ status: "onlyLeft", left: left[i]! });
-      out.push({ status: "onlyRight", right: right[j]! });
-      i += 1;
-      j += 1;
+      out.push({ status: "onlyLeft", left: left[i - 1]! });
+      i -= 1;
     }
   }
-  while (i < left.length) {
-    out.push({ status: "onlyLeft", left: left[i]! });
-    i += 1;
-  }
-  while (j < right.length) {
-    out.push({ status: "onlyRight", right: right[j]! });
-    j += 1;
-  }
+  out.reverse();
   return out;
 }
 

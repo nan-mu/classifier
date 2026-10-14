@@ -25,9 +25,10 @@ import { formatPred } from "./viewer";
 
 const NODE_W = 300;
 const NODE_H = 132;
+const PREVIEW_MAX = 3;
 /** Column stride: wide enough that dual-list cards stay readable at mid zoom. */
 const GAP_X = 380;
-/** Row stride: card minHeight + gutter; barycenter keeps order, this keeps clearance. */
+/** Row stride matches fixed NODE_H + gutter so siblings never overlap. */
 const GAP_Y = 168;
 const BARY_PASSES = 8;
 /** Above this, fitView hits minZoom and cards become unreadable — frame the root instead. */
@@ -35,11 +36,15 @@ const FIT_ALL_MAX_NODES = 24;
 const ROOT_FRAME_ZOOM = 0.55;
 
 type TreeFlowData = {
+  id: number;
   start: StartKind;
   left: ListEntry[];
   right: ListEntry[];
+  leftArch: string;
+  rightArch: string;
   tipScore?: SoftScore;
   selected: boolean;
+  onSelect: (id: number) => void;
 };
 
 type TreeFlowNode = Node<TreeFlowData, "tree">;
@@ -177,10 +182,37 @@ function EntryChip({ entry }: { entry: ListEntry }) {
   );
 }
 
+function PreviewCol({
+  label,
+  entries,
+}: {
+  label: string;
+  entries: ListEntry[];
+}) {
+  const shown = entries.slice(0, PREVIEW_MAX);
+  const overflow = entries.length - shown.length;
+  return (
+    <div className="compare-tree-node__col">
+      <span className="mono muted compare-tree-node__side">{label}</span>
+      <div className="compare-tree-node__chips">
+        {shown.map((e, i) => (
+          <EntryChip key={`${label}-${i}`} entry={e} />
+        ))}
+        {overflow > 0 ? (
+          <span className="mono muted compare-tree-node__more">+{overflow}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function TipScore({ score }: { score: SoftScore }) {
   const pct = Math.round(Math.max(0, Math.min(1, score.overall)) * 100);
   return (
-    <span className="mono muted state-node__meta" title={`tipScore ${score.overall.toFixed(2)}`}>
+    <span
+      className="mono muted state-node__meta"
+      title={`分支末端启发式相似度 ${score.overall.toFixed(2)}`}
+    >
       tip {pct}%
     </span>
   );
@@ -195,34 +227,35 @@ function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
       className={`state-node state-node--role-${role} compare-tree-node${
         data.selected ? " compare-tree-node--selected" : ""
       }`}
-      style={{ width: NODE_W, minHeight: NODE_H }}
+      style={{ width: NODE_W, height: NODE_H }}
     >
       <Handle id="l" type="target" position={Position.Left} style={handleStyle} />
       <div className="state-node__header">
-        <span className="state-node__tags">{data.start}</span>
         {data.tipScore ? <TipScore score={data.tipScore} /> : null}
       </div>
-      <div className="state-node__title">
-        compare
+      <button
+        type="button"
+        className="state-node__title compare-tree-node__select"
+        aria-pressed={data.selected}
+        aria-label={`节点 ${data.id} ${data.start}`}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          data.onSelect(data.id);
+        }}
+        onKeyDown={(ev) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            data.onSelect(data.id);
+          }
+        }}
+      >
+        #{data.id}
         <span className="state-node__loc"> · {data.start}</span>
-      </div>
+      </button>
       <div className="compare-tree-node__cols">
-        <div className="compare-tree-node__col">
-          <span className="mono muted compare-tree-node__side">L</span>
-          <div className="compare-tree-node__chips">
-            {data.left.map((e, i) => (
-              <EntryChip key={`l-${i}`} entry={e} />
-            ))}
-          </div>
-        </div>
-        <div className="compare-tree-node__col">
-          <span className="mono muted compare-tree-node__side">R</span>
-          <div className="compare-tree-node__chips">
-            {data.right.map((e, i) => (
-              <EntryChip key={`r-${i}`} entry={e} />
-            ))}
-          </div>
-        </div>
+        <PreviewCol label={`L · ${data.leftArch}`} entries={data.left} />
+        <PreviewCol label={`R · ${data.rightArch}`} entries={data.right} />
       </div>
       <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
     </div>
@@ -235,16 +268,33 @@ type Props = {
   report: TreeReport;
   selectedId: number | null;
   onSelectNode: (id: number) => void;
+  leftArch: string;
+  rightArch: string;
+  fitRequest?: number;
 };
 
-export function CompareTreeView({ report, selectedId, onSelectNode }: Props) {
+export function CompareTreeView({
+  report,
+  selectedId,
+  onSelectNode,
+  leftArch,
+  rightArch,
+  fitRequest = 0,
+}: Props) {
   const positions = useMemo(
     () => layoutTree(report.nodes, report.edges),
     [report.nodes, report.edges],
   );
   const flowRef = useRef<ReactFlowInstance<TreeFlowNode, Edge> | null>(null);
+  const selectRef = useRef(onSelectNode);
+  selectRef.current = onSelectNode;
 
-  const flowNodes = useMemo<TreeFlowNode[]>(() => {
+  const onSelectStable = useCallback((id: number) => {
+    selectRef.current(id);
+  }, []);
+
+  // Structure only — selectedId must not rebuild this (would reframe via effect).
+  const structureNodes = useMemo<TreeFlowNode[]>(() => {
     const out: TreeFlowNode[] = [];
     for (const n of report.nodes) {
       const id = String(n.id);
@@ -255,20 +305,33 @@ export function CompareTreeView({ report, selectedId, onSelectNode }: Props) {
         type: "tree",
         position: { x: pos.x, y: pos.y },
         data: {
+          id: n.id,
           start: n.start,
           left: n.left,
           right: n.right,
+          leftArch,
+          rightArch,
           tipScore: n.tipScore,
-          selected: selectedId === n.id,
+          selected: false,
+          onSelect: onSelectStable,
         },
         draggable: false,
       });
     }
     return out;
-  }, [positions, report.nodes, selectedId]);
+  }, [positions, report.nodes, leftArch, rightArch, onSelectStable]);
+
+  const flowNodes = useMemo<TreeFlowNode[]>(
+    () =>
+      structureNodes.map((n) => ({
+        ...n,
+        data: { ...n.data, selected: selectedId === n.data.id },
+      })),
+    [structureNodes, selectedId],
+  );
 
   const flowEdges = useMemo<Edge[]>(() => {
-    const placed = new Set(flowNodes.map((n) => n.id));
+    const placed = new Set(structureNodes.map((n) => n.id));
     return report.edges
       .filter((e) => placed.has(String(e.from)) && placed.has(String(e.to)))
       .map((e) => ({
@@ -281,25 +344,33 @@ export function CompareTreeView({ report, selectedId, onSelectNode }: Props) {
         className: "flow-edge flow-edge--branch",
         labelStyle: { fill: "#c9bfb0", fontSize: 10 },
       }));
-  }, [flowNodes, report.edges]);
+  }, [structureNodes, report.edges]);
 
-  const frameCamera = useCallback((instance: ReactFlowInstance<TreeFlowNode, Edge>) => {
-    if (flowNodes.length === 0) return;
-    if (flowNodes.length <= FIT_ALL_MAX_NODES) {
-      void instance.fitView({ padding: 0.28, duration: 240 });
-      return;
-    }
-    const root =
-      flowNodes.find((n) => n.data.start === "create") ??
-      [...flowNodes].sort((a, b) => a.position.x - b.position.x || a.position.y - b.position.y)[0]!;
-    const zoom = ROOT_FRAME_ZOOM;
-    const pane = document.querySelector(".compare-tree__canvas .react-flow") as HTMLElement | null;
-    const pw = pane?.clientWidth ?? 960;
-    const ph = pane?.clientHeight ?? 640;
-    const x = pw * 0.22 - root.position.x * zoom - (NODE_W * zoom) / 2;
-    const y = ph * 0.5 - root.position.y * zoom - (NODE_H * zoom) / 2;
-    void instance.setViewport({ x, y, zoom }, { duration: 240 });
-  }, [flowNodes]);
+  const frameCamera = useCallback(
+    (instance: ReactFlowInstance<TreeFlowNode, Edge>) => {
+      const nodes = structureNodes;
+      if (nodes.length === 0) return;
+      if (nodes.length <= FIT_ALL_MAX_NODES) {
+        void instance.fitView({ padding: 0.28, duration: 240 });
+        return;
+      }
+      const root =
+        nodes.find((n) => n.data.start === "create") ??
+        [...nodes].sort(
+          (a, b) => a.position.x - b.position.x || a.position.y - b.position.y,
+        )[0]!;
+      const zoom = ROOT_FRAME_ZOOM;
+      const pane = document.querySelector(
+        ".compare-tree__canvas .react-flow",
+      ) as HTMLElement | null;
+      const pw = pane?.clientWidth ?? 960;
+      const ph = pane?.clientHeight ?? 640;
+      const x = pw * 0.22 - root.position.x * zoom - (NODE_W * zoom) / 2;
+      const y = ph * 0.5 - root.position.y * zoom - (NODE_H * zoom) / 2;
+      void instance.setViewport({ x, y, zoom }, { duration: 240 });
+    },
+    [structureNodes],
+  );
 
   const onInit = useCallback(
     (instance: ReactFlowInstance<TreeFlowNode, Edge>) => {
@@ -314,7 +385,14 @@ export function CompareTreeView({ report, selectedId, onSelectNode }: Props) {
     if (!instance) return;
     const id = requestAnimationFrame(() => frameCamera(instance));
     return () => cancelAnimationFrame(id);
-  }, [frameCamera, flowNodes.length, report.phase]);
+  }, [frameCamera, structureNodes.length, report.phase]);
+
+  useEffect(() => {
+    if (fitRequest <= 0) return;
+    const instance = flowRef.current;
+    if (!instance) return;
+    frameCamera(instance);
+  }, [fitRequest, frameCamera]);
 
   const onNodeClick = useCallback<NodeMouseHandler>(
     (_event, node) => {
@@ -322,6 +400,21 @@ export function CompareTreeView({ report, selectedId, onSelectNode }: Props) {
     },
     [onSelectNode],
   );
+
+  if (report.nodes.length === 0) {
+    return (
+      <Flex
+        className="compare-tree panel panel--canvas"
+        flex="1"
+        alignItems="center"
+        justifyContent="center"
+        minHeight={0}
+        minWidth={0}
+      >
+        <Box className="mono muted">没有可比较节点</Box>
+      </Flex>
+    );
+  }
 
   return (
     <Flex className="compare-tree panel panel--canvas" flex="1" flexDirection="column" minHeight={0} minWidth={0}>

@@ -62,6 +62,11 @@ body {
   color: var(--muted);
 }
 
+.panel--left .panel__title.panel__title--small {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
 .panel__body {
   min-height: 0;
 }
@@ -639,6 +644,54 @@ body {
   box-shadow: 0 0 0 1px rgba(226, 207, 171, 0.25);
 }
 
+.compare-tree-node__select {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.compare-tree-node__select:focus-visible {
+  outline: 1px solid rgba(226, 207, 171, 0.85);
+  outline-offset: 2px;
+}
+
+.compare-tree-node__more {
+  font-size: 10px;
+}
+
+.compare-fields {
+  margin-top: 4px;
+  user-select: text;
+}
+
+.compare-fields__row {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) 1fr;
+  gap: 6px 8px;
+  align-items: start;
+  margin-top: 2px;
+}
+
+.compare-fields__key {
+  font-size: 10px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.compare-fields__val {
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .compare-align {
   padding: 2px 0;
   line-height: 1.45;
@@ -656,35 +709,49 @@ body {
   color: #8aadc0;
 }
 
-/* Compare tree reuses `.state-node`; widen for dual L/R lists. */
+/* Compare tree reuses `.state-node`; fixed height so GAP_Y clears siblings. */
 .state-node.compare-tree-node {
   max-width: none;
   min-width: 280px;
-  padding-bottom: 8px;
+  height: 132px;
+  min-height: 132px;
+  max-height: 132px;
+  padding-bottom: 6px;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .compare-tree-node__cols {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 4px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .compare-tree-node__col {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .compare-tree-node__side {
   display: block;
   font-size: 10px;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .compare-tree-node__chips {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   align-items: flex-start;
+  overflow: hidden;
+  max-height: 72px;
 }
 
 .capsule--start,

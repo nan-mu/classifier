@@ -76,9 +76,9 @@ type RunSlot = {
 };
 
 type CompareUi =
-  | { tag: "idle" }
+  | { tag: "idle"; stopped?: boolean }
   | { tag: "expanding"; left: RunSlot; right: RunSlot }
-  | { tag: "ready"; report: TreeReport };
+  | { tag: "ready"; report: TreeReport; left: SessionSnapshot; right: SessionSnapshot };
 
 function emptySlot(arch: ArchKind): RunSlot {
   return {
@@ -91,14 +91,6 @@ function emptySlot(arch: ArchKind): RunSlot {
 
 function defaultName(arch: ArchKind): string {
   return arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf";
-}
-
-function snapFresh(snap: SessionSnapshot | null, budget: number): snap is SessionSnapshot {
-  return (
-    snap != null
-    && snap.budget === budget
-    && (snap.status === "complete" || snap.status === "fail")
-  );
 }
 
 const nodeTypes = { state: StateNodeView };
@@ -219,14 +211,20 @@ function eiOnLabel(dir: string | null | undefined): "taken" | "not_taken" | "onl
 
 function CompareReadyLayout({
   report,
+  left,
+  right,
   nodeId,
   detailSide,
+  fitRequest,
   onSelectNode,
   onDetailSide,
 }: {
   report: TreeReport;
+  left: SessionSnapshot;
+  right: SessionSnapshot;
   nodeId: number | null;
   detailSide: "left" | "right";
+  fitRequest: number;
   onSelectNode: (id: number) => void;
   onDetailSide: (side: "left" | "right") => void;
 }) {
@@ -234,11 +232,18 @@ function CompareReadyLayout({
     nodeId == null ? null : (report.nodes.find((n) => n.id === nodeId) ?? null);
   return (
     <>
-      <CompareSummaryPanel report={report} node={node} />
+      <CompareSummaryPanel
+        report={report}
+        node={node}
+        provenance={{ left, right }}
+      />
       <CompareTreeView
         report={report}
         selectedId={nodeId}
         onSelectNode={onSelectNode}
+        leftArch={report.left.arch}
+        rightArch={report.right.arch}
+        fitRequest={fitRequest}
       />
       <CompareDetailPanel
         report={report}
@@ -280,6 +285,7 @@ function DebugScreen() {
     nodeId: number | null;
     detailSide: "left" | "right";
   }>({ nodeId: null, detailSide: "left" });
+  const [compareFitRequest, setCompareFitRequest] = useState(0);
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -290,7 +296,9 @@ function DebugScreen() {
   const fitOnceRef = useRef(true);
   const tabRef = useRef<TabId>(tab);
   const snapsRef = useRef(snaps);
+  const compareUiRef = useRef(compareUi);
   const flow = useReactFlow();
+  compareUiRef.current = compareUi;
 
   tabRef.current = tab;
   snapsRef.current = snaps;
@@ -586,49 +594,42 @@ function DebugScreen() {
     setRunRate(null);
 
     try {
-      let left = snapsRef.current.rv32imc;
-      let right = snapsRef.current.ebpf;
-      const needExpand = !snapFresh(left, budget) || !snapFresh(right, budget);
-
-      if (needExpand) {
-        setCompareUi({
-          tag: "expanding",
-          left: emptySlot("rv32imc"),
-          right: emptySlot("ebpf"),
+      // Always expand default just_tx fixtures at current budget (ignore snap cache).
+      setCompareUi({
+        tag: "expanding",
+        left: emptySlot("rv32imc"),
+        right: emptySlot("ebpf"),
+      });
+      const patchSlot = (
+        side: "left" | "right",
+        snapNext: SessionSnapshot,
+        stats: RunStreamStats,
+      ) => {
+        apply(snapNext);
+        setCompareUi((prev) => {
+          if (prev.tag !== "expanding") return prev;
+          return {
+            ...prev,
+            [side]: { ...prev[side], snap: snapNext, stats },
+          };
         });
-        const patchSlot = (
-          side: "left" | "right",
-          snapNext: SessionSnapshot,
-          stats: RunStreamStats,
-        ) => {
-          apply(snapNext);
-          setCompareUi((prev) => {
-            if (prev.tag !== "expanding") return prev;
-            return {
-              ...prev,
-              [side]: { ...prev[side], snap: snapNext, stats },
-            };
-          });
-        };
-        const [left0, right0] = await Promise.all([
-          createSession({ budget, arch: "rv32imc", name: "just_tx.elf" }),
-          createSession({ budget, arch: "ebpf", name: "just_tx.bpf.o" }),
-        ]);
-        const [leftFinal, rightFinal] = await Promise.all([
-          runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
-          runSessionStream(right0.id, (s, stats) => patchSlot("right", s, stats), ac.signal),
-        ]);
-        left = leftFinal;
-        right = rightFinal;
-        apply(leftFinal, { immediate: true });
-        apply(rightFinal, { immediate: true });
-      }
+      };
+      const [left0, right0] = await Promise.all([
+        createSession({ budget, arch: "rv32imc", name: "just_tx.elf" }),
+        createSession({ budget, arch: "ebpf", name: "just_tx.bpf.o" }),
+      ]);
+      const [left, right] = await Promise.all([
+        runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
+        runSessionStream(right0.id, (s, stats) => patchSlot("right", s, stats), ac.signal),
+      ]);
+      apply(left, { immediate: true });
+      apply(right, { immediate: true });
 
-      if (ac.signal.aborted || !left || !right) return;
+      if (ac.signal.aborted) return;
       const report = await compareTree(toTreeSnap(left), toTreeSnap(right));
       if (ac.signal.aborted) return;
       setCompareSel({ nodeId: null, detailSide: "left" });
-      setCompareUi({ tag: "ready", report });
+      setCompareUi({ tag: "ready", report, left, right });
     } catch (err: unknown) {
       if (!ac.signal.aborted) {
         setError(err instanceof Error ? err.message : "compare tree failed");
@@ -644,12 +645,14 @@ function DebugScreen() {
     (next: TabId) => {
       if (next === "compare") {
         setTab("compare");
-        void runCompareTree();
         return;
       }
-      compareAbortRef.current?.abort();
-      compareAbortRef.current = null;
-      setCompareUi({ tag: "idle" });
+      if (compareUiRef.current.tag === "expanding") {
+        compareAbortRef.current?.abort();
+        compareAbortRef.current = null;
+        setCompareUi({ tag: "idle", stopped: true });
+        setBusy(false);
+      }
       setTab(next);
       fitOnceRef.current = true;
       const existing = snapsRef.current[next];
@@ -668,7 +671,7 @@ function DebugScreen() {
         setFirmwareName(defaultName(next));
       }
     },
-    [boot, budget, busy, firmwareBytes, firmwareName, runCompareTree, streaming],
+    [boot, budget, busy, firmwareBytes, firmwareName, streaming],
   );
 
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
@@ -843,8 +846,11 @@ function DebugScreen() {
           </>
         ) : null}
 
-        <Text className="muted">budget</Text>
+        <label className="muted" htmlFor="toolbar-budget">
+          budget
+        </label>
         <input
+          id="toolbar-budget"
           className="toolbar__input mono"
           type="number"
           min={0}
@@ -867,18 +873,45 @@ function DebugScreen() {
           </Button>
         ) : null}
 
+        {comparing ? (
+          <Button
+            type="button"
+            className="toolbar__btn"
+            disabled={busy || compareUi.tag === "expanding"}
+            onClick={() => void runCompareTree()}
+          >
+            重新对比
+          </Button>
+        ) : null}
+
+        {comparing && compareUi.tag === "ready" ? (
+          <Button
+            type="button"
+            className="toolbar__btn toolbar__btn--quiet"
+            onClick={() => setCompareFitRequest((n) => n + 1)}
+          >
+            适配树
+          </Button>
+        ) : null}
+
         {compareUi.tag === "expanding" ? (
           <Button
             type="button"
             className="toolbar__btn toolbar__btn--quiet"
             onClick={() => {
               compareAbortRef.current?.abort();
-              setCompareUi({ tag: "idle" });
+              setCompareUi({ tag: "idle", stopped: true });
               setBusy(false);
             }}
           >
             停止
           </Button>
+        ) : null}
+
+        {comparing && compareUi.tag === "ready" && compareUi.left.budget !== budget ? (
+          <Text className="mono muted" fontSize={11}>
+            结果 budget={compareUi.left.budget}（已过期）
+          </Text>
         ) : null}
 
         {compareUi.tag === "expanding" ? (
@@ -896,7 +929,7 @@ function DebugScreen() {
         ) : (
           <Text className="mono muted" fontSize={11}>
             {comparing
-              ? "Compare tree · Term equality not proven"
+              ? "仅 branch/ret 阶段；不代表行为等价"
               : `Shift+点击设比较 · 同类型自动折叠 · ${snap?.proof_note ?? ""}`}
           </Text>
         )}
@@ -919,15 +952,20 @@ function DebugScreen() {
               <Text className="mono muted">
                 {compareUi.tag === "expanding"
                   ? "并行展开 rv32imc / ebpf…"
-                  : "准备树比较…"}
+                  : compareUi.stopped
+                    ? "已停止。点击重新对比。"
+                    : "点击重新对比以展开默认 just_tx 并比较树。"}
               </Text>
             </Flex>
           ) : null}
           {compareUi.tag === "ready" ? (
             <CompareReadyLayout
               report={compareUi.report}
+              left={compareUi.left}
+              right={compareUi.right}
               nodeId={compareSel.nodeId}
               detailSide={compareSel.detailSide}
+              fitRequest={compareFitRequest}
               onSelectNode={(id) =>
                 setCompareSel((s) => ({ ...s, nodeId: id }))
               }
