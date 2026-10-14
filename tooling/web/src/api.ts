@@ -76,7 +76,7 @@ export async function compareRuns(
   throw new Error("unexpected compare status");
 }
 
-/** Compare tree of dual-list nodes (`claim: heuristic`). Phase1 branch/ret. */
+/** Compare tree of dual-list nodes (`claim: crossPred`). Phase1 branch/ret. */
 export async function compareTree(
   left: TreeSnap,
   right: TreeSnap,
@@ -95,7 +95,7 @@ export async function compareTree(
     );
   }
   const body = (await res.json()) as Partial<TreeReport>;
-  if (body.status === "tree" && body.claim === "heuristic") {
+  if (body.status === "tree" && body.claim === "crossPred") {
     return body as TreeReport;
   }
   throw new Error("unexpected compare-tree status");

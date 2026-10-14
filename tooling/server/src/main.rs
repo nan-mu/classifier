@@ -555,6 +555,8 @@ mod http_tests {
         let (status, report) = call(&router, "POST", "/api/compare/tree", body).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(report["status"], "tree");
+        assert_eq!(report["claim"], "crossPred");
+        assert_eq!(report["behavioralEquivalence"], "notEstablished");
         assert_eq!(report["phase"], "branch_return");
         assert_eq!(report["nodes"].as_array().unwrap().len(), 3);
         assert_eq!(report["edges"].as_array().unwrap().len(), 2);

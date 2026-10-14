@@ -12,7 +12,7 @@ use crate::pred_match::{
     fingerprint, normalize_kind, score_pair, PredAtom, PredIn, PredNodeIn, SoftScore, MATCH_FLOOR,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,9 +110,9 @@ pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let (nodes, edges) = align_trees(&left_segs, &right_segs);
     TreeReport {
         status: "tree",
-        claim: "heuristic",
+        claim: "crossPred",
         behavioral_equivalence: "notEstablished",
-        note: "nodes hold dual ordered predicate lists; phase1 branch/ret only",
+        note: "phase1 branch/ret fingerprints are CrossPred normalize JSON",
         phase: "branch_return",
         left: ArchSummary {
             arch: left.arch.clone(),
@@ -157,7 +157,7 @@ fn segments_from_snap(run: &SnapRun) -> HashMap<u32, Segment> {
         if !seen.insert(start_id) {
             continue;
         }
-        let seg = walk_segment(start_id, start_kind, &nodes, &edges);
+        let seg = walk_segment(&run.arch, start_id, start_kind, &nodes, &edges);
         if let Some(t) = seg.taken {
             q.push_back((t, StartKind::Taken));
         }
@@ -183,11 +183,16 @@ fn find_root(nodes: &HashMap<u32, ExpandNode>, edges: &[&WireEdge]) -> u32 {
         .unwrap_or(0)
 }
 
-fn push_phase1_preds(n: &ExpandNode, preds: &mut Vec<PredAtom>) {
-    push_phase1_preds_filtered(n, preds, false);
+fn push_phase1_preds(arch: &str, n: &ExpandNode, preds: &mut Vec<PredAtom>) {
+    push_phase1_preds_filtered(arch, n, preds, false);
 }
 
-fn push_phase1_preds_filtered(n: &ExpandNode, preds: &mut Vec<PredAtom>, skip_branch: bool) {
+fn push_phase1_preds_filtered(
+    arch: &str,
+    n: &ExpandNode,
+    preds: &mut Vec<PredAtom>,
+    skip_branch: bool,
+) {
     for (index, p) in n.predicates.iter().enumerate() {
         let kind = normalize_kind(&p.kind);
         if kind != "branch" && kind != "ret" {
@@ -202,7 +207,7 @@ fn push_phase1_preds_filtered(n: &ExpandNode, preds: &mut Vec<PredAtom>, skip_br
             index,
             kind: kind.to_string(),
             fields: p.fields.clone(),
-            fingerprint: fingerprint(kind, &p.fields),
+            fingerprint: cross_fingerprint(arch, kind, &p.fields),
         };
         if preds.iter().any(|a| a.fingerprint == atom.fingerprint) {
             continue;
@@ -211,7 +216,36 @@ fn push_phase1_preds_filtered(n: &ExpandNode, preds: &mut Vec<PredAtom>, skip_br
     }
 }
 
+/// Measured just_tx packet ends plus the shared rxcnt map (`0x403802e8`).
+const ENV_RV32IMC: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)","maps":[{"map":"1077412584","keyBytes":4,"valueBytes":8}]}"#;
+const ENV_EBPF: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)","maps":[{"map":"1077412584","keyBytes":4,"valueBytes":8}]}"#;
+
+fn cross_env_json(arch: &str) -> &'static str {
+    match arch {
+        "rv32imc" => ENV_RV32IMC,
+        "ebpf" => ENV_EBPF,
+        _ => "{}",
+    }
+}
+
+fn predicate_wire(kind: &str, fields: &Map<String, Value>) -> String {
+    let mut obj = Map::new();
+    obj.insert("kind".to_string(), Value::String(kind.to_string()));
+    for (key, value) in fields {
+        if key != "kind" {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+    Value::Object(obj).to_string()
+}
+
+fn cross_fingerprint(arch: &str, kind: &str, fields: &Map<String, Value>) -> String {
+    lean_binding::cross_pred::normalize(cross_env_json(arch), &predicate_wire(kind, fields))
+        .unwrap_or_else(|| fingerprint(kind, fields))
+}
+
 fn walk_segment(
+    arch: &str,
     start_id: u32,
     start: StartKind,
     nodes: &HashMap<u32, ExpandNode>,
@@ -228,9 +262,9 @@ fn walk_segment(
         // taken/not_taken children already contributed their branch tip to the
         // parent segment; do not repeat it as the head of this list.
         if cur == start_id && matches!(start, StartKind::Taken | StartKind::NotTaken) {
-            push_phase1_preds_filtered(n, &mut preds, /*skip_branch*/ true);
+            push_phase1_preds_filtered(arch, n, &mut preds, /*skip_branch*/ true);
         } else {
-            push_phase1_preds(n, &mut preds);
+            push_phase1_preds(arch, n, &mut preds);
         }
         if n.loc == "exit" {
             ends_exit = true;
@@ -250,7 +284,7 @@ fn walk_segment(
             // tip branch into this segment so the list ends with branch.
             for child_id in [t, nt].into_iter().flatten() {
                 if let Some(child) = nodes.get(&child_id) {
-                    push_phase1_preds(child, &mut preds);
+                    push_phase1_preds(arch, child, &mut preds);
                 }
             }
             taken = t;
@@ -290,8 +324,7 @@ fn align_trees(
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut next_id = 0u32;
-    let mut q: VecDeque<(Option<u32>, Option<u32>, Option<(u32, &'static str)>)> =
-        VecDeque::new();
+    let mut q: VecDeque<(Option<u32>, Option<u32>, Option<(u32, &'static str)>)> = VecDeque::new();
     q.push_back((left_root, right_root, None));
 
     while let Some((lid, rid, parent_edge)) = q.pop_front() {
@@ -358,6 +391,7 @@ fn tip_soft(l: Option<&Segment>, r: Option<&Segment>) -> Option<SoftScore> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn pred(kind: &str, fields: serde_json::Value) -> PredIn {
         PredIn {
@@ -424,7 +458,14 @@ mod tests {
         let right = left.clone();
         let report = build_compare_tree(&left, &right);
         assert_eq!(report.status, "tree");
+        assert_eq!(report.claim, "crossPred");
+        assert_eq!(report.behavioral_equivalence, "notEstablished");
         assert_eq!(report.phase, "branch_return");
+        assert_eq!(
+            pred_fingerprint(&report.nodes[0].left, "branch"),
+            "branch|at=3|dir=taken",
+            "incomplete branch wire falls back to the soft fingerprint"
+        );
         assert_eq!(report.nodes.len(), 3);
         assert_eq!(report.edges.len(), 2);
         assert!(matches!(
@@ -456,5 +497,73 @@ mod tests {
             .left
             .iter()
             .any(|e| matches!(e, ListEntry::Pred { atom } if atom.kind == "ret")));
+    }
+
+    fn pred_fingerprint<'a>(list: &'a [ListEntry], kind: &str) -> &'a str {
+        list.iter()
+            .find_map(|e| match e {
+                ListEntry::Pred { atom } if atom.kind == kind => Some(atom.fingerprint.as_str()),
+                _ => None,
+            })
+            .expect(kind)
+    }
+
+    fn wire_eq(kind: &str, fields: Value, expected: Value) {
+        let parsed: Value =
+            serde_json::from_str(&predicate_wire(kind, fields.as_object().unwrap())).unwrap();
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn predicate_wire_matches_lean_predicate_object() {
+        wire_eq(
+            "branch",
+            json!({"position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}),
+            json!({"kind":"branch","position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}),
+        );
+        wire_eq(
+            "ret",
+            json!({"width":32,"term":"1"}),
+            json!({"kind":"ret","width":32,"term":"1"}),
+        );
+        wire_eq(
+            "helper",
+            json!({"event":7,"helperId":1,"args":["42","v32:100","9"]}),
+            json!({"kind":"helper","event":7,"helperId":1,"args":["42","v32:100","9"]}),
+        );
+    }
+
+    #[test]
+    fn compare_tree_cross_pred_bound_taken() {
+        let cross = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"14"}]}}}"#;
+        let left = SnapRun {
+            arch: "rv32imc".into(),
+            nodes: vec![PredNodeIn {
+                id: 0,
+                loc: "10".into(),
+                predicates: vec![pred(
+                    "branch",
+                    json!({"position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}),
+                )],
+            }],
+            edges: vec![],
+        };
+        let right = SnapRun {
+            arch: "ebpf".into(),
+            nodes: vec![PredNodeIn {
+                id: 0,
+                loc: "6".into(),
+                predicates: vec![pred(
+                    "branch",
+                    json!({"position":6,"dir":"taken","width":64,"cond":{"lhs":"id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))","rel":"gtu","rhs":"zext32/64/32(extract0,32(add32(v32:4,128)))"}}),
+                )],
+            }],
+            edges: vec![],
+        };
+        let report = build_compare_tree(&left, &right);
+        assert_eq!(report.claim, "crossPred");
+        assert_eq!(report.behavioral_equivalence, "notEstablished");
+        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), cross);
+        assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), cross);
     }
 }

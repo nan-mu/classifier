@@ -270,10 +270,10 @@ export type TreeArchSummary = {
   segments: number;
 };
 
-/** Host compare tree; `claim` stays heuristic until Lean Term equality. */
+/** Compare tree. Phase-1 fingerprints are CrossPred JSON when normalize succeeds. */
 export type TreeReport = {
   status: "tree";
-  claim: "heuristic";
+  claim: "crossPred";
   behavioralEquivalence: "notEstablished";
   note: string;
   phase: string;
