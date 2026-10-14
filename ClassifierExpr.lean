@@ -11,4 +11,5 @@ import ClassifierExpr.Insn
 import ClassifierExpr.Parse
 import ClassifierExpr.Render
 import ClassifierExpr.CrossPred
+import ClassifierExpr.ObservationEq
 import ClassifierExpr.Ffi
