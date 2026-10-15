@@ -110,10 +110,12 @@ per command. Exit 0 means `ok` true, exit 1 is a domain error, and exit 2 is
 usage. `Kernel::execute` is the sync reducer for create, step, run, get, and
 the compare commands (CLI/harness). HTTP handlers still gate Lean work with
 `InferencePool`. `classifier test --root tooling/test` walks
-`tooling/test/{base,xdp,fail}/**/case.json` in process. `just_tx` requires
-compare-tree `fail` 0 and both arches `complete`. `merge_try` dual-run also
-reaches fail 0. `firewall` and `just_drop` cases assert RV32 `complete` only
-until their eBPF runs stop early (`LocalReject` / `UndefinedSrc`).
+`tooling/test/{base,xdp,fail}/**/case.json` in process. eBPF create binds map
+LDDW slots from the `.bpf.o` REL section to companion Compact ELF map VMAs
+(not hard-coded just_tx slot 34). `just_tx`, `just_drop`, and `merge_try`
+require both arches `complete` and compare-tree `fail` 0. `firewall` stays
+RV32-only until its Compact ELF / bpf pair matches. `base/helper_loop` uses
+the `fib` pair and expects `LimitExceeded` under budget 64.
 
 ## Lean surface for tooling: create, step, merge
 

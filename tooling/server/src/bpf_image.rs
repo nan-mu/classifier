@@ -34,10 +34,49 @@ pub fn extract_insn_words(bytes: &[u8]) -> Result<BpfProgram, BpfElfError> {
     Ok(BpfProgram { words })
 }
 
-fn program_section_bytes(bytes: &[u8]) -> Result<&[u8], BpfElfError> {
+/// Raw insn-slot indices of map LDDW loads (`R_BPF_64_64` / type 1 on the program section).
+/// Empty when the object has no map relocations (e.g. merge_try).
+pub fn map_lddw_slots(bytes: &[u8]) -> Result<Vec<u32>, BpfElfError> {
+    const SHT_REL: u32 = 9;
+    let headers = elf_headers(bytes)?;
+    let prog_index = program_section_index(&headers)?;
+    let mut slots = Vec::new();
+    for sh in &headers.shdrs {
+        if sh.sh_type != SHT_REL || sh.info != prog_index {
+            continue;
+        }
+        if sh.entsize == 0 || sh.size % sh.entsize != 0 || sh.entsize < 16 {
+            return Err(BpfElfError::MisalignedSection);
+        }
+        let rel = slice(bytes, sh.offset, sh.size)?;
+        for chunk in rel.chunks_exact(sh.entsize) {
+            let r_offset = u64::from_le_bytes(chunk[0..8].try_into().expect("8"));
+            let r_info = u64::from_le_bytes(chunk[8..16].try_into().expect("8"));
+            let r_type = (r_info & 0xffff_ffff) as u32;
+            // R_BPF_64_64 = 1: LDDW map/fd relocation at the first of two words.
+            if r_type != 1 {
+                continue;
+            }
+            if r_offset % 8 != 0 {
+                return Err(BpfElfError::MisalignedSection);
+            }
+            let slot = u32::try_from(r_offset / 8).map_err(|_| BpfElfError::Truncated)?;
+            slots.push(slot);
+        }
+    }
+    slots.sort_unstable();
+    slots.dedup();
+    Ok(slots)
+}
+
+struct ElfHeaders {
+    shdrs: Vec<Shdr>,
+    strtab: Vec<u8>,
+}
+
+fn elf_headers(bytes: &[u8]) -> Result<ElfHeaders, BpfElfError> {
     const ELFCLASS64: u8 = 2;
     const ELFDATA2LSB: u8 = 1;
-    const SHT_PROGBITS: u32 = 1;
 
     if bytes.len() < 64 || bytes.get(0..4) != Some(&[0x7f, b'E', b'L', b'F']) {
         return Err(BpfElfError::InvalidElf);
@@ -57,23 +96,29 @@ fn program_section_bytes(bytes: &[u8]) -> Result<&[u8], BpfElfError> {
         return Err(BpfElfError::InvalidElf);
     }
 
-    let shstr = section_header(bytes, e_shoff, e_shentsize, e_shstrndx)?;
-    let strtab = slice(bytes, shstr.offset, shstr.size)?;
-
-    let mut text: Option<&[u8]> = None;
-    let mut xdp1: Option<&[u8]> = None;
-    let mut xdp: Option<&[u8]> = None;
+    let mut shdrs = Vec::with_capacity(e_shnum);
     for i in 0..e_shnum {
-        let sh = section_header(bytes, e_shoff, e_shentsize, i)?;
-        if sh.sh_type != SHT_PROGBITS {
+        shdrs.push(section_header(bytes, e_shoff, e_shentsize, i)?);
+    }
+    let shstr = &shdrs[e_shstrndx];
+    let strtab = slice(bytes, shstr.offset, shstr.size)?.to_vec();
+    Ok(ElfHeaders { shdrs, strtab })
+}
+
+fn program_section_index(headers: &ElfHeaders) -> Result<usize, BpfElfError> {
+    const SHT_PROGBITS: u32 = 1;
+    let mut text: Option<usize> = None;
+    let mut xdp1: Option<usize> = None;
+    let mut xdp: Option<usize> = None;
+    for (i, sh) in headers.shdrs.iter().enumerate() {
+        if sh.sh_type != SHT_PROGBITS || sh.size == 0 {
             continue;
         }
-        let name = c_str_at(strtab, sh.name_off)?;
-        let data = slice(bytes, sh.offset, sh.size)?;
+        let name = c_str_at(&headers.strtab, sh.name_off)?;
         match name {
-            ".text" if !data.is_empty() => text = Some(data),
-            "xdp1" | ".xdp1" if !data.is_empty() => xdp1 = Some(data),
-            "xdp" | ".xdp" if !data.is_empty() => xdp = Some(data),
+            ".text" => text = Some(i),
+            "xdp1" | ".xdp1" => xdp1 = Some(i),
+            "xdp" | ".xdp" => xdp = Some(i),
             _ => {}
         }
     }
@@ -82,11 +127,21 @@ fn program_section_bytes(bytes: &[u8]) -> Result<&[u8], BpfElfError> {
         .ok_or(BpfElfError::MissingProgramSection)
 }
 
+fn program_section_bytes(bytes: &[u8]) -> Result<&[u8], BpfElfError> {
+    let headers = elf_headers(bytes)?;
+    let idx = program_section_index(&headers)?;
+    let sh = &headers.shdrs[idx];
+    slice(bytes, sh.offset, sh.size)
+}
+
 struct Shdr {
     name_off: usize,
     sh_type: u32,
     offset: usize,
     size: usize,
+    /// sh_info: for SHT_REL, the section index being relocated.
+    info: usize,
+    entsize: usize,
 }
 
 fn section_header(
@@ -99,7 +154,7 @@ fn section_header(
         .checked_mul(e_shentsize)
         .and_then(|o| e_shoff.checked_add(o))
         .ok_or(BpfElfError::Truncated)?;
-    if base.saturating_add(40) > bytes.len() {
+    if base.saturating_add(56) > bytes.len() {
         return Err(BpfElfError::Truncated);
     }
     Ok(Shdr {
@@ -107,6 +162,9 @@ fn section_header(
         sh_type: read_u32(bytes, base + 4)?,
         offset: read_u64(bytes, base + 24)? as usize,
         size: read_u64(bytes, base + 32)? as usize,
+        // Elf64_Shdr: sh_link @ 40, sh_info @ 44, sh_entsize @ 56.
+        info: read_u32(bytes, base + 44)? as usize,
+        entsize: read_u64(bytes, base + 56)? as usize,
     })
 }
 
@@ -160,6 +218,19 @@ mod tests {
     }
 
     #[test]
+    fn just_tx_map_lddw_slot_is_34() {
+        assert_eq!(map_lddw_slots(DEFAULT_BPF).expect("slots"), vec![34]);
+    }
+
+    #[test]
+    fn just_drop_and_firewall_map_lddw_slots() {
+        let drop_bpf = include_bytes!("../../test/xdp/just_drop/just_drop.bpf.o");
+        let fw_bpf = include_bytes!("../../test/xdp/firewall/firewall.bpf.o");
+        assert_eq!(map_lddw_slots(drop_bpf).expect("drop"), vec![25]);
+        assert_eq!(map_lddw_slots(fw_bpf).expect("fw"), vec![24]);
+    }
+
+    #[test]
     fn rejects_non_elf() {
         assert_eq!(
             extract_insn_words(b"not elf").unwrap_err(),
@@ -167,3 +238,4 @@ mod tests {
         );
     }
 }
+

@@ -24,8 +24,10 @@ Each case is a `case.json` (CaseSpec). The in-process harness drives
 
 Copied from `/Volumes/SSD/bs/build/<prog>/` into `xdp/{just_tx,just_drop,merge_try,firewall}/`.
 `firewall.elf` in this suite is the known helper-completion fixture
-(`tooling/fixtures/xdp.elf`); the newer `build/firewall/firewall.elf` is kept
-as `firewall.bpf.o` companion only until RV32 expand completes on that image.
+(`tooling/fixtures/xdp.elf`); the newer `build/firewall/firewall.elf` does not
+yet complete under RV32 expand, so firewall stays RV32-only until a matching
+pair is ready. eBPF Meta binds map LDDW slots from the `.bpf.o` REL section to
+companion Compact ELF map VMAs (not hard-coded just_tx slot 34).
 
 ## Coverage notes
 
@@ -33,8 +35,9 @@ The command prints one Envelope. Exit 0 means every case matched `expect`. Exit 
 
 Measured on the current images:
 
-- `just_tx` dual run finishes `complete` on both arches, and compare-tree `fail` is 0.
-- `merge_try` does the same. Compare-tree `fail` is also 0.
-- `firewall` and `just_drop` cases assert RV32 `complete` only. Their eBPF runs
-  still stop early (`LocalReject` / `UndefinedSrc` under just_tx product meta);
-  dual complete is not a hard gate until that is fixed.
+- `just_tx`, `just_drop`, and `merge_try` dual runs finish `complete` on both
+  arches with compare-tree `fail` 0.
+- `firewall` asserts RV32 `complete` only (asset mismatch for eBPF dual).
+- `base/helper_loop` uses the `fib` Compact ELF / bpf pair. Both arches hit
+  `LimitExceeded` under budget 64: fib's control-flow loop grows the frontier
+  faster than that fuel allows.

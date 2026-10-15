@@ -1,12 +1,20 @@
 {
   "id": "base.helper_loop",
   "suite": "base",
-  "budget": 1024,
-  "artifacts": { "rv32": "../../xdp/merge_try/merge_try.elf" },
+  "budget": 64,
+  "artifacts": {
+    "rv32": "fib.elf",
+    "ebpf": "fib.bpf.o"
+  },
   "steps": [
-    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "rv32" },
-    { "op": "run", "bind": "s" }
+    { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "run", "bind": "rv" },
+    { "op": "create", "bind": "bpf", "arch": "ebpf", "artifact": "ebpf", "map_elf": "rv32" },
+    { "op": "run", "bind": "bpf" }
   ],
-  "expect": { "kind": "pass", "status": "complete" },
-  "assert": [{ "contains_kind": "branch" }]
+  "expect": { "kind": "fail", "status": "fail" },
+  "assert": [
+    { "path": "/payload/reason", "eq": "LimitExceeded" },
+    { "contains_kind": "branch" }
+  ]
 }

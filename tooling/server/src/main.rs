@@ -119,15 +119,39 @@ fn default_name(arch: Arch) -> &'static str {
     }
 }
 
-/// Slot 34 stays bound to the just_tx rxcnt map.
-/// Map rows come from `just_tx.elf`, the same layout RV32 create uses.
-fn ebpf_product_meta() -> ebpf::Meta {
+/// Default HTTP create: just_tx bpf LDDW slots + just_tx.elf maps (same as Kernel path).
+fn ebpf_product_meta(bpf_bytes: &[u8]) -> Result<ebpf::Meta, StatusCode> {
     let maps = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF)
-        .expect("just_tx.elf")
+        .map_err(|_| StatusCode::BAD_REQUEST)?
         .maps;
-    let mut meta = ebpf::Meta::just_tx_product();
-    meta.maps = maps;
-    meta
+    let slots = bpf_image::map_lddw_slots(bpf_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let resource_locations = if slots.is_empty() {
+        vec![]
+    } else if maps.len() == 1 {
+        slots
+            .iter()
+            .map(|&slot| ebpf::ResourceLocation {
+                slot,
+                term: Some(maps[0].map_id.to_string()),
+            })
+            .collect()
+    } else if maps.len() == slots.len() {
+        slots
+            .iter()
+            .zip(maps.iter())
+            .map(|(&slot, map)| ebpf::ResourceLocation {
+                slot,
+                term: Some(map.map_id.to_string()),
+            })
+            .collect()
+    } else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+    Ok(ebpf::Meta {
+        entry: ebpf::Entry::just_tx(),
+        resource_locations,
+        maps,
+    })
 }
 
 fn default_bytes(arch: Arch) -> &'static [u8] {
@@ -184,7 +208,7 @@ async fn create_session(
         Arch::Ebpf => {
             let program =
                 bpf_image::extract_insn_words(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
-            let meta = ebpf_product_meta();
+            let meta = ebpf_product_meta(&bin)?;
             app.pool
                 .run(move || {
                     Arc::new(Mutex::new(Session::new_ebpf(
