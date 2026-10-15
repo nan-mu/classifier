@@ -195,10 +195,13 @@ private def mergeRequestFixture (taken candidates : String)
 private def mergeOutputField (response key : String) : Option String :=
   ((Lean.Json.parse response) >>= (fun j => j.getObjVal? key) >>= Lean.Json.getStr?).toOption
 
+private def mergeRejectedResponse (response : String) : Bool :=
+  mergeOutputField response "status" == some "reject" &&
+    mergeOutputField response "reason" == some "InsufficientEvidence"
+
 private def mergeRejects (request : String) (detail : String) : Bool :=
   let result := exportExpandMerge request
-  mergeOutputField result "status" == some "reject" &&
-    mergeOutputField result "reason" == some "InsufficientEvidence" &&
+  mergeRejectedResponse result &&
     (mergeOutputField result "detail").any (fun text => text.startsWith detail)
 
 private def mergeEqualRequestFixture : String :=
@@ -267,39 +270,50 @@ private def mergeStateBoundaryCheck : Bool :=
     (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 5 "[]" ++ "]")))
     "NoExactConfigMatch"
 
-private def mergeMalformedCheck : Bool :=
+/-- Malformed evidence must reject, independently of which validation layer detects it.
+In particular, parseTerm rejects mixed-carrier applications before snapshot's final
+term check; the internal diagnostic is not the rejection contract. Snapshot cases
+include an earlier valid exact match, so accepting invalid evidence would merge
+rather than merely reject on inequality. Labels identify each input in the report. -/
+private def mergeMalformedCases : List (String × String) :=
   let taken := mergeSnapshotFixture 42
   let candidate := mergeSnapshotFixture 17
   let badValue := "[" ++ mergeExprFixture ++ "," ++ mergeExprFixture ++ "]"
   let constraint := mergeExprFixture "4" ",\"role\":\"constraint\""
-  mergeRejects "{" "InvalidRequestJSON:" &&
-  mergeRejects "{}" "MissingOrInvalidField:" &&
-  mergeRejects (mergeRequestFixture taken "") "EmptyNotTaken" &&
-  mergeRejects (mergeRequestFixture taken (mergeSnapshotFixture 42)) "DuplicateNodeId" &&
-  mergeRejects (mergeRequestFixture taken (candidate ++ "," ++ mergeSnapshotFixture 17)) "DuplicateNodeId" &&
-  mergeRejects (mergeRequestFixture taken (candidate ++ "," ++ mergeSnapshotFixture 18 "-1")) "InvalidLocation:" &&
-  mergeRejects (mergeRequestFixture taken (candidate ++ "," ++ mergeSnapshotFixture 18 "1" badValue))
-    "InvalidSnapshot:" &&
-  mergeRejects (mergeRequestFixture taken (mergeSnapshotFixture 17 "1" badValue)) "InvalidSnapshot:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" ("[" ++ constraint ++ "," ++ constraint ++ "]"))) "InvalidSnapshot:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" "[{\"reg\":\"packet64:0\",\"rel\":\"eq\",\"term\":\"1\"}]")) "InvalidSnapshot:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "add32(v64:1,2)" ++ "]"))) "InvalidTerm:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" "[{\"reg\":\"real32:10\",\"rel\":\"eqN33\",\"term\":\"1\"}]")) "InvalidTerm:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 1 "[\"v64:1\",\"2\"]" ++ "]")))
-    "InvalidPredicate:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 1 "[\"add32(v64:1,2)\"]" ++ "]")))
-    "InvalidPredicate:" &&
-  mergeRejects (mergeRequestFixture taken
-    (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 4294967296 ++ "]")))
-    "InvalidPredicate:" &&
-  mergeRejects (mergeRequestFixture taken
-    "{\"id\":\"17\",\"loc\":\"1\",\"exprs\":[],\"predicates\":[]}") "MissingOrInvalidField:id"
+  let withInvalidCandidate := fun invalid =>
+    mergeRequestFixture taken (mergeSnapshotFixture 16 ++ "," ++ invalid)
+  [
+    ("invalidJSON", "{"),
+    ("missingFields", "{}"),
+    ("emptyCandidates", mergeRequestFixture taken ""),
+    ("takenIdRepeated", withInvalidCandidate (mergeSnapshotFixture 42)),
+    ("candidateIdRepeated",
+      withInvalidCandidate (candidate ++ "," ++ mergeSnapshotFixture 17)),
+    ("invalidLocationAfterMatch",
+      withInvalidCandidate (candidate ++ "," ++ mergeSnapshotFixture 18 "-1")),
+    ("duplicateValueAfterMatch",
+      withInvalidCandidate (candidate ++ "," ++ mergeSnapshotFixture 18 "1" badValue)),
+    ("duplicateValue", withInvalidCandidate (mergeSnapshotFixture 17 "1" badValue)),
+    ("duplicateConstraint", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" ("[" ++ constraint ++ "," ++ constraint ++ "]"))),
+    ("packet64Register", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" "[{\"reg\":\"packet64:0\",\"rel\":\"eq\",\"term\":\"1\"}]")),
+    ("mixedCarrierValue", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "add32(v64:1,2)" ++ "]"))),
+    ("relationBeyondCarrier", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" "[{\"reg\":\"real32:10\",\"rel\":\"eqN33\",\"term\":\"1\"}]")),
+    ("mixedCarrierHelperArgs", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 1 "[\"v64:1\",\"2\"]" ++ "]"))),
+    ("mixedCarrierHelperTerm", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 1 "[\"add32(v64:1,2)\"]" ++ "]"))),
+    ("helperIdOverflow", withInvalidCandidate
+      (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 4294967296 ++ "]"))),
+    ("stringNodeId", withInvalidCandidate
+      "{\"id\":\"17\",\"loc\":\"1\",\"exprs\":[],\"predicates\":[]}")
+  ]
+
+private def mergeMalformedCheck : Bool :=
+  mergeMalformedCases.all fun (_, request) => mergeRejectedResponse (exportExpandMerge request)
 
 private def mergeUnsupportedCheck : Bool :=
   let taken := mergeSnapshotFixture 42
@@ -420,24 +434,35 @@ private def mergeChangedClassFieldCheck : Bool :=
       mergeRejects (mergeMixedRequest a b) "NoExactConfigMatch" &&
         mergeRejects (mergeMixedRequest a b "HelperOnly") "NoExactConfigMatch"
 
-private def mergeMalformedMixedCheck : Bool :=
+private def mergeMalformedMixedCases : List (String × String) :=
   let valid := mergeSnapshotFixture 42
   let badRows := [
-    "{\"kind\":\"branch\",\"position\":0,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eq\",\"rhs\":\"1\"}}",
-    "{\"kind\":\"branch\",\"position\":1,\"dir\":\"ok\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eq\",\"rhs\":\"1\"}}",
-    "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"v64:1\",\"rel\":\"eq\",\"rhs\":\"1\"}}",
-    "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eqN33\",\"rhs\":\"1\"}}",
-    "{\"kind\":\"ret\",\"width\":16,\"term\":\"1\"}",
-    "{\"kind\":\"ret\",\"width\":64,\"term\":\"v32:1\"}",
-    "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"v64:1\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}",
-    "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"256\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}",
-    "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32,\"source\":\"add32(v64:1,2)\"}",
-    "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32}"]
-  badRows.all fun row =>
+    ("branchZeroPosition",
+      "{\"kind\":\"branch\",\"position\":0,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eq\",\"rhs\":\"1\"}}"),
+    ("branchInvalidDirection",
+      "{\"kind\":\"branch\",\"position\":1,\"dir\":\"ok\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eq\",\"rhs\":\"1\"}}"),
+    ("branchCarrierMismatch",
+      "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"v64:1\",\"rel\":\"eq\",\"rhs\":\"1\"}}"),
+    ("branchRelationBeyondCarrier",
+      "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"1\",\"rel\":\"eqN33\",\"rhs\":\"1\"}}"),
+    ("returnUnsupportedWidth", "{\"kind\":\"ret\",\"width\":16,\"term\":\"1\"}"),
+    ("returnCarrierMismatch", "{\"kind\":\"ret\",\"width\":64,\"term\":\"v32:1\"}"),
+    ("mapKeyCarrierMismatch",
+      "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"v64:1\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}"),
+    ("mapKeyByteOverflow",
+      "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"256\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}"),
+    ("packetSourceMixedCarrier",
+      "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32,\"source\":\"add32(v64:1,2)\"}"),
+    ("packetMissingSource",
+      "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32}")]
+  badRows.map fun (name, row) =>
     let invalid := mergeSnapshotFixture 18 "1" "[]" ("[" ++ row ++ "]")
     -- All snapshots validate, even after an earlier equal candidate.
-    mergeRejects (mergeRequestFixture valid (mergeSnapshotFixture 17 ++ "," ++ invalid)
-      mergeFiveClassRequirements "FiveClass") "InvalidPredicate:"
+    (name, mergeRequestFixture valid (mergeSnapshotFixture 17 ++ "," ++ invalid)
+      mergeFiveClassRequirements "FiveClass")
+
+private def mergeMalformedMixedCheck : Bool :=
+  mergeMalformedMixedCases.all fun (_, request) => mergeRejectedResponse (exportExpandMerge request)
 
 -- Reduced just_drop.elf diamond: outer branch node 12 has Taken descendants
 -- 27 -> 30 and NotTaken descendants 28 -> 31. Wire locations are zero-based.
@@ -520,10 +545,10 @@ private def mergeComplementaryOverwriteCheck : Bool :=
 #guard mergeChangedClassFieldCheck
 #guard mergeMalformedMixedCheck
 
-/-- Execute finite wire regressions, including mixed-class equality and field sensitivity.
-This does not establish general instruction semantics, runtime scheduling, full-observation
-merge, or the caller's history and suffix certificates. The standalone main lives in
-`MergeCheck.lean`, outside the PathMerge library imports. -/
+/-- Execute finite wire regressions, including mixed-class equality, field sensitivity,
+and individually labeled malformed inputs. This does not establish general instruction
+semantics, runtime scheduling, full-observation merge, or the caller's history and suffix
+certificates. The standalone main lives in `MergeCheck.lean`, outside the library imports. -/
 def runMergeChecks : IO UInt32 := do
   IO.println "Merge finite behavior regressions (not a general semantic proof)."
   IO.println s!"ExactConfig response: {exportExpandMerge mergeEqualRequestFixture}"
@@ -531,15 +556,17 @@ def runMergeChecks : IO UInt32 := do
   let checks : List (String × Bool) := [
     ("mergeEqualCheck", mergeEqualCheck),
     ("mergeSetOrderCheck", mergeSetOrderCheck),
-    ("mergeStateBoundaryCheck", mergeStateBoundaryCheck),
-    ("mergeMalformedCheck", mergeMalformedCheck),
+    ("mergeStateBoundaryCheck", mergeStateBoundaryCheck)
+    ] ++ (mergeMalformedCases.map fun (name, request) =>
+      ("mergeMalformed/" ++ name, mergeRejectedResponse (exportExpandMerge request))) ++
+    (mergeMalformedMixedCases.map fun (name, request) =>
+      ("mergeMalformedMixed/" ++ name, mergeRejectedResponse (exportExpandMerge request))) ++ [
     ("mergeUnsupportedCheck", mergeUnsupportedCheck),
     ("mergeOpaqueIdsCheck", mergeOpaqueIdsCheck),
     ("mergeSharedRepresentationCheck", mergeSharedRepresentationCheck),
     ("mergeOpaqueHelpersCheck", mergeOpaqueHelpersCheck),
     ("mergeMixedSetCheck", mergeMixedSetCheck),
     ("mergeChangedClassFieldCheck", mergeChangedClassFieldCheck),
-    ("mergeMalformedMixedCheck", mergeMalformedMixedCheck),
     ("mergeJustDropOverwriteCheck", mergeJustDropOverwriteCheck),
     ("mergeComplementaryOverwriteCheck", mergeComplementaryOverwriteCheck)]
   let mut failed := false

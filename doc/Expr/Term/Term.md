@@ -48,7 +48,27 @@ t_w::=C_w(c)\mid V_w(\xi)\mid R_w^{\varepsilon}(r)\mid f(t_{w_1},\ldots,t_{w_n})
 
 ## 未解释运算的解释补全
 
-含包输入或外部结果等未解释运算的项还须给定解释补全 \(\theta\)，为这些运算指定同位宽的值函数。项解释为 \(\left[\!\left[t\right]\!\right]_{\nu,\theta}\)。应用项仍按上述递归规则解释，只将未解释运算的数值函数取自 \(\theta\)。
+含包输入或外部结果等未解释运算的项还须给定解释补全 \(\theta=(\theta_{\mathrm{result}},\theta_{\mathrm{byte}})\)。令 \(\lambda\in\mathbb N\) 为返回 lane，\(\varepsilon\in\mathcal I_{\mathrm{call}}\) 为调用身份，\(\operatorname{List}(\mathbb B_w)\) 为同宽数值参数的有限列表。完整结果补全的签名为
+
+\[
+\theta_{\mathrm{result}}:
+\prod_{w\in W}\bigl(\mathcal I_{\mathrm{call}}\times\mathbb N\times
+\operatorname{List}(\mathbb B_w)\to\mathbb B_w\bigr).
+\]
+
+包输入补全以资源身份 \(\kappa\in\mathbb N\)、基址和访问地址的非负整数解释为参数，返回一个字节：
+
+\[
+\theta_{\mathrm{byte}}:\mathbb N\times\mathbb N\times\mathbb N\to\mathbb B_8.
+\]
+
+资源身份是固定标签，基址和地址来自相同载体的两项。`externalResult` 采用 \(\theta_{\mathrm{result}}(w)(\varepsilon,\lambda,\vec a)\)，`inputByte` 采用 \(\theta_{\mathrm{byte}}(\kappa,a_{\mathrm{base}},a_{\mathrm{addr}})\)，其字节值嵌入既定位宽的结果载体。纯数值运算仍使用固定的 \(\widehat f\)。项解释为 \(\left[\!\left[t\right]\!\right]_{\nu,\theta}\)，应用按已有递归规则解释。
 
 关系与观察的解释以固定的 \((\nu,\theta)\) 为前提。补全的存在不保证访问或调用有效。部分求值见[部分求值与未解释运算](solve.md#部分求值与未解释运算)。
+
+部分外部环境可以对合法外部应用返回 `none`，也可以在取得值时返回 `some a`。严格部分项解释要求运算签名良构、每个子项及该外部应用均有值，否则返回 `none`。完整补全要求这些合法外部请求全部有值，并满足所属运算的值域，特别是 `inputByte` 的结果属于 \(\mathbb B_8\)。资源身份、调用成功及输入字节与真实状态的对应仍分别需要外部语义契约。
+
+Lean 的 `ClassifierExpr.ExternalInterpretation` 将两个外部函数的结果表示为 `Option Nat`；`ExternalInterpretation.Total` 仅要求每个参数组合均返回某个 `some v`。`interpretTerm` 对每个成功节点按载体取模，所以 `Total` 本身不保证 `inputByte` 的结果属于 \(\mathbb B_8\)。数学完整补全还须满足上述字节值域及外部语义契约。
+
+[Semantics.lean](../../../ClassifierExpr/Semantics.lean) 中的 `ClassifierExpr.interpretTerm_total` 已在 `θ.Total` 与 `t.wellFormed=true` 下证明存在成功解释值，`ClassifierExpr.interpretTerm_external_missing` 已证明实参有值而外部函数返回 `none` 时该应用仍解释为 `none`。完整 R1 至 R6 的解释保持使用相同的 `Total` 与良构前提，精确陈述见 [solve 的解释保持性](solve.md#解释保持性)。
 

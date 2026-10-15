@@ -20,6 +20,9 @@ lean_lib RV32IMC where
 lean_lib EBPF where
   defaultFacets := #[LeanLib.sharedFacet]
 
+lean_exe semanticCheck where
+  root := `SemanticCheck
+
 target server pkg : System.FilePath := do
   let some exprLib := pkg.findLeanLib? `ClassifierExpr | error "ClassifierExpr library is missing"
   let some pathLib := pkg.findLeanLib? `PathMerge | error "PathMerge library is missing"

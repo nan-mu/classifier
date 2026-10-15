@@ -11,7 +11,7 @@ namespace RV32IMC
 open ClassifierExpr PathMerge
 
 /-! Symbolic indirect targets reject. Map writes need a prior lookup with frozen key bytes
-(Meta `maps` layout + stack `readStackBytes`) recorded on the helper Predicate. -/
+(Meta `maps` layout + complete current buffer contents) recorded on the helper Predicate. -/
 
 /-- Byte length, used to bind sequence indices to a contiguous instruction layout. -/
 def insnLength : Insn → Nat
@@ -98,11 +98,13 @@ private def valueRejection : Insn → RejectReason
   | .C_EBREAK _ => .unsupported
   | _ => .undefinedSrc
 
-/-- Recover map term + frozen key from Pg for the lookup that owns this Map address. -/
+/-- Recover map term + frozen key from Pg for the lookup that owns this Map address.
+Reject when the pointer's Map provenance disagrees with the frozen-key observation Map
+(aligned with eBPF `mapWriteObservation`). -/
 private def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
     (rs1 rs2 : regidx) (offset width : Nat) :
     Option (Term × List Term × Nat × Term) := do
-  let (lookupEvent, elementOff, _) ← mapElementAccess Eg rs1 offset width
+  let (lookupEvent, elementOff, mapTerm, _) ← mapElementAccess Eg rs1 offset width
   let source ← readReg Eg rs2
   if source.width != .w32 then none
   else
@@ -110,7 +112,7 @@ private def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : Lis
       | .helper e .lookup _ => e == lookupEvent
       | _ => false
     let (map, frozen) ← lookupFrozenKey p
-    if frozen.isEmpty then none
+    if map != mapTerm || frozen.isEmpty then none
     else
       let layout ← findMapLayout maps map
       if frozen.length != layout.keySize || elementOff + width > layout.valueSize then none
@@ -909,7 +911,7 @@ def inferStep (I : Array Insn) (context : StepContext)
       | some loc =>
         let Eg := σ.exprs.insertEq (Reg.real32 32) (Term.C32 (base + offset))
         match RV32IMC.step Eg i context.boundContext,
-            helperPredicate event σ.exprs context.maps with
+            helperPredicate event σ.exprs context.maps context.boundContext with
         | some link, .ok predicate =>
           match helperExpr predicate with
           | .error reason => .reject reason
@@ -1042,10 +1044,46 @@ private def packetSnapshotEventCheck : Bool :=
   json.contains (renderPredicateJson (.packetWrite 2 smokeEntryParams.αCtx 0 (Term.C32 0))) &&
     !(json.contains (renderPredicateJson (.packetWrite 3 smokeEntryParams.αCtx 0 (Term.C32 0))))
 
+/-- Matching pointer Map and frozen-key observation Map still authorizes MapWrite. -/
+private def mapWriteProvenanceMatchCheck : Bool :=
+  let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
+  let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
+  let lookup : Predicate := .helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)
+  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+    |>.insertEq (Reg.real32 11) (Term.C32 123)
+    |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
+  let maps : List MapLayout := [{ mapId := 42, keySize := 4, valueSize := 16 }]
+  let ctx : StepContext := { maps }
+  let I := #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4), decodeInsnWord 0x0001]
+  match inferStep I ctx 77 0 ⟨E, [lookup]⟩ with
+  | .candidates [c] =>
+      c.loc == .pos 1 &&
+        c.P_k == [.mapWrite 77 (Term.C32 42) key 0 (Term.C32 123)]
+  | _ => false
+
+/-- Pointer Map 42 with frozen-key observation Map 17 must reject (no successor). -/
+private def mapWriteProvenanceMismatchCheck : Bool :=
+  let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 7]
+  let key := [Term.C32 1]
+  let lookup : Predicate := .helper 9 .lookup ([Term.C32 17, Term.V32 7] ++ key)
+  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+    |>.insertEq (Reg.real32 11) (Term.C32 123)
+    |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
+  let mapsOnly17 : List MapLayout := [{ mapId := 17, keySize := 1, valueSize := 8 }]
+  let mapsBoth : List MapLayout :=
+    [{ mapId := 17, keySize := 1, valueSize := 8 }, { mapId := 42, keySize := 1, valueSize := 8 }]
+  let I := #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4), decodeInsnWord 0x0001]
+  [mapsOnly17, mapsBoth].all fun maps =>
+    match inferStep I { maps } 80 0 ⟨E, [lookup]⟩ with
+    | .reject .undefinedSrc => true
+    | _ => false
+
 #guard packetStoreObservationsCheck
 #guard packetStoreRejectsMissingInputsCheck
 #guard mapStoreObservationGapCheck
 #guard mapStoreObservationsCheck
+#guard mapWriteProvenanceMatchCheck
+#guard mapWriteProvenanceMismatchCheck
 #guard packetSnapshotEventCheck
 
 /-- Static program bindings outside SemState / Predicate.
@@ -1209,5 +1247,59 @@ private def statelessStepCheck : Bool :=
   | _, _ => false
 
 #guard statelessStepCheck
+
+private def encodedOpenMCheck : Bool :=
+  let E := ExprSet.empty
+    |>.insertEq (Reg.real32 8) (Term.V32 41)
+    |>.insertEq (Reg.real32 9) (Term.V32 42)
+  let fixtures : List (UInt32 × Op) := [
+    (0x02940533, .mullo .w32), (0x02941533, .mulh .w32),
+    (0x02942533, .mulhsu .w32), (0x02943533, .mulhu .w32),
+    (0x02944533, .sdiv .w32 0xffffffff), (0x02945533, .udiv .w32 0xffffffff),
+    (0x02946533, .srem .w32), (0x02947533, .urem .w32)]
+  fixtures.all fun (word, op) =>
+    let expected := star .w32 op [Term.V32 41, Term.V32 42]
+    let json := exportRv32ExpandStep #[word, 0x00008067]
+      (testMeta 0x400 0x100) 80 0 s!"[{renderExprSetJson E}]" "[]"
+    json.contains "\"status\":\"ok\"" &&
+      json.contains (renderExprJson (Expr.mkEq (Reg.real32 10) expected)) &&
+      parseTerm (renderTerm expected) == some expected
+
+private def encodedHelperBuffersCheck : Bool := Id.run do
+  let key := addStar .w32 (Term.V32 0) (Term.C32 3)
+  let value := addStar .w32 (Term.V32 0) (Term.C32 4)
+  let E := ExprSet.empty
+    |>.insertEq (Reg.real32 2) (Term.V32 0)
+    |>.insertEq (Reg.real32 5) (Term.C32 0x100)
+    |>.insertEq (Reg.real32 11) (Term.C32 42)
+    |>.insertEq (Reg.real32 12) key
+    |>.insertEq (Reg.real32 13) value
+    |>.insertEq (Reg.real32 14) (Term.C32 0)
+    |>.insertEq (Reg.sw (1 <<< 33)) (Term.C32 0x04030201)
+    |>.insertEq (Reg.sw ((1 <<< 33) + 4)) (Term.C32 0x08070605)
+  let metadataJson := "{\"base\":1024,\"helperAddress\":256,\"returnAddress\":8192,\"maps\":[{\"mapId\":42,\"keySize\":3,\"valueSize\":2}]}"
+  for (id, kind, abi, tail) in [
+      (1, HelperKind.lookup, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
+      (3, HelperKind.delete, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
+      (2, HelperKind.update, [Term.C32 42, key, value, Term.C32 0],
+        [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 5, Term.C32 6])] do
+    let state := E.insertEq (Reg.real32 10) (Term.C32 id)
+    let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] metadataJson
+      80 0 s!"[{renderExprSetJson state}]" "[]"
+    if !json.contains "\"status\":\"ok\"" ||
+        !json.contains (renderPredicateJson (.helper 80 kind (abi ++ tail))) ||
+        !json.contains (renderExprJson (Expr.mkEq (Reg.real32 10)
+          (star .w32 (.externalResult 80 0) (Term.C32 id :: abi)))) then return false
+  let missingValue := addStar .w32 (Term.V32 0) (Term.C32 7)
+  let state := E.insertEq (Reg.real32 10) (Term.C32 2)
+    |>.insertEq (Reg.real32 13) missingValue
+  let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] metadataJson
+    80 0 s!"[{renderExprSetJson state}]" "[]"
+  return json.contains "\"status\":\"ok\"" &&
+    json.contains (renderPredicateJson
+      (.helper 80 .update [Term.C32 42, key, missingValue, Term.C32 0]))
+
+#guard encodedOpenMCheck
+#guard encodedHelperBuffersCheck
 
 end RV32IMC

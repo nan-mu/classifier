@@ -4,7 +4,7 @@ namespace ClassifierExpr
 inductive Width where
   | w32
   | w64
-  deriving DecidableEq, BEq, Repr, Inhabited
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 def Width.bits : Width → Nat
   | .w32 => 32

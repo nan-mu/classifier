@@ -33,12 +33,19 @@ def parseRel (text : String) : Option Rel :=
 
 private def parseOp (text : String) (w : Width) : Option Op := do
   if let some op := [ ("add", Op.add), ("sub", .sub), ("mullo", .mullo),
+      ("urem", .urem), ("srem", .srem), ("mulh", .mulh), ("mulhu", .mulhu),
+      ("mulhsu", .mulhsu), ("selectEq", .selectEq),
       ("neg", .neg), ("id", .id), ("shl", .shl), ("lshr", .lshr),
       ("ashr", .ashr), ("ltu", .ltu), ("lts", .lts) ].findSome?
       (fun (stem, ctor) => do
         if !text.startsWith stem then none else
           pure (ctor (← parseWidth (text.drop stem.length).toString))) then
     return op
+  if text.startsWith "udiv" || text.startsWith "sdiv" then
+    let [bits, value] := (text.drop 4).toString.splitOn "_" | none
+    let width ← parseWidth bits
+    let zeroResult ← value.toNat?
+    return if text.startsWith "udiv" then .udiv width zeroResult else .sdiv width zeroResult
   if let some op := [ ("and", Op.and), ("or", .or), ("xor", .xor),
       ("low", fun q => Op.low q w.bits), ("bswap", fun q => Op.bswap q w.bits),
       ("inputByte", Op.inputByte) ].findSome?
@@ -80,13 +87,16 @@ private def parsePredicateOp (text : String) (w : Width) : Option Op := do
   | _ => parseOp text w
 
 private def opWidth (fallback : Width) : Op → Width
-  | .add w | .sub w | .mullo w | .neg w | .id w | .shl w | .lshr w | .ashr w
+  | .add w | .sub w | .mullo w | .udiv w _ | .urem w | .sdiv w _ | .srem w
+  | .mulh w | .mulhu w | .mulhsu w | .selectEq w
+  | .neg w | .id w | .shl w | .lshr w | .ashr w
   | .ltu w | .lts w | .zext _ w _ | .sext _ w _ => w
   | _ => fallback
 
 private def opArity : Op → Option Nat
   | .neg _ | .id _ | .low _ _ | .extract _ _ _ | .zext _ _ _ | .sext _ _ _
   | .bswap _ _ => some 1
+  | .selectEq _ => some 4
   | .externalResult _ _ => none
   | _ => some 2
 
@@ -156,7 +166,7 @@ end
 /-- Bare constants inherit the field carrier; mixed-carrier applications retain annotations. -/
 def parseTerm (text : String) (w : Width := .w32) : Option Term := do
   let (term, []) ← parseTermChars w text.toList true | none
-  pure term
+  if term.wellFormed then pure term else none
 
 private def jsonString (value : Lean.Json) (key : String) : Option String :=
   (value.getObjVal? key >>= Lean.Json.getStr?).toOption
@@ -169,42 +179,6 @@ def parseExprJson (value : Lean.Json) : Option Expr := do
 
 private def boundedWidth (q bits : Nat) : Bool := 0 < q && q ≤ bits
 
-/-- Validate the existing operators' carrier widths, arities and numeric parameters.
-Low/extract/bswap results may use a wider carrier than their projected value. -/
-private def predicateOpSignature (w : Width) (op : Op) (args : List Term) : Bool :=
-  let uniform (n : Nat) := args.length == n && args.all (fun t => t.width == w)
-  let input (v : Nat) := args.length == 1 && args.all (fun t => t.width.bits == v)
-  match op with
-  | .add v | .sub v | .mullo v | .shl v | .lshr v | .ashr v | .ltu v | .lts v =>
-    w == v && uniform 2
-  | .neg v | .id v => w == v && uniform 1
-  | .and q | .or q | .xor q => boundedWidth q w.bits && uniform 2
-  | .low q v => boundedWidth q v && q ≤ w.bits && input v
-  | .extract o len v => 0 < len && o + len ≤ v && len ≤ w.bits && input v
-  | .zext q out v | .sext q out v =>
-    w == out && boundedWidth q w.bits && q ≤ v && input v
-  | .bswap q v => (q == 16 || q == 32 || q == 64) &&
-    q ≤ v && q ≤ w.bits && input v
-  | .mergeLow q v => v == w.bits && boundedWidth q v && uniform 2
-  | .externalResult _ _ => (w == .w32 || w == .w64) && !args.isEmpty &&
-    args.all (fun t => t.width == w)
-  | .inputByte _ => w == .w32 && match args with
-    | [base, address] => base.width == address.width
-    | _ => false
-
-mutual
-  private def predicateTermWellFormed : Term → Bool
-    | .const w c => c < 2 ^ w.bits
-    | .var _ _ => true
-    | .regVar _ reg => reg.valid && reg.kind == .real
-    | .app w op args => predicateOpSignature w op args && predicateTermsWellFormed args
-  termination_by t => sizeOf t
-
-  private def predicateTermsWellFormed : List Term → Bool
-    | [] => true
-    | t :: ts => predicateTermWellFormed t && predicateTermsWellFormed ts
-  termination_by ts => sizeOf ts
-end
 
 private def predicateRelWellFormed (w : Width) : Rel → Bool
   | .eqN q | .neN q | .ltuN q | .leuN q | .gtuN q | .geuN q
@@ -219,17 +193,17 @@ def predicateWellFormed : Predicate → Bool
   | .helper _ kind args =>
     kind.id < 2 ^ 32 && helperKind kind.id == kind &&
       (args.all (fun t => t.width == .w32) || args.all (fun t => t.width == .w64)) &&
-      predicateTermsWellFormed args
+      termsWellFormed args
   | .branch position _ cond =>
     0 < position && cond.lhs.width == cond.rhs.width &&
       predicateRelWellFormed cond.lhs.width cond.rel &&
-      predicateTermWellFormed cond.lhs && predicateTermWellFormed cond.rhs
-  | .ret term => predicateTermWellFormed term
+      cond.lhs.wellFormed && cond.rhs.wellFormed
+  | .ret term => term.wellFormed
   | .mapWrite _ map key _ source =>
-    predicateTermWellFormed map && predicateTermWellFormed source &&
-      key.all (fun t => t.width == .w32 && predicateTermWellFormed t &&
+    map.wellFormed && source.wellFormed &&
+      key.all (fun t => t.width == .w32 && t.wellFormed &&
         match t with | .const _ c => c < 256 | _ => true)
-  | .packetWrite _ _ _ source => predicateTermWellFormed source
+  | .packetWrite _ _ _ source => source.wellFormed
 
 private def jsonNat (value : Lean.Json) (key : String) : Option Nat :=
   (value.getObjVal? key >>= Lean.Json.getNat?).toOption
@@ -347,12 +321,16 @@ private def parseRoundTripCheck : Bool :=
 
 private def parseOpsRoundTripCheck : Bool :=
   let ops := [Op.add .w32, .sub .w32, .mullo .w32, .neg .w32, .id .w32,
+    .udiv .w32 0, .udiv .w32 4294967295, .urem .w32,
+    .sdiv .w32 0, .sdiv .w32 4294967295, .srem .w32,
+    .mulh .w32, .mulhu .w32, .mulhsu .w32, .selectEq .w32,
     .and 32, .or 32, .xor 32, .shl .w32, .lshr .w32, .ashr .w32,
     .ltu .w32, .lts .w32, .low 8 32, .extract 8 16 32, .zext 8 .w32 32,
     .sext 16 .w32 32, .bswap 32 32, .externalResult 12 3, .inputByte 7,
     .mergeLow 16 32]
   ops.all fun op =>
     let args := if opArity op == some 1 then [Term.V32 1]
+      else if opArity op == some 4 then [Term.V32 1, Term.C32 2, Term.V32 3, Term.V32 4]
       else [Term.V32 1, Term.C32 2]
     let term := Term.app .w32 op args
     parseTerm (renderTerm term) == some term

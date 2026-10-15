@@ -15,9 +15,10 @@ create 的入口假设与 step 的指令规则按目标架构给定，具体入�
 U3 按职责拆分库、模块与命名空间，入口与构建目标一一对应：
 
 - [ClassifierExpr.lean](../../ClassifierExpr.lean) / `ClassifierExpr`：共享表达式表示与操作，模块为 [Bits](../../ClassifierExpr/Bits.lean)、[Reg](../../ClassifierExpr/Reg.lean)、[Numeric](../../ClassifierExpr/Numeric.lean)、[Op](../../ClassifierExpr/Op.lean)、[Term](../../ClassifierExpr/Term.lean)、[Expr](../../ClassifierExpr/Expr.lean)、[Virtual](../../ClassifierExpr/Virtual.lean)、[Direction](../../ClassifierExpr/Direction.lean)、[Insn](../../ClassifierExpr/Insn.lean)、[Parse](../../ClassifierExpr/Parse.lean)、[Render](../../ClassifierExpr/Render.lean)、[Ffi](../../ClassifierExpr/Ffi.lean)。渲染仅依赖表达式对象，不导入路径模块。
+  共享层还包含 [MapLayout](../../ClassifierExpr/MapLayout.lean)、[CrossPred](../../ClassifierExpr/CrossPred.lean)、[ObservationEq](../../ClassifierExpr/ObservationEq.lean)，新增数值证明、项解释和结构对齐证明分别位于 [NumericProofs](../../ClassifierExpr/NumericProofs.lean)、[Semantics](../../ClassifierExpr/Semantics.lean)、[ObservationEqProofs](../../ClassifierExpr/ObservationEqProofs.lean)。这几个模块的存在与本轮 gate 状态分别记录，证明范围见[证据普查](跨架构比较.md#形式化证据普查)。
 - [PathMerge.lean](../../PathMerge.lean) / `PathMerge`：[Path](../../PathMerge/Path.lean) 维护位置、候选、节点、边与状态组合，[Budget](../../PathMerge/Budget.lean) 维护预算、工作队列与图快照驱动，[Merge](../../PathMerge/Merge.lean) 维护线协议精确配置比较。三者显式导入并使用 ClassifierExpr 类型。
 - [RV32IMC.lean](../../RV32IMC.lean) / `RV32IMC`：[Initial](../../RV32IMC/Initial.lean)、[Expr](../../RV32IMC/Expr.lean)、[Expand](../../RV32IMC/Expand.lean) 分别承载产品入口、指令值规则与 create/step 导出。RV32IMC 按所需对象导入 ClassifierExpr、PathMerge.Path 与 PathMerge.Budget，不以 PathMerge.Merge 作为聚合入口。
-- [EBPF.lean](../../EBPF.lean) / `EBPF`：[Insn](../../EBPF/Insn.lean) 与 [Encode](../../EBPF/Encode.lean) 维护指令及原始槽位解码，[Expr](../../EBPF/Expr.lean) 维护 MOV/ADD 值关系，[Initial](../../EBPF/Initial.lean) 维护入口，[Memory](../../EBPF/Memory.lean) 维护上下文、栈、Map 与包的地址绑定及共享单元读写适配，[Helper](../../EBPF/Helper.lean) 维护原生 helper 的 ABI 取源、可选冻结键和返回效果，[Step](../../EBPF/Step.lean) 维护 `EBPF.ebpfStep` 的局部候选及观察，[Expand](../../EBPF/Expand.lean) 维护 Meta 解析、create/step String 导出及 PathMerge 预算驱动适配。入口关系由[create 的 eBPF 规则](create.md#ebpf)维护。
+- [EBPF.lean](../../EBPF.lean) / `EBPF`：[Insn](../../EBPF/Insn.lean) 与 [Encode](../../EBPF/Encode.lean) 维护指令及原始槽位解码，[Expr](../../EBPF/Expr.lean) 维护 MOV、二元 ALU、NEG、MOVSX 与字节序值关系，[Initial](../../EBPF/Initial.lean) 维护入口，[Memory](../../EBPF/Memory.lean) 维护资源地址绑定、共享单元读写、顺序原子数值更新及既有内容字节冻结，[Helper](../../EBPF/Helper.lean) 维护原生 helper 的 ABI 取源、完整冻结尾和返回效果，[Step](../../EBPF/Step.lean) 维护 `EBPF.ebpfStep` 的局部候选及观察，[Expand](../../EBPF/Expand.lean) 维护 Meta 解析、create/step String 导出及 PathMerge 预算驱动适配。入口关系由[create 的 eBPF 规则](create.md#ebpf)维护。本轮源码的编译证据见[本轮实现与验证状态](#本轮实现与验证状态)。
 
 旧聚合库及其目录整体撤除，不保留兼容导入、命名空间别名或 umbrella；Demo 及其唯一 RV32 示例检查一并撤除。两种产品的指令侧展开适配器保留在各自库中，共同预算驱动移入 PathMerge。
 
@@ -206,7 +207,7 @@ Expr 行沿用共享解析与渲染格式，例如：
 - Helper：`event` 为自然数调用身份；`helperId` 为小于 `2^32` 的自然数，经共享 `helperKind` 取得一致的类型；`args` 是项字符串数组，必须全部为良构 Term32，或全部为良构 Term64，不能混用载体。字段解析上下文默认 32 位，64 位常元和应用须显式保留 `c64:` 或 `t64(...)`，64 位变元按自身标记解析。原生 eBPF 路径生成 Term64 的 ABI 前缀及同宽冻结字节尾。共同 merge 不按编号检查目标专属参数个数或调用契约，空参数数组有效。
 - Branch：`position` 是从 1 开始的自然数指令序号，必须大于零；与 `loc` 的零基字符串表示分别处理。`dir` 仅接受 `"taken"` 与 `"notTaken"`。`width` 指定两个条件项的相同载体位宽；`cond.lhs`、`cond.rhs` 为项字符串，`cond.rel` 为关系字符串，关系的比较宽度须在载体范围内。共享校验不验证程序上界、该位置是否确为条件分支或方向与机器指令的对应。
 - Return：`width` 为完整返回项载体位宽，`term` 必须解析为该位宽的良构项。共同校验不识别最外层返回。
-- MapWrite：`event` 为写入事件身份，`mapWidth`、`sourceWidth` 分别指定 Map 项与完整源项的载体位宽，`map`、`source` 为项字符串。`key` 是按顺序保存的 Term32 字符串数组，长度参与结构比较，常量键字节须小于 256；符号键项的字节取值、完整冻结来源和与对象布局匹配仍是语义义务。`offset` 为元素值内的自然数字节偏移。
+- MapWrite：`event` 为写入事件身份，`mapWidth`、`sourceWidth` 分别指定 Map 项与本条观察源项的载体位宽，`map`、`source` 为项字符串。`key` 是按顺序保存的 Term32 字符串数组，长度参与结构比较，常量键字节须小于 256；符号键项的字节取值、完整冻结来源和与对象布局匹配仍是语义义务。`offset` 为元素值内的自然数字节偏移。原生 `STX DW` 写入 Map 单元时，由[Map 写入生成器](../Predicate/MapWrite谓词.md#写入宽度与覆盖范围)特有的分解规则产生偏移 \(o\)、\(o+4\) 的两条观察，每条 `sourceWidth` 为 32；两条共用写入事件、Map 项与冻结键。
 - PacketWrite：`event` 为写入事件身份，`packet` 为自然数包资源身份，`offset` 为相对包起点的自然数字节偏移；`width` 为完整源项的载体位宽，`source` 为项字符串。一次多字节存储仍只产生一个事件，实际访问宽度另由指令和记录提供。
 
 各位宽字段仅接受 JSON 数字 `32` 或 `64`，并须与实际项位宽一致。两类写入的事件和偏移允许零。所有项均递归检查 AST 的常量范围、寄存器变元、运算符签名、参数个数与宽度；所有必填字段均检查类型。`predicateWellFormed` 提供这一结构检查，不提供资源有效性、动态身份唯一性或指令语义的证明。
@@ -216,13 +217,16 @@ Lean 的 `Cond` 以 `lhs`、`rel`、`rhs` 存储条件，载体取自 `lhs.width
 
 共享 Expr、Helper 与五类 Predicate 的项字符串中，裸常量继承字段位宽；嵌套常量载体与上下文不同则使用 `c32:n` 或 `c64:n`。应用结果载体与上下文不同可用 `t32(term)` 或 `t64(term)`。投影与扩展的跨载体应用显式保留输入位宽：`lowq/v`、`extracto,len/v`、`bswapq/v`，以及 `zextq/w/v`、`sextq/w/v`，其中 `v` 是输入载体，`w` 是输出载体。例如 `zext8/64/32(v32:1)` 保留 32 位输入和 64 位结果。载体相同时保留既有短写法；共享解析器与渲染器保留这些载体标注。
 
+新符号算子的原始项标签为 `udiv{bits}_{zeroResult}`、`sdiv{bits}_{zeroResult}`、`urem{bits}`、`srem{bits}`、`mulh{bits}`、`mulhu{bits}`、`mulhsu{bits}`、`selectEq{bits}`，其中 `bits` 为 32 或 64。除法的除零结果参数参与 AST 与文本相等，不能在往返时删除。`selectEq` 接受四个同宽项，其余新增算子接受两个同宽项。`Op.validSignature` 是共享签名检查入口，`Term.wellFormed` 递归复用该检查，Predicate 解析不另设第二套签名规则。数学数值定义见[除法与余数](../Expr/寄存器/真实寄存器.md#除法与余数赋值)、[乘法高半](../Expr/寄存器/真实寄存器.md#乘法高半赋值)和[原子比较交换](../Expr/寄存器/原子数值更新与旧值返回.md#ebpf-stx-atomic)。
+
 `predicates` 允许重复同结构成员。结构累积保留已有列表次序，再依局部列表次序追加尚未出现的成员；精确合并仅比较集合成员，不比较排列或重复次数。参数和键数组的内部顺序仍参与每个观察的相等。列表排列、集合相等及有序 History 记录是三种不同的比较范围。
 
 ### 五类观察的实现对应
 
 RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构造和 wire 能表示一个类，不表示该类全部机器生成条件已有实现或证明。
 
-- Helper 的调用身份和 ABI 前缀参数继续沿用既有生成；lookup 的 `externalResult` 使用 `[helperId, map, keyPtr]`。Meta `maps` 的布局与栈上 `readStackBytes` 成功时，lookup 的 helper `args` 在 ABI 前缀后追加冻结键字节（`Term32`，常量 `< 256`），行为边界由[共同生成条件](../Predicate/Helper谓词.md#生成条件)维护。其他类型的返回项只使用其 ABI 前缀；未支持编号产生空参数 Helper 及 32 位全一返回项。
+- Helper 的调用身份和 ABI 前缀参数继续沿用既有生成；lookup 的 `externalResult` 使用 `[helperId, map, keyPtr]`。`RV32IMC.readBufferBytes` 按同一执行前关系读取 Stack、Map、Packet 或显式绑定 Context 的已有完整内容，范围内每字节须唯一解析到同一资源对象。布局唯一、完整读取成功时，lookup/delete 追加完整键，update 同时追加完整键和值；任一读取不足就保留原 ABI 前缀。冻结期间不补充缺失资源输入。`inferStep` 传入 `context.boundContext`，helper 编号寄存器不提供 Context 权限。返回项始终只使用 ABI 前缀；未支持编号产生空参数 Helper 及 32 位全一返回项。完整事件的数学定义见[共同生成条件](../Predicate/Helper谓词.md#生成条件)。
+  `readBufferBytes(E,addr,n,maps,boundCtx)` 对 Map 缓冲区先从实际 lookup 来源确定事件、模位移及源 Map 项，再要求该源 Map 具有唯一布局，检查位移加 n 同时不超过其 `valueSize` 和 \(2^{32}\)。缓冲区所在 Map 与被调用 helper 的目标 Map 可以不同，范围检查使用前者。缺失或重复源布局、未知源 Map、超界或整段回绕均保留原 ABI 前缀，即使范围外旧单元等式已经存在也不冻结。该结构检查仍不证明资源权限或外部布局真实性。
 - Branch 覆盖 `BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`、`C.BEQZ`、`C.BNEZ` 的每个保留方向；取同一执行前关系的两端 solve 后完整项，Taken 使用原关系，NotTaken 使用补关系。`position` 为运行时数组下标加一，原 Expr 比较约束继续保留；确定比较保留一侧时也生成该侧观察。
 - Return 在 `JALR x0,0(ra)` 或 `C.JR ra` 经已有绑定识别为外层 Exit 后，读取执行前关系中 `a0` 的完整 32 位项。程序内返回不生成 Return；完整项缺失拒绝。Exit 的写后完整项检查仍保留，两个时点与实际返回结果的一致性仍需证明。
 - PacketWrite 覆盖 Expr 实际选定为 Packet 的 `SB`、`SH`、`SW`、`C.SW`、`C.SWSP`。资源选择沿用 Stack、Map、Packet 的既有优先级；能取得包别名不改变已选定的 Stack 存储，正常对齐的 `C.SWSP` 通常走 Stack。选定 Packet 后取得 `PacketAccess` 的资源身份与偏移，并保存 Expr 字节拆分使用的同一完整源项，生成一个事件。绑定层以 `Option NodeId` 接收真实执行前节点引用；产品 `inferStep` 与 `rv32Snapshot` 传入来源节点身份，无身份时拒绝 `UndefinedSrc`。局部效果与观察一起组合，后续字节覆写保留旧事件。
@@ -230,15 +234,19 @@ RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构
 
 eBPF 的局部候选由 [EBPF/Step.lean](../../EBPF/Step.lean)生成，内存写入观察由 [EBPF/Memory.lean](../../EBPF/Memory.lean)与值效果一起返回：
 
-- Helper 覆盖 [EBPF.Encode](../../EBPF/Encode.lean) 解码出的 `.callHelper imm`，即操作码 `0x85` 且 `dst=src=off=0`。`EBPF.ebpfStep` 先检查下一原始槽位存在，再由 [parseHelperCall](../../EBPF/Helper.lean) 检查执行前 Expr 的 `keysUnique` 与 `wellTyped`，按立即数编号选择共享 helper 类型并读取恰好 `helperArity kind` 个完整 64 位参数等式；缺失或宽度不符为 `UndefinedSrc`。两架构的编号、参数数量、独立 ABI 及返回项定义见[Helper 共同规则](../Predicate/Helper谓词.md#类型定义)与[返回效果](../Predicate/Helper谓词.md#生成的-expr)。成功时发射 `.helper event call.kind args`，创建 `real64:0` 的返回等式；lookup 另创建 `Reg.mapDword event 0 = Term.regVar event (Reg.real64 0)`。`freezeLookupArgs` 在 lookup 的 `[map,keyPtr]` 前缀后追加 `stackBytes` 取得的完整键字节，按小端栈单元拆分，每项为 Term64；可折叠的字节为 `C64 c`（`c < 256`）。
+- Helper 覆盖 [EBPF.Encode](../../EBPF/Encode.lean) 解码出的 `.callHelper imm`，即操作码 `0x85` 且 `dst=src=off=0`。`EBPF.ebpfStep` 先检查下一原始槽位存在，再由 [parseHelperCall](../../EBPF/Helper.lean) 检查执行前 Expr 的 `keysUnique` 与 `wellTyped`，按立即数编号读取恰好 `helperArity kind` 个完整 64 位参数；缺失或宽度不符为 `UndefinedSrc`。成功时发射 `.helper event call.kind args`，创建 `real64:0` 返回等式；lookup 另创建 `Reg.mapDword event 0 = Term.regVar event (Reg.real64 0)`。`freezeHelperArgs` 从唯一可解析的 Stack、Map、Packet、Context 已有缓冲区冻结字节，lookup/delete 追加完整键，update 仅在键和值均齐备时追加全部尾部；每项为 Term64。失败保留原 ABI 参数，返回项仍只使用该前缀。独立 ABI 与事件解释见[Helper 共同规则](../Predicate/Helper谓词.md#类型定义)。
+  Context 的逐字节冻结只投影两个已有 Context32 单元；普通地址解析仍仅允许这两个单元的完整四字节读取，没有因此增加普通 Context 访问权限。
+  每个字节的资源解析须唯一，并以 `BufferOrigin` 要求整段保持同一 Stack、Context、Map 或 Packet 身份，跨资源拼接不冻结完整尾。
 
-- Branch 覆盖 JEQ、JNE、无符号 JGT 的 JMP 与 JMP32 形式。两端是同一执行前状态取得的完整 64 位源项，立即数按 32 位补码扩展；JMP 使用完整关系，JMP32 使用 `eqN 32`、`neN 32`、`gtuN 32`，NotTaken 使用补关系。Branch 的 `cond` 保留原始完整 `lhs`、`rhs`；约束通过两种产品共用的 [ExprSet.insertConstraint](../../ClassifierExpr/Expr.lean) 插入，其 `solveExpr` 规范化右侧项。约束项与 Branch 的原始条件项须区分，只有 `decideWith` 内部的数值求值决定保留一侧或两侧。每个保留方向都有约束 Expr 与 Branch，`position` 为原始槽位下标加一，条件项载体仍为 64 位。确定比较保留一侧时也生成观察；只有保留目标须通过范围与 continuation 检查。
+- Branch 覆盖 JEQ、JNE、JGT、JGE、JLT、JLE、JSGT、JSGE、JSLT、JSLE、JSET 的 JMP 与 JMP32 形式。两端从同一执行前状态取得完整 64 位源项，立即数按 32 位补码扩展；JMP 使用完整关系，JMP32 使用相应的显式 32 位关系，JSET 分别使用 `bitsnz 64`、`bitsnz 32`，NotTaken 使用补关系。Branch 的 `cond` 保留完整 `lhs`、`rhs`；约束通过共享 [ExprSet.insertConstraint](../../ClassifierExpr/Expr.lean) 插入。数值 `decideWith` 决定保留一侧或两侧，每个保留方向均生成约束和 Branch，`position` 为原始槽位下标加一。保留目标须通过范围与 continuation 检查。
 - Return 覆盖作为最外层返回的 EXIT：读取执行前 \(r_0\) 完整 64 位等式右侧项，生成 `.ret t` 并到达 Exit。缺失完整项拒绝；数组末尾没有隐式 Return。
-- PacketWrite 覆盖 STX MEM 的 1、2、4、8 字节存储，前提为 [EBPF.Memory.resolveAccess](../../EBPF/Memory.lean) 唯一选择 Packet，并且同一次实际写入成功。观察保存 `event`、该 `PacketAccess` 的包身份与偏移、执行前源寄存器的完整 64 位项，一次存储产生一个事件。单元型 Context 或 Stack 存储不生成 PacketWrite。局部值效果和观察一起交给后继准备，后续包字节覆写保留此前事件。
+- PacketWrite 覆盖普通 ST 立即数、STX 及 STORE_REL 的 1、2、4、8 字节存储，要求 [EBPF.Memory.resolveAccess](../../EBPF/Memory.lean) 唯一选择 Packet 且同次实际数值写入成功。观察保存事件、包身份、偏移及执行前完整源项；一次存储生成一个事件。Context、Stack 存储不生成 PacketWrite，原子数值规则也不生成该观察。
 
-Map 元素地址解析、LDX 加载及 STX 存储已由 [EBPF.Memory.resolveAccess/readAccess/writeAccess](../../EBPF/Memory.lean) 处理：地址项须保留 lookup 外部结果来源，Meta 布局匹配，元素内范围不超过 `valueSize`，且一次访问不跨 8 字节 Map 单元。内容以 `Reg.mapDword event offset` 的完整关系读取或覆写；lookup 只建立字节偏移 0 的首个单元，其他单元没有隐式内容，Map 存储也要求已有内容关系。此路径不发射 MapWrite；ST 立即数存储仍没有对应指令构造和成功规则。
+Map 元素访问由 [EBPF.Memory.resolveAccess/readAccess/writeAccess](../../EBPF/Memory.lean) 处理。地址须保留 lookup 来源，Meta 布局匹配，元素内偏移非负且范围不超过 `valueSize`，一次访问不跨 8 字节 Map 单元。内容以 `Reg.mapDword event offset` 的完整关系读取或覆写；lookup 只建立偏移 0 的首个单元，其余单元须已有内容。普通 ST、STX、STORE_REL 成功写 Map 时，`exprEffects` 从所属 lookup 取得非空、长度等于 `keySize` 的冻结键。DW 生成同事件、同 Map、同键的偏移 \(o\)、\(o+4\) 两条 MapWrite，源项为同一完整源的低、高 32 位；较窄存储生成一条观察并保留完整源项。缺冻结键或 Map 项不匹配时拒绝 `UndefinedSrc`，局部值与观察整次提交。分解定义见[MapWrite 生成规则](../Predicate/MapWrite谓词.md#写入宽度与覆盖范围)。
 
-两架构的 wire Helper 保存 ABI 前缀，lookup 可有冻结键尾；其成功与完整字节事件精化的边界由[共同生成条件](../Predicate/Helper谓词.md#生成条件)维护。须按[义务 H-B](../Predicate/Helper谓词.md#数学性质)证明冻结尾与 [MapLookup 完整事件](../Predicate/MapLookup谓词.md#类型定义)的布局、字节顺序和调用时键一致。ABI-only 的 map-kind 观察尚不足以恢复完整冻结事件；update/delete 的 ABI 指针前缀也不能直接视为已保存的完整键和值。wire 与这些精化构造的对应仍须满足 H-B，以及资源变化的 H-U/H-D；MapWrite 的引用来源与保存义务仍归 [MW-O*](../Predicate/MapWrite谓词.md#证明义务)。
+原生 lookup 冻结的键字节保持 Term64，与其 ABI 参数采用相同载体；MapWrite 生成器按[冻结键值的来源规则](../Predicate/MapWrite谓词.md#来自-maplookup-的值引用)将其承载为共享 wire 所需的 Term32 键字节。转换只读取 lookup 已保存的项，闭字节按模 256 取值，符号字节使用已冻结的 32 位八位提取项。产品前沿的有限检查要求同一节点含偏移 0、4 的两条 32 位源项 MapWrite，写入事件、Map 项和非空冻结键相同，且两条均通过 `predicateWellFormed` 及 `renderPredicateJson`、`parsePredicateJson` 的结构回读；该检查不证明键值与真实查询的对应。
+
+两架构的 wire Helper 保存 ABI 前缀及可取得的完整冻结尾。完整尾对应 MapLookup、MapUpdate、MapDelete 的尝试调用事件，读取不足的 ABI-only 记录仍不能恢复完整事件。冻结布局、旧内容和字节顺序的可靠性由[义务 H-B](../Predicate/Helper谓词.md#数学性质)维护；实际更新、删除成功及资源变化仍需要 H-U、H-D。两侧生成器不因冻结成功就修改已有虚拟 Map 关系。MapWrite 的引用来源与保存义务仍归 [MW-O*](../Predicate/MapWrite谓词.md#证明义务)。
 
 Packet 与 Map 的源项载体宽度不决定窄存储宽度 \(q\)；wire 未添加 \(q\)、字节序或覆盖范围。写入事件与这些属性的关联、访问有效性、别名一致性、真实节点身份的动态区分、历史恢复以及名称外延性仍须依[各类数学义务](../Predicate/谓词定义.md#观察集合累积与可满足性)证明。共享 wire 的 64 位支持本身不能证明额外的 eBPF 指令覆盖。
 
@@ -287,7 +295,7 @@ Packet 与 Map 的源项载体宽度不决定窄存储宽度 \(q\)；wire 未添
 
 `scope:"ExactConfig"` 只保证所提供配置在当前五类结构表示中完整相等。该结果是[精确配置共享判据 D3](Jump/证明义务-路径合并完备.md#配置执行前缀与后续行为)的结构比较结果；表示覆盖与数学构造的差异见[五类观察的实现对应](#五类观察的实现对应)，语义解释与后缀引用许可还需要以下证据。
 
-Architecture-Agnostic 仍是研究假设，不是已证明的跨 ISA 验证器性质。ClassifierExpr 共享对象、PathMerge 的线协议比较及共同预算驱动不证明两种架构的入口、步骤或行为等价。现有 [EBPF/Expand.lean](../../EBPF/Expand.lean) 已提供 create/step/预算快照产品，复用 [PathMerge/Budget.lean](../../PathMerge/Budget.lean)。可执行切片包括 MOV/ADD、上下文两字段入口、LDX/STX 的 Context/Stack/Map/Packet 访问、JA、JEQ/JNE/JGT 的 JMP/JMP32、LDDW 常元或已绑定位置赋值、原生 helper call、EXIT，以及上述 Helper、Branch、Return、PacketWrite 生成。入口、资源访问和调用前提分别由[create](create.md)、[栈规则](../Expr/寄存器/虚拟栈.md#虚拟栈读写)、[字段读写](../Expr/寄存器/单元字段读写.md#单元字段读写)、[包规则](../Expr/寄存器/包字节.md#包字节读写)、[资源读取](../Expr/寄存器/资源读取与位置赋值.md)与[Helper 规则](../Predicate/Helper谓词.md)维护，具体 Map 访问覆盖及 ABI 观察精化的缺口见[实现对应](#五类观察的实现对应)。内部 CALL 与返回配对仍缺成功规则；BTF CALL 与 CALLX 不在原生 helper 成功域，eBPF MapWrite 尚未生成。地址绑定与真实资源有效性的对应、完整观察和历史保持仍须证明。这一切片不构成 RV32 产品能力对等或跨 ISA 等价证据。
+Architecture-Agnostic 仍是研究假设。共享对象、结构比较与共同预算驱动不证明两种架构的入口、步骤或行为等价。[EBPF/Expand.lean](../../EBPF/Expand.lean) 已有 create、step、预算快照产品，本轮扩充的实际源码范围及验证状态见[本轮实现与验证状态](#本轮实现与验证状态)。入口与资源前提分别由[create](create.md)、[栈规则](../Expr/寄存器/虚拟栈.md#虚拟栈读写)、[字段读写](../Expr/寄存器/单元字段读写.md#单元字段读写)、[包规则](../Expr/寄存器/包字节.md#包字节读写)、[资源读取](../Expr/寄存器/资源读取与位置赋值.md)和[Helper](../Predicate/Helper谓词.md)维护。内部 CALL 与返回配对仍缺成功规则，BTF CALL 与 CALLX 不在原生 helper 成功域。地址绑定与真实资源有效性、完整观察生成和历史保持仍须证明。
 
 - 运行时须保证位置有效、相同程序与固定语义语境、同一次分支的两侧来源、配置真实到达及可复用后缀的归属。共同 merge 的结构检查不证明这些事实。
 - 完整数学 `Merged(M)` 仍要求 [e_N](Jump/路径合并-接口契约.md#输入) 的 NotTaken 后缀适用性与完整行为覆盖、`e_T` 的 Taken 记录有效性及到达覆盖，以及 [e_M](Jump/路径合并-接口契约.md#mergedm) 的全称精确复用、前缀连接和后缀引用适用性。此 String 请求不传入或产生这些证明，不得把 `status:"merged"` 当作完整 `Merged(M)` 凭据。
@@ -296,6 +304,28 @@ Architecture-Agnostic 仍是研究假设，不是已证明的跨 ISA 验证器�
 - 结构不相等只否定精确配置判据，不能作为更宽行为等价的反例。数学拒绝原因中的 `Counterexample` 须有明确否定范围的已证反例；当前导出不产生该结果。
 - 特殊循环仅由满足 `Admit(W)` 及 `e_F` 的 `Escape(W)` 获得许可，见[数学契约](Jump/路径合并-接口契约.md#escapew)。精确匹配、比较失败或回返到分支位置均不建立该准入；当前导出不返回 `Escape`，不生成循环凭据。
 - [PathMerge/Merge.lean](../../PathMerge/Merge.lean) 的项、Cond 与 Predicate 相等判定使用携带等式或不等式证明的 `DecidableEq`。`#guard` 与 `PathMerge.runMergeChecks` 覆盖有限 wire 回归，包括混合重排与重复成员成功、各类构造字段差异拒绝、全部候选有效性和旧声明标签不投影。`mergeJustDropOverwriteCheck` 与 `mergeComplementaryOverwriteCheck` 是不含新类观察的旧表示缩减实例，只检验 Expr 覆写前后及互补约束；不能作为新 Branch 累积后的汇合依据。这些实例不建立 P1 至 P4、完整 `Merged(M)` 或一般指令语义正确性。[MergeCheck.lean](../../MergeCheck.lean) 提供 `lake env lean --run MergeCheck.lean` 入口；实际执行结果由对应验证记录提供。
+
+### 本轮实现与验证状态
+
+2026-10-15 恢复轮次已用正式入口实测（有限回归与四库构建，不等于全指令或跨 ISA 行为等价）：
+
+| 入口 | 实测 |
+| --- | --- |
+| `lake build ClassifierExpr PathMerge RV32IMC EBPF` | 通过（退出码 0） |
+| `lake exe semanticCheck` | 12 组全 PASS |
+| `lake env lean --run MergeCheck.lean` | 37 项全 PASS（含 malformed 与 ExactConfig 复用） |
+| `lake env lean --run CrossArchCheck.lean` | 成功；eBPF `just_tx` complete/`ret3`；RV32 夹具 fail/`UnboundTarget`/`loc34`；`claim=structural`、`behavioralEquivalence=notEstablished`、`coverageDiffers` |
+
+实现覆盖摘要：
+
+- 共享数值层增加 `UDIV`、`UREM`、`SDIV`、`SREM`、`MULH`、`MULHU`、`MULHSU`、`SELECTEQ`，除法算子保留 `zeroResult`，值域与边界条件见[真实寄存器数值规则](../Expr/寄存器/真实寄存器.md)。
+- eBPF 使用 `BinaryOp` 和 `Insn.binary` 表示 ADD、SUB、MUL、DIV、MOD、SDIV、SMOD、AND、OR、XOR、LSH、RSH、ARSH，MOV 保持独立取源。ALU32 先将操作数投影为 32 位，再执行共享算子，结果零扩展至真实 64 位目标。另有 NEG、MOVSX、大小端转换及 BSWAP。
+- `ExternalInterpretation` 仅为 `externalResult` 和 `inputByte` 提供部分值函数，`interpretTerm ν θ t : Option Nat` 和 `interpretExpr ρ ν θ e : Option Bool` 显式接收它。未知外部值或坏签名保持无定义。在 `θ.Total` 与良构前提下，`solve_interpret` / `normalizeAlgebra_interpret` 已机检完整 R1–R6 解释保持；部分环境上的无条件等式仍排除。见[Term](../Expr/Term/Term.md#未解释运算的解释补全)及[solve](../Expr/Term/solve.md#解释保持性)。
+- eBPF 内存扩充 ST 立即数、MEMSX、LOAD_ACQ、STORE_REL，以及 Stack/Map 上的 W/DW 顺序原子数值更新。原子规则不额外生成普通 MapWrite 或原子观察，不证明并发或内存顺序。
+- RV32 M 运算使用共享符号算子，保留开放源项。MapWrite 观察要求指针 Map 与冻结键观察 Map 一致（`map != mapTerm → none`），与 eBPF 对齐；匹配/不匹配由 `RV32IMC/Expand.lean` 的 `#guard` 永久回归覆盖。
+- 一般结构证明范围见[形式化证据普查](跨架构比较.md#形式化证据普查)。外部解释真实性、资源权限、成功 helper 契约、并发、完整 History、循环与跨架构行为等价仍为独立义务。
+- [SemanticCheck.lean](../../SemanticCheck.lean) 提供 `lake exe semanticCheck`；上述 12 组 PASS 是有限消费者回归，不替代一般语义定理。
+
 
 ## just_drop 实际菱形诊断
 以下历史诊断均沿用当时未生成新类观察的捕获与报告，不作为五类生成扩展后的 live 复用结论；新版本复查需保留完整混合观察，并以严格相等预期拒绝仍有互补 Branch 成员的两侧。

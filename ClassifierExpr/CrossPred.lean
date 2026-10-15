@@ -11,7 +11,11 @@ namespace ClassifierExpr
 
 inductive CrossOp where
   | add | sub | mullo | neg | id | shl | lshr | ashr | ltu | lts
-  | and (q : Nat) | or (q : Nat) | xor (q : Nat)
+  | udiv (bits zeroResult : Nat) | urem (bits : Nat)
+  | sdiv (bits zeroResult : Nat) | srem (bits : Nat)
+  | mulh (bits : Nat) | mulhu (bits : Nat) | mulhsu (bits : Nat)
+  | selectEq (bits : Nat)
+  | and | or | xor
   | low (q : Nat) | extract (offset length : Nat)
   | zext (q input : Nat) | sext (q input : Nat) | bswap (q input : Nat)
   | inputByte (resource : Nat) | mergeLow (q bits : Nat)
@@ -62,9 +66,13 @@ instance : LawfulBEq CrossTerm where
 
 private def crossOp : Op → CrossOp
   | .add _ => .add | .sub _ => .sub | .mullo _ => .mullo
+  | .udiv w z => .udiv w.bits z | .urem w => .urem w.bits
+  | .sdiv w z => .sdiv w.bits z | .srem w => .srem w.bits
+  | .mulh w => .mulh w.bits | .mulhu w => .mulhu w.bits
+  | .mulhsu w => .mulhsu w.bits | .selectEq w => .selectEq w.bits
   | .neg _ => .neg | .id _ => .id | .shl _ => .shl
   | .lshr _ => .lshr | .ashr _ => .ashr | .ltu _ => .ltu | .lts _ => .lts
-  | .and q => .and q | .or q => .or q | .xor q => .xor q
+  | .and _ => .and | .or _ => .or | .xor _ => .xor
   | .low q _ => .low q | .extract o n _ => .extract o n
   | .zext q _ v => .zext q v | .sext q _ v => .sext q v
   | .bswap q v => .bswap q v | .inputByte r => .inputByte r
@@ -74,7 +82,8 @@ private def crossOp : Op → CrossOp
 private def identityCast : Op → Bool
   | .id _ => true
   | .extract o n v => o == 0 && n == v
-  | .zext q _ v | .low q v => q == v
+  | .zext q _ v => q ≤ v
+  | .low q v => q == v
   | .sext q w v => q == v && v == w.bits
   | .bswap q v => q == 8 && v == 8
   | _ => false
@@ -97,44 +106,21 @@ private def crossRegAlpha (r : Reg) : Nat :=
   if r.kind == .map then r.alpha - triangle (pairDiagonal r.alpha 0 r.alpha)
   else r.alpha
 
-mutual
-  def toCrossTerm : Term → CrossTerm
-    | .const w c => .c (s w.bits c)
-    | .var _ name => .var name
-    | .regVar _ r => .reg r.kind (crossRegAlpha r)
-    | .app _ (.externalResult _ lane) args => .external lane (crossTerms args)
-    | .app _ op [t] => if identityCast op then toCrossTerm t
-                      else .app (crossOp op) [toCrossTerm t]
-    | .app _ op args => .app (crossOp op) (crossTerms args)
-  termination_by t => sizeOf t
+/-- Lane zero is the ABI return value: keep helper id and resource, not frame pointers. -/
+private def abiPrefix (lane : Nat) (args : List Term) : List Term :=
+  if lane == 0 then args.take 2 else args
 
-  private def crossTerms : List Term → List CrossTerm
-    | [] => []
-    | t :: ts => toCrossTerm t :: crossTerms ts
-  termination_by ts => sizeOf ts
-end
-
-/- Width of the represented observation, not of its original carrier.
-Variables require the generation-side common 32-bit value premise (CP-Q). -/
-mutual
-  def CrossTerm.compareBits : CrossTerm → Nat
-    | .c z => if -(2^31 : Int) ≤ z && z < 2^31 then 32 else 64
-    | .var _ | .reg _ _ => 32
-    | .app op args =>
-      match op with
-      | .low q | .extract _ q | .zext q _ | .sext q _ | .bswap q _ => q
-      | .and q | .or q | .xor q | .mergeLow _ q => q
-      | .inputByte _ => 8
-      | .ltu | .lts => 1
-      | _ => max 32 (crossBits args)
-    | .external _ args => max 32 (crossBits args)
-  termination_by t => sizeOf t
-
-  private def crossBits : List CrossTerm → Nat
-    | [] => 0
-    | t :: ts => max t.compareBits (crossBits ts)
-  termination_by ts => sizeOf ts
-end
+private theorem abiPrefix_sizeOf_le (lane : Nat) (args : List Term) :
+    sizeOf (abiPrefix lane args) ≤ sizeOf args := by
+  unfold abiPrefix
+  split
+  · cases args with
+    | nil => simp
+    | cons a args =>
+      cases args with
+      | nil => simp
+      | cons b args => cases args <;> simp +arith [List.take]
+  · exact Nat.le_refl _
 
 /-- Total structural order: constructor rank, then constructor fields in order. -/
 private def crossRank : CrossTerm → Nat
@@ -168,6 +154,85 @@ mutual
   private def regRank : RegKind → Nat
     | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4
 end
+
+/- Width of the represented observation, not of its original carrier.
+Variables require the generation-side common 32-bit value premise (CP-Q). -/
+mutual
+  def CrossTerm.compareBits : CrossTerm → Nat
+    | .c z => if -(2^31 : Int) ≤ z && z < 2^31 then 32 else 64
+    | .var _ | .reg _ _ => 32
+    | .app op args =>
+      match op with
+      | .low q | .extract _ q | .zext q _ | .sext q _ | .bswap q _ => q
+      | .mergeLow _ q => q
+      | .udiv bits _ | .urem bits | .sdiv bits _ | .srem bits
+      | .mulh bits | .mulhu bits | .mulhsu bits | .selectEq bits => bits
+      | .inputByte _ => 8
+      | .ltu | .lts => 1
+      | _ => max 32 (crossBits args)
+    | .external _ args => max 32 (crossBits args)
+  termination_by t => sizeOf t
+
+  private def crossBits : List CrossTerm → Nat
+    | [] => 0
+    | t :: ts => max t.compareBits (crossBits ts)
+  termination_by ts => sizeOf ts
+end
+private def crossUnary (op : Op) (x : CrossTerm) : CrossTerm :=
+  if identityCast op then x
+  else match op with
+    | .extract o n _ =>
+      if o == 0 && x.compareBits == 32 && x.compareBits ≤ n then x
+      else match x with
+        | .app (.sext q _) [v] =>
+          if o + n ≤ q then .app (.extract o n) [v]
+          else .app (.extract o n) [x]
+        | _ => .app (.extract o n) [x]
+    | _ => .app (crossOp op) [x]
+
+/-- R6 recognizes only the closed word-content carry idiom. Its interpretation
+requires H and L to name word 1 and word 0 of the same Map element (CP-Bytes/Q);
+this is a non-injective observation key, not an identity for arbitrary H. -/
+private def crossAdd (x y : CrossTerm) : CrossTerm :=
+  match x, y with
+  | .external lane [.c _], .app .ltu [.app .add [l, .c k], .c k'] =>
+    if 1 ≤ lane && k == k' then .app (.extract 32 32) [.app .add [l, .c k]]
+    else .app .add [x,y]
+  | _, _ => .app .add [x,y]
+
+private def crossBinary (op : Op) (x y : CrossTerm) : CrossTerm :=
+  match op with
+  | .add _ => if crossCompare x y == .gt then crossAdd x y else crossAdd y x
+  | .or _ | .xor _ =>
+    if x == .c 0 then y else if y == .c 0 then x else .app (crossOp op) [x,y]
+  | .shl _ | .lshr _ | .ashr _ =>
+    if y == .c 0 then x else .app (crossOp op) [x,y]
+  | _ => .app (crossOp op) [x,y]
+
+mutual
+  def toCrossTerm : Term → CrossTerm
+    | .const w c => .c (s w.bits c)
+    | .var _ name => .var name
+    | .regVar _ r => .reg r.kind (crossRegAlpha r)
+    | .app _ (.externalResult _ lane) args => .external lane (crossTerms (abiPrefix lane args))
+    | .app _ op [t] => crossUnary op (toCrossTerm t)
+    | .app _ op [a,b] => crossBinary op (toCrossTerm a) (toCrossTerm b)
+    | .app _ op args => .app (crossOp op) (crossTerms args)
+  termination_by t => sizeOf t
+  decreasing_by
+    all_goals simp_wf
+    all_goals first
+      | omega
+      | have := abiPrefix_sizeOf_le lane args
+        omega
+
+  private def crossTerms : List Term → List CrossTerm
+    | [] => []
+    | t :: ts => toCrossTerm t :: crossTerms ts
+  termination_by ts => sizeOf ts
+end
+
+
 
 inductive CrossRelKind where
   | eq | ne | ltu | leu | gtu | geu | lts | les | gts | ges | bitsnz | bitsz
@@ -264,10 +329,6 @@ instance : LawfulBEq CrossEnv where
   eq_of_beq := of_decide_eq_true
   rfl := of_decide_eq_self_eq_true _
 
-private def addBase? : CrossTerm → Option CrossTerm
-  | .app .add [base, _] => some base
-  | _ => none
-
 mutual
   private def packetFieldTerm (base : CrossTerm) : CrossTerm → Bool
     | .app (.inputByte _) [b, _] => b == base
@@ -289,9 +350,9 @@ def toCrossCond (env : CrossEnv) (cond : Cond) : CrossCond :=
   | some b, some e =>
     let base := toCrossTerm b
     let endTerm := toCrossTerm e
-    if addBase? lhs == some base && addBase? rhs == some base && lhs == endTerm then
+    if lhs == endTerm then
       .packetBound base (toCrossRel q cond.rel) rhs
-    else if addBase? lhs == some base && addBase? rhs == some base && rhs == endTerm then
+    else if rhs == endTerm then
       .packetBound base (toCrossRel q cond.rel true) lhs
     else fieldOrPlain base lhs rhs q
   | some b, none => fieldOrPlain (toCrossTerm b) lhs rhs q
@@ -407,14 +468,21 @@ def toCross (env : CrossEnv) : Predicate → CrossPred
 
 private def crossOpName : CrossOp → String
   | .add => "add" | .sub => "sub" | .mullo => "mullo" | .neg => "neg"
+  | .udiv _ _ => "udiv" | .urem _ => "urem"
+  | .sdiv _ _ => "sdiv" | .srem _ => "srem"
+  | .mulh _ => "mulh" | .mulhu _ => "mulhu" | .mulhsu _ => "mulhsu"
+  | .selectEq _ => "selectEq"
   | .id => "id" | .shl => "shl" | .lshr => "lshr" | .ashr => "ashr"
-  | .ltu => "ltu" | .lts => "lts" | .and _ => "and" | .or _ => "or"
-  | .xor _ => "xor" | .low _ => "low" | .extract _ _ => "extract"
+  | .ltu => "ltu" | .lts => "lts" | .and => "and" | .or => "or"
+  | .xor => "xor" | .low _ => "low" | .extract _ _ => "extract"
   | .zext _ _ => "zext" | .sext _ _ => "sext" | .bswap _ _ => "bswap"
   | .inputByte _ => "inputByte" | .mergeLow _ _ => "mergeLow"
 
 private def crossOpParams : CrossOp → List Nat
-  | .and q | .or q | .xor q | .low q | .inputByte q => [q]
+  | .udiv bits z | .sdiv bits z => [bits, z]
+  | .urem bits | .srem bits | .mulh bits | .mulhu bits
+  | .mulhsu bits | .selectEq bits => [bits]
+  | .low q | .inputByte q => [q]
   | .extract a b | .zext a b | .sext a b | .bswap a b | .mergeLow a b => [a,b]
   | _ => []
 
@@ -567,21 +635,225 @@ theorem cross_mutation_decide (x y : CrossMutation) :
 theorem cross_pred_beq (x y : CrossPred) : (x == y) = true ↔ x = y := by
   exact beq_iff_eq
 
+private theorem ordering_swap_then (a b : Ordering) :
+    (a.then b).swap = a.swap.then b.swap := by cases a <;> rfl
+
+private theorem ordering_then_eq (a b : Ordering) :
+    a.then b = .eq ↔ a = .eq ∧ b = .eq := by cases a <;> simp [Ordering.then]
+
+private theorem nat_one_swap (a b : Nat) :
+    ((compare a b).then .eq).swap = (compare b a).then .eq := by
+  rw [ordering_swap_then, Nat.compare_swap]; rfl
+
+private theorem nat_two_swap (a b c d : Nat) :
+    ((compare a b).then ((compare c d).then .eq)).swap =
+      (compare b a).then ((compare d c).then .eq) := by
+  rw [ordering_swap_then, ordering_swap_then, Nat.compare_swap, Nat.compare_swap]; rfl
+
+private theorem nat_one_eq (a b : Nat) (h : (compare a b).then .eq = .eq) : a = b :=
+  Nat.compare_eq_eq.mp ((ordering_then_eq _ _).mp h).1
+
+private theorem nat_two_eq (a b c d : Nat)
+    (h : (compare a b).then ((compare c d).then .eq) = .eq) : a = b ∧ c = d :=
+  ⟨Nat.compare_eq_eq.mp ((ordering_then_eq _ _).mp h).1,
+    nat_one_eq _ _ ((ordering_then_eq _ _).mp h).2⟩
+
+private theorem crossOp_compare_swap (a b : CrossOp) :
+    (compare a b).swap = compare b a := by
+  cases a <;> cases b <;> first | rfl | exact nat_one_swap _ _ | exact nat_two_swap _ _ _ _
+
+private theorem crossOp_compare_eq (a b : CrossOp) (h : compare a b = .eq) : a = b := by
+  cases a <;> cases b <;> first
+    | rfl
+    | contradiction
+    | (congr 1; exact nat_one_eq _ _ h)
+    | (obtain ⟨rfl, rfl⟩ := nat_two_eq _ _ _ _ h; rfl)
+
+mutual
+  private theorem crossCompare_swap (a b : CrossTerm) :
+      (crossCompare a b).swap = crossCompare b a := by
+    cases a <;> cases b <;> simp only [crossCompare, crossRank] <;>
+      try first | rfl | exact Int.compare_swap _ _ | exact Nat.compare_swap _ _
+    case reg.reg k x l y =>
+      change ((compare (regRank k) (regRank l)).then (compare x y)).swap = _
+      rw [ordering_swap_then, Nat.compare_swap, Nat.compare_swap]
+      rfl
+    case app.app f xs g ys =>
+      change ((compare f g).then (crossCompareList xs ys)).swap = _
+      rw [ordering_swap_then, crossOp_compare_swap, crossCompareList_swap]
+      rfl
+    case external.external x xs y ys =>
+      change ((compare x y).then (crossCompareList xs ys)).swap = _
+      rw [ordering_swap_then, Nat.compare_swap, crossCompareList_swap]
+      rfl
+  termination_by sizeOf a + sizeOf b
+
+  private theorem crossCompareList_swap (xs ys : List CrossTerm) :
+      (crossCompareList xs ys).swap = crossCompareList ys xs := by
+    cases xs with
+    | nil => cases ys <;> simp [crossCompareList]
+    | cons x xs =>
+      cases ys with
+      | nil => simp [crossCompareList]
+      | cons y ys =>
+        simp only [crossCompareList]
+        change ((crossCompare x y).then (crossCompareList xs ys)).swap = _
+        rw [ordering_swap_then, crossCompare_swap, crossCompareList_swap]
+        rfl
+  termination_by sizeOf xs + sizeOf ys
+end
+
+private theorem regRank_compare_eq (k l : RegKind)
+    (h : compare (regRank k) (regRank l) = .eq) : k = l := by
+  have heq := Nat.compare_eq_eq.mp h
+  cases k <;> cases l <;> simp_all [regRank]
+
+mutual
+  private theorem crossCompare_eq (a b : CrossTerm) (h : crossCompare a b = .eq) :
+      a = b := by
+    cases a <;> cases b <;> simp only [crossCompare, crossRank] at h <;> try contradiction
+    case c.c x y => exact congrArg CrossTerm.c (Int.compare_eq_eq.mp h)
+    case var.var x y => exact congrArg CrossTerm.var (Nat.compare_eq_eq.mp h)
+    case reg.reg k x l y =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hk := regRank_compare_eq _ _ hh.1
+      have hx := Nat.compare_eq_eq.mp hh.2
+      subst l; subst y; rfl
+    case app.app f xs g ys =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hf := crossOp_compare_eq _ _ hh.1
+      have hxs := crossCompareList_eq _ _ hh.2
+      subst g; subst ys; rfl
+    case external.external x xs y ys =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hx := Nat.compare_eq_eq.mp hh.1
+      have hxs := crossCompareList_eq _ _ hh.2
+      subst y; subst ys; rfl
+  termination_by sizeOf a + sizeOf b
+
+  private theorem crossCompareList_eq (xs ys : List CrossTerm)
+      (h : crossCompareList xs ys = .eq) : xs = ys := by
+    cases xs with
+    | nil => cases ys <;> simp_all [crossCompareList]
+    | cons x xs =>
+      cases ys with
+      | nil => simp [crossCompareList] at h
+      | cons y ys =>
+        simp only [crossCompareList] at h
+        have hh := (ordering_then_eq _ _).mp h
+        have hx := crossCompare_eq _ _ hh.1
+        have hxs := crossCompareList_eq _ _ hh.2
+        subst y; subst ys; rfl
+  termination_by sizeOf xs + sizeOf ys
+end
+
+private theorem crossCompare_gt_iff (a b : CrossTerm) :
+    crossCompare a b = .gt ↔ crossCompare b a = .lt := by
+  have hs := crossCompare_swap b a
+  rw [← hs]
+  cases crossCompare b a <;> simp
+
+/-- The same-width modular-addition premise of R1; not interpretation preservation. -/
+theorem cross_add_mod_comm (w : Nat) (a b : Int) :
+    (a + b) % (2 ^ w : Int) = (b + a) % (2 ^ w : Int) := by
+  rw [Int.add_comm a b]
+
+theorem cross_term_add_comm (w₁ w₂ q₁ q₂ : Width) (a b : Term) :
+    toCrossTerm (.app w₁ (.add q₁) [a,b]) =
+      toCrossTerm (.app w₂ (.add q₂) [b,a]) := by
+  cases h : crossCompare (toCrossTerm a) (toCrossTerm b) with
+  | lt =>
+    have hb := (crossCompare_gt_iff (toCrossTerm b) (toCrossTerm a)).mpr h
+    simp [toCrossTerm, crossBinary, h, hb]
+  | gt =>
+    have hb := (crossCompare_gt_iff (toCrossTerm a) (toCrossTerm b)).mp h
+    simp [toCrossTerm, crossBinary, h, hb]
+  | eq =>
+    have heq := crossCompare_eq _ _ h
+    simp [toCrossTerm, crossBinary, heq]
+
 theorem cross_term_id (w : Width) (t : Term) :
     toCrossTerm (.app w (.id w) [t]) = toCrossTerm t := by
-  simp [toCrossTerm, identityCast]
+  simp [toCrossTerm, crossUnary, identityCast]
 
 theorem cross_term_extract (w : Width) (v : Nat) (t : Term) :
     toCrossTerm (.app w (.extract 0 v v) [t]) = toCrossTerm t := by
-  simp [toCrossTerm, identityCast]
+  simp [toCrossTerm, crossUnary, identityCast]
+
+/-- R5 is structural; represented-value bounds are the generation-side CP-Q premise. -/
+theorem cross_term_extract_represented (w : Width) (n v : Nat) (t : Term)
+    (hwidth : (toCrossTerm t).compareBits = 32) (h : (toCrossTerm t).compareBits ≤ n) :
+    toCrossTerm (.app w (.extract 0 n v) [t]) = toCrossTerm t := by
+  have hn : 32 ≤ n := by simpa [hwidth] using h
+  by_cases hv : n = v <;> simp [toCrossTerm, crossUnary, identityCast, hn, hv, hwidth]
+
+/-- Structural recognition of R6. The same-element word-content and machine carry
+premises needed for interpretation are owned by CP-Bytes/Q, not proved here. -/
+theorem cross_term_add_carry (w q : Width) (h c : Term)
+    (lane : Nat) (i k : Int) (l : CrossTerm)
+    (hh : toCrossTerm h = .external lane [.c i])
+    (hc : toCrossTerm c = .app .ltu [.app .add [l, .c k], .c k])
+    (hlane : 1 ≤ lane) :
+    toCrossTerm (.app w (.add q) [h,c]) =
+      .app (.extract 32 32) [.app .add [l, .c k]] := by
+  have hcmp : compare (4 : Nat) 3 = .gt := by decide
+  simp [toCrossTerm, crossBinary, crossCompare, crossRank, hh, hc, crossAdd, hlane, hcmp]
 
 theorem cross_term_zext (w : Width) (v : Nat) (t : Term) :
     toCrossTerm (.app w (.zext v w v) [t]) = toCrossTerm t := by
-  simp [toCrossTerm, identityCast]
+  simp [toCrossTerm, crossUnary, identityCast]
+
+theorem cross_term_zext_carrier (w out : Width) (q v : Nat) (t : Term) (h : q ≤ v) :
+    toCrossTerm (.app w (.zext q out v) [t]) = toCrossTerm t := by
+  simp [toCrossTerm, crossUnary, identityCast, h]
+
+theorem cross_term_and_carrier (w₁ w₂ : Width) (q₁ q₂ : Nat) (a b : Term) :
+    toCrossTerm (.app w₁ (.and q₁) [a,b]) =
+      toCrossTerm (.app w₂ (.and q₂) [a,b]) := by
+  simp [toCrossTerm, crossBinary, crossOp]
+
+theorem cross_term_or_carrier (w₁ w₂ : Width) (q₁ q₂ : Nat) (a b : Term) :
+    toCrossTerm (.app w₁ (.or q₁) [a,b]) =
+      toCrossTerm (.app w₂ (.or q₂) [a,b]) := by
+  simp [toCrossTerm, crossBinary, crossOp]
+
+theorem cross_term_xor_carrier (w₁ w₂ : Width) (q₁ q₂ : Nat) (a b : Term) :
+    toCrossTerm (.app w₁ (.xor q₁) [a,b]) =
+      toCrossTerm (.app w₂ (.xor q₂) [a,b]) := by
+  simp [toCrossTerm, crossBinary, crossOp]
 
 theorem cross_term_low (w : Width) (v : Nat) (t : Term) :
     toCrossTerm (.app w (.low v v) [t]) = toCrossTerm t := by
-  simp [toCrossTerm, identityCast]
+  simp [toCrossTerm, crossUnary, identityCast]
+
+theorem cross_term_or_zero (w : Width) (q : Nat) (t z : Term)
+    (hz : toCrossTerm z = .c 0) :
+    toCrossTerm (.app w (.or q) [z,t]) = toCrossTerm t ∧
+      toCrossTerm (.app w (.or q) [t,z]) = toCrossTerm t := by
+  by_cases ht : toCrossTerm t = .c 0 <;> simp [toCrossTerm, crossBinary, hz, ht]
+
+theorem cross_term_xor_zero (w : Width) (q : Nat) (t z : Term)
+    (hz : toCrossTerm z = .c 0) :
+    toCrossTerm (.app w (.xor q) [z,t]) = toCrossTerm t ∧
+      toCrossTerm (.app w (.xor q) [t,z]) = toCrossTerm t := by
+  by_cases ht : toCrossTerm t = .c 0 <;> simp [toCrossTerm, crossBinary, hz, ht]
+
+theorem cross_term_shift_zero (w q : Width) (t z : Term)
+    (hz : toCrossTerm z = .c 0) :
+    toCrossTerm (.app w (.shl q) [t,z]) = toCrossTerm t ∧
+      toCrossTerm (.app w (.lshr q) [t,z]) = toCrossTerm t ∧
+      toCrossTerm (.app w (.ashr q) [t,z]) = toCrossTerm t := by
+  simp [toCrossTerm, crossBinary, hz]
+
+/-- Full-input identity and R5 represented-value erasure take priority over R4. -/
+theorem cross_term_extract_sext (w : Width) (o n v q input : Nat)
+    (t : Term) (x : CrossTerm)
+    (hview : toCrossTerm t = .app (.sext q input) [x])
+    (hcast : ¬ (o = 0 ∧ n = v)) (hrepresented : ¬ (o = 0 ∧ q = 32 ∧ q ≤ n))
+    (h : o + n ≤ q) :
+    toCrossTerm (.app w (.extract o n v) [t]) = .app (.extract o n) [x] := by
+  simp [toCrossTerm, crossUnary, identityCast, hview, hcast,
+    CrossTerm.compareBits, h] <;> omega
 
 private def envR : CrossEnv :=
   { packetBase := some (Term.V32 4), packetEnd := parseTerm "add32(v32:4,v32:5)" }
@@ -722,5 +994,175 @@ private def ret64 : String := "{\"kind\":\"ret\",\"width\":64,\"term\":\"1\"}"
 #guard exportCrossPredNormalize "{\"bogus\":1}" boundRT == "null"
 #guard exportCrossPredNormalize envRJson "{\"kind\":\"ret\",\"width\":16,\"term\":\"0\"}" == "null"
 #guard exportCrossPredNormalize "{\"maps\":[{\"map\":\"42\",\"keyBytes\":1}]}" ret32 == "null"
+
+-- Measured dual just_tx nodes 9, 77 and 29; normalization checks must not accept null.
+private def liveEthertypeR : String :=
+  "{\"kind\":\"branch\",\"position\":25,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,16)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,17)))),8))\",\"rel\":\"eq\",\"rhs\":\"56710\"}}"
+private def liveEthertypeE : String :=
+  "{\"kind\":\"branch\",\"position\":17,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"or64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,16)))),0)),shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,17)))),8))\",\"rel\":\"eqN32\",\"rhs\":\"56710\"}}"
+private def liveByteFieldR : String :=
+  "{\"kind\":\"branch\",\"position\":58,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,27)))),0))\",\"rel\":\"ne\",\"rhs\":\"17\"}}"
+private def liveByteFieldE : String :=
+  "{\"kind\":\"branch\",\"position\":44,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"zext32/64/32(extract0,32(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,27)))),0)))))\",\"rel\":\"neN32\",\"rhs\":\"17\"}}"
+private def liveLookupNullR : String :=
+  "{\"kind\":\"branch\",\"position\":48,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"id32(externalResult489_0(1,1077412584,id32(add32(v32:0,4294967280))))\",\"rel\":\"eq\",\"rhs\":\"0\"}}"
+private def liveLookupNullE : String :=
+  "{\"kind\":\"branch\",\"position\":38,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"externalResult85_0(1,1077412584,id64(add64(id64(v64:0),18446744073709551612)))\",\"rel\":\"eq\",\"rhs\":\"0\"}}"
+
+private def sameNormalized (r e : String) : Bool :=
+  let normalized := exportCrossPredNormalize envRJson r
+  normalized != "null" && normalized == exportCrossPredNormalize envEJson e
+private def liveEthertypeNormalize : Bool := sameNormalized liveEthertypeR liveEthertypeE
+private def liveByteFieldNormalize : Bool := sameNormalized liveByteFieldR liveByteFieldE
+private def liveLookupNullNormalize : Bool := sameNormalized liveLookupNullR liveLookupNullE
+#guard liveEthertypeNormalize
+#guard liveByteFieldNormalize
+#guard liveLookupNullNormalize
+
+private def opFixtures : List CrossOp :=
+  [.add, .sub, .mullo, .neg, .id, .shl, .lshr, .ashr, .ltu, .lts,
+   .and, .or, .xor, .low 16, .extract 8 16, .zext 64 32,
+   .sext 64 32, .bswap 32 32, .inputByte 3, .mergeLow 32 8]
+#guard opFixtures.map crossOpParams ==
+  [[], [], [], [], [], [], [], [], [], [], [], [], [],
+   [16], [8,16], [64,32], [64,32], [32,32], [3], [32,8]]
+
+#guard toCrossTerm (.app .w32 (.externalResult 1 0) [.C32 1]) == .external 0 [.c 1]
+#guard toCrossTerm (.app .w32 (.externalResult 1 2) [.C32 1, .C32 2, .C32 3]) ==
+  .external 2 [.c 1, .c 2, .c 3]
+
+-- Live 2026-10-14 20:20 pairs: loc is the host atom location, not position.
+-- Branch directions below are forced from the compare-tree edge, as on the host.
+private def liveEnvRJson : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,v32:5)\",\"maps\":[{\"map\":\"1077412584\",\"keyBytes\":4,\"valueBytes\":8}]}"
+private def liveEnvEJson : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,128)\",\"maps\":[{\"map\":\"1077412584\",\"keyBytes\":4,\"valueBytes\":8}]}"
+private def liveStoreEnvRJson : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,v32:5)\",\"maps\":[{\"map\":\"1077412584\",\"keyBytes\":4,\"valueBytes\":8}],\"storeBytes\":2}"
+private def liveStoreEnvEJson : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,128)\",\"maps\":[{\"map\":\"1077412584\",\"keyBytes\":4,\"valueBytes\":8}],\"storeBytes\":2}"
+-- Node 15: RV loc76 / eBPF loc30 (raw eBPF notTaken becomes edge taken).
+private def liveNode15BranchR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"add32(v32:4,v32:5)\",\"rel\":\"geu\",\"rhs\":\"add32(add32(18,v32:4),40)\"},\"dir\":\"taken\",\"position\":35,\"width\":32}"
+private def liveNode15BranchE : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"id64(add64(id64(id64(add64(id64(zext32/64/32(extract0,32(v32:4))),18))),40))\",\"rel\":\"leu\",\"rhs\":\"zext32/64/32(extract0,32(add32(v32:4,128)))\"},\"dir\":\"taken\",\"position\":30,\"width\":64}"
+-- Node 31: RV loc35 / eBPF loc31, the ltu/gtu relation family.
+private def liveNode31BranchR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"add32(v32:4,v32:5)\",\"rel\":\"ltu\",\"rhs\":\"add32(add32(18,v32:4),20)\"},\"dir\":\"taken\",\"position\":30,\"width\":32}"
+private def liveNode31BranchE : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"id64(add64(id64(id64(add64(id64(zext32/64/32(extract0,32(v32:4))),18))),20))\",\"rel\":\"gtu\",\"rhs\":\"zext32/64/32(extract0,32(add32(v32:4,128)))\"},\"dir\":\"taken\",\"position\":23,\"width\":64}"
+-- Node 15 lookup: RV loc45 / eBPF loc37, four frozen key bytes.
+private def liveNode15HelperR : String :=
+  "{\"kind\":\"helper\",\"args\":[\"1077412584\",\"id32(add32(v32:0,4294967280))\",\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"event\":747,\"helperId\":1}"
+private def liveNode15HelperE : String :=
+  "{\"kind\":\"helper\",\"args\":[\"c64:1077412584\",\"t64(id64(add64(id64(v64:0),18446744073709551612)))\",\"t64(zext8/64/32(extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))))\",\"t64(or64(0,shl64(zext8/64/32(extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))),0)))\",\"t64(or64(0,shl64(zext8/64/32(extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))),0)))\",\"t64(or64(0,shl64(zext8/64/32(extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))),0)))\"],\"event\":386,\"helperId\":1}"
+-- Node 46 write at offset 0: RV loc65 / eBPF loc47.
+private def liveNode46WriteR : String :=
+  "{\"kind\":\"packetWrite\",\"event\":849,\"offset\":0,\"packet\":0,\"source\":\"sext16/32(or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,6)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,7)))),8)))\",\"width\":32}"
+private def liveNode46WriteE : String :=
+  "{\"kind\":\"packetWrite\",\"event\":495,\"offset\":0,\"packet\":0,\"source\":\"or64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,6)))),0)),shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,7)))),8))\",\"width\":64}"
+-- Node 3 ethertype: RV loc16 / eBPF loc10, different VLAN disjuncts.
+private def liveNode3EthertypeR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,12)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,13)))),8))\",\"rel\":\"eq\",\"rhs\":\"43144\"},\"dir\":\"taken\",\"position\":14,\"width\":32}"
+private def liveNode3EthertypeE : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"or64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,12)))),0)),shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,13)))),8))\",\"rel\":\"eqN32\",\"rhs\":\"129\"},\"dir\":\"taken\",\"position\":8,\"width\":64}"
+private def liveNode15BranchNormalize : Bool :=
+  let r := exportCrossPredNormalize liveEnvRJson liveNode15BranchR
+  let e := exportCrossPredNormalize liveEnvEJson liveNode15BranchE
+  r != "null" && e != "null" && r == e &&
+    r == "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetBound\",\"base\":{\"kind\":\"var\",\"name\":4},\"rel\":{\"kind\":\"geu\",\"q\":32},\"offset\":{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"18\"}]},{\"kind\":\"c\",\"value\":\"40\"}]}}}"
+#guard liveNode15BranchNormalize
+
+private def liveNode31BranchNormalize : Bool :=
+  let r := exportCrossPredNormalize liveEnvRJson liveNode31BranchR
+  let e := exportCrossPredNormalize liveEnvEJson liveNode31BranchE
+  r != "null" && e != "null" && r == e
+#guard liveNode31BranchNormalize
+
+private def liveNode15HelperNormalize : Bool :=
+  let r := exportCrossPredNormalize liveEnvRJson liveNode15HelperR
+  let e := exportCrossPredNormalize liveEnvEJson liveNode15HelperE
+  r != "null" && e != "null" && r == e &&
+    r == "{\"kind\":\"helper\",\"observation\":{\"kind\":\"lookup\",\"map\":{\"kind\":\"c\",\"value\":\"1077412584\"},\"key\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]}]}}"
+#guard liveNode15HelperNormalize
+
+private def liveNode46WriteBytesNormalize : Bool :=
+  let r := exportCrossPredNormalize liveStoreEnvRJson liveNode46WriteR
+  let e := exportCrossPredNormalize liveStoreEnvEJson liveNode46WriteE
+  r != "null" && e != "null" && r == e &&
+    r == "{\"kind\":\"packetWrite\",\"packet\":0,\"offset\":0,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"or\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"6\"}]}]}]},{\"kind\":\"app\",\"op\":\"shl\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"7\"}]}]}]},{\"kind\":\"c\",\"value\":\"8\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"or\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"6\"}]}]}]},{\"kind\":\"app\",\"op\":\"shl\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"7\"}]}]}]},{\"kind\":\"c\",\"value\":\"8\"}]}]}]}]}}"
+#guard liveNode46WriteBytesNormalize
+
+-- Current host envs omit storeBytes: source sext16/32 must remain different.
+private def liveNode46WriteNeedsStoreBytes : Bool :=
+  let r := exportCrossPredNormalize liveEnvRJson liveNode46WriteR
+  let e := exportCrossPredNormalize liveEnvEJson liveNode46WriteE
+  r != "null" && e != "null" && r != e
+#guard liveNode46WriteNeedsStoreBytes
+
+-- just_tx.c: ETH_P_8021Q=0x8100 and ETH_P_8021AD=0x88A8 occur in one ||.
+-- Both trees read byte12 into bits 0..7 and byte13 into bits 8..15.
+-- bpf_htons gives Q=129 and AD=43144. Compilers reverse the disjunct order;
+-- the host pairs eq with eq (AD with Q). Merging these constants is unsound.
+private def liveNode3EthertypeDistinct : Bool :=
+  let r := exportCrossPredNormalize liveEnvRJson liveNode3EthertypeR
+  let e := exportCrossPredNormalize liveEnvEJson liveNode3EthertypeE
+  r != "null" && e != "null" && r != e &&
+    r == "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetField\",\"field\":{\"kind\":\"app\",\"op\":\"or\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"12\"}]}]}]},{\"kind\":\"app\",\"op\":\"shl\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"13\"}]}]}]},{\"kind\":\"c\",\"value\":\"8\"}]}]},\"rel\":{\"kind\":\"eq\",\"q\":32},\"value\":\"43144\"}}" &&
+    e == "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetField\",\"field\":{\"kind\":\"app\",\"op\":\"or\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"12\"}]}]}]},{\"kind\":\"app\",\"op\":\"shl\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"13\"}]}]}]},{\"kind\":\"c\",\"value\":\"8\"}]}]},\"rel\":{\"kind\":\"eq\",\"q\":32},\"value\":\"129\"}}"
+#guard liveNode3EthertypeDistinct
+
+
+namespace MapWriteCarryFixtures
+
+-- Exact fresh node increments: lookup-null branch, low write, high write.
+def envR : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,v32:5)\",\"maps\":[{\"map\":\"1077412584\",\"keyBytes\":4,\"valueBytes\":8}],\"storeBytes\":4}"
+
+def envE : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,128)\",\"maps\":[{\"map\":\"1077412584\",\"keyBytes\":4,\"valueBytes\":8}],\"storeBytes\":4}"
+
+def node26BranchR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"id32(externalResult747_0(1,1077412584,id32(add32(v32:0,4294967280))))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":48,\"width\":32}"
+def node26LowR : String :=
+  "{\"kind\":\"mapWrite\",\"event\":771,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":0,\"source\":\"add32(regVar747(real32:10),1)\",\"sourceWidth\":32}"
+def node26HighR : String :=
+  "{\"kind\":\"mapWrite\",\"event\":773,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":4,\"source\":\"add32(externalResult747_2(1),ltu32(add32(regVar747(real32:10),1),1))\",\"sourceWidth\":32}"
+def node26PredsR : List String :=
+  [node26BranchR, node26LowR, node26HighR]
+
+def node26BranchE : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"externalResult386_0(1,1077412584,id64(add64(id64(v64:0),18446744073709551612)))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":38,\"width\":64}"
+def node26LowE : String :=
+  "{\"kind\":\"mapWrite\",\"event\":418,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":0,\"source\":\"extract0,32/64(id64(add64(regVar386(real64:0),1)))\",\"sourceWidth\":32}"
+def node26HighE : String :=
+  "{\"kind\":\"mapWrite\",\"event\":418,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":4,\"source\":\"extract32,32/64(id64(add64(regVar386(real64:0),1)))\",\"sourceWidth\":32}"
+def node26PredsE : List String :=
+  [node26BranchE, node26LowE, node26HighE]
+
+def node34BranchR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"id32(externalResult737_0(1,1077412584,id32(add32(v32:0,4294967280))))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":48,\"width\":32}"
+def node34LowR : String :=
+  "{\"kind\":\"mapWrite\",\"event\":766,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":0,\"source\":\"add32(regVar737(real32:10),1)\",\"sourceWidth\":32}"
+def node34HighR : String :=
+  "{\"kind\":\"mapWrite\",\"event\":768,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":4,\"source\":\"add32(externalResult737_2(1),ltu32(add32(regVar737(real32:10),1),1))\",\"sourceWidth\":32}"
+def node34PredsR : List String :=
+  [node34BranchR, node34LowR, node34HighR]
+
+def node34BranchE : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"externalResult336_0(1,1077412584,id64(add64(id64(v64:0),18446744073709551612)))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":38,\"width\":64}"
+def node34LowE : String :=
+  "{\"kind\":\"mapWrite\",\"event\":381,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":0,\"source\":\"extract0,32/64(id64(add64(regVar336(real64:0),1)))\",\"sourceWidth\":32}"
+def node34HighE : String :=
+  "{\"kind\":\"mapWrite\",\"event\":381,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":4,\"source\":\"extract32,32/64(id64(add64(regVar336(real64:0),1)))\",\"sourceWidth\":32}"
+def node34PredsE : List String :=
+  [node34BranchE, node34LowE, node34HighE]
+
+private def liveNode26HighCanonical : Bool :=
+  let r := exportCrossPredNormalize envR node26HighR
+  r != "null" && r == "{\"kind\":\"mapWrite\",\"mutation\":{\"action\":\"write\",\"map\":{\"kind\":\"c\",\"value\":\"1077412584\"},\"key\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]}],\"offset\":4,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]}]}}}"
+#guard liveNode26HighCanonical
+
+end MapWriteCarryFixtures
 
 end ClassifierExpr

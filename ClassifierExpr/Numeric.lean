@@ -11,26 +11,11 @@ def MULLO (w : Width) (a b : Nat) : Nat := MNat w.bits (a * b)
 def NEG (w : Width) (a : Nat) : Nat := M w.bits (-(Int.ofNat (MNat w.bits a)))
 def ID (_w : Width) (a : Nat) : Nat := a
 
-def AND (q : Nat) (a b : Nat) : Nat :=
-  Id.run do
-    let mut acc := 0
-    for j in [:q] do
-      acc := acc + bit a j * bit b j * (1 <<< j)
-    pure acc
+def AND (q : Nat) (a b : Nat) : Nat := MNat q (a &&& b)
 
-def OR (q : Nat) (a b : Nat) : Nat :=
-  Id.run do
-    let mut acc := 0
-    for j in [:q] do
-      acc := acc + max (bit a j) (bit b j) * (1 <<< j)
-    pure acc
+def OR (q : Nat) (a b : Nat) : Nat := MNat q (a ||| b)
 
-def XOR (q : Nat) (a b : Nat) : Nat :=
-  Id.run do
-    let mut acc := 0
-    for j in [:q] do
-      acc := acc + ((bit a j + bit b j) % 2) * (1 <<< j)
-    pure acc
+def XOR (q : Nat) (a b : Nat) : Nat := MNat q (a ^^^ b)
 
 def kShift (w : Width) (b : Nat) : Nat := b % w.bits
 
@@ -42,13 +27,7 @@ def LSHR (w : Width) (a b : Nat) : Nat :=
 
 /-- Arithmetic right shift uses floor division of the signed view. -/
 def ASHR (w : Width) (a b : Nat) : Nat :=
-  let sa := s w.bits (MNat w.bits a)
-  let k := kShift w b
-  let den := Int.ofNat (1 <<< k)
-  let q := sa / den
-  let r := sa % den
-  let floored := if sa < 0 && r != 0 then q - 1 else q
-  M w.bits floored
+  M w.bits (s w.bits a / Int.ofNat (1 <<< kShift w b))
 
 def LTU (w : Width) (a b : Nat) : Nat :=
   indicator (MNat w.bits a < MNat w.bits b)
@@ -75,6 +54,38 @@ def TQ (x y : Int) : Int :=
   else sgn x * sgn y * (x.natAbs / y.natAbs)
 
 def TR (x y : Int) : Int := x - y * TQ x y
+
+def UDIV (w : Width) (zeroResult a b : Nat) : Nat :=
+  let A := MNat w.bits a
+  let B := MNat w.bits b
+  if B == 0 then MNat w.bits zeroResult else A / B
+
+def UREM (w : Width) (a b : Nat) : Nat :=
+  let A := MNat w.bits a
+  let B := MNat w.bits b
+  if B == 0 then A else A % B
+
+def SDIV (w : Width) (zeroResult a b : Nat) : Nat :=
+  let x := s w.bits a
+  let y := s w.bits b
+  if y == 0 then MNat w.bits zeroResult else M w.bits (TQ x y)
+
+def SREM (w : Width) (a b : Nat) : Nat :=
+  let x := s w.bits a
+  let y := s w.bits b
+  if y == 0 then MNat w.bits a else M w.bits (TR x y)
+
+def MULH (w : Width) (a b : Nat) : Nat :=
+  M w.bits (s w.bits a * s w.bits b / Int.ofNat (1 <<< w.bits))
+
+def MULHU (w : Width) (a b : Nat) : Nat :=
+  MNat w.bits (MNat w.bits a * MNat w.bits b / (1 <<< w.bits))
+
+def MULHSU (w : Width) (a b : Nat) : Nat :=
+  M w.bits (s w.bits a * Int.ofNat (MNat w.bits b) / Int.ofNat (1 <<< w.bits))
+
+def SELECTEQ (w : Width) (lhs rhs ifEqual ifDifferent : Nat) : Nat :=
+  MNat w.bits (if MNat w.bits lhs == MNat w.bits rhs then ifEqual else ifDifferent)
 
 def BSWAP (q v : Nat) (a : Nat) : Nat :=
   let bytes := q / 8

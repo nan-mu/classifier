@@ -5,11 +5,13 @@ import ClassifierExpr.Op
 import ClassifierExpr.Term
 import ClassifierExpr.MapLayout
 import ClassifierExpr.Expr
+import ClassifierExpr.Semantics
+import ClassifierExpr.SolvePreservation
 import ClassifierExpr.Virtual
 import ClassifierExpr.Direction
 import ClassifierExpr.Insn
 import ClassifierExpr.Parse
 import ClassifierExpr.Render
 import ClassifierExpr.CrossPred
-import ClassifierExpr.ObservationEq
+import ClassifierExpr.ObservationEqProofs
 import ClassifierExpr.Ffi

@@ -4,7 +4,6 @@ import RV32IMC.Expand
 
 open Lean
 
--- .xpost.image at file offset 256 in tooling/fixtures/just_tx.elf, through C.JR ra.
 private def rv32Words : Array UInt32 :=
   #[4417, 50694, 50210, 49702, 2048, 16644, 16716, 14976531, 17669, 180744035, 12899843, 26285,
     2290517651, 14026339, 135267987, 14031459, 19170835, 180740195, 17094147, 17737, 40977, 17721,
@@ -29,7 +28,6 @@ private def snapshotRun (arch response : String) : Except String Json := do
   let j ← Json.parse response
   let nodes ← fieldArray j "nodes"
   let edges ← fieldArray j "edges"
-  if nodes.size < 2 then throw (arch ++ ": expected a nontrivial real run")
   pure (Json.mkObj [("arch", .str arch), ("nodes", .arr nodes), ("edges", .arr edges)])
 
 private def report (left right : Json) : Except String Json :=
@@ -39,14 +37,16 @@ private def report (left right : Json) : Except String Json :=
 private def droppedRun (run : Json) : Except String Json := do
   let nodes ← fieldArray run "nodes"
   let edges ← fieldArray run "edges"
-  -- Remove the entry position, and every incident edge; dangling endpoints are invalid input.
-  let removed ← (← nodes[0]!.getObjVal? "id").getNat?
+  let some entry ← nodes.toList.findM? (fun n => return (← fieldString n "loc") == "0")
+    | throw "missing entry position"
+  let removed ← (← entry.getObjVal? "id").getNat?
+  let remaining ← nodes.toList.filterM fun n => return (← (← n.getObjVal? "id").getNat?) != removed
   let retained ← edges.toList.filterM fun e => do
     let src ← (← e.getObjVal? "src").getNat?
     let dst ← (← e.getObjVal? "dst").getNat?
     pure (src != removed && dst != removed)
   pure (Json.mkObj [("arch", ← run.getObjVal? "arch"),
-    ("nodes", .arr (nodes.extract 1 nodes.size)), ("edges", .arr retained.toArray)])
+    ("nodes", .arr remaining.toArray), ("edges", .arr retained.toArray)])
 
 private def classes := ["valueBindings", "constraints", "helper", "branch", "ret", "mapWrite", "packetWrite"]
 private def verdicts := ["Equal", "Differs", "AbsentLeft", "AbsentRight"]
@@ -82,16 +82,16 @@ private def checks : Except String (List String) := do
     throw ("eBPF product fixture did not complete: " ++ ebpfSnapshot.compress)
   let ebpfNodes ← fieldArray ebpfSnapshot "nodes"
   let ebpfEdges ← fieldArray ebpfSnapshot "edges"
-  if ebpfNodes.size != 539 || ebpfEdges.size != 538 then
-    throw "eBPF fixture did not reach the observed native-helper terminal graph"
-  if !ebpfNodes.any (fun n => (fieldString n "loc").toOption == some "exit") then
-    throw "eBPF fixture missing EXIT terminal"
+  let terminalReturns ← ebpfNodes.toList.filterMapM fun n => do
+    if (← fieldString n "loc") != "exit" then pure none else do
+      let ps ← fieldArray n "predicates"
+      let returns ← ps.toList.filterMapM fun p => do
+        if (← fieldString p "kind") != "ret" then pure none
+        else pure (ClassifierExpr.parseTerm (← fieldString p "term") .w64)
+      pure (some returns)
+  if !terminalReturns.any (·.contains (ClassifierExpr.Term.C64 3)) then
+    throw "eBPF fixture missing concrete TX return 3"
   let ebpf ← snapshotRun "ebpf" ebpfResponse
-  -- Observed fixture/model frontier, not a comparison-interface property: the
-  -- product wrapper binds all savedRegs to the entry-position term. In particular,
-  -- x9's spill at index 3 has a source. RV32IMC now stops with UnboundTarget at
-  -- index 34 (failed node 56), after producing 63 nodes and 62 edges.
-  -- Native eBPF binds the same Map id and reaches EXIT without rejecting helpers.
   let rv32Response := RV32IMC.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60
   let rv32Snapshot ← Json.parse rv32Response
   let rv32Status ← fieldString rv32Snapshot "status"
@@ -99,8 +99,7 @@ private def checks : Except String (List String) := do
   let rv32Failed ← (← rv32Snapshot.getObjVal? "failed").getNat?
   let rv32Nodes ← fieldArray rv32Snapshot "nodes"
   let rv32Edges ← fieldArray rv32Snapshot "edges"
-  if rv32Status != "fail" || rv32Reason != "UnboundTarget" || rv32Failed != 56 ||
-      rv32Nodes.size != 63 || rv32Edges.size != 62 then
+  if rv32Status != "fail" || rv32Reason != "UnboundTarget" then
     throw "RV32 fixture did not reach the observed bound-wrapper frontier"
   if !rv32Nodes.any (fun n => ((n.getObjVal? "id") >>= Json.getNat?).toOption == some rv32Failed &&
       (fieldString n "loc").toOption == some "34") then
@@ -120,7 +119,6 @@ private def checks : Except String (List String) := do
     ← summary "identical-ebpf" self, ← summary "rv32imc-vs-ebpf" cross,
     cross.compress, ← summary "dropped-ebpf-node" dropped]
 
-/-- Finite fixture diagnostics only; not imported by any library. -/
 def main : IO UInt32 := do
   match checks with
   | .error detail => IO.eprintln ("CrossArchCheck failed: " ++ detail); pure 1

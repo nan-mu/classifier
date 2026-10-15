@@ -91,17 +91,12 @@ def Expr.decideWith (e : Expr) (lhs : Term) : Option Bool := do
 
 def solveExpr (e : Expr) : Expr := { e with term := solve e.term }
 
-/-- Interpret one Expr under register/value assignments (math §10.3). -/
-def interpretExpr (ρ : Reg → Nat) (ν : Var → Nat) (e : Expr) : Bool :=
-  let rec termVal : Term → Nat
-    | .const _ c => c
-    | .var w ξ => ν ⟨w, ξ, none⟩
-    | .regVar event r => ν ⟨r.width, r.alpha, some (event, r)⟩
-    | .app _ op args =>
-        match interpretOp op (args.map termVal) with
-        | some v => v
-        | none => 0
-  interpretRel e.reg.width.bits e.rel (ρ e.reg) (termVal e.term)
+/-- Partial interpretation. Missing external meanings and malformed terms remain undefined. -/
+def interpretExpr (ρ : Reg → Nat) (ν : Var → Nat) (θ : ExternalInterpretation)
+    (e : Expr) : Option Bool := do
+  if !e.reg.valid || e.term.width != e.reg.width then none else
+    let value ← interpretTerm ν θ e.term
+    pure (interpretRel e.reg.width.bits e.rel (ρ e.reg) value)
 
 /-! ## Value bindings and comparison constraints -/
 

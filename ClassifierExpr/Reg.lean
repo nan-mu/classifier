@@ -8,14 +8,14 @@ inductive RegKind where
   | map
   | packet
   | context
-  deriving DecidableEq, BEq, Repr, Inhabited
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 /-- \(\mathrm{Reg}_{k,w}=(k,w,\alpha)\). Alpha assignment is architecture-specific. -/
 structure Reg where
   kind  : RegKind
   width : Width
   alpha : Nat
-  deriving DecidableEq, BEq, Repr, Inhabited
+  deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 def Reg.real (w : Width) (α : Nat) : Reg := ⟨.real, w, α⟩
 def Reg.stack (w : Width) (α : Nat) : Reg := ⟨.stack, w, α⟩

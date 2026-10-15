@@ -11,8 +11,15 @@ inductive ResolvedAccess where
   | packet (access : PacketAccess)
   deriving Repr, Inhabited
 
-/-- Signed, integral displacement from a fixed entry root. Only identity wrappers
-and additions of closed constants establish symbolic aliases. -/
+/-- A Map parameter must select exactly one supplied layout. -/
+def uniqueMapLayout (maps : List MapLayout) (mapTerm : Term) : Option MapLayout := do
+  let id ← eval (solve mapTerm)
+  match maps.filter (fun layout => layout.mapId == id) with
+  | [layout] => some layout
+  | _ => none
+
+/-- Signed, integral displacement from a fixed entry root. Identity wrappers and
+addition or subtraction of closed constants establish symbolic aliases. -/
 def relativeOffset (root address : Term) : Option Int :=
   if root.width != .w64 || address.width != .w64 then none
   else if address == root then some 0
@@ -25,6 +32,10 @@ def relativeOffset (root address : Term) : Option Int :=
         let c ← eval (solve a)
         let d ← relativeOffset root b
         pure (d + s 64 c)
+    | .app .w64 (.sub .w64) [a, b] => do
+      let c ← eval (solve b)
+      let d ← relativeOffset root a
+      pure (d - s 64 c)
     | _ => match solve root, solve address with
       | .const .w64 r, .const .w64 a => some (s 64 (M 64 (Int.ofNat a - Int.ofNat r)))
       | _, _ => none
@@ -58,9 +69,12 @@ def lookupAddress64 : Term → Option (Nat × Int × Term)
 /-- Unit zero starts at tSp-4. A fixed stride is injective because unit < 128. -/
 def stackUnitReg (resource unit : Nat) : Reg := Reg.sw (128 * resource + unit)
 
-private def contextParts (p : EntryParams) (d : Int) (bytes : Nat) : Option ResolvedAccess :=
-  if d ≥ 0 && d.toNat % 4 == 0 && d.toNat / 4 < 2 && bytes == 4 then
-    some (.cells [⟨Reg.ctx32 (p.αCtx + d.toNat / 4), 0, 32⟩])
+private def contextParts (p : EntryParams) (d : Int) (bytes : Nat)
+    (byteView : Bool := false) : Option ResolvedAccess :=
+  if d ≥ 0 && d.toNat / 4 < 2 && d.toNat % 4 + bytes ≤ 4 &&
+      ((d.toNat % 4 == 0 && bytes == 4) || (byteView && bytes == 1)) then
+    some (.cells [⟨Reg.ctx32 (p.αCtx + d.toNat / 4),
+      8 * (d.toNat % 4), 8 * bytes⟩])
   else none
 
 private def stackParts (p : EntryParams) (d : Int) (bytes : Nat) : Option ResolvedAccess :=
@@ -121,17 +135,14 @@ def packetRoot (p : EntryParams) (E : ExprSet) : Option Term := do
 entry-register name. Content availability is checked by readAccess/writeAccess.
 Lookup anchors word zero; other Map words have no implicit content relation
 and accesses reject undefinedSrc until such a relation is explicitly available. -/
-def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
-    (bytes : Nat) (isWrite : Bool) (maps : List MapLayout := []) :
+def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : Int)
+    (bytes : Nat) (maps : List MapLayout := []) (contextByteView : Bool := false) :
     Except RejectReason ResolvedAccess := do
-  let _ := isWrite
-  if base > 10 || !E.keysUnique || !E.wellTyped ||
+  if !E.keysUnique || !E.wellTyped || address.width != .w64 ||
       ![1, 2, 4, 8].contains bytes then throw .undefinedSrc
-  let some address := E.lookupEq (Reg.real64 base) | throw .undefinedSrc
-  if address.width != .w64 then throw .undefinedSrc
   let mut candidates : List ResolvedAccess := []
   if let some displacement := relativeOffset p.tCtx address then
-    if let some a := contextParts p (displacement + offset) bytes then
+    if let some a := contextParts p (displacement + offset) bytes contextByteView then
       candidates := a :: candidates
   if let some displacement := relativeOffset p.tSp address then
     if let some a := stackParts p (displacement + offset) bytes then
@@ -142,7 +153,7 @@ def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
       if o ≥ 0 && o.toNat + bytes ≤ p.packetBytes then
         candidates := .packet ⟨p.κPacket, o.toNat, bytes, .little, some p.tData⟩ :: candidates
   if let some (event, displacement, mapTerm) := lookupAddress64 address then
-    if let some layout := findMapLayout maps mapTerm then
+    if let some layout := uniqueMapLayout maps mapTerm then
       let rel := displacement + offset
       if rel ≥ 0 && rel.toNat + bytes ≤ layout.valueSize &&
           rel.toNat % 8 + bytes ≤ 8 then
@@ -152,6 +163,56 @@ def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
   match candidates with
   | [a] => pure a
   | _ => throw .undefinedSrc
+
+def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
+    (bytes : Nat) (isWrite : Bool) (maps : List MapLayout := []) :
+    Except RejectReason ResolvedAccess := do
+  let _ := isWrite
+  if base > 10 then throw .undefinedSrc
+  let some address := E.lookupEq (Reg.real64 base) | throw .undefinedSrc
+  resolveAddress p E address offset bytes maps
+
+private inductive BufferOrigin where
+  | stack (resource : Nat)
+  | context (firstCell : Nat)
+  | map (event : NodeId) (object : Term)
+  | packet (resource : Nat)
+  deriving BEq
+
+private def bufferOrigin (p : EntryParams) (address : Term) :
+    ResolvedAccess → Option BufferOrigin
+  | .packet a => some (.packet a.κ)
+  | .cells [part] =>
+    match part.reg.kind with
+    | .stack => some (.stack p.φStack)
+    | .context => some (.context p.αCtx)
+    | .map => do
+      let (event, _, object) ← lookupAddress64 address
+      some (.map event object)
+    | _ => none
+  | _ => none
+
+/-- Freeze one complete existing buffer with a single resource origin.
+Packet input materialization is disabled. Context bytes are views of the two
+existing canonical context words. -/
+def availableBufferBytes (p : EntryParams) (E : ExprSet) (address : Term)
+    (n : Nat) (maps : List MapLayout := []) : Option (List Term) := do
+  if !E.keysUnique || !E.wellTyped || address.width != .w64 then none else do
+    let mut origin : Option BufferOrigin := none
+    let mut bytes := []
+    for j in List.range n do
+      let access ← (resolveAddress p E address (Int.ofNat j) 1 maps true).toOption
+      let candidate ← bufferOrigin p address access
+      if let some previous := origin then
+        if previous != candidate then none
+      origin := some candidate
+      let access := match access with
+        | .packet a => ResolvedAccess.packet { a with inputBase := none }
+        | .cells parts => .cells parts
+      let (inputs, value) ← (readAccess E access).toOption
+      if !inputs.entries.isEmpty then none
+      bytes := value :: bytes
+    some bytes.reverse
 
 /-- All partial fields read the old snapshot. Whole Stack units, including both
 halves of a DW store, require no old equality. Map writes require an existing
@@ -176,30 +237,136 @@ def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except Reje
       shift := shift + part.bits
     pure updates
 
-/-- Memory effects distinguish first-read inputs from simultaneous assignments.
-Packet stores carry their observation with the byte updates, using the same
-complete pre-state source. The existing MOV/ADD rules are reused; control flow
-and helper classes belong to Step, not this value-effect dispatcher. -/
+/-- Map term and frozen key tail from the owning lookup observation. This lives
+below Helper because Helper's freezing rule depends on stackBytes. -/
+private def lookupFrozenKey (p : Predicate) : Option (Term × List Term) :=
+  match p with
+  | .helper _ .lookup (map :: _keyPtr :: frozen) => some (map, frozen)
+  | _ => none
+
+/-- Re-carrier saved native stack bytes without consulting the current key buffer.
+Open bytes reuse the saved 32-bit extract; readAccess's zero OR/shift wrappers
+leave that byte unchanged. -/
+private def mapWriteKeyByte (byte : Term) : Option Term :=
+  match eval (solve byte) with
+  | some c => some (Term.C32 (c % 256))
+  | none => match byte with
+    | .app .w64 (.zext 8 .w64 32)
+        [field@(.app .w32 (.extract _ 8 32) [_])]
+    | .app .w64 (.or 64) [.const .w64 0,
+        .app .w64 (.shl .w64)
+          [.app .w64 (.zext 8 .w64 32)
+            [field@(.app .w32 (.extract _ 8 32) [_])], .const .w64 0]] =>
+        some (solve field)
+    | _ => if byte.width == .w64 then some (zStar 8 .w32 64 byte) else none
+
+/-- Map writes reuse the lookup's frozen key, never the current key buffer. -/
+private def mapWriteObservation (E : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
+    (base : Nat) (offset : Int) (bytes : Nat) : Option (Term × List Term × Nat) := do
+  let address ← E.lookupEq (Reg.real64 base)
+  let (lookupEvent, displacement, mapTerm) ← lookupAddress64 address
+  let layout ← uniqueMapLayout maps mapTerm
+  let rel := displacement + offset
+  if rel < 0 || rel.toNat + bytes > layout.valueSize || rel.toNat % 8 + bytes > 8 then none
+  else
+    let p ← Pg.find? fun p => match p with
+      | .helper event .lookup _ => event == lookupEvent
+      | _ => false
+    let (map, frozen) ← lookupFrozenKey p
+    if map != mapTerm || frozen.isEmpty || frozen.length != layout.keySize then none
+    else do
+      let key ← frozen.mapM mapWriteKeyByte
+      some (map, key, rel.toNat)
+
+/-- A native Map DW write observes the low half before the high half, while the
+value effect still uses the complete pre-state source. Narrow stores keep it intact. -/
+private def mapWriteObservations (event : NodeId) (map : Term) (frozen : List Term)
+    (elementOff bytes : Nat) (source : Term) : List Predicate :=
+  if bytes == 8 then
+    [.mapWrite event map frozen elementOff (star .w32 (.extract 0 32 64) [source]),
+      .mapWrite event map frozen (elementOff + 4) (star .w32 (.extract 32 32 64) [source])]
+  else [.mapWrite event map frozen elementOff source]
+
+private def storeEffect (p : EntryParams) (event : NodeId) (E : ExprSet)
+    (maps : List MapLayout) (Pg : List Predicate) (bytes base : Nat)
+    (offset : Int) (source : Term) : Except RejectReason (ExprEffect × List Predicate) := do
+  let access ← resolveAccess p E base offset bytes true maps
+  let updates ← writeAccess E access source
+  let predicates ← match access with
+    | .packet a => pure [.packetWrite event a.κ a.offset source]
+    | .cells parts =>
+      if parts.any (fun part => part.reg.kind == .map) then do
+        let some (map, frozen, elementOff) := mapWriteObservation E Pg maps base offset bytes
+          | throw .undefinedSrc
+        pure (mapWriteObservations event map frozen elementOff bytes source)
+      else pure []
+  pure (⟨.empty, updates⟩, predicates)
+
+private def memoryReg (E : ExprSet) (r : Nat) : Except RejectReason Term := do
+  if r > 10 then throw .undefinedSrc
+  let some value := E.lookupEq (Reg.real64 r) | throw .undefinedSrc
+  if value.width != .w64 then throw .undefinedSrc
+  pure value
+
+/-- Sequential numeric RMW on canonical stack or Map cells.
+DW stack memory is assembled once from the two old SW32 cells, updated once at
+64 bits, then split into simultaneous assignments. No concurrency observation is added. -/
+private def atomicEffect (p : EntryParams) (E : ExprSet) (maps : List MapLayout)
+    (w : Width) (op : AtomicOp) (base src : Nat) (offset : Int) :
+    Except RejectReason (ExprEffect × List Predicate) := do
+  if op.returnsSource && src ≥ 10 then throw .undefinedSrc
+  let source ← memoryReg E src
+  let access ← resolveAccess p E base offset (w.bits / 8) true maps
+  match access with
+  | .packet _ => throw .unsupported
+  | .cells parts =>
+    if parts.any (fun part => part.reg.kind != .stack && part.reg.kind != .map) then
+      throw .unsupported
+    if parts.any (fun part => part.bitOffset % w.bits != 0) then throw .undefinedSrc
+  let (inputs, oldMemory) ← readAccess E access
+  let a := aluOperand w oldMemory
+  let b := aluOperand w source
+  let value ← match op with
+    | .add _ => pure (addStar w a b)
+    | .or _ => pure (orStar w.bits w a b)
+    | .and _ => pure (andStar w.bits w a b)
+    | .xor _ => pure (xorStar w.bits w a b)
+    | .xchg => pure b
+    | .cmpxchg => do
+      let expected ← memoryReg E 0
+      pure (star w (.selectEq w) [a, aluOperand w expected, b, a])
+  let updates ← writeAccess E access (aluResult w value)
+  let updates := if op.returnsSource then
+      updates.insertEq (Reg.real64 src) (aluResult w a)
+    else if op == .cmpxchg then updates.insertEq (Reg.real64 0) (aluResult w a)
+    else updates
+  pure (⟨inputs, updates⟩, [])
+
+/-- Value effects read their sources and partial-field old values from E.
+Control flow and helper calls belong to Step. -/
 def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn)
-    (maps : List MapLayout := []) : Except RejectReason (ExprEffect × List Predicate) := do
+    (maps : List MapLayout := []) (Pg : List Predicate := []) :
+    Except RejectReason (ExprEffect × List Predicate) := do
   if !E.keysUnique || !E.wellTyped then throw .undefinedSrc
   match i with
-  | .ldx bytes dst base offset =>
+  | .ldx bytes dst base offset | .loadAcq bytes dst base offset =>
     if dst > 9 then throw .undefinedSrc
     let access ← resolveAccess p E base offset bytes false maps
     let (inputs, value) ← readAccess E access
     pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst) value⟩, [])
-  | .stx bytes base src offset =>
-    if src > 10 then throw .undefinedSrc
-    let some source := E.lookupEq (Reg.real64 src) | throw .undefinedSrc
-    if source.width != .w64 then throw .undefinedSrc
-    let access ← resolveAccess p E base offset bytes true maps
-    let updates ← writeAccess E access source
-    let predicates := match access with
-      | .packet a => [.packetWrite event a.κ a.offset source]
-      | .cells _ => []
-    pure (⟨.empty, updates⟩, predicates)
-  | .mov _ _ _ | .add _ _ _ =>
+  | .memsx bytes dst base offset =>
+    if dst > 9 || ![1, 2, 4].contains bytes then throw .undefinedSrc
+    let access ← resolveAccess p E base offset bytes false maps
+    let (inputs, value) ← readAccess E access
+    pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst)
+      (sStar (8 * bytes) .w64 64 value)⟩, [])
+  | .stx bytes base src offset | .storeRel bytes base src offset =>
+    let source ← memoryReg E src
+    storeEffect p event E maps Pg bytes base offset source
+  | .st bytes base bits offset =>
+    storeEffect p event E maps Pg bytes base offset (Term.C64 (M 64 (s 32 bits.toNat)))
+  | .atomic w op base src offset => atomicEffect p E maps w op base src offset
+  | .mov _ _ _ | .binary _ _ _ _ | .neg _ _ | .movsx _ _ _ _ | .endian _ _ _ =>
     let some updates := expr E i | throw .undefinedSrc
     pure (⟨.empty, updates⟩, [])
   | .exit => pure (⟨.empty, .empty⟩, [])
@@ -307,6 +474,140 @@ private def lookupMemoryCheck : Bool := Id.run do
     value == Term.regVar 7 (Reg.real64 0) && next == Term.C64 99
 
 #guard lookupMemoryCheck
+
+/-- The key pointer is not a current stack alias: only Pg supplies the frozen key. -/
+private def mapStoreExprs : ExprSet :=
+  ExprSet.empty.insertEq (Reg.real64 0)
+    (star .w64 (.externalResult 7 0)
+      [Term.C64 1, Term.C64 1077412584, Term.V64 9])
+    |>.insertEq (Reg.real64 1) (idStar .w64 (Term.V64 11))
+    |>.insertEq (Reg.mapDword 7 0) (Term.regVar 7 (Reg.real64 0))
+
+private def mapStoreFrozenKey : List Term :=
+  [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
+
+private def mapStoreKey : List Term :=
+  [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
+
+private def mapStoreLookup : Predicate :=
+  .helper 7 .lookup ([Term.C64 1077412584, Term.V64 9] ++ mapStoreFrozenKey)
+
+private def mapStoreLayouts : List MapLayout :=
+  [{ mapId := 1077412584, keySize := 4, valueSize := 8 }]
+
+private def mapStoreObservationsCheck : Bool := Id.run do
+  let E := mapStoreExprs
+  let ev := 77
+  let some source := E.lookupEq (Reg.real64 1) | return false
+  let .ok (effect, predicates) :=
+    exprEffects memoryEntry ev E (.stx 8 0 1 0) mapStoreLayouts [mapStoreLookup]
+    | return false
+  let .ok (_, partialPredicates) :=
+    exprEffects memoryEntry (ev + 1) E (.stx 4 0 1 4) mapStoreLayouts [mapStoreLookup]
+    | return false
+  return predicates ==
+      [.mapWrite ev (Term.C64 1077412584) mapStoreKey 0
+        (star .w32 (.extract 0 32 64) [source]),
+       .mapWrite ev (Term.C64 1077412584) mapStoreKey 4
+        (star .w32 (.extract 32 32 64) [source])] &&
+    partialPredicates ==
+      [.mapWrite (ev + 1) (Term.C64 1077412584) mapStoreKey 4 source] &&
+    effect.inputs == ExprSet.empty &&
+    effect.updates.lookupEq (Reg.mapDword 7 0) == some source &&
+    effect.validFor E
+
+/-- Interpret the saved key and both DW observations under explicit ν/θ.
+The old key survives a live-stack overwrite; extract/extend wrappers are not
+part of this behavior contract. The value effect must store the full old source. -/
+private def symbolicMapStoreFrozenKeyCheck : Bool := Id.run do
+  let keyPtr := addStar .w64 memoryEntry.tSp (Term.C64 (M 64 (-4)))
+  let original := mapStoreExprs.insertEq (stackUnitReg 5 0) (Term.V32 12)
+  let some frozen := stackBytes memoryEntry original keyPtr 4 | return false
+  let Pg := [.helper 7 .lookup ([Term.C64 1077412584, keyPtr] ++ frozen)]
+  let E := original.insertEq (Reg.real64 0)
+    (star .w64 (.externalResult 7 0) [Term.C64 1, Term.C64 1077412584, keyPtr])
+    |>.insertEq (stackUnitReg 5 0) (Term.C32 0)
+  let .ok (effect, predicates) :=
+    exprEffects memoryEntry 77 E (.stx 8 0 1 0) mapStoreLayouts Pg | return false
+  let [.mapWrite 77 mapLo keyLo 0 valueLo, .mapWrite 77 mapHi keyHi 4 valueHi] :=
+    predicates | return false
+  let some updated := effect.updates.lookupEq (Reg.mapDword 7 0) | return false
+  let next := E.override effect.delta
+  let some stored := next.lookupEq (Reg.mapDword 7 0) | return false
+  let some liveKey := stackBytes memoryEntry next keyPtr 4 | return false
+  if !effect.validFor E || !effect.inputs.entries.isEmpty ||
+      effect.updates.entries.length != 1 ||
+      !frozen.all (fun t => t.width == .w64) ||
+      !(keyLo ++ keyHi).all (fun t => t.width == .w32) ||
+      valueLo.width != .w32 || valueHi.width != .w32 then return false
+  let θ : ExternalInterpretation :=
+    { externalResult := fun _ _ _ _ => some 0
+      inputByte := fun _ _ _ => some 0 }
+  let cases : List (Nat × List Nat × Nat × Nat × Nat) := [
+    (0xa1b2c3d4, [0xd4, 0xc3, 0xb2, 0xa1],
+      0x1122334455667788, 0x55667788, 0x11223344),
+    (0x01020304, [4, 3, 2, 1],
+      0xfedcba9876543210, 0x76543210, 0xfedcba98)]
+  return cases.all fun (keyValue, keyBytes, sourceValue, lowValue, highValue) =>
+    let ν : Var → Nat := fun v => match v.width, v.name, v.register with
+      | .w32, 12, none => keyValue
+      | .w64, 11, none => sourceValue
+      | _, _, _ => 0
+    interpretTerms ν θ frozen == some keyBytes &&
+      interpretTerms ν θ keyLo == some keyBytes &&
+      interpretTerms ν θ keyHi == some keyBytes &&
+      interpretTerm ν θ mapLo == some 1077412584 &&
+      interpretTerm ν θ mapHi == some 1077412584 &&
+      interpretTerm ν θ valueLo == some lowValue &&
+      interpretTerm ν θ valueHi == some highValue &&
+      interpretTerm ν θ updated == some sourceValue &&
+      interpretTerm ν θ stored == some sourceValue &&
+      interpretTerms ν θ liveKey == some [0, 0, 0, 0]
+
+private def mapStoreRejectsMissingObservationCheck : Bool :=
+  let malformedLookups : List (List Predicate) := [
+    [],
+    [.helper 7 .lookup [Term.C64 1077412584, Term.V64 9]],
+    [.helper 7 .lookup
+      ([Term.C64 1077412584, Term.V64 9] ++ mapStoreFrozenKey.take 3)],
+    [.helper 7 .lookup
+      ([Term.C64 1077412584, Term.V64 9] ++ mapStoreFrozenKey ++ [Term.C64 5])],
+    [.helper 8 .lookup ([Term.C64 1077412584, Term.V64 9] ++ mapStoreFrozenKey)],
+    [.helper 7 .lookup ([Term.C64 42, Term.V64 9] ++ mapStoreFrozenKey)]]
+  malformedLookups.all fun Pg =>
+    match exprEffects memoryEntry 77 mapStoreExprs (.stx 8 0 1 0) mapStoreLayouts Pg with
+    | .error .undefinedSrc => true
+    | _ => false
+
+private def mapStoreRejectsLayoutAndBoundsCheck : Bool :=
+  let cases : List (Insn × List MapLayout) := [
+    (.stx 8 0 1 0, []),
+    (.stx 8 0 1 0, [⟨42, 4, 8⟩]),
+    (.stx 1 0 1 (-1), mapStoreLayouts),
+    (.stx 2 0 1 7, [⟨1077412584, 4, 16⟩]),
+    (.stx 8 0 1 0, [⟨1077412584, 4, 4⟩]),
+    (.stx 1 0 1 8, mapStoreLayouts)]
+  cases.all fun (i, maps) =>
+    match exprEffects memoryEntry 77 mapStoreExprs i maps [mapStoreLookup] with
+    | .error .undefinedSrc => true
+    | _ => false
+
+private def nonMapCellStoreObservationsCheck : Bool := Id.run do
+  let .ok σ := buildE0 memoryEntry | return false
+  let E := σ.exprs.insertEq (Reg.real64 0) (Term.C64 99)
+  let .ok (_, []) :=
+    exprEffects memoryEntry 77 E (.stx 8 10 0 (-8)) mapStoreLayouts [mapStoreLookup]
+    | return false
+  let .ok (_, []) :=
+    exprEffects memoryEntry 78 E (.stx 4 1 0 0) mapStoreLayouts [mapStoreLookup]
+    | return false
+  return true
+
+#guard mapStoreObservationsCheck
+#guard symbolicMapStoreFrozenKeyCheck
+#guard mapStoreRejectsMissingObservationCheck
+#guard mapStoreRejectsLayoutAndBoundsCheck
+#guard nonMapCellStoreObservationsCheck
 #guard lookupAddress64 (idStar .w64 lookupPointer) == some (7, 0, Term.C64 42)
 #guard lookupAddress64
   (subStar .w64 (addStar .w64 lookupPointer (Term.C64 8)) (Term.C64 4)) ==
@@ -328,4 +629,74 @@ private def lookupMemoryCheck : Bool := Id.run do
     (stackBytes memoryEntry σ.exprs ptr 4).isNone &&
     (stackBytes memoryEntry E ptr 5).isNone
 
+private def atomicStackSnapshotCheck : Bool := Id.run do
+  let .ok σ := buildE0 memoryEntry | return false
+  let E := σ.exprs.insertEq (stackUnitReg 5 1) (Term.C32 0xffffffff)
+    |>.insertEq (stackUnitReg 5 0) (Term.C32 1)
+    |>.insertEq (Reg.real64 2) (Term.C64 1)
+    |>.insertEq (Reg.real64 0) (Term.C64 0x1ffffffff)
+  let .ok (add, []) := exprEffects memoryEntry 1 E
+    (.atomic .w64 (.add true) 10 2 (-8)) | return false
+  let .ok (cmp, []) := exprEffects memoryEntry 2 E
+    (.atomic .w64 .cmpxchg 10 2 (-8)) | return false
+  let failedCompare := E.insertEq (Reg.real64 0) (Term.C64 0)
+  let .ok (miss, []) := exprEffects memoryEntry 3 failedCompare
+    (.atomic .w64 .cmpxchg 10 2 (-8)) | return false
+  let missingHigh := σ.exprs.insertEq (stackUnitReg 5 1) (Term.C32 1)
+    |>.insertEq (Reg.real64 2) (Term.C64 1)
+  let .error .undefinedSrc := exprEffects memoryEntry 4 missingHigh
+    (.atomic .w64 (.add true) 10 2 (-8)) | return false
+  return add.updates.lookupEq (stackUnitReg 5 1) == some (Term.C32 0) &&
+    add.updates.lookupEq (stackUnitReg 5 0) == some (Term.C32 2) &&
+    add.updates.lookupEq (Reg.real64 2) == some (Term.C64 0x1ffffffff) &&
+    cmp.updates.lookupEq (stackUnitReg 5 1) == some (Term.C32 1) &&
+    cmp.updates.lookupEq (stackUnitReg 5 0) == some (Term.C32 0) &&
+    cmp.updates.lookupEq (Reg.real64 0) == some (Term.C64 0x1ffffffff) &&
+    miss.updates.lookupEq (stackUnitReg 5 1) == some (Term.C32 0xffffffff) &&
+    miss.updates.lookupEq (stackUnitReg 5 0) == some (Term.C32 1) &&
+    miss.updates.lookupEq (Reg.real64 0) == some (Term.C64 0x1ffffffff) &&
+    add.validFor E && cmp.validFor E && miss.validFor failedCompare
+
+private def atomicMapFieldCheck : Bool := Id.run do
+  let E := mapStoreExprs.insertEq (Reg.mapDword 7 0) (Term.C64 0x11223344ffffffff)
+    |>.insertEq (Reg.real64 2) (Term.C64 1)
+  let .ok (effect, []) := exprEffects memoryEntry 9 E
+    (.atomic .w32 (.add true) 0 2 0) mapStoreLayouts | return false
+  let .error .undefinedSrc := exprEffects memoryEntry 9 E
+    (.atomic .w32 (.add false) 0 2 1) mapStoreLayouts | return false
+  return effect.updates.lookupEq (Reg.mapDword 7 0) == some (Term.C64 0x1122334400000000) &&
+    effect.updates.lookupEq (Reg.real64 2) == some (Term.C64 0xffffffff) &&
+    effect.updates.entries.length == 2 && effect.validFor E
+
+private def immediateAndSignedMemoryCheck : Bool := Id.run do
+  let .ok σ := buildE0 memoryEntry | return false
+  let .ok (stored, []) := exprEffects memoryEntry 0 σ.exprs
+    (.st 8 10 0xffffff80 (-8)) | return false
+  let E := σ.exprs.override stored.delta
+  let .ok (signed, []) := exprEffects memoryEntry 1 E (.memsx 1 2 10 (-8)) | return false
+  let .ok (unsigned, []) := exprEffects memoryEntry 2 E (.loadAcq 1 2 10 (-8)) | return false
+  let E := E.insertEq (Reg.real64 2) (Term.C64 0x55)
+  let .ok (released, []) := exprEffects memoryEntry 3 E (.storeRel 1 10 2 (-7)) | return false
+  return signed.updates.lookupEq (Reg.real64 2) == some (Term.C64 0xffffffffffffff80) &&
+    unsigned.updates.lookupEq (Reg.real64 2) == some (Term.C64 0x80) &&
+    released.updates.lookupEq (stackUnitReg 5 1) == some (Term.C32 0xffff5580)
+
+#guard atomicStackSnapshotCheck
+#guard atomicMapFieldCheck
+#guard immediateAndSignedMemoryCheck
+
+#guard relativeOffset memoryEntry.tSp (subStar .w64 memoryEntry.tSp (Term.C64 8)) ==
+  some (-8)
+
+#guard Id.run do
+  let p : EntryParams := ⟨Term.C64 0x1000, Term.C64 0x2000, Term.C32 0x2000,
+    4, 0, 0, 0⟩
+  let .ok initial := buildE0 p | return false
+  let E := initial.exprs.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)
+    |>.insertEq (Reg.packet 0 0) (Term.C32 0x55)
+  return availableBufferBytes p E (Term.C64 0x1fff) 1 == some [Term.C64 0x11] &&
+    availableBufferBytes p E (Term.C64 0x2000) 1 == some [Term.C64 0x55] &&
+    (availableBufferBytes p E (Term.C64 0x1fff) 2).isNone
+
 end EBPF
+

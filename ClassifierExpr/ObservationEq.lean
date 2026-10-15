@@ -247,29 +247,655 @@ mutual
   termination_by ts => sizeOf ts
 end
 
-/-! These propositions are recorded proof obligations, not axioms or theorems.
-In particular, malformed input substitutions invalidate unconditional
-injectivity preservation and unconditional identity stripping. -/
+private theorem find_key_of_mem {α κ : Type} [BEq κ] [LawfulBEq κ]
+    (key : α → κ) {xs : List α} (hn : (xs.map key).Nodup)
+    {e : α} (he : e ∈ xs) :
+    xs.find? (fun d => key d == key e) = some e := by
+  induction xs with
+  | nil => simp at he
+  | cons d ds ih =>
+    simp only [List.map_cons, List.nodup_cons] at hn
+    rcases List.mem_cons.mp he with rfl | he
+    · simp
+    · have hne : key d ≠ key e := by
+        intro h
+        exact hn.1 (h ▸ List.mem_map.mpr ⟨e, he, rfl⟩)
+      simp only [List.find?_cons, beq_eq_false_iff_ne.mpr hne]
+      exact ih hn.2 he
+
+private theorem image_some_iff {α κ δ : Type} [BEq κ] [LawfulBEq κ]
+    (key : α → κ) (value : α → δ) {xs : List α}
+    (hn : (xs.map key).Nodup) (x : κ) (y : δ) :
+    (xs.find? (fun e => key e == x)).map value = some y ↔
+      ∃ e ∈ xs, key e = x ∧ value e = y := by
+  constructor
+  · intro h
+    cases hf : xs.find? (fun e => key e == x) with
+    | none => simp [hf] at h
+    | some e =>
+      exact ⟨e, List.mem_of_find?_eq_some hf,
+        eq_of_beq (List.find?_some (p := fun d => key d == x) hf), by simpa [hf] using h⟩
+  · rintro ⟨e, he, hk, hv⟩
+    rw [← hk, find_key_of_mem key hn he]
+    simp [hv]
+
+theorem extends_refl (σ : CrossSubst) : Extends σ σ :=
+  ⟨fun _ h => h, fun _ h => h⟩
+
+theorem extends_trans {σ τ υ : CrossSubst} (h : Extends σ τ) (g : Extends τ υ) :
+    Extends σ υ :=
+  ⟨fun e he => g.1 e (h.1 e he), fun e he => g.2 e (h.2 e he)⟩
+
+theorem varImage_some_iff {σ : CrossSubst} (h : Injective σ) (x y : Nat) :
+    σ.varImage? x = some y ↔ (x, y) ∈ σ.vars := by
+  rw [varImage?, image_some_iff (fun e : Nat × Nat => e.1) (fun e => e.2) h.1]
+  constructor
+  · rintro ⟨⟨a, b⟩, he, rfl, rfl⟩; exact he
+  · intro he; exact ⟨(x, y), he, rfl, rfl⟩
+
+theorem regImage_some_iff {σ : CrossSubst} (h : Injective σ) (k : RegKind) (a b : Nat) :
+    σ.regImage? k a = some b ↔ (k, a, b) ∈ σ.regs := by
+  have hp : (fun e : RegKind × Nat × Nat => e.1 == k && e.2.1 == a) =
+      (fun e => (e.1, e.2.1) == (k, a)) := by
+    funext e; rfl
+  rw [regImage?, hp, image_some_iff
+    (fun e : RegKind × Nat × Nat => (e.1, e.2.1)) (fun e => e.2.2) h.2.2.1]
+  constructor
+  · rintro ⟨⟨l, c, d⟩, he, hk, rfl⟩
+    cases hk; exact he
+  · intro he; exact ⟨(k, a, b), he, rfl, rfl⟩
+
+theorem varImage_extends {σ τ : CrossSubst} (he : Extends σ τ)
+    (hi : Injective σ) (hj : Injective τ) {x y : Nat}
+    (h : σ.varImage? x = some y) : τ.varImage? x = some y :=
+  (varImage_some_iff hj x y).mpr (he.1 _ ((varImage_some_iff hi x y).mp h))
+
+theorem regImage_extends {σ τ : CrossSubst} (he : Extends σ τ)
+    (hi : Injective σ) (hj : Injective τ) {k : RegKind} {a b : Nat}
+    (h : σ.regImage? k a = some b) : τ.regImage? k a = some b :=
+  (regImage_some_iff hj k a b).mpr (he.2 _ ((regImage_some_iff hi k a b).mp h))
+
+theorem addVar_sound {σ τ : CrossSubst} {x y : Nat} (hi : Injective σ)
+    (h : addVar? σ x y = some τ) :
+    Extends σ τ ∧ Injective τ ∧ τ.varImage? x = some y := by
+  unfold addVar? at h
+  split at h
+  · split at h
+    · have hτ : σ = τ := Option.some.inj h
+      subst τ
+      exact ⟨extends_refl σ, hi, by simp_all⟩
+    · contradiction
+  · rename_i hn
+    split at h
+    · contradiction
+    · have hτ : ⟨(x, y) :: σ.vars, σ.regs⟩ = τ := Option.some.inj h
+      subst τ
+      have hx : x ∉ σ.vars.map (·.1) := by
+        intro hm
+        obtain ⟨e, he, hk⟩ := List.mem_map.mp hm
+        have hf := find_key_of_mem (fun e : Nat × Nat => e.1) hi.1 he
+        have : σ.varImage? x = some e.2 := by
+          simp only [varImage?, ← hk, hf, Option.map_some]
+        rw [hn] at this
+        contradiction
+      have hy : y ∉ σ.vars.map (·.2) := by
+        simpa using ‹¬ σ.vars.any (fun e => e.2 == y) = true›
+      refine ⟨⟨fun e he => List.mem_cons_of_mem _ he, fun _ he => he⟩, ?_, ?_⟩
+      · simpa [Injective, List.map_cons, List.nodup_cons] using
+          And.intro (And.intro hx hi.1) (And.intro (And.intro hy hi.2.1) hi.2.2)
+      · simp [varImage?]
+
+theorem addReg_sound {σ τ : CrossSubst} {k : RegKind} {a b : Nat}
+    (hi : Injective σ) (h : addReg? σ k a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧ τ.regImage? k a = some b := by
+  unfold addReg? at h
+  split at h
+  · split at h
+    · have hτ : σ = τ := Option.some.inj h
+      subst τ
+      exact ⟨extends_refl σ, hi, by simp_all⟩
+    · contradiction
+  · rename_i hn
+    split at h
+    · contradiction
+    · have hτ : ⟨σ.vars, (k, a, b) :: σ.regs⟩ = τ := Option.some.inj h
+      subst τ
+      have ha : (k, a) ∉ σ.regs.map (fun e => (e.1, e.2.1)) := by
+        intro hm
+        obtain ⟨⟨l, c, d⟩, he, hk⟩ := List.mem_map.mp hm
+        cases hk
+        have hf := (regImage_some_iff hi l c d).mpr he
+        rw [hn] at hf
+        contradiction
+      have hb : (k, b) ∉ σ.regs.map (fun e => (e.1, e.2.2)) := by
+        simpa [List.mem_map, Prod.ext_iff] using
+          ‹¬ σ.regs.any (fun e => e.1 == k && e.2.2 == b) = true›
+      refine ⟨⟨fun _ he => he, fun e he => List.mem_cons_of_mem _ he⟩, ?_, ?_⟩
+      · simpa [Injective, List.map_cons, List.nodup_cons] using
+          And.intro hi.1 (And.intro hi.2.1
+            (And.intro (And.intro ha hi.2.2.1) (And.intro hb hi.2.2.2)))
+      · simp [regImage?]
+
+mutual
+  theorem determined_extends {σ τ : CrossSubst} (he : Extends σ τ)
+      (hi : Injective σ) (hj : Injective τ) (a : CrossTerm) (hd : Determined σ a) :
+      Determined τ a ∧ applyTerm τ a = applyTerm σ a := by
+    cases a <;> simp only [Determined] at hd ⊢
+    case c z => exact ⟨True.intro, by simp only [applyTerm]⟩
+    case var x =>
+      obtain ⟨y, hy⟩ := hd
+      have ht := varImage_extends he hi hj hy
+      exact ⟨⟨y, ht⟩, by simp [applyTerm, varLookup, ht, hy]⟩
+    case reg k a =>
+      obtain ⟨b, hb⟩ := hd
+      have ht := regImage_extends he hi hj hb
+      exact ⟨⟨b, ht⟩, by simp [applyTerm, regLookup, ht, hb]⟩
+    case app f ts =>
+      obtain ⟨hd, ht⟩ := determinedTerms_extends he hi hj ts hd
+      exact ⟨hd, by simp only [applyTerm, ht]⟩
+    case external l ts =>
+      obtain ⟨hd, ht⟩ := determinedTerms_extends he hi hj ts hd
+      exact ⟨hd, by simp only [applyTerm, ht]⟩
+  termination_by sizeOf a
+
+  theorem determinedTerms_extends {σ τ : CrossSubst} (he : Extends σ τ)
+      (hi : Injective σ) (hj : Injective τ) (as : List CrossTerm)
+      (hd : DeterminedTerms σ as) :
+      DeterminedTerms τ as ∧ applyTerms τ as = applyTerms σ as := by
+    cases as <;> simp only [DeterminedTerms] at hd ⊢
+    case nil => exact ⟨True.intro, by simp only [applyTerms]⟩
+    case cons a as =>
+      obtain ⟨ha, hta⟩ := determined_extends he hi hj a hd.1
+      obtain ⟨has, htas⟩ := determinedTerms_extends he hi hj as hd.2
+      exact ⟨⟨ha, has⟩, by simp only [applyTerms, hta, htas]⟩
+  termination_by sizeOf as
+end
+
+mutual
+  theorem mergeTerm_spec (σ τ : CrossSubst) (a b : CrossTerm)
+      (hi : Injective σ) (h : mergeTerm σ a b = some τ) :
+      Extends σ τ ∧ Injective τ ∧ Determined τ a ∧ applyTerm τ a = b := by
+    cases a <;> cases b <;> simp only [mergeTerm, Determined] at h ⊢
+    all_goals try split at h
+    all_goals try contradiction
+    case c.c.isTrue z w hc =>
+      have : z = w := eq_of_beq hc
+      subst w; cases h
+      exact ⟨extends_refl _, hi, True.intro, by simp only [applyTerm]⟩
+    case var.var x y =>
+      obtain ⟨he, hj, hv⟩ := addVar_sound hi h
+      exact ⟨he, hj, ⟨y, hv⟩, by simp [applyTerm, varLookup, hv]⟩
+    case reg.reg.isTrue k a l b hk =>
+      have : k = l := eq_of_beq hk
+      subst l
+      obtain ⟨he, hj, hr⟩ := addReg_sound hi h
+      exact ⟨he, hj, ⟨b, hr⟩, by simp [applyTerm, regLookup, hr]⟩
+    case app.app.isTrue f as g bs hf =>
+      have : f = g := eq_of_beq hf
+      subst g
+      obtain ⟨he, hj, hd, ht⟩ := mergeList_spec σ τ as bs hi h
+      exact ⟨he, hj, hd, by simp only [applyTerm, ht]⟩
+    case external.external.isTrue l as m bs hl =>
+      have : l = m := eq_of_beq hl
+      subst m
+      obtain ⟨he, hj, hd, ht⟩ := mergeList_spec σ τ as bs hi h
+      exact ⟨he, hj, hd, by simp only [applyTerm, ht]⟩
+  termination_by sizeOf a + sizeOf b
+
+  theorem mergeList_spec (σ τ : CrossSubst) (as bs : List CrossTerm)
+      (hi : Injective σ) (h : mergeList σ as bs = some τ) :
+      Extends σ τ ∧ Injective τ ∧ DeterminedTerms τ as ∧ applyTerms τ as = bs := by
+    cases as with
+    | nil =>
+      cases bs <;> simp only [mergeList, DeterminedTerms] at h ⊢
+      · cases h; exact ⟨extends_refl _, hi, True.intro, by simp only [applyTerms]⟩
+      · contradiction
+    | cons a as =>
+      cases bs with
+      | nil => simp [mergeList] at h
+      | cons b bs =>
+        simp only [mergeList, Option.bind_eq_bind] at h
+        cases hm : mergeTerm σ a b with
+        | none => simp [hm] at h
+        | some υ =>
+          simp only [hm, Option.bind_some] at h
+          obtain ⟨he, hj, hd, ht⟩ := mergeTerm_spec σ υ a b hi hm
+          obtain ⟨he', hj', hd', ht'⟩ := mergeList_spec υ τ as bs hj h
+          obtain ⟨hda, hta⟩ := determined_extends he' hj hj' a hd
+          simp only [DeterminedTerms]
+          exact ⟨extends_trans he he', hj', ⟨hda, hd'⟩,
+            by simp only [applyTerms, hta, ht, ht']⟩
+  termination_by sizeOf as + sizeOf bs
+end
+
+theorem mergeList_already_determined (σ τ υ : CrossSubst) (as bs : List CrossTerm)
+    (hi : Injective σ) (h : mergeList σ as bs = some τ)
+    (he : Extends τ υ) (hj : Injective υ) : applyTerms υ as = bs := by
+  obtain ⟨_, ht, hd, ha⟩ := mergeList_spec σ τ as bs hi h
+  exact (determinedTerms_extends he ht hj as hd).2.trans ha
+
+theorem mergeValue_spec (σ τ : CrossSubst) (a b : CrossValue)
+    (hi : Injective σ) (h : mergeValue σ a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧
+      ∀ υ, Extends τ υ → Injective υ → applyValue υ a = b := by
+  cases a <;> cases b <;> simp only [mergeValue] at h
+  all_goals try contradiction
+  case bytes.bytes as bs =>
+    obtain ⟨he, hj, hd, ht⟩ := mergeList_spec σ τ as bs hi h
+    refine ⟨he, hj, fun υ he' hj' => ?_⟩
+    simp only [applyValue, mergeList_already_determined σ τ υ as bs hi h he' hj']
+  case source.source a b =>
+    obtain ⟨he, hj, hd, ht⟩ := mergeTerm_spec σ τ a b hi h
+    refine ⟨he, hj, fun υ he' hj' => ?_⟩
+    simp only [applyValue, (determined_extends he' hj hj' a hd).2, ht]
+
+theorem mergeMutation_spec (σ τ : CrossSubst) (a b : CrossMutation)
+    (hi : Injective σ) (h : mergeMutation σ a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧
+      ∀ υ, Extends τ υ → Injective υ → applyMutation υ a = b := by
+  simp only [mergeMutation, Option.bind_eq_bind] at h
+  split at h
+  · simp at h
+  · rename_i hk
+    have hk : a.kind = b.kind := by simpa using hk
+    cases hm : mergeTerm σ a.map b.map with
+    | none => simp [hm] at h
+    | some σ₁ =>
+      simp only [hm, Option.bind_some] at h
+      obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a.map b.map hi hm
+      cases hl : mergeList σ₁ a.key b.key with
+      | none => simp [hl] at h
+      | some σ₂ =>
+        simp only [hl, Option.bind_some] at h
+        obtain ⟨he₂, hi₂, _, _⟩ := mergeList_spec σ₁ σ₂ a.key b.key hi₁ hl
+        split at h
+        · simp at h
+        · rename_i ho
+          have ho : a.offset = b.offset := by simpa using ho
+          obtain ⟨he₃, hi₃, hv⟩ := mergeValue_spec σ₂ τ a.value b.value hi₂ h
+          refine ⟨extends_trans (extends_trans he₁ he₂) he₃, hi₃, ?_⟩
+          intro υ he₄ hi₄
+          have hm' := (determined_extends
+            (extends_trans he₂ (extends_trans he₃ he₄)) hi₁ hi₄ a.map hd₁).2.trans ht₁
+          have hl' := mergeList_already_determined σ₁ σ₂ υ a.key b.key hi₁ hl
+            (extends_trans he₃ he₄) hi₄
+          have hv' := hv υ he₄ hi₄
+          cases a; cases b
+          simp_all only [applyMutation]
+
+theorem mergeHelper_spec (σ τ : CrossSubst) (a b : CrossHelper)
+    (hi : Injective σ) (h : mergeHelper σ a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧
+      ∀ υ, Extends τ υ → Injective υ → applyHelper υ a = b := by
+  cases a <;> cases b <;> simp only [mergeHelper, Option.bind_eq_bind] at h
+  all_goals try contradiction
+  case lookup.lookup a as b bs =>
+    cases hm : mergeTerm σ a b with
+    | none => simp [hm] at h
+    | some σ₁ =>
+      simp only [hm, Option.bind_some] at h
+      obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a b hi hm
+      obtain ⟨he₂, hi₂, _, _⟩ := mergeList_spec σ₁ τ as bs hi₁ h
+      refine ⟨extends_trans he₁ he₂, hi₂, ?_⟩
+      intro υ he₃ hi₃
+      have ht := (determined_extends (extends_trans he₂ he₃) hi₁ hi₃ a hd₁).2.trans ht₁
+      have hts := mergeList_already_determined σ₁ τ υ as bs hi₁ h he₃ hi₃
+      simp only [applyHelper, ht, hts]
+  case mutation.mutation a b =>
+    obtain ⟨he, hj, ht⟩ := mergeMutation_spec σ τ a b hi h
+    exact ⟨he, hj, fun υ he' hj' => by simp only [applyHelper, ht υ he' hj']⟩
+  case other.other a as b bs =>
+    split at h
+    · rename_i hab
+      have : a = b := eq_of_beq hab
+      subst b
+      obtain ⟨he, hj, _, _⟩ := mergeList_spec σ τ as bs hi h
+      exact ⟨he, hj, fun υ he' hj' => by
+        simp only [applyHelper, mergeList_already_determined σ τ υ as bs hi h he' hj']⟩
+    · contradiction
+
+theorem mergeCond_spec (σ τ : CrossSubst) (a b : CrossCond)
+    (hi : Injective σ) (h : mergeCond σ a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧
+      ∀ υ, Extends τ υ → Injective υ → applyCond υ a = b := by
+  cases a <;> cases b <;> simp only [mergeCond, Option.bind_eq_bind] at h
+  all_goals try contradiction
+  case plain.plain r a b s c d =>
+    split at h
+    · simp at h
+    · rename_i hrs
+      have : r = s := by simpa using hrs
+      subst s
+      cases hm : mergeTerm σ a c with
+      | none => simp [hm] at h
+      | some σ₁ =>
+        simp only [hm, Option.bind_some] at h
+        obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a c hi hm
+        obtain ⟨he₂, hi₂, hd₂, ht₂⟩ := mergeTerm_spec σ₁ τ b d hi₁ h
+        refine ⟨extends_trans he₁ he₂, hi₂, ?_⟩
+        intro υ he₃ hi₃
+        have ht := (determined_extends (extends_trans he₂ he₃) hi₁ hi₃ a hd₁).2.trans ht₁
+        have ht' := (determined_extends he₃ hi₂ hi₃ b hd₂).2.trans ht₂
+        simp only [applyCond, ht, ht']
+  case packetBound.packetBound a r b c s d =>
+    split at h
+    · simp at h
+    · rename_i hrs
+      have : r = s := by simpa using hrs
+      subst s
+      cases hm : mergeTerm σ a c with
+      | none => simp [hm] at h
+      | some σ₁ =>
+        simp only [hm, Option.bind_some] at h
+        obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a c hi hm
+        obtain ⟨he₂, hi₂, hd₂, ht₂⟩ := mergeTerm_spec σ₁ τ b d hi₁ h
+        refine ⟨extends_trans he₁ he₂, hi₂, ?_⟩
+        intro υ he₃ hi₃
+        have ht := (determined_extends (extends_trans he₂ he₃) hi₁ hi₃ a hd₁).2.trans ht₁
+        have ht' := (determined_extends he₃ hi₂ hi₃ b hd₂).2.trans ht₂
+        simp only [applyCond, ht, ht']
+  case packetField.packetField a r z b s w =>
+    split at h
+    · rename_i hrz
+      obtain ⟨hrs, hzw⟩ : r = s ∧ z = w := by simpa using hrz
+      subst s; subst w
+      obtain ⟨he, hj, hd, ht⟩ := mergeTerm_spec σ τ a b hi h
+      exact ⟨he, hj, fun υ he' hj' => by
+        simp only [applyCond, (determined_extends he' hj hj' a hd).2, ht]⟩
+    · contradiction
+
+theorem mergePred_spec (σ τ : CrossSubst) (a b : CrossPred)
+    (hi : Injective σ) (h : mergePred σ a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧
+      ∀ υ, Extends τ υ → Injective υ → rename υ a = b := by
+  cases a <;> cases b <;> simp only [mergePred] at h
+  all_goals try contradiction
+  case helper.helper a b =>
+    obtain ⟨he, hj, ht⟩ := mergeHelper_spec σ τ a b hi h
+    exact ⟨he, hj, fun υ he' hj' => by simp only [rename, ht υ he' hj']⟩
+  case branch.branch a b =>
+    split at h
+    · rename_i hdir
+      have hdir : a.dir = b.dir := eq_of_beq hdir
+      obtain ⟨he, hj, ht⟩ := mergeCond_spec σ τ a.cond b.cond hi h
+      refine ⟨he, hj, fun υ he' hj' => ?_⟩
+      have ht := ht υ he' hj'
+      cases a; cases b; simp_all only [rename]
+    · contradiction
+  case ret.ret a b =>
+    obtain ⟨he, hj, hd, ht⟩ := mergeTerm_spec σ τ a.payload b.payload hi h
+    refine ⟨he, hj, fun υ he' hj' => ?_⟩
+    have ht := (determined_extends he' hj hj' a.payload hd).2.trans ht
+    cases a; cases b; simp_all only [rename]
+  case mapWrite.mapWrite a b =>
+    obtain ⟨he, hj, ht⟩ := mergeMutation_spec σ τ a b hi h
+    exact ⟨he, hj, fun υ he' hj' => by simp only [rename, ht υ he' hj']⟩
+  case packetWrite.packetWrite a b =>
+    split at h
+    · rename_i hp
+      obtain ⟨hp, ho⟩ : a.packet = b.packet ∧ a.offset = b.offset := by simpa using hp
+      obtain ⟨he, hj, ht⟩ := mergeValue_spec σ τ a.value b.value hi h
+      refine ⟨he, hj, fun υ he' hj' => ?_⟩
+      have ht := ht υ he' hj'
+      cases a; cases b; simp_all only [rename]
+    · contradiction
+
+private theorem filtered_lookup_getD {α κ δ : Type}
+    [BEq κ] [LawfulBEq κ] [BEq δ] [LawfulBEq δ]
+    (key : α → κ) (value : α → δ) (default : κ → δ)
+    (xs : List α) (hn : (xs.map key).Nodup) (x : κ) :
+    (((xs.filter (fun e => default (key e) != value e)).find?
+      (fun e => key e == x)).map value).getD (default x) =
+    ((xs.find? (fun e => key e == x)).map value).getD (default x) := by
+  induction xs with
+  | nil => simp
+  | cons e es ih =>
+    simp only [List.map_cons, List.nodup_cons] at hn
+    by_cases hk : key e = x
+    · have hf : es.find? (fun d => key d == x) = none := by
+        apply List.find?_eq_none.mpr
+        intro d hd heq
+        have hdx : key d = x := eq_of_beq heq
+        exact hn.1 (List.mem_map.mpr ⟨d, hd, hdx.trans hk.symm⟩)
+      have hg : (es.filter (fun d => default (key d) != value d)).find?
+          (fun d => key d == x) = none := by
+        apply List.find?_eq_none.mpr
+        intro d hd
+        exact List.find?_eq_none.mp hf d (List.mem_filter.mp hd).1
+      by_cases hv : default x = value e
+      · simp [hk, hv, hg]
+      · simp [hk, hv]
+    · have hk' : (key e == x) = false := beq_eq_false_iff_ne.mpr hk
+      by_cases hv : (default (key e) != value e) = true
+      · simpa [List.filter_cons, List.find?_cons, hk', hv] using ih hn.2
+      · simpa [List.filter_cons, List.find?_cons, hk', hv] using ih hn.2
+
+theorem strip_varLookup {σ : CrossSubst} (hi : Injective σ) (x : Nat) :
+    σ.strip.varLookup x = σ.varLookup x := by
+  exact filtered_lookup_getD (fun e : Nat × Nat => e.1) (·.2) id σ.vars hi.1 x
+
+theorem strip_regLookup {σ : CrossSubst} (hi : Injective σ) (k : RegKind) (a : Nat) :
+    σ.strip.regLookup k a = σ.regLookup k a := by
+  exact filtered_lookup_getD (fun e : RegKind × Nat × Nat => (e.1, e.2.1))
+    (·.2.2) (·.2) σ.regs hi.2.2.1 (k, a)
+
+theorem strip_injective {σ : CrossSubst} (hi : Injective σ) : Injective σ.strip := by
+  exact ⟨(List.filter_sublist.map _).nodup hi.1,
+    (List.filter_sublist.map _).nodup hi.2.1,
+    (List.filter_sublist.map _).nodup hi.2.2.1,
+    (List.filter_sublist.map _).nodup hi.2.2.2⟩
+
+mutual
+  theorem strip_applyTerm {σ : CrossSubst} (hi : Injective σ) (t : CrossTerm) :
+      applyTerm σ.strip t = applyTerm σ t := by
+    cases t with
+    | c z => simp only [applyTerm]
+    | var x => simp only [applyTerm, strip_varLookup hi]
+    | reg k a => simp only [applyTerm, strip_regLookup hi]
+    | app f ts => simp only [applyTerm, strip_applyTerms hi ts]
+    | external l ts => simp only [applyTerm, strip_applyTerms hi ts]
+  termination_by sizeOf t
+
+  theorem strip_applyTerms {σ : CrossSubst} (hi : Injective σ) (ts : List CrossTerm) :
+      applyTerms σ.strip ts = applyTerms σ ts := by
+    cases ts with
+    | nil => simp only [applyTerms]
+    | cons t ts => simp only [applyTerms, strip_applyTerm hi t, strip_applyTerms hi ts]
+  termination_by sizeOf ts
+end
+
+def DeterminedValue (σ : CrossSubst) : CrossValue → Prop
+  | .bytes ts => DeterminedTerms σ ts
+  | .source t => Determined σ t
+
+def DeterminedMutation (σ : CrossSubst) (m : CrossMutation) : Prop :=
+  Determined σ m.map ∧ DeterminedTerms σ m.key ∧ DeterminedValue σ m.value
+
+def DeterminedHelper (σ : CrossSubst) : CrossHelper → Prop
+  | .lookup m key => Determined σ m ∧ DeterminedTerms σ key
+  | .mutation m => DeterminedMutation σ m
+  | .other _ args => DeterminedTerms σ args
+
+def DeterminedCond (σ : CrossSubst) : CrossCond → Prop
+  | .plain _ a b | .packetBound a _ b => Determined σ a ∧ Determined σ b
+  | .packetField a _ _ => Determined σ a
+
+/-- Every renameable occurrence has an explicit binding, including identities. -/
+def DeterminedPred (σ : CrossSubst) : CrossPred → Prop
+  | .helper h => DeterminedHelper σ h
+  | .branch b => DeterminedCond σ b.cond
+  | .ret r => Determined σ r.payload
+  | .mapWrite m => DeterminedMutation σ m
+  | .packetWrite p => DeterminedValue σ p.value
+
+theorem determinedPred_extends {σ τ : CrossSubst} (he : Extends σ τ)
+    (hi : Injective σ) (hj : Injective τ) (p : CrossPred)
+    (hd : DeterminedPred σ p) : DeterminedPred τ p := by
+  have ht := fun t h => (determined_extends he hi hj t h).1
+  have hts := fun ts h => (determinedTerms_extends he hi hj ts h).1
+  have hv : ∀ v, DeterminedValue σ v → DeterminedValue τ v := by
+    intro v; cases v <;> simp only [DeterminedValue] <;> first | exact hts _ | exact ht _
+  have hm : ∀ m, DeterminedMutation σ m → DeterminedMutation τ m := by
+    intro m h
+    exact ⟨ht _ h.1, hts _ h.2.1, hv _ h.2.2⟩
+  have hh : ∀ h, DeterminedHelper σ h → DeterminedHelper τ h := by
+    intro h; cases h with
+    | lookup m key => exact fun h => ⟨ht _ h.1, hts _ h.2⟩
+    | mutation m => exact hm m
+    | other _ args => exact hts args
+  have hc : ∀ c, DeterminedCond σ c → DeterminedCond τ c := by
+    intro c; cases c with
+    | plain _ a b | packetBound a _ b => exact fun h => ⟨ht _ h.1, ht _ h.2⟩
+    | packetField a _ _ => exact ht a
+  cases p with
+  | helper h => exact hh h hd
+  | branch b => exact hc b.cond hd
+  | ret r => exact ht r.payload hd
+  | mapWrite m => exact hm m hd
+  | packetWrite p => exact hv p.value hd
+
+private theorem mergeValue_determined (σ τ : CrossSubst) (a b : CrossValue)
+    (hi : Injective σ) (h : mergeValue σ a b = some τ) :
+    DeterminedValue τ a := by
+  cases a <;> cases b <;> simp only [mergeValue] at h
+  all_goals try contradiction
+  case bytes.bytes as bs => exact (mergeList_spec σ τ as bs hi h).2.2.1
+  case source.source a b => exact (mergeTerm_spec σ τ a b hi h).2.2.1
+
+private theorem mergeMutation_determined (σ τ : CrossSubst) (a b : CrossMutation)
+    (hi : Injective σ) (h : mergeMutation σ a b = some τ) :
+    DeterminedMutation τ a := by
+  simp only [mergeMutation, Option.bind_eq_bind] at h
+  split at h
+  · simp at h
+  · cases hm : mergeTerm σ a.map b.map with
+    | none => simp [hm] at h
+    | some σ₁ =>
+      simp only [hm, Option.bind_some] at h
+      obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a.map b.map hi hm
+      cases hl : mergeList σ₁ a.key b.key with
+      | none => simp [hl] at h
+      | some σ₂ =>
+        simp only [hl, Option.bind_some] at h
+        obtain ⟨he₂, hi₂, hd₂, _⟩ := mergeList_spec σ₁ σ₂ a.key b.key hi₁ hl
+        split at h
+        · simp at h
+        · obtain ⟨he₃, hi₃, _⟩ := mergeValue_spec σ₂ τ a.value b.value hi₂ h
+          exact ⟨(determined_extends (extends_trans he₂ he₃) hi₁ hi₃ a.map hd₁).1,
+            (determinedTerms_extends he₃ hi₂ hi₃ a.key hd₂).1,
+            mergeValue_determined σ₂ τ a.value b.value hi₂ h⟩
+
+private theorem mergeHelper_determined (σ τ : CrossSubst) (a b : CrossHelper)
+    (hi : Injective σ) (h : mergeHelper σ a b = some τ) :
+    DeterminedHelper τ a := by
+  cases a <;> cases b <;> simp only [mergeHelper, Option.bind_eq_bind] at h
+  all_goals try contradiction
+  case lookup.lookup a as b bs =>
+    cases hm : mergeTerm σ a b with
+    | none => simp [hm] at h
+    | some σ₁ =>
+      simp only [hm, Option.bind_some] at h
+      obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a b hi hm
+      obtain ⟨he₂, hi₂, hd₂, _⟩ := mergeList_spec σ₁ τ as bs hi₁ h
+      exact ⟨(determined_extends he₂ hi₁ hi₂ a hd₁).1, hd₂⟩
+  case mutation.mutation a b => exact mergeMutation_determined σ τ a b hi h
+  case other.other a as b bs =>
+    split at h
+    · exact (mergeList_spec σ τ as bs hi h).2.2.1
+    · contradiction
+
+private theorem mergeCond_determined (σ τ : CrossSubst) (a b : CrossCond)
+    (hi : Injective σ) (h : mergeCond σ a b = some τ) :
+    DeterminedCond τ a := by
+  cases a <;> cases b <;> simp only [mergeCond, Option.bind_eq_bind] at h
+  all_goals try contradiction
+  case plain.plain r a b s c d =>
+    split at h
+    · simp at h
+    · cases hm : mergeTerm σ a c with
+      | none => simp [hm] at h
+      | some σ₁ =>
+        simp only [hm, Option.bind_some] at h
+        obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a c hi hm
+        obtain ⟨he₂, hi₂, hd₂, _⟩ := mergeTerm_spec σ₁ τ b d hi₁ h
+        exact ⟨(determined_extends he₂ hi₁ hi₂ a hd₁).1, hd₂⟩
+  case packetBound.packetBound a r b c s d =>
+    split at h
+    · simp at h
+    · cases hm : mergeTerm σ a c with
+      | none => simp [hm] at h
+      | some σ₁ =>
+        simp only [hm, Option.bind_some] at h
+        obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a c hi hm
+        obtain ⟨he₂, hi₂, hd₂, _⟩ := mergeTerm_spec σ₁ τ b d hi₁ h
+        exact ⟨(determined_extends he₂ hi₁ hi₂ a hd₁).1, hd₂⟩
+  case packetField.packetField a r z b s w =>
+    split at h
+    · exact (mergeTerm_spec σ τ a b hi h).2.2.1
+    · contradiction
+
+theorem mergePred_determined (σ τ : CrossSubst) (a b : CrossPred)
+    (hi : Injective σ) (h : mergePred σ a b = some τ) : DeterminedPred τ a := by
+  cases a <;> cases b <;> simp only [mergePred] at h
+  all_goals try contradiction
+  case helper.helper a b => exact mergeHelper_determined σ τ a b hi h
+  case branch.branch a b =>
+    split at h
+    · exact mergeCond_determined σ τ a.cond b.cond hi h
+    · contradiction
+  case ret.ret a b => exact (mergeTerm_spec σ τ a.payload b.payload hi h).2.2.1
+  case mapWrite.mapWrite a b => exact mergeMutation_determined σ τ a b hi h
+  case packetWrite.packetWrite a b =>
+    split at h
+    · exact mergeValue_determined σ τ a.value b.value hi h
+    · contradiction
+
+/-! Theorems discharge the local merge and identity-stripping obligations.
+Malformed input substitutions still invalidate unconditional injectivity
+preservation and unconditional identity stripping. -/
 namespace ProofObligations
 
-def mergeTerm_sound : Prop :=
+theorem mergeTerm_sound :
   ∀ σ σ' a b, Injective σ → mergeTerm σ a b = some σ' →
-    Extends σ σ' ∧ Injective σ' ∧ applyTerm σ' a = b
+    Extends σ σ' ∧ Injective σ' ∧ applyTerm σ' a = b := by
+  intro σ τ a b hi h
+  obtain ⟨he, hj, _, ht⟩ := mergeTerm_spec σ τ a b hi h
+  exact ⟨he, hj, ht⟩
 
-def mergeTerm_determined : Prop :=
-  ∀ σ σ' a b, Injective σ → mergeTerm σ a b = some σ' → Determined σ' a
+theorem mergeTerm_determined :
+  ∀ σ σ' a b, Injective σ → mergeTerm σ a b = some σ' → Determined σ' a := by
+  intro σ τ a b hi h
+  exact (mergeTerm_spec σ τ a b hi h).2.2.1
 
 /-- The already-determined pair cannot be changed by later consistent merges. -/
-def mergeTerm_already_determined : Prop :=
+theorem mergeTerm_already_determined :
   ∀ σ σ' σ'' a b, Injective σ → mergeTerm σ a b = some σ' →
-    Extends σ' σ'' → Injective σ'' → applyTerm σ'' a = b
+    Extends σ' σ'' → Injective σ'' → applyTerm σ'' a = b := by
+  intro σ τ υ a b hi h he hj
+  obtain ⟨_, ht, hd, ha⟩ := mergeTerm_spec σ τ a b hi h
+  exact (determined_extends he ht hj a hd).2.trans ha
 
-def mergePred_sound : Prop :=
+theorem mergePred_sound :
   ∀ σ σ' a b, Injective σ → mergePred σ a b = some σ' →
-    Extends σ σ' ∧ Injective σ' ∧ rename σ' a = b
+    Extends σ σ' ∧ Injective σ' ∧ rename σ' a = b := by
+  intro σ τ a b hi h
+  obtain ⟨he, hj, ht⟩ := mergePred_spec σ τ a b hi h
+  exact ⟨he, hj, ht τ (extends_refl τ) hj⟩
 
-def strip_rename : Prop :=
-  ∀ σ p, Injective σ → rename σ.strip p = rename σ p
+theorem strip_rename :
+  ∀ σ p, Injective σ → rename σ.strip p = rename σ p := by
+  intro σ p hi
+  have ht := strip_applyTerm hi
+  have hts := strip_applyTerms hi
+  have hv : ∀ v, applyValue σ.strip v = applyValue σ v := by
+    intro v; cases v <;> simp only [applyValue, ht, hts]
+  have hm : ∀ m, applyMutation σ.strip m = applyMutation σ m := by
+    intro m; simp only [applyMutation, ht, hts, hv]
+  have hh : ∀ h, applyHelper σ.strip h = applyHelper σ h := by
+    intro h; cases h <;> simp only [applyHelper, ht, hts, hm]
+  have hc : ∀ c, applyCond σ.strip c = applyCond σ c := by
+    intro c; cases c <;> simp only [applyCond, ht]
+  cases p <;> simp only [rename, hh, hc, ht, hm, hv]
 
 end ProofObligations
 
@@ -289,6 +915,152 @@ private def chooseMatch (candidates : List Match) (fallback : Match) : Match :=
   let winner := achievers.headD fallback
   { winner with ambiguous := achievers.length > 1 || achievers.any (·.ambiguous) }
 
+private theorem maxFold_bounds (xs : List Match) (n : Nat) :
+    n ≤ xs.foldl (fun n m => max n m.size) n ∧
+      ∀ m ∈ xs, m.size ≤ xs.foldl (fun n m => max n m.size) n := by
+  induction xs generalizing n with
+  | nil => simp
+  | cons a xs ih =>
+    obtain ⟨hn, hm⟩ := ih (max n a.size)
+    constructor
+    · exact Nat.le_trans (Nat.le_max_left n a.size) hn
+    · intro m h
+      rcases List.mem_cons.mp h with h | h
+      · subst m; exact Nat.le_trans (Nat.le_max_right n a.size) hn
+      · exact hm m h
+
+private theorem maxFold_choice (xs : List Match) (n : Nat) :
+    xs.foldl (fun n m => max n m.size) n = n ∨
+      ∃ m ∈ xs, m.size = xs.foldl (fun n m => max n m.size) n := by
+  induction xs generalizing n with
+  | nil => exact Or.inl rfl
+  | cons a xs ih =>
+    obtain h | ⟨m, hm, he⟩ := ih (max n a.size)
+    · by_cases hn : a.size ≤ n
+      · exact Or.inl (by simpa [List.foldl, Nat.max_eq_left hn] using h)
+      · have hna : n ≤ a.size := by omega
+        exact Or.inr ⟨a, by simp, by
+          simpa [List.foldl, Nat.max_eq_right hna] using h.symm⟩
+    · exact Or.inr ⟨m, List.mem_cons_of_mem _ hm, he⟩
+
+private theorem maxFold_attained (xs : List Match) (hne : xs ≠ []) :
+    ∃ m ∈ xs, m.size = xs.foldl (fun n m => max n m.size) 0 := by
+  obtain hz | hm := maxFold_choice xs 0
+  · cases xs with
+    | nil => contradiction
+    | cons m ms =>
+      refine ⟨m, by simp, ?_⟩
+      have hb := (maxFold_bounds (m :: ms) 0).2 m (by simp)
+      omega
+  · exact hm
+
+theorem chooseMatch_size_max (candidates : List Match) (fallback : Match)
+    (hne : candidates ≠ []) :
+    (chooseMatch candidates fallback).size =
+      candidates.foldl (fun n m => max n m.size) 0 ∧
+      ∀ m ∈ candidates, m.size ≤ (chooseMatch candidates fallback).size := by
+  obtain ⟨m, hm, he⟩ := maxFold_attained candidates hne
+  have ha : m ∈ candidates.filter
+      (fun m => m.size == candidates.foldl (fun n m => max n m.size) 0) := by
+    exact List.mem_filter.mpr ⟨hm, by simp [he]⟩
+  unfold chooseMatch
+  dsimp only
+  generalize hx : candidates.filter
+    (fun m => m.size == candidates.foldl (fun n m => max n m.size) 0) = achievers at *
+  cases achievers with
+  | nil => simp at ha
+  | cons winner rest =>
+    have hw : winner ∈ candidates.filter
+        (fun m => m.size == candidates.foldl (fun n m => max n m.size) 0) := by
+      rw [hx]; exact List.mem_cons_self
+    have hs := eq_of_beq (List.mem_filter.mp hw).2
+    exact ⟨hs, fun c hc => by simpa [hs] using (maxFold_bounds candidates 0).2 c hc⟩
+
+
+/-- A maximizer is unique exactly when its branch is unique and has no child tie.
+The certificate predicate is supplied independently of candidate generation. -/
+theorem chooseMatch_ambiguity_certificate
+    (candidates : List Match) (fallback : Match)
+    (P : List (Nat × Nat) → Prop)
+    (hne : candidates ≠ [])
+    (hnd : (candidates.map Match.pairs).Nodup)
+    (hlen : ∀ m ∈ candidates, m.pairs.length = m.size)
+    (hself : ∀ m ∈ candidates, P m.pairs)
+    (hchild : ∀ m ∈ candidates, m.ambiguous = true →
+      ∃ p, P p ∧ p.length = m.size ∧ p ≠ m.pairs)
+    (hcover : ∀ p, P p →
+      p.length = (chooseMatch candidates fallback).size →
+      ∃ m ∈ candidates, m.size = (chooseMatch candidates fallback).size ∧
+        (p = m.pairs ∨ m.ambiguous = true)) :
+    (chooseMatch candidates fallback).ambiguous = true ↔
+      ∃ p, P p ∧ p.length = (chooseMatch candidates fallback).size ∧
+        p ≠ (chooseMatch candidates fallback).pairs := by
+  obtain ⟨m, hm, he⟩ := maxFold_attained candidates hne
+  have hnonempty : candidates.filter
+      (fun m => m.size == candidates.foldl (fun n m => max n m.size) 0) ≠ [] := by
+    intro hz
+    have hh : m ∈ candidates.filter
+        (fun m => m.size == candidates.foldl (fun n m => max n m.size) 0) :=
+      List.mem_filter.mpr ⟨hm, by simp [he]⟩
+    simp only [hz, List.not_mem_nil] at hh
+  unfold chooseMatch at *
+  dsimp only at *
+  generalize ha : candidates.filter
+    (fun m => m.size == candidates.foldl (fun n m => max n m.size) 0) = achievers at *
+  have hmem : ∀ a ∈ achievers, a ∈ candidates := by
+    intro a hm
+    rw [← ha] at hm
+    exact (List.mem_filter.mp hm).1
+  have hbest : ∀ a ∈ achievers,
+      a.size = candidates.foldl (fun n m => max n m.size) 0 := by
+    intro a hm
+    rw [← ha] at hm
+    exact eq_of_beq (List.mem_filter.mp hm).2
+  have hand : (achievers.map Match.pairs).Nodup := by
+    apply List.Nodup.sublist ?_ hnd
+    rw [← ha]
+    exact (List.filter_sublist).map Match.pairs
+  cases achievers with
+  | nil => exact False.elim (hnonempty rfl)
+  | cons winner rest =>
+    have hw := hmem winner List.mem_cons_self
+    have hws := hbest winner List.mem_cons_self
+    cases rest with
+    | nil =>
+      simp only [List.length_cons, List.length_nil, List.any_cons, List.any_nil,
+        List.headD_cons, Nat.lt_irrefl, decide_false, Bool.false_or, Bool.or_false]
+      change winner.ambiguous = true ↔
+        ∃ p, P p ∧ p.length = winner.size ∧ p ≠ winner.pairs
+      constructor
+      · intro hamb
+        obtain ⟨p, hp, hl, hn⟩ := hchild winner hw hamb
+        exact ⟨p, hp, hl, hn⟩
+      · rintro ⟨p, hp, hl, hn⟩
+        obtain ⟨a, hac, has, hcase⟩ := hcover p hp hl
+        have ham : a ∈ [winner] := by
+          rw [← ha]
+          exact List.mem_filter.mpr ⟨hac, by simp [has, hws]⟩
+        have haw : a = winner := by simpa using ham
+        subst a
+        rcases hcase with hsame | hamb
+        · exact False.elim (hn hsame)
+        · exact hamb
+    | cons second rest =>
+      have hs := hmem second (by simp)
+      have hss := hbest second (by simp)
+      have hnepair : second.pairs ≠ winner.pairs := by
+        have hh := (List.nodup_cons.mp hand).1
+        intro heq
+        apply hh
+        simp only [List.map_cons, List.mem_cons]
+        exact Or.inl heq.symm
+      constructor
+      · intro _
+        refine ⟨second.pairs, hself second hs, ?_, hnepair⟩
+        exact (hlen second hs).trans (hss.trans hws.symm)
+      · intro _
+        simp
+
 /-- Each left position is either skipped or paired with one later right position.
 This enumerates each increasing partial matching once, including the empty one. -/
 def search (L R : List (Nat × CrossPred)) (σ : CrossSubst) : Match :=
@@ -303,6 +1075,214 @@ def search (L R : List (Nat × CrossPred)) (σ : CrossSubst) : Match :=
       pure ⟨s.size + 1, s.subst, (l.1, r.1) :: s.pairs, s.ambiguous⟩
     chooseMatch (skip :: branches) skip
 termination_by L.length
+
+theorem search_ge_skip (l : Nat × CrossPred) (ls R : List (Nat × CrossPred))
+    (σ : CrossSubst) : (search ls R σ).size ≤ (search (l :: ls) R σ).size := by
+  rw [search]
+  exact (chooseMatch_size_max _ _ (by simp)).2 _ List.mem_cons_self
+
+theorem search_ge_branch (l : Nat × CrossPred) (ls R : List (Nat × CrossPred))
+    (σ τ : CrossSubst) (k : Nat) (r : Nat × CrossPred)
+    (hg : R[k]? = some r) (hm : σ.mergePred l.2 r.2 = some τ) :
+    (search ls (R.drop (k + 1)) τ).size + 1 ≤ (search (l :: ls) R σ).size := by
+  rw [search]
+  let s := search ls (R.drop (k + 1)) τ
+  let m : Match := ⟨s.size + 1, s.subst, (l.1, r.1) :: s.pairs, s.ambiguous⟩
+  apply (chooseMatch_size_max _ _ (by simp)).2 m
+  apply List.mem_cons_of_mem
+  apply List.mem_filterMap.mpr
+  exact ⟨k, List.mem_range.mpr (List.getElem?_eq_some_iff.mp hg).1,
+    by simp [hg, hm, m, s]⟩
+
+
+private theorem chooseMatch_preserves (P : CrossSubst → List (Nat × Nat) → Prop)
+    (candidates : List Match) (fallback : Match)
+    (hf : P fallback.subst fallback.pairs)
+    (hc : ∀ m ∈ candidates, P m.subst m.pairs) :
+    P (chooseMatch candidates fallback).subst (chooseMatch candidates fallback).pairs := by
+  unfold chooseMatch
+  dsimp only
+  generalize hb : candidates.foldl (fun n m => max n m.size) 0 = best
+  generalize ha : candidates.filter (fun m => m.size == best) = achievers
+  cases achievers with
+  | nil => simpa using hf
+  | cons m ms =>
+    have hm : m ∈ candidates.filter (fun m => m.size == best) := by
+      rw [ha]; exact List.mem_cons_self
+    simpa using hc m (List.mem_filter.mp hm).1
+
+theorem search_sound (L R : List (Nat × CrossPred)) (σ : CrossSubst)
+    (hi : CrossSubst.Injective σ) :
+    CrossSubst.Extends σ (search L R σ).subst ∧
+    CrossSubst.Injective (search L R σ).subst ∧
+    ∀ i j, (i, j) ∈ (search L R σ).pairs →
+      ∃ a b, (i, a) ∈ L ∧ (j, b) ∈ R ∧
+        CrossSubst.rename (search L R σ).subst a = b := by
+  induction L generalizing R σ with
+  | nil => simpa only [search, List.not_mem_nil, false_implies, implies_true, and_true]
+      using And.intro (CrossSubst.extends_refl σ) hi
+  | cons l ls ih =>
+    rw [search]
+    apply chooseMatch_preserves
+      (fun τ pairs => CrossSubst.Extends σ τ ∧ CrossSubst.Injective τ ∧
+        ∀ i j, (i, j) ∈ pairs →
+          ∃ a b, (i, a) ∈ l :: ls ∧ (j, b) ∈ R ∧ CrossSubst.rename τ a = b)
+    · obtain ⟨he, hj, hp⟩ := ih R σ hi
+      refine ⟨he, hj, ?_⟩
+      intro i j hij
+      obtain ⟨a, b, ha, hb, ht⟩ := hp i j hij
+      exact ⟨a, b, List.mem_cons_of_mem _ ha, hb, ht⟩
+    · intro m hm
+      rcases List.mem_cons.mp hm with hm | hm
+      · subst m
+        obtain ⟨he, hj, hp⟩ := ih R σ hi
+        refine ⟨he, hj, ?_⟩
+        intro i j hij
+        obtain ⟨a, b, ha, hb, ht⟩ := hp i j hij
+        exact ⟨a, b, List.mem_cons_of_mem _ ha, hb, ht⟩
+      · obtain ⟨k, _, hm⟩ := List.mem_filterMap.mp hm
+        simp only [Option.bind_eq_bind] at hm
+        cases hr : R[k]? with
+        | none => simp [hr] at hm
+        | some r =>
+          simp only [hr, Option.bind_some] at hm
+          cases hmerge : CrossSubst.mergePred σ l.2 r.2 with
+          | none => simp [hmerge] at hm
+          | some τ =>
+            simp only [hmerge, Option.bind_some, Option.pure_def, Option.some.injEq] at hm
+            subst m
+            obtain ⟨he, hj, ht⟩ := CrossSubst.mergePred_spec σ τ l.2 r.2 hi hmerge
+            obtain ⟨he', hj', hp⟩ := ih (R.drop (k + 1)) τ hj
+            refine ⟨CrossSubst.extends_trans he he', hj', ?_⟩
+            intro i j hij
+            rcases List.mem_cons.mp hij with hij | hij
+            · have hij := Prod.mk.inj hij
+              obtain ⟨rfl, rfl⟩ := hij
+              exact ⟨l.2, r.2, by simp,
+                List.mem_of_getElem? hr, ht _ he' hj'⟩
+            · obtain ⟨a, b, ha, hb, ht⟩ := hp i j hij
+              exact ⟨a, b, List.mem_cons_of_mem _ ha, List.mem_of_mem_drop hb, ht⟩
+
+private theorem chooseMatch_preserves_match (P : Match → Prop)
+    (candidates : List Match) (fallback : Match)
+    (hu : ∀ m b, P m → P { m with ambiguous := b })
+    (hf : P fallback) (hc : ∀ m ∈ candidates, P m) :
+    P (chooseMatch candidates fallback) := by
+  unfold chooseMatch
+  dsimp only
+  generalize hb : candidates.foldl (fun n m => max n m.size) 0 = best
+  generalize ha : candidates.filter (fun m => m.size == best) = achievers
+  cases achievers with
+  | nil => exact hu fallback _ hf
+  | cons m ms =>
+    have hm : m ∈ candidates.filter (fun m => m.size == best) := by
+      rw [ha]; exact List.mem_cons_self
+    exact hu m _ (hc m (List.mem_filter.mp hm).1)
+
+/-- Search preserves both input orders, independently of symbol consistency. -/
+theorem search_structure (L R : List (Nat × CrossPred)) (σ : CrossSubst) :
+    (search L R σ).size = (search L R σ).pairs.length ∧
+    ((search L R σ).pairs.map Prod.fst).Sublist (L.map Prod.fst) ∧
+    ((search L R σ).pairs.map Prod.snd).Sublist (R.map Prod.fst) := by
+  induction L generalizing R σ with
+  | nil => simp [search]
+  | cons l ls ih =>
+    rw [search]
+    apply chooseMatch_preserves_match
+      (fun m => m.size = m.pairs.length ∧
+        (m.pairs.map Prod.fst).Sublist ((l :: ls).map Prod.fst) ∧
+        (m.pairs.map Prod.snd).Sublist (R.map Prod.fst))
+    · intro m b hm
+      exact hm
+    · obtain ⟨hn, hl, hr⟩ := ih R σ
+      exact ⟨hn, hl.cons l.1, hr⟩
+    · intro m hm
+      rcases List.mem_cons.mp hm with hm | hm
+      · subst m
+        obtain ⟨hn, hl, hr⟩ := ih R σ
+        exact ⟨hn, hl.cons l.1, hr⟩
+      · obtain ⟨k, _, hm⟩ := List.mem_filterMap.mp hm
+        simp only [Option.bind_eq_bind] at hm
+        cases hget : R[k]? with
+        | none => simp [hget] at hm
+        | some r =>
+          simp only [hget, Option.bind_some] at hm
+          cases hmerge : CrossSubst.mergePred σ l.2 r.2 with
+          | none => simp [hmerge] at hm
+          | some τ =>
+            simp only [hmerge, Option.bind_some, Option.pure_def, Option.some.injEq] at hm
+            subst m
+            obtain ⟨hn, hl, hr⟩ := ih (R.drop (k + 1)) τ
+            refine ⟨by simpa using hn, hl.cons₂ l.1, ?_⟩
+            have htail : (r :: R.drop (k + 1)).Sublist R := by
+              obtain ⟨hk, heq⟩ := List.getElem?_eq_some_iff.mp hget
+              have hd : R.drop k = r :: R.drop (k + 1) := by
+                simpa only [heq] using List.drop_eq_getElem_cons hk
+              rw [← hd]
+              exact List.drop_sublist k R
+            exact (hr.cons₂ r.1).trans (htail.map Prod.fst)
+
+theorem search_pairs_determined (L R : List (Nat × CrossPred)) (σ : CrossSubst)
+    (hi : CrossSubst.Injective σ) :
+    ∀ i j, (i, j) ∈ (search L R σ).pairs →
+      ∃ a b, (i, a) ∈ L ∧ (j, b) ∈ R ∧
+        CrossSubst.DeterminedPred (search L R σ).subst a ∧
+        CrossSubst.rename (search L R σ).subst a = b := by
+  induction L generalizing R σ with
+  | nil => simp [search]
+  | cons l ls ih =>
+    rw [search]
+    apply chooseMatch_preserves
+      (fun τ pairs => ∀ i j, (i, j) ∈ pairs →
+        ∃ a b, (i, a) ∈ l :: ls ∧ (j, b) ∈ R ∧
+          CrossSubst.DeterminedPred τ a ∧ CrossSubst.rename τ a = b)
+    · intro i j hij
+      obtain ⟨a, b, ha, hb, hd, ht⟩ := ih R σ hi i j hij
+      exact ⟨a, b, List.mem_cons_of_mem _ ha, hb, hd, ht⟩
+    · intro m hm
+      rcases List.mem_cons.mp hm with hm | hm
+      · subst m
+        intro i j hij
+        obtain ⟨a, b, ha, hb, hd, ht⟩ := ih R σ hi i j hij
+        exact ⟨a, b, List.mem_cons_of_mem _ ha, hb, hd, ht⟩
+      · obtain ⟨k, _, hm⟩ := List.mem_filterMap.mp hm
+        simp only [Option.bind_eq_bind] at hm
+        cases hr : R[k]? with
+        | none => simp [hr] at hm
+        | some r =>
+          simp only [hr, Option.bind_some] at hm
+          cases hmerge : CrossSubst.mergePred σ l.2 r.2 with
+          | none => simp [hmerge] at hm
+          | some τ =>
+            simp only [hmerge, Option.bind_some, Option.pure_def, Option.some.injEq] at hm
+            subst m
+            obtain ⟨_, hj, ht⟩ := CrossSubst.mergePred_spec σ τ l.2 r.2 hi hmerge
+            obtain ⟨he', hj', _⟩ := search_sound ls (R.drop (k + 1)) τ hj
+            intro i j hij
+            rcases List.mem_cons.mp hij with hij | hij
+            · obtain ⟨rfl, rfl⟩ := Prod.mk.inj hij
+              exact ⟨l.2, r.2, by simp, List.mem_of_getElem? hr,
+                CrossSubst.determinedPred_extends he' hj hj' l.2
+                  (CrossSubst.mergePred_determined σ τ l.2 r.2 hi hmerge),
+                ht _ he' hj'⟩
+            · obtain ⟨a, b, ha, hb, hd, ht⟩ := ih (R.drop (k + 1)) τ hj i j hij
+              exact ⟨a, b, List.mem_cons_of_mem _ ha, List.mem_of_mem_drop hb, hd, ht⟩
+
+private theorem indexed_mem_iff {α : Type} (L : List α) (i : Nat) (a : α) :
+    (i, a) ∈ (List.range L.length).zip L ↔ L[i]? = some a := by
+  constructor
+  · intro h
+    obtain ⟨k, hk⟩ := List.mem_iff_getElem?.mp h
+    obtain ⟨hi, ha⟩ := List.getElem?_zip_eq_some.mp hk
+    have hlt : k < L.length := by
+      simpa using (List.getElem?_eq_some_iff.mp hi).1
+    have heq : k = i := by
+      simpa [List.getElem?_range hlt] using hi
+    simpa [heq] using ha
+  · intro h
+    apply List.mem_iff_getElem?.mpr
+    refine ⟨i, List.getElem?_zip_eq_some.mpr ⟨?_, h⟩⟩
+    exact List.getElem?_range (List.getElem?_eq_some_iff.mp h).1
 
 structure UnifyOut where
   ambiguous : Bool
@@ -322,15 +1302,60 @@ def unifyLists (L R : List CrossPred) : UnifyOut :=
 
 namespace ObservationEqProofObligations
 
-def unify_pairs_sound : Prop :=
+theorem unify_pairs_sound :
   ∀ L R i j, (i, j) ∈ (unifyLists L R).pairs →
     ∃ a b, L[i]? = some a ∧ R[j]? = some b ∧
-      CrossSubst.rename (unifyLists L R).subst a = b
+      CrossSubst.rename (unifyLists L R).subst a = b := by
+  intro L R i j hij
+  have hempty : CrossSubst.Injective .empty := by simp [CrossSubst.Injective, CrossSubst.empty]
+  obtain ⟨_, hi, hp⟩ := search_sound
+    ((List.range L.length).zip L) ((List.range R.length).zip R) .empty hempty
+  obtain ⟨a, b, ha, hb, ht⟩ := hp i j hij
+  exact ⟨a, b, (indexed_mem_iff L i a).mp ha, (indexed_mem_iff R j b).mp hb,
+    (CrossSubst.ProofObligations.strip_rename _ a hi).trans ht⟩
 
-def unify_subst_injective : Prop :=
-  ∀ L R, CrossSubst.Injective (unifyLists L R).subst
+theorem unify_subst_injective :
+  ∀ L R, CrossSubst.Injective (unifyLists L R).subst := by
+  intro L R
+  apply CrossSubst.strip_injective
+  exact (search_sound ((List.range L.length).zip L) ((List.range R.length).zip R)
+    .empty (by simp [CrossSubst.Injective, CrossSubst.empty])).2.1
+
+/-- The pre-strip witness covers every symbol occurring in any matched input. -/
+theorem unify_alignment_witness (L R : List CrossPred) :
+    ∃ σ, CrossSubst.Injective σ ∧ σ.strip = (unifyLists L R).subst ∧
+      ∀ i j, (i, j) ∈ (unifyLists L R).pairs →
+        ∃ a b, L[i]? = some a ∧ R[j]? = some b ∧
+          CrossSubst.DeterminedPred σ a ∧ CrossSubst.rename σ a = b := by
+  let σ := (search ((List.range L.length).zip L)
+    ((List.range R.length).zip R) .empty).subst
+  have hi : CrossSubst.Injective .empty := by
+    simp [CrossSubst.Injective, CrossSubst.empty]
+  refine ⟨σ, (search_sound _ _ .empty hi).2.1, rfl, ?_⟩
+  intro i j hij
+  obtain ⟨a, b, ha, hb, hd, ht⟩ := search_pairs_determined
+    ((List.range L.length).zip L) ((List.range R.length).zip R) .empty hi i j hij
+  exact ⟨a, b, (indexed_mem_iff L i a).mp ha, (indexed_mem_iff R j b).mp hb, hd, ht⟩
 
 end ObservationEqProofObligations
+
+/-- Identity collisions prevent a two-pair alignment with explicit input coverage. -/
+theorem unify_identity_collision_ambiguous :
+    let L : List CrossPred := [.ret ⟨.var 0⟩, .ret ⟨.var 1⟩]
+    let R : List CrossPred := [.ret ⟨.var 1⟩, .ret ⟨.var 1⟩]
+    (unifyLists L R).ambiguous = true ∧
+    (unifyLists L R).pairs = [(1, 0)] ∧
+    (unifyLists L R).onlyLeft = [0] ∧ (unifyLists L R).onlyRight = [1] := by
+  decide +kernel
+
+/-- Explicit-entry injectivity alone does not imply injectivity of defaulted lookup. -/
+theorem unify_identity_collision_two_pair_witness :
+    let σ : CrossSubst := ⟨[(0, 1)], []⟩
+    CrossSubst.Injective σ ∧
+    CrossSubst.rename σ (.ret ⟨.var 0⟩) = .ret ⟨.var 1⟩ ∧
+    CrossSubst.rename σ (.ret ⟨.var 1⟩) = .ret ⟨.var 1⟩ := by
+  simp [CrossSubst.Injective, CrossSubst.rename, CrossSubst.applyTerm,
+    CrossSubst.varLookup, CrossSubst.varImage?]
 
 /-! Strict canonical JSON parser. Every object has exactly its constructor keys;
 integer strings use the decimal spelling emitted by `renderCrossPredJson`. -/
@@ -364,11 +1389,16 @@ private def parseCrossOp (name : String) (params : List Nat) : Option CrossOp :=
   | "neg", [] => some .neg | "id", [] => some .id | "shl", [] => some .shl
   | "lshr", [] => some .lshr | "ashr", [] => some .ashr
   | "ltu", [] => some .ltu | "lts", [] => some .lts
-  | "and", [q] => some (.and q) | "or", [q] => some (.or q)
-  | "xor", [q] => some (.xor q) | "low", [q] => some (.low q)
+  | "and", [] => some .and | "or", [] => some .or
+  | "xor", [] => some .xor | "low", [q] => some (.low q)
   | "extract", [a,b] => some (.extract a b) | "zext", [a,b] => some (.zext a b)
   | "sext", [a,b] => some (.sext a b) | "bswap", [a,b] => some (.bswap a b)
   | "inputByte", [r] => some (.inputByte r) | "mergeLow", [a,b] => some (.mergeLow a b)
+  | "udiv", [bits, zeroResult] => some (.udiv bits zeroResult)
+  | "sdiv", [bits, zeroResult] => some (.sdiv bits zeroResult)
+  | "urem", [bits] => some (.urem bits) | "srem", [bits] => some (.srem bits)
+  | "mulh", [bits] => some (.mulh bits) | "mulhu", [bits] => some (.mulhu bits)
+  | "mulhsu", [bits] => some (.mulhsu bits) | "selectEq", [bits] => some (.selectEq bits)
   | _, _ => none
 
 /-- The Option least fixpoint follows only proper nested argument JSON.
@@ -623,8 +1653,10 @@ private def nestedFixtures : List String :=
 
 private def opFixtures : List CrossOp :=
   [.add, .sub, .mullo, .neg, .id, .shl, .lshr, .ashr, .ltu, .lts,
-   .and 32, .or 64, .xor 8, .low 16, .extract 8 16, .zext 64 32,
-   .sext 64 32, .bswap 32 32, .inputByte 3, .mergeLow 32 8]
+   .and, .or, .xor, .low 16, .extract 8 16, .zext 64 32,
+   .sext 64 32, .bswap 32 32, .inputByte 3, .mergeLow 32 8,
+   .udiv 32 0, .udiv 32 4294967295, .sdiv 64 18446744073709551615,
+   .urem 32, .srem 64, .mulh 32, .mulhu 64, .mulhsu 32, .selectEq 64]
 #guard opFixtures.all fun op =>
   let p := CrossPred.ret ⟨.app op [.var 4]⟩
   fixture (renderCrossPredJson p) == some p
@@ -652,5 +1684,75 @@ private def opFixtures : List CrossOp :=
 #guard renderCrossSubst (CrossSubst.strip
     ⟨[(9,3),(4,8),(2,2)], [(.map,8,3),(.real,9,4),(.real,2,5)]⟩) ==
   "{\"vars\":[[4,8],[9,3]],\"regs\":[[0,2,5],[0,9,4],[2,8,3]]}"
+
+-- The measured source wires exercise normalization and the canonical parser together.
+private def liveEnvR : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,v32:5)\"}"
+private def liveEnvE : String :=
+  "{\"packetBase\":\"v32:4\",\"packetEnd\":\"add32(v32:4,128)\"}"
+private def liveEthertypeR : String :=
+  "{\"kind\":\"branch\",\"position\":25,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,16)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,17)))),8))\",\"rel\":\"eq\",\"rhs\":\"56710\"}}"
+private def liveEthertypeE : String :=
+  "{\"kind\":\"branch\",\"position\":17,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"or64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,16)))),0)),shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,17)))),8))\",\"rel\":\"eqN32\",\"rhs\":\"56710\"}}"
+private def liveLookupNullR : String :=
+  "{\"kind\":\"branch\",\"position\":48,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"id32(externalResult489_0(1,1077412584,id32(add32(v32:0,4294967280))))\",\"rel\":\"eq\",\"rhs\":\"0\"}}"
+private def liveLookupNullE : String :=
+  "{\"kind\":\"branch\",\"position\":38,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"externalResult85_0(1,1077412584,id64(add64(id64(v64:0),18446744073709551612)))\",\"rel\":\"eq\",\"rhs\":\"0\"}}"
+
+private def liveUnifyPass (r e : String) : Bool :=
+  exportCrossPredUnify (request
+    [exportCrossPredNormalize liveEnvR r] [exportCrossPredNormalize liveEnvE e]) ==
+    "{\"ok\":true,\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0}],\"onlyLeft\":[],\"onlyRight\":[],\"subst\":{\"vars\":[],\"regs\":[]}}"
+private def liveEthertypeUnify : Bool := liveUnifyPass liveEthertypeR liveEthertypeE
+private def liveLookupNullUnify : Bool := liveUnifyPass liveLookupNullR liveLookupNullE
+#guard liveEthertypeUnify
+#guard liveLookupNullUnify
+
+private def bitwiseParamsReject : Bool :=
+  ["and", "or", "xor"].all fun name =>
+    exportCrossPredUnify (request
+      [s!"\{\"kind\":\"ret\",\"payload\":\{\"kind\":\"app\",\"op\":\"{name}\",\"params\":[32],\"args\":[]}}"] []) == "null"
+#guard bitwiseParamsReject
+
+namespace MapWriteCarryFixtures
+
+private def sameNormalized (r e : String) : Bool :=
+  let result : Option Bool := do
+    let left ← fixture (exportCrossPredNormalize envR r)
+    let right ← fixture (exportCrossPredNormalize envE e)
+    let r := renderCrossPredJson (CrossSubst.rename ⟨[], [(.real,10,0)]⟩ left)
+    let e := renderCrossPredJson right
+    pure (r != "null" && e != "null" && r == e)
+  result.getD false
+
+private def liveNode26MapWritesNormalize : Bool :=
+  sameNormalized node26LowR node26LowE && sameNormalized node26HighR node26HighE
+private def liveNode34MapWritesNormalize : Bool :=
+  sameNormalized node34LowR node34LowE && sameNormalized node34HighR node34HighE
+#guard liveNode26MapWritesNormalize
+#guard liveNode34MapWritesNormalize
+
+private def liveMapWriteUnify (rs es : List String) : Bool :=
+  let r := rs.map (exportCrossPredNormalize envR)
+  let e := es.map (exportCrossPredNormalize envE)
+  let result : Option Bool := do
+    let left ← r.mapM fixture
+    let right ← e.mapM fixture
+    let out := unifyLists left right
+    let renamed := left.map (fun p =>
+      renderCrossPredJson (CrossSubst.rename out.subst p))
+    pure (out.pass && !out.ambiguous && out.onlyLeft.isEmpty && out.onlyRight.isEmpty &&
+      out.pairs == [(0,0),(1,1),(2,2)] &&
+      out.subst.strip == ⟨[], [(.real,10,0)]⟩ && renamed == e)
+  r.all (· != "null") && e.all (· != "null") && result.getD false &&
+    exportCrossPredUnify (request r e) ==
+      "{\"ok\":true,\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0},{\"left\":1,\"right\":1},{\"left\":2,\"right\":2}],\"onlyLeft\":[],\"onlyRight\":[],\"subst\":{\"vars\":[],\"regs\":[[0,10,0]]}}"
+
+private def liveNode26MapWriteUnify : Bool := liveMapWriteUnify node26PredsR node26PredsE
+private def liveNode34MapWriteUnify : Bool := liveMapWriteUnify node34PredsR node34PredsE
+#guard liveNode26MapWriteUnify
+#guard liveNode34MapWriteUnify
+
+end MapWriteCarryFixtures
 
 end ClassifierExpr

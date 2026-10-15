@@ -1,4 +1,5 @@
 import ClassifierExpr.Virtual
+import ClassifierExpr.MapLayout
 import RV32IMC.Insn
 import PathMerge.Path
 
@@ -10,35 +11,6 @@ open ClassifierExpr PathMerge
 private def xReg (r : regidx) : Reg := Reg.real32 r.toNat
 private def pcReg : Reg := Reg.real32 32
 private def isX0 (r : regidx) : Bool := r.toNat == 0
-
-/-! RV32M closed arithmetic (ISA rules on top of ClassifierExpr TQ/TR). -/
-
-private def mulhu (a b : Nat) : Nat :=
-  MNat 32 ((MNat 32 a * MNat 32 b) / (1 <<< 32))
-private def mulh (a b : Nat) : Nat :=
-  M 32 (s 32 a * s 32 b / Int.ofNat (1 <<< 32))
-private def mulhsu (a b : Nat) : Nat :=
-  M 32 (s 32 a * Int.ofNat (MNat 32 b) / Int.ofNat (1 <<< 32))
-private def divu (a b : Nat) : Nat :=
-  let a := MNat 32 a; let b := MNat 32 b
-  if b == 0 then (1 <<< 32) - 1 else a / b
-private def remu (a b : Nat) : Nat :=
-  let a := MNat 32 a; let b := MNat 32 b
-  if b == 0 then a else a - b * (a / b)
-private def divs (a b : Nat) : Nat :=
-  let x := s 32 a; let y := s 32 b
-  if y == 0 then (1 <<< 32) - 1
-  else if x == -(Int.ofNat (1 <<< 31)) && y == -1 then 1 <<< 31
-  else M 32 (TQ x y)
-private def rems (a b : Nat) : Nat :=
-  let x := s 32 a; let y := s 32 b
-  if y == 0 then MNat 32 a
-  else if x == -(Int.ofNat (1 <<< 31)) && y == -1 then 0
-  else M 32 (TR x y)
-private def closedBin (f : Nat → Nat → Nat) (ta tb : Term) : Option Term :=
-  match eval (solve ta), eval (solve tb) with
-  | some a, some b => some (Term.C32 (f a b))
-  | _, _ => none
 
 
 def sextBits (srcBits : Nat) (v : Nat) : Nat :=
@@ -139,16 +111,14 @@ def exprMUL (Eg : ExprSet) (rs2 rs1 rd : regidx) (mop : mul_op) : Option ExprSet
   else
     match readReg Eg rs1, readReg Eg rs2 with
     | some ta, some tb =>
-        let t? :=
+        let t :=
           match mop.result_part, mop.signed_rs1, mop.signed_rs2 with
-          | .Low, _, _ => some (mulloStar .w32 ta tb)
-          | .High, .Signed, .Signed => closedBin mulh ta tb
-          | .High, .Signed, .Unsigned => closedBin mulhsu ta tb
-          | .High, .Unsigned, .Unsigned => closedBin mulhu ta tb
-          | .High, .Unsigned, .Signed => closedBin mulhsu tb ta
-        match t? with
-        | some t => some (assign rd t)
-        | none => none
+          | .Low, _, _ => mulloStar .w32 ta tb
+          | .High, .Signed, .Signed => star .w32 (.mulh .w32) [ta, tb]
+          | .High, .Signed, .Unsigned => star .w32 (.mulhsu .w32) [ta, tb]
+          | .High, .Unsigned, .Unsigned => star .w32 (.mulhu .w32) [ta, tb]
+          | .High, .Unsigned, .Signed => star .w32 (.mulhsu .w32) [tb, ta]
+        some (assign rd t)
     | _, _ => none
 
 def exprDIV (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option ExprSet :=
@@ -156,9 +126,9 @@ def exprDIV (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option Ex
   else
     match readReg Eg rs1, readReg Eg rs2 with
     | some ta, some tb =>
-        match closedBin (if isUnsigned then divu else divs) ta tb with
-        | some t => some (assign rd t)
-        | none => none
+        let op := if isUnsigned then Op.udiv .w32 ((1 <<< 32) - 1)
+          else Op.sdiv .w32 ((1 <<< 32) - 1)
+        some (assign rd (star .w32 op [ta, tb]))
     | _, _ => none
 
 def exprREM (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option ExprSet :=
@@ -166,9 +136,8 @@ def exprREM (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option Ex
   else
     match readReg Eg rs1, readReg Eg rs2 with
     | some ta, some tb =>
-        match closedBin (if isUnsigned then remu else rems) ta tb with
-        | some t => some (assign rd t)
-        | none => none
+        let op := if isUnsigned then Op.urem .w32 else Op.srem .w32
+        some (assign rd (star .w32 op [ta, tb]))
     | _, _ => none
 
 def exprJAL (Eg : ExprSet) (rd : regidx) : Option ExprSet :=
@@ -206,23 +175,28 @@ private def ctxBaseAlpha (Eg : ExprSet) : Option Nat := Id.run do
         base := some (match base with | none => α | some b => min b α)
   pure base
 
-/-- Normalize only affine 32-bit addresses, without changing symbolic value terms.
-`id` wraps a copied term (`C.MV`, eBPF copy) but denotes the identity on values
-(`ID_w a = a`), so peel it before classifying the shape, as `lookupAddress` does. -/
+/-- One symbolic root with coefficient one, plus a concrete modular displacement. -/
 private def affineAddress : Term → Option (Option Nat × Nat)
   | .const .w32 c => some (none, MNat 32 c)
   | .var .w32 ξ => some (some ξ, 0)
-  | .app .w32 (.id .w32) [a] => affineAddress a
-  | .app .w32 (.add .w32) [a, .const .w32 b] => do
+  | .app .w32 (.id .w32) [a]
+  | .app .w32 (.low 32 32) [a]
+  | .app .w32 (.zext 32 .w32 32) [a]
+  | .app .w32 (.sext 32 .w32 32) [a] => affineAddress a
+  | .app .w32 (.add .w32) [a, b] => do
+      let (ra, oa) ← affineAddress a
+      let (rb, ob) ← affineAddress b
+      if ra.isSome && rb.isSome then none
+      else some (ra.orElse (fun _ => rb), MNat 32 (oa + ob))
+  | .app .w32 (.sub .w32) [a, b] => do
       let (root, off) ← affineAddress a
-      some (root, MNat 32 (off + b))
-  | .app .w32 (.add .w32) [.const .w32 a, b] => do
-      let (root, off) ← affineAddress b
-      some (root, MNat 32 (off + a))
-  | .app .w32 (.sub .w32) [a, .const .w32 b] => do
-      let (root, off) ← affineAddress a
-      some (root, MNat 32 (off + (1 <<< 32) - MNat 32 b))
-  | _ => none
+      let displacement ← eval b
+      some (root, MNat 32 (off + (1 <<< 32) - MNat 32 displacement))
+  | t => do
+      if t.width != .w32 then none
+      else
+        let c ← eval t
+        some (none, MNat 32 c)
 
 #guard affineAddress (.app .w32 (.id .w32)
   [.app .w32 (.add .w32) [Term.V32 0, Term.C32 0xfffffff0]]) == some (some 0, 0xfffffff0)
@@ -256,8 +230,7 @@ def exprLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
 
 /-- SP and its affine aliases bind aligned word slots. Symbolic alignment is an
 entry-contract premise; concrete addresses are checked. No heap is inferred. -/
-def stackSlot (Eg : ExprSet) (rs1 : regidx) (offset : Nat) : Option Reg := do
-  let base ← readReg Eg rs1
+private def stackSlotAt (Eg : ExprSet) (base : Term) (offset : Nat) : Option Reg := do
   let tsp ← readReg Eg sp
   let (root, off) ← affineAddress base
   let (spRoot, spOff) ← affineAddress tsp
@@ -268,8 +241,12 @@ def stackSlot (Eg : ExprSet) (rs1 : regidx) (offset : Nat) : Option Reg := do
     else
       let tag := match root with | none => 0 | some ξ => ξ + 1
       let slot := Reg.sw ((1 <<< 32) + tag * (1 <<< 32) + address)
-      if root.isNone && rs1 != sp && base != tsp && (Eg.lookupEq slot).isNone then none
+      if root.isNone && affineAddress base != affineAddress tsp && (Eg.lookupEq slot).isNone then none
       else some slot
+
+def stackSlot (Eg : ExprSet) (rs1 : regidx) (offset : Nat) : Option Reg := do
+  let base ← readReg Eg rs1
+  stackSlotAt Eg base offset
 
 def exprStackLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat) : Option ExprSet := do
   if !guardEg Eg then none
@@ -286,10 +263,10 @@ def exprWordLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
 
 /-- Packet identity is the fixed context slot namespace. Only a uniquely normalized
 constant byte offset is admitted; symbolic offsets need a future binding rule. -/
-def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option PacketAccess := do
+private def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
+    Option PacketAccess := do
   let α ← ctxBaseAlpha Eg
   let data ← Eg.lookupEq (Reg.ctx32 α)
-  let source ← readReg Eg rs1
   let (root, dataOff) ← affineAddress data
   let (sourceRoot, sourceOff) ← affineAddress source
   if root != sourceRoot then none
@@ -307,6 +284,10 @@ def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option Pa
       | none =>
         if root.isNone then none else some ⟨α, o, width, .little, some data⟩
 
+def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option PacketAccess := do
+  let source ← readReg Eg rs1
+  packetBindingAt Eg source offset width
+
 def exprPacketLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
     (isUnsigned : Bool) : Option ExprSet := do
   if !guardEg Eg then none
@@ -316,19 +297,21 @@ def exprPacketLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
     some (assign rd result.value)
 
 /-- Resolve a subfield against the same canonical word used by aligned spills. -/
-def stackAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option CellAccess := do
-  let base ← readReg Eg rs1
+private def stackAccessAt (Eg : ExprSet) (base : Term) (offset width : Nat) : Option CellAccess := do
   let (_, off) ← affineAddress base
   let within := MNat 32 (off + offset) % 4
   if within + width > 4 then none
   else
-    let slot ← stackSlot Eg rs1 (MNat 32 (offset + (1 <<< 32) - within))
+    let slot ← stackSlotAt Eg base (MNat 32 (offset + (1 <<< 32) - within))
     some ⟨slot, 8 * within, 8 * width⟩
 
+def stackAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option CellAccess := do
+  let base ← readReg Eg rs1
+  stackAccessAt Eg base offset width
+
 /-- Fixed context fields use the entry context binding, independently of mutable a0. -/
-private def contextAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+private def contextAccessAt (Eg : ExprSet) (source : Term) (offset width : Nat)
     (boundCtx : Option Term) : Option CellAccess := do
-  let source ← readReg Eg rs1
   let ctx ← boundCtx.orElse (fun _ => Eg.lookupEq (Reg.real32 10))
   let (root, off) ← affineAddress source
   let (ctxRoot, ctxOff) ← affineAddress ctx
@@ -339,36 +322,41 @@ private def contextAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
     let α ← ctxBaseAlpha Eg
     some ⟨Reg.ctx32 (α + relative / 4), 8 * within, 8 * width⟩
 
+def contextAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+    (boundCtx : Option Term := none) : Option CellAccess := do
+  let source ← readReg Eg rs1
+  contextAccessAt Eg source offset width boundCtx
+
 /-- Exactly one lookup-result base plus concrete displacement. Other helper results,
 numeric pointers and sums of symbolic bases do not establish a Map identity. -/
-private def lookupAddress : Term → Option (Nat × Nat)
+private def lookupAddress : Term → Option (Nat × Nat × Term)
   | .app .w32 (.id .w32) [a] => lookupAddress a
   | .app .w32 (.externalResult event 0) [id, map, key] =>
       if eval (solve id) == some 1 && map.width == .w32 && key.width == .w32 then
-        some (event, 0)
+        some (event, 0, map)
       else none
   | .app .w32 (.add .w32) [a, b] =>
       match lookupAddress a, eval (solve b) with
-      | some (event, off), some displacement => some (event, MNat 32 (off + displacement))
+      | some (event, off, map), some displacement =>
+          some (event, MNat 32 (off + displacement), map)
       | _, _ => do
           let displacement ← eval (solve a)
-          let (event, off) ← lookupAddress b
-          some (event, MNat 32 (off + displacement))
+          let (event, off, map) ← lookupAddress b
+          some (event, MNat 32 (off + displacement), map)
   | .app .w32 (.sub .w32) [a, b] => do
-      let (event, off) ← lookupAddress a
+      let (event, off, map) ← lookupAddress a
       let displacement ← eval (solve b)
-      some (event, MNat 32 (off + (1 <<< 32) - MNat 32 displacement))
+      some (event, MNat 32 (off + (1 <<< 32) - MNat 32 displacement), map)
   | _ => none
 
 /-- Resolve one event-local Map word. Word zero must retain its helper introduction.
 Later untouched words use externalResult event (1 + wordBase / 4) [C32 1]; these
 closed content terms remain opaque under eval. No ELF value size is inferred. -/
-private def mapAccessInputs (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+private def mapAccessInputsAt (Eg : ExprSet) (source : Term) (offset width : Nat)
     (needsOld : Bool) : Option (CellAccess × ExprSet) := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
   else
-    let source ← readReg Eg rs1
-    let (event, displacement) ← lookupAddress (solve source)
+    let (event, displacement, _) ← lookupAddress (solve source)
     let first ← Eg.lookupEq (Reg.mapWord event 0)
     if first.width != .w32 then none
     else
@@ -387,6 +375,11 @@ private def mapAccessInputs (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
           else
             let content := star .w32 (.externalResult event (1 + wordBase / 4)) [Term.C32 1]
             some (access, ExprSet.empty.insertEq reg content)
+
+private def mapAccessInputs (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+    (needsOld : Bool) : Option (CellAccess × ExprSet) := do
+  let source ← readReg Eg rs1
+  mapAccessInputsAt Eg source offset width needsOld
 
 /-- Address resolution alone does not materialize missing content. -/
 def mapAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option CellAccess :=
@@ -417,42 +410,63 @@ def exprSizedLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
   let effect ← exprSizedLOADEffects Eg rs1 rd offset width isUnsigned boundCtx
   some effect.updates
 
-/-- Stack word and byte-within-word for an SP-affine address term plus byte offset. -/
-def stackSlotFromAddr (Eg : ExprSet) (addr : Term) (byteOffset : Nat) : Option (Reg × Nat) := do
-  let tsp ← readReg Eg sp
-  let (root, off) ← affineAddress (solve addr)
-  let (spRoot, _) ← affineAddress tsp
-  if root != spRoot then none
-  else
-    let address := MNat 32 (off + byteOffset)
-    let within := address % 4
-    let wordAddr := address - within
-    if root.isNone && wordAddr % 4 != 0 then none
-    else
-      let tag := match root with | none => 0 | some ξ => ξ + 1
-      let slot := Reg.sw ((1 <<< 32) + tag * (1 <<< 32) + wordAddr)
-      if (Eg.lookupEq slot).isNone then none
-      else some (slot, within)
+/-- A buffer keeps one resource origin throughout its complete frozen range. -/
+private inductive BufferOrigin where
+  | stack | context | map | packet
+  deriving BEq
 
-/-- Freeze `n` little-endian stack bytes at `addr`. Packet keys are out of scope here. -/
-def readStackBytes (Eg : ExprSet) (addr : Term) (n : Nat) : Option (List Term) := Id.run do
-  if !guardEg Eg then return none
-  if n == 0 then return some []
-  let mut out : List Term := []
-  for j in [:n] do
-    match stackSlotFromAddr Eg addr j with
-    | none => return none
-    | some (slot, within) =>
-      match Eg.lookupEq slot with
-      | some old =>
-        if old.width != .w32 then return none
-        let field := star .w32 (.extract (8 * within) 8 32) [old]
-        let byte := match eval (solve field) with
-          | some c => Term.C32 (c % 256)
-          | none => solve field
-        out := out ++ [byte]
-      | none => return none
-  return some out
+private inductive BufferByte where
+  | cell (access : CellAccess)
+  | packet (reg : Reg)
+
+private def bufferByteAt (Eg : ExprSet) (addr : Term) (offset : Nat)
+    (boundCtx : Option Term) : BufferOrigin → Option BufferByte
+  | .stack => (stackAccessAt Eg addr offset 1).map BufferByte.cell
+  | .context => do
+      let ctx ← boundCtx
+      let access ← contextAccessAt Eg addr offset 1 (some ctx)
+      some (.cell access)
+  | .map => do
+      let (access, _) ← mapAccessInputsAt Eg addr offset 1 false
+      some (.cell access)
+  | .packet => do
+      let access ← packetBindingAt Eg addr offset 1
+      some (.packet (Reg.packet access.κ access.offset))
+
+private def BufferByte.read (byte : BufferByte) (Eg : ExprSet) : Option Term := do
+  let value ← match byte with
+    | .cell access => access.read Eg .w32 true
+    | .packet reg => do
+        let old ← Eg.lookupEq reg
+        if old.width != .w32 then none else some (star .w32 (.low 8 32) [old])
+  some (solve value)
+
+/-- Freeze only complete current bytes from one uniquely resolved resource.
+Map buffers require their lookup's unique layout and a nonwrapping value range.
+Context requires the explicit entry binding. Reads never materialize missing input. -/
+def readBufferBytes (Eg : ExprSet) (addr : Term) (n : Nat) (maps : List MapLayout)
+    (boundCtx : Option Term := none) : Option (List Term) := do
+  if !guardEg Eg || addr.width != .w32 then none
+  else
+    let source := solve addr
+    if let some (_, displacement, map) := lookupAddress source then
+      let id ← eval (solve map)
+      let [layout] := maps.filter (fun layout => layout.mapId == id) | none
+      if displacement + n > layout.valueSize || displacement + n > (1 <<< 32) then none
+    if n == 0 then return []
+    let origins : List BufferOrigin := [.stack, .context, .map, .packet]
+    let mut bytes := []
+    let mut origin : Option BufferOrigin := none
+    for j in List.range n do
+      let [(candidate, access)] := origins.filterMap (fun candidate =>
+        (bufferByteAt Eg source j boundCtx candidate).map fun access => (candidate, access))
+        | none
+      if let some previous := origin then
+        if candidate != previous then none
+      origin := some candidate
+      let byte ← access.read Eg
+      bytes := byte :: bytes
+    some bytes.reverse
 
 -- A copied SP alias keeps the identity wrapper (`ID_32(add32(sp,-16))`); freezing
 -- key bytes still resolves the same stack word, as the just_tx lookup key requires.
@@ -464,15 +478,18 @@ def readStackBytes (Eg : ExprSet) (addr : Term) (n : Nat) : Option (List Term) :
      |>.insertEq slot (Term.C32 0x01020304)
    let addr : Term := .app .w32 (.id .w32)
      [.app .w32 (.add .w32) [spTerm, Term.C32 (M 32 (-16))]]
-   readStackBytes E addr 4 == some [Term.C32 4, Term.C32 3, Term.C32 2, Term.C32 1])
+   readBufferBytes E addr 4 [] == some [Term.C32 4, Term.C32 3, Term.C32 2, Term.C32 1])
 
-/-- Lookup event, element-internal byte offset, and the Map cell for a sized store/load. -/
+/-- Lookup event, element-internal byte offset, pointer Map term, and the Map cell
+for a sized store/load. The Map term is the third component of `lookupAddress`
+(provenance of the pointer); callers that emit MapWrite must reject when it
+disagrees with the frozen-key observation Map. -/
 def mapElementAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) :
-    Option (NodeId × Nat × CellAccess) := do
+    Option (NodeId × Nat × Term × CellAccess) := do
   let (access, _) ← mapAccessInputs Eg rs1 offset width false
   let source ← readReg Eg rs1
-  let (event, displacement) ← lookupAddress (solve source)
-  some (event, MNat 32 (displacement + offset), access)
+  let (event, displacement, mapTerm) ← lookupAddress (solve source)
+  some (event, MNat 32 (displacement + offset), mapTerm, access)
 
 /-- Local value effects alone do not authorize a resource observation. Map resolution
 retains lookup identity; frozen key bytes are Predicate-owned when Meta supplies layout. -/
@@ -924,5 +941,61 @@ def exportOverrideKeeps (_unused : UInt32) : UInt32 :=
       | some 11, some 20 => 1
       | _, _ => 0
   | _, _ => 0
+
+private def frozenResourceBuffersCheck : Bool := Id.run do
+  let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 7]
+  let E := ExprSet.empty
+    |>.insertEq (Reg.real32 2) (Term.V32 0)
+    |>.insertEq (Reg.real32 10) (Term.C32 3)
+    |>.insertEq (Reg.mapWord 9 0) (Term.C32 0x04030201)
+    |>.insertEq (Reg.mapWord 9 4) (Term.C32 0x08070605)
+    |>.insertEq (Reg.ctx32 0) (Term.V32 4)
+    |>.insertEq (Reg.ctx32 1) (addStar .w32 (Term.V32 4) (Term.C32 8))
+    |>.insertEq (Reg.ctx32 2) (Term.C32 0x04030201)
+    |>.insertEq (Reg.ctx32 3) (Term.C32 0x08070605)
+    |>.insertEq (Reg.ctx32 4) (Term.C32 0)
+    |>.insertEq (Reg.ctx32 5) (Term.C32 0)
+  let expected := some [Term.C32 4, Term.C32 5, Term.C32 6]
+  let maps : List MapLayout := [{ mapId := 42, keySize := 3, valueSize := 6 }]
+  if readBufferBytes E (addStar .w32 pointer (Term.C32 3)) 3 maps != expected then return false
+  let contextPtr := addStar .w32 (Term.V32 1) (Term.C32 11)
+  if readBufferBytes E contextPtr 3 maps (some (Term.V32 1)) != expected ||
+      (readBufferBytes E contextPtr 3 maps).isSome ||
+      (readBufferBytes E (Term.C32 3) 1 maps).isSome then return false
+  let missing := { E with
+    entries := E.entries.filter (fun e => e.reg != Reg.mapWord 9 4) }
+  if (readBufferBytes missing (addStar .w32 pointer (Term.C32 3)) 3 maps).isSome then return false
+  let overlap := E.insertEq (Reg.real32 2) (Term.V32 4)
+    |>.insertEq (Reg.sw ((1 <<< 32) + 5 * (1 <<< 32))) (Term.C32 0x01020304)
+    |>.insertEq (Reg.packet 0 0) (Term.C32 4)
+  return (readBufferBytes overlap (Term.V32 4) 1 maps).isNone &&
+    (readBufferBytes E (addStar .w32 (Term.V32 4) (Term.C32 7)) 2 maps).isNone
+
+#guard frozenResourceBuffersCheck
+
+private def mNumericBoundariesCheck : Bool :=
+  let r1 : regidx := .Regidx 8#5
+  let r2 : regidx := .Regidx 9#5
+  let rd : regidx := .Regidx 10#5
+  let cases : List (Bool × Bool × Nat × Nat × Nat) := [
+    (false, false, 0x80000000, 0xffffffff, 0x80000000),
+    (true, false, 0x80000000, 0xffffffff, 0),
+    (false, false, 0xfffffff9, 3, 0xfffffffe),
+    (true, false, 0xfffffff9, 3, 0xffffffff),
+    (false, false, 7, 0, 0xffffffff),
+    (false, true, 7, 0, 0xffffffff),
+    (true, false, 0xfffffff9, 0, 0xfffffff9),
+    (true, true, 0xfffffff9, 0, 0xfffffff9)]
+  cases.all fun (remainder, unsigned, a, b, expected) =>
+    let E := ExprSet.empty
+      |>.insertEq (Reg.real32 8) (Term.C32 a)
+      |>.insertEq (Reg.real32 9) (Term.C32 b)
+    let result := if remainder then exprREM E r2 r1 rd unsigned
+      else exprDIV E r2 r1 rd unsigned
+    match result with
+    | some result => result.lookupEq (Reg.real32 10) == some (Term.C32 expected)
+    | none => false
+
+#guard mNumericBoundariesCheck
 
 end RV32IMC

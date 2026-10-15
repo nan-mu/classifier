@@ -33,27 +33,29 @@ private def frozenTailOk (tail : List Term) : Bool :=
       | .const _ c => c < 256
       | _ => true
 
-/-- Append frozen key bytes when Meta layout and stack provenance allow; otherwise keep ABI args. -/
-private def freezeLookupArgs (Eg : ExprSet) (maps : List MapLayout) (args : List Term) :
-    List Term :=
-  match args with
-  | [map, keyPtr] =>
-    match findMapLayout maps map with
-    | some layout =>
-      match readStackBytes Eg keyPtr layout.keySize with
-      | some bytes =>
-        if bytes.length == layout.keySize && frozenTailOk bytes then args ++ bytes else args
-      | none => args
-    | none => args
-  | _ => args
+/-- Resolve layout and every required buffer before appending any frozen bytes. -/
+private def freezeMapTail (Eg : ExprSet) (maps : List MapLayout)
+    (boundCtx : Option Term) (kind : HelperKind) (args : List Term) :
+    Option (List Term) := do
+  let map ← args.head?
+  let id ← eval (solve map)
+  let [layout] := maps.filter (fun layout => layout.mapId == id) | none
+  match kind, args with
+  | .lookup, [_, keyPtr] | .delete, [_, keyPtr] =>
+      readBufferBytes Eg keyPtr layout.keySize maps boundCtx
+  | .update, [_, keyPtr, valuePtr, _] => do
+      let key ← readBufferBytes Eg keyPtr layout.keySize maps boundCtx
+      let value ← readBufferBytes Eg valuePtr layout.valueSize maps boundCtx
+      some (key ++ value)
+  | _, _ => none
 
-/-- Capture the dispatcher type and ABI args; lookup may append frozen key bytes from Meta. -/
-def helperPredicate (event : NodeId) (Eg : ExprSet) (maps : List MapLayout := []) :
-    Except RejectReason Predicate := do
+/-- ABI observation survives an undefined complete-buffer refinement unchanged. -/
+def helperPredicate (event : NodeId) (Eg : ExprSet) (maps : List MapLayout := [])
+    (boundCtx : Option Term := none) : Except RejectReason Predicate := do
   let call ← parseHelperCall Eg
-  let args := match call.kind with
-    | .lookup => freezeLookupArgs Eg maps call.args
-    | _ => call.args
+  let args := match freezeMapTail Eg maps boundCtx call.kind call.args with
+    | some tail => if frozenTailOk tail then call.args ++ tail else call.args
+    | none => call.args
   pure (.helper event call.kind args)
 
 /-- Prefix ABI args drive externalResult; optional frozen tail is ignored here. -/
@@ -105,5 +107,105 @@ def helperExpr (p : Predicate) : Except RejectReason ExprSet := do
 #guard match helperExpr (.ret (Term.V32 1)) with
   | .error .unsupported => true
   | _ => false
+
+private def completeMapBuffersCheck : Bool := Id.run do
+  let key := addStar .w32 (Term.V32 0) (Term.C32 3)
+  let value := addStar .w32 (Term.V32 4) (Term.C32 1)
+  let maps : List MapLayout := [{ mapId := 42, keySize := 3, valueSize := 2 }]
+  let E := ExprSet.empty
+    |>.insertEq (Reg.real32 2) (Term.V32 0)
+    |>.insertEq (Reg.real32 11) (Term.C32 42)
+    |>.insertEq (Reg.real32 12) key
+    |>.insertEq (Reg.real32 13) value
+    |>.insertEq (Reg.real32 14) (Term.C32 0)
+    |>.insertEq (Reg.sw ((1 <<< 33) + 0)) (Term.C32 0x04030201)
+    |>.insertEq (Reg.sw ((1 <<< 33) + 4)) (Term.C32 0x08070605)
+    |>.insertEq (Reg.ctx32 0) (Term.V32 4)
+    |>.insertEq (Reg.ctx32 1) (addStar .w32 (Term.V32 4) (Term.C32 8))
+    |>.insertEq (Reg.ctx32 2) (Term.C32 0)
+    |>.insertEq (Reg.ctx32 3) (Term.C32 0)
+    |>.insertEq (Reg.ctx32 4) (Term.C32 0)
+    |>.insertEq (Reg.ctx32 5) (Term.C32 0)
+    |>.insertEq (Reg.packet 0 1) (Term.C32 0xaa)
+    |>.insertEq (Reg.packet 0 2) (Term.C32 0xbb)
+  for (id, kind, abi, tail) in [
+      (1, HelperKind.lookup, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
+      (3, HelperKind.delete, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
+      (2, HelperKind.update, [Term.C32 42, key, value, Term.C32 0],
+        [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 0xaa, Term.C32 0xbb])] do
+    let state := E.insertEq (Reg.real32 10) (Term.C32 id)
+    let .ok p := helperPredicate 70 state maps | return false
+    if p != .helper 70 kind (abi ++ tail) then return false
+    let .ok result := helperExpr p | return false
+    if result.lookupEq (Reg.real32 10) !=
+        some (star .w32 (.externalResult 70 0) (Term.C32 id :: abi)) then return false
+    let changed := state.insertEq (Reg.sw ((1 <<< 33) + 4)) (Term.C32 0)
+    let .ok fresh := helperPredicate 71 changed maps | return false
+    if fresh != .helper 71 kind
+        (abi ++ [Term.C32 4, Term.C32 0, Term.C32 0] ++ tail.drop 3) then return false
+  let update := E.insertEq (Reg.real32 10) (Term.C32 2)
+  let abiPrefix := [Term.C32 42, key, value, Term.C32 0]
+  let missing := { update with
+    entries := update.entries.filter (fun e => e.reg != Reg.packet 0 2) }
+  let .ok incompletePredicate := helperPredicate 70 missing maps | return false
+  let .ok ambiguous := helperPredicate 70 update (maps ++ maps) | return false
+  return incompletePredicate == .helper 70 .update abiPrefix &&
+    ambiguous == .helper 70 .update abiPrefix &&
+    (readBufferBytes missing value 2 maps).isNone
+
+#guard completeMapBuffersCheck
+
+private def mapBufferBoundsCheck : Bool := Id.run do
+  let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 17, Term.V32 7]
+  let key := Term.V32 0
+  let atEnd := addStar .w32 pointer (Term.C32 3)
+  let beyondEnd := addStar .w32 pointer (Term.C32 4)
+  let target : MapLayout := { mapId := 42, keySize := 3, valueSize := 3 }
+  let source : MapLayout := { mapId := 17, keySize := 8, valueSize := 6 }
+  let maps := [target, source]
+  let E := ExprSet.empty
+    |>.insertEq (Reg.real32 2) key
+    |>.insertEq (Reg.real32 11) (Term.C32 42)
+    |>.insertEq (Reg.real32 14) (Term.C32 0)
+    |>.insertEq (Reg.sw (1 <<< 33)) (Term.C32 0x04030201)
+    |>.insertEq (Reg.mapWord 9 0) (Term.C32 0x04030201)
+    |>.insertEq (Reg.mapWord 9 4) (Term.C32 0x08070605)
+    |>.insertEq (Reg.mapWord 9 ((1 <<< 32) - 4)) (Term.C32 0x08070605)
+  for (id, kind) in [(1, HelperKind.lookup), (3, HelperKind.delete),
+      (2, HelperKind.update)] do
+    let bufferReg := if id == 2 then Reg.real32 13 else Reg.real32 12
+    let abi := if id == 2 then [Term.C32 42, key, atEnd, Term.C32 0]
+      else [Term.C32 42, atEnd]
+    let tail := if id == 2 then [Term.C32 1, Term.C32 2, Term.C32 3,
+      Term.C32 4, Term.C32 5, Term.C32 6] else [Term.C32 4, Term.C32 5, Term.C32 6]
+    let state := E.insertEq (Reg.real32 10) (Term.C32 id)
+      |>.insertEq (Reg.real32 12) (if id == 2 then key else atEnd)
+      |>.insertEq (Reg.real32 13) atEnd
+    let .ok frozen := helperPredicate 70 state maps | return false
+    if frozen != .helper 70 kind (abi ++ tail) then return false
+    let .ok result := helperExpr frozen | return false
+    if result.lookupEq (Reg.real32 10) !=
+        some (star .w32 (.externalResult 70 0) (Term.C32 id :: abi)) then return false
+    for layouts in [[target], [target, source, source],
+        [target, { source with valueSize := 5 }]] do
+      let .ok abiPrefix := helperPredicate 70 state layouts | return false
+      if abiPrefix != .helper 70 kind abi then return false
+    let unknown := star .w32 (.externalResult 9 0) [Term.C32 1, Term.V32 17, Term.V32 7]
+    let wrapped := addStar .w32 pointer (Term.C32 ((1 <<< 32) - 1))
+    for (address, layouts) in [(beyondEnd, maps), (unknown, maps),
+        (wrapped, [target, { source with valueSize := (1 <<< 32) + 2 }])] do
+      let changed := state.insertEq bufferReg address
+      let expected := if id == 2 then [Term.C32 42, key, address, Term.C32 0]
+        else [Term.C32 42, address]
+      let .ok abiPrefix := helperPredicate 70 changed layouts | return false
+      if abiPrefix != .helper 70 kind expected then return false
+    if id == 2 then
+      let changed := state.insertEq (Reg.real32 12) beyondEnd
+      let .ok abiPrefix := helperPredicate 70 changed maps | return false
+      if abiPrefix != .helper 70 kind [Term.C32 42, beyondEnd, atEnd, Term.C32 0] then
+        return false
+  return true
+
+#guard mapBufferBoundsCheck
 
 end RV32IMC

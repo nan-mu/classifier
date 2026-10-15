@@ -30,9 +30,25 @@ private def jumpRel : Width → JumpOp → Rel
   | .w64, .jeq => .eq
   | .w64, .jne => .ne
   | .w64, .jgt => .gtu
+  | .w64, .jge => .geu
+  | .w64, .jlt => .ltu
+  | .w64, .jle => .leu
+  | .w64, .jsgt => .gts
+  | .w64, .jsge => .ges
+  | .w64, .jslt => .lts
+  | .w64, .jsle => .les
+  | .w64, .jset => .bitsnz 64
   | .w32, .jeq => .eqN 32
   | .w32, .jne => .neN 32
   | .w32, .jgt => .gtuN 32
+  | .w32, .jge => .geuN 32
+  | .w32, .jlt => .ltuN 32
+  | .w32, .jle => .leuN 32
+  | .w32, .jsgt => .gtsN 32
+  | .w32, .jsge => .gesN 32
+  | .w32, .jslt => .ltsN 32
+  | .w32, .jsle => .lesN 32
+  | .w32, .jset => .bitsnz 32
 
 /-- Jump offsets count raw slots, including LDDW continuation slots. -/
 private def jumpTarget (I : Array Insn) (j : Nat) (offset : Int) : Option Location :=
@@ -90,7 +106,7 @@ def ebpfStep (I : Array Insn) (context : StepContext) (event : NodeId)
     else match parseHelperCall σ.exprs id.toNat with
       | .error reason => .reject reason
       | .ok call => .candidates [⟨.ok, .pos (j + 1), helperExpr event call,
-          [.helper event call.kind (freezeLookupArgs context.entry σ.exprs context.maps call)]⟩]
+          [.helper event call.kind (freezeHelperArgs context.entry σ.exprs context.maps call)]⟩]
   | some (.jcond width op dst src offset) =>
     match branchCandidates I j σ.exprs width op dst src offset with
     | .error reason => .reject reason
@@ -107,9 +123,8 @@ def ebpfStep (I : Array Insn) (context : StepContext) (event : NodeId)
     match fullReg σ.exprs 0 with
     | some t => .candidates [⟨.ok, .exit, ExprSet.empty, [.ret t]⟩]
     | none => .reject .undefinedSrc
-  | some i@(.mov _ _ _) | some i@(.add _ _ _)
-  | some i@(.ldx _ _ _ _) | some i@(.stx _ _ _ _) =>
-    match exprEffects context.entry event σ.exprs i context.maps with
+  | some i =>
+    match exprEffects context.entry event σ.exprs i context.maps σ.predicates with
     | .error reason => .reject reason
     | .ok (effect, predicates) => if j + 1 < I.size then
         .candidates [⟨.ok, .pos (j + 1), effect.delta, predicates⟩]
@@ -143,7 +158,7 @@ private def aluExitSequenceCheck : Bool := Id.run do
     (.mov .w64 0 (.reg 1)) with
   | some E => E.lookupEq (Reg.real64 0) == some (idStar .w64 (Term.V64 7))
   | none => false
-#guard (expr ExprSet.empty (.add .w64 0 (.imm 1))).isNone
+#guard (expr ExprSet.empty (.binary .w64 .add 0 (.imm 1))).isNone
 #guard (expr ExprSet.empty (.mov .w64 10 (.imm 1))).isNone
 #guard match decodeInsnWord 0x00000000000010bf with
   | .mov .w64 0 (.reg 1) => true
@@ -163,7 +178,7 @@ private def aluExitSequenceCheck : Bool := Id.run do
   | some E => E.lookupEq (Reg.real64 0) == some (Term.C64 0xffffffff)
   | none => false
 #guard match expr (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 0xffffffff))
-    (.add .w32 0 (.imm 1)) with
+    (.binary .w32 .add 0 (.imm 1)) with
   | some E => E.lookupEq (Reg.real64 0) == some (Term.C64 0)
   | none => false
 #guard match ebpfStep #[.exit] checkContext 0 0 SemState.empty with
@@ -337,8 +352,8 @@ private def packetStoreObservationCheck : Bool := Id.run do
 
 #guard packetStoreObservationCheck
 
-/-- Successful STX candidates have observations exactly when resolution selects
-Packet, not cells. Both base aliases and store offsets contribute to resolution. -/
+/-- Packet stores have observations while Stack/Context cells do not. Both base
+aliases and store offsets contribute to resolution; Map is checked separately. -/
 private def storeObservationCategoryCheck : Bool := Id.run do
   let p := checkContext.entry
   let .ok root := buildE0 p | return false
