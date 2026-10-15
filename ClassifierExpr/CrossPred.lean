@@ -190,15 +190,49 @@ private def crossUnary (op : Op) (x : CrossTerm) : CrossTerm :=
         | _ => .app (.extract o n) [x]
     | _ => .app (crossOp op) [x]
 
+/-- One non-constant base plus a sum of `.c` leaves. Two bases are not a value. -/
+private inductive AffineAdd where
+  | pure (k : Int)
+  | base (t : CrossTerm) (k : Int)
+
+private def combineAffine : AffineAdd → AffineAdd → Option AffineAdd
+  | .pure x, .pure y => some (.pure (x + y))
+  | .base t x, .pure y | .pure y, .base t x => some (.base t (x + y))
+  | .base _ _, .base _ _ => none
+
+/-- Same refusal as host `fold_add_const`: an `add` with two non-constant bases
+does not fold, and a non-binary `add` does not fold. Sums are exact `Int` sums. -/
+private def affineAdd : CrossTerm → Option AffineAdd
+  | .c k => some (.pure k)
+  | .app .add [a, b] =>
+    match affineAdd a, affineAdd b with
+    | some xa, some xb => combineAffine xa xb
+    | _, _ => none
+  | .app .add _ => none
+  | t => some (.base t 0)
+
+private def fromAffine : AffineAdd → CrossTerm
+  | .pure k => .c k
+  | .base t k => .app .add [t, .c k]
+
+private def foldAddConst (x y : CrossTerm) : CrossTerm :=
+  match affineAdd x, affineAdd y with
+  | some xa, some ya =>
+    match combineAffine xa ya with
+    | some z => fromAffine z
+    | none => .app .add [x, y]
+  | _, _ => .app .add [x, y]
+
 /-- R6 recognizes only the closed word-content carry idiom. Its interpretation
 requires H and L to name word 1 and word 0 of the same Map element (CP-Bytes/Q);
-this is a non-injective observation key, not an identity for arbitrary H. -/
+this is a non-injective observation key, not an identity for arbitrary H.
+The fallback folds a single base plus `.c` leaves after R1 ordering. -/
 private def crossAdd (x y : CrossTerm) : CrossTerm :=
   match x, y with
   | .external lane [.c _], .app .ltu [.app .add [l, .c k], .c k'] =>
     if 1 ≤ lane && k == k' then .app (.extract 32 32) [.app .add [l, .c k]]
-    else .app .add [x,y]
-  | _, _ => .app .add [x,y]
+    else foldAddConst x y
+  | _, _ => foldAddConst x y
 
 private def crossBinary (op : Op) (x y : CrossTerm) : CrossTerm :=
   match op with
@@ -1070,8 +1104,30 @@ private def liveNode15BranchNormalize : Bool :=
   let r := exportCrossPredNormalize liveEnvRJson liveNode15BranchR
   let e := exportCrossPredNormalize liveEnvEJson liveNode15BranchE
   r != "null" && e != "null" && r == e &&
-    r == "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetBound\",\"base\":{\"kind\":\"var\",\"name\":4},\"rel\":{\"kind\":\"geu\",\"q\":32},\"offset\":{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"18\"}]},{\"kind\":\"c\",\"value\":\"40\"}]}}}"
+    r == "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetBound\",\"base\":{\"kind\":\"var\",\"name\":4},\"rel\":{\"kind\":\"geu\",\"q\":32},\"offset\":{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"58\"}]}}}"
 #guard liveNode15BranchNormalize
+
+private def liveNode15FlatR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"add32(v32:4,v32:5)\",\"rel\":\"geu\",\"rhs\":\"add32(v32:4,58)\"},\"dir\":\"taken\",\"position\":35,\"width\":32}"
+private def liveNode31FlatR : String :=
+  "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"add32(v32:4,v32:5)\",\"rel\":\"ltu\",\"rhs\":\"add32(v32:4,38)\"},\"dir\":\"taken\",\"position\":30,\"width\":32}"
+
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 18], .C32 40]) ==
+  .app .add [.var 4, .c 58]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.C32 18, .V32 4], .C32 40]) ==
+  .app .add [.var 4, .c 58]
+#guard toCrossTerm (.app .w64 (.add .w64) [.app .w64 (.add .w64) [.V32 4, .C64 18], .C64 40]) ==
+  .app .add [.var 4, .c 58]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 18], .C32 20]) ==
+  .app .add [.var 4, .c 38]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.C32 18, .V32 4], .C32 20]) ==
+  .app .add [.var 4, .c 38]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .V32 5], .C32 10]) ==
+  .app .add [.app .add [.var 5, .var 4], .c 10]
+#guard exportCrossPredNormalize liveEnvRJson liveNode15BranchR ==
+  exportCrossPredNormalize liveEnvRJson liveNode15FlatR
+#guard exportCrossPredNormalize liveEnvRJson liveNode31BranchR ==
+  exportCrossPredNormalize liveEnvRJson liveNode31FlatR
 
 private def liveNode31BranchNormalize : Bool :=
   let r := exportCrossPredNormalize liveEnvRJson liveNode31BranchR
