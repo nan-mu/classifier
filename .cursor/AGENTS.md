@@ -109,11 +109,11 @@ Synthetic wrapper return address is `0x2000` (not an ELF field).
 per command. Exit 0 means `ok` true, exit 1 is a domain error, and exit 2 is
 usage. `Kernel::execute` is the sync reducer for create, step, run, get, and
 the compare commands (CLI/harness). HTTP handlers still gate Lean work with
-`InferencePool`. CaseSpec suites live under `tooling/test/{base,xdp,fail}/`
-(`classifier test --root tooling/test`). The axum bin keeps routes and the WebSocket
-run loop. `classifier test --root tooling/test` walks `tooling/test/{base,xdp,fail}/**/case.json`
-in process. `just_tx` is the XDP pair that requires compare-tree `fail` 0.
-The other product pairs require both arches to reach `status` `complete`.
+`InferencePool`. `classifier test --root tooling/test` walks
+`tooling/test/{base,xdp,fail}/**/case.json` in process. `just_tx` requires
+compare-tree `fail` 0 and both arches `complete`. `merge_try` dual-run also
+reaches fail 0. `firewall` and `just_drop` cases assert RV32 `complete` only
+until their eBPF runs stop early (`LocalReject` / `UndefinedSrc`).
 
 ## Lean surface for tooling: create, step, merge
 
