@@ -116,7 +116,7 @@ struct Segment {
     ends_exit: bool,
 }
 
-const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; host contracts may pass VLAN TPID OR-arms, packetBound nested-add equal sums, and helper other stack key-ptr displacements";
+const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; VLAN TPID OR-arms {129,43144} may pass with distinct immediates";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let maps = discover_env_maps(&[left, right]);
@@ -830,148 +830,8 @@ fn match_status(
     match lean_binding::cross_pred::unify(&request) {
         Some(result) if result.ok && result.pass => MatchStatus::Pass,
         _ if vlan_or_arm_match(left, right, edge_dir) => MatchStatus::Pass,
-        _ if host_cross_pred_contract_match(left, right, edge_dir) => MatchStatus::Pass,
         _ => MatchStatus::Fail,
     }
-}
-
-/// Fold nested `add` trees of decimal `c` leaves into `(base, const_sum)`.
-/// `add(var4,58)` and `add(add(var4,18),40)` both yield `(var4, 58)`.
-fn fold_add_const(term: &Value) -> Option<(Value, i64)> {
-    if term.get("kind").and_then(|k| k.as_str()) == Some("c") {
-        let v = term.get("value").and_then(|x| x.as_str())?.parse::<i64>().ok()?;
-        return Some((Value::Null, v));
-    }
-    if term.get("kind").and_then(|k| k.as_str()) == Some("app")
-        && term.get("op").and_then(|o| o.as_str()) == Some("add")
-    {
-        let args = term.get("args")?.as_array()?;
-        if args.len() != 2 {
-            return None;
-        }
-        let (b0, c0) = fold_add_const(&args[0])?;
-        let (b1, c1) = fold_add_const(&args[1])?;
-        let base = match (&b0, &b1) {
-            (Value::Null, Value::Null) => Value::Null,
-            (b, Value::Null) | (Value::Null, b) => b.clone(),
-            _ => return None, // two non-const bases
-        };
-        return Some((base, c0.saturating_add(c1)));
-    }
-    Some((term.clone(), 0))
-}
-
-/// Host contracts for residual just_tx / just_drop crossPred mismatches that
-/// Lean normalize does not yet erase. Claim stays `crossPred`; fingerprints are
-/// not rewritten (CP-Add / CP-ABI remain open in Lean).
-///
-/// 1. `packetBound` nested-add offsets with equal constant sums.
-/// 2. helper `other` calls whose only difference is the stack key pointer
-///    `add(sp, c)` constant (RV32 vs eBPF frame layout).
-fn host_cross_pred_contract_match(
-    left: &Segment,
-    right: &Segment,
-    edge_dir: Option<&'static str>,
-) -> bool {
-    if left.preds.len() != right.preds.len() || left.preds.is_empty() {
-        return false;
-    }
-    let force = cross_dir_for_edge(edge_dir);
-    for (l, r) in left.preds.iter().zip(right.preds.iter()) {
-        let (LocalKey::Normalized(lj), LocalKey::Normalized(rj)) = (&l.key, &r.key) else {
-            return false;
-        };
-        let lj = force
-            .map(|d| rewrite_branch_dir(lj, d))
-            .unwrap_or_else(|| lj.clone());
-        let rj = force
-            .map(|d| rewrite_branch_dir(rj, d))
-            .unwrap_or_else(|| rj.clone());
-        if lj == rj {
-            continue;
-        }
-        let (Ok(lv), Ok(rv)) = (
-            serde_json::from_str::<Value>(&lj),
-            serde_json::from_str::<Value>(&rj),
-        ) else {
-            return false;
-        };
-        if packet_bound_offsets_match(&lv, &rv) || helper_stack_slot_match(&lv, &rv) {
-            continue;
-        }
-        return false;
-    }
-    true
-}
-
-fn packet_bound_offsets_match(lv: &Value, rv: &Value) -> bool {
-    if lv.get("kind").and_then(|k| k.as_str()) != Some("branch")
-        || rv.get("kind").and_then(|k| k.as_str()) != Some("branch")
-    {
-        return false;
-    }
-    if lv.get("dir") != rv.get("dir") {
-        return false;
-    }
-    let (Some(lc), Some(rc)) = (lv.get("cond"), rv.get("cond")) else {
-        return false;
-    };
-    if lc.get("kind").and_then(|k| k.as_str()) != Some("packetBound")
-        || rc.get("kind").and_then(|k| k.as_str()) != Some("packetBound")
-    {
-        return false;
-    }
-    if lc.get("rel") != rc.get("rel") || lc.get("base") != rc.get("base") {
-        return false;
-    }
-    let (Some(lo), Some(ro)) = (lc.get("offset"), rc.get("offset")) else {
-        return false;
-    };
-    let (Some((lb, ls)), Some((rb, rs))) = (fold_add_const(lo), fold_add_const(ro)) else {
-        return false;
-    };
-    lb == rb && ls == rs
-}
-
-fn helper_stack_slot_match(lv: &Value, rv: &Value) -> bool {
-    if lv.get("kind").and_then(|k| k.as_str()) != Some("helper")
-        || rv.get("kind").and_then(|k| k.as_str()) != Some("helper")
-    {
-        return false;
-    }
-    let (Some(lo), Some(ro)) = (lv.get("observation"), rv.get("observation")) else {
-        return false;
-    };
-    if lo.get("kind").and_then(|k| k.as_str()) != Some("other")
-        || ro.get("kind").and_then(|k| k.as_str()) != Some("other")
-    {
-        return false;
-    }
-    if lo.get("helperId") != ro.get("helperId") {
-        return false;
-    }
-    let (Some(la), Some(ra)) = (lo.get("args").and_then(|a| a.as_array()), ro.get("args").and_then(|a| a.as_array()))
-    else {
-        return false;
-    };
-    // [map, key_ptr, key_byte...] — allow only key_ptr stack displacement to differ.
-    if la.len() < 2 || la.len() != ra.len() {
-        return false;
-    }
-    if la[0] != ra[0] {
-        return false;
-    }
-    if !stack_ptr_same_base(&la[1], &ra[1]) {
-        return false;
-    }
-    la[2..] == ra[2..]
-}
-
-fn stack_ptr_same_base(a: &Value, b: &Value) -> bool {
-    let (Some((ba, _)), Some((bb, _))) = (fold_add_const(a), fold_add_const(b)) else {
-        return false;
-    };
-    ba != Value::Null && ba == bb
 }
 
 fn unify_request(

@@ -37,7 +37,8 @@ Measured on the current images:
 
 - `just_tx`, `just_drop`, and `merge_try` dual runs finish `complete` on both
   arches with compare-tree `fail` 0.
-- `firewall` asserts RV32 `complete` only (asset mismatch for eBPF dual).
-- `base/helper_loop` uses the `fib` Compact ELF / bpf pair. Both arches hit
-  `LimitExceeded` under budget 64: fib's control-flow loop grows the frontier
-  faster than that fuel allows.
+- `firewall` asserts RV32 `complete` only. Product eBPF uses variable
+  `ip->ihl*4` packet addresses; expand rejects with `UndefinedSrc`. A fixed-ihl
+  dual pair needs libbpf-mcu rebuild with a `.xpost.mem` firmware.
+- `base/helper_loop` uses the `fib` pair. Both arches hit `LimitExceeded` under
+  budget 64 (frontier growth). The helper call is after the loop body.

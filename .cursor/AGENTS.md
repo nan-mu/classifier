@@ -114,8 +114,11 @@ the compare commands (CLI/harness). HTTP handlers still gate Lean work with
 LDDW slots from the `.bpf.o` REL section to companion Compact ELF map VMAs
 (not hard-coded just_tx slot 34). `just_tx`, `just_drop`, and `merge_try`
 require both arches `complete` and compare-tree `fail` 0. `firewall` stays
-RV32-only until its Compact ELF / bpf pair matches. `base/helper_loop` uses
-the `fib` pair and expects `LimitExceeded` under budget 64.
+RV32-only: the product bpf uses variable `ip->ihl*4` addresses that eBPF
+`relativeOffset` rejects (`UndefinedSrc`), and rebuilding a fixed-ihl Compact
+ELF pair needs a firmware with `.xpost.mem` not present in this tree.
+`base/helper_loop` uses the `fib` pair and expects `LimitExceeded` under
+budget 64 (arithmetic loop; helper is after the loop).
 
 ## Lean surface for tooling: create, step, merge
 
