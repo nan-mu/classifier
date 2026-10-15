@@ -7,7 +7,7 @@
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,9 +119,10 @@ struct Segment {
 const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; host contracts may pass VLAN TPID OR-arms, packetBound nested-add equal sums, and helper other stack key-ptr displacements";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
+    let maps = discover_env_maps(&[left, right]);
     let mut unparsed_seq = 0u64;
-    let left_segs = segments_from_snap(left, &mut unparsed_seq);
-    let right_segs = segments_from_snap(right, &mut unparsed_seq);
+    let left_segs = segments_from_snap(left, &maps, &mut unparsed_seq);
+    let right_segs = segments_from_snap(right, &maps, &mut unparsed_seq);
     let (nodes, edges) = align_trees(&left_segs, &right_segs);
     TreeReport {
         status: "tree",
@@ -144,7 +145,11 @@ pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     }
 }
 
-fn segments_from_snap(run: &SnapRun, unparsed_seq: &mut u64) -> HashMap<u32, Segment> {
+fn segments_from_snap(
+    run: &SnapRun,
+    maps: &[EnvMap],
+    unparsed_seq: &mut u64,
+) -> HashMap<u32, Segment> {
     let nodes: HashMap<u32, ExpandNode> = run
         .nodes
         .iter()
@@ -179,6 +184,7 @@ fn segments_from_snap(run: &SnapRun, unparsed_seq: &mut u64) -> HashMap<u32, Seg
             parent_id,
             &nodes,
             &edges,
+            maps,
             unparsed_seq,
         );
         let fork = seg.fork_id;
@@ -263,9 +269,27 @@ fn local_rows<'a>(parent: &[PredIn], node: &'a [PredIn]) -> Vec<(usize, &'a Pred
         .collect()
 }
 
-/// Measured just_tx packet ends plus the shared rxcnt map (`0x403802e8`).
-const ENV_RV32IMC: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)","maps":[{"map":"1077412584","keyBytes":4,"valueBytes":8}]}"#;
-const ENV_EBPF: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)","maps":[{"map":"1077412584","keyBytes":4,"valueBytes":8}]}"#;
+/// Packet ends measured on just_tx. Map layouts come from the snaps, not a fixed VMA.
+const ENV_RV32IMC: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"}"#;
+const ENV_EBPF: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
+
+/// Product ARRAY maps use a 4-byte key and an 8-byte value when a predicate names
+/// the map and omits sizes. `toCrossHelper` still requires the frozen arg count
+/// to match, so a wrong default stays `other`.
+const DEFAULT_KEY_BYTES: u32 = 4;
+const DEFAULT_VALUE_BYTES: u32 = 8;
+
+struct EnvMap {
+    id: u64,
+    key_bytes: u32,
+    value_bytes: u32,
+}
+
+#[derive(Default)]
+struct MapSize {
+    key_bytes: Option<u32>,
+    value_bytes: Option<u32>,
+}
 
 fn cross_env_base(arch: &str) -> &'static str {
     match arch {
@@ -285,15 +309,185 @@ fn store_bytes_for(kind: &str) -> Option<u32> {
     }
 }
 
-fn cross_env_json(arch: &str, kind: &str) -> String {
+fn cross_env_json(arch: &str, kind: &str, maps: &[EnvMap]) -> String {
     let Ok(Value::Object(mut obj)) = serde_json::from_str(cross_env_base(arch)) else {
         return cross_env_base(arch).to_string();
     };
+    if !maps.is_empty() {
+        let layouts = maps
+            .iter()
+            .map(|m| {
+                let mut layout = Map::new();
+                layout.insert("map".into(), Value::String(m.id.to_string()));
+                layout.insert("keyBytes".into(), Value::Number(m.key_bytes.into()));
+                layout.insert("valueBytes".into(), Value::Number(m.value_bytes.into()));
+                Value::Object(layout)
+            })
+            .collect();
+        obj.insert("maps".into(), Value::Array(layouts));
+    }
     if let Some(n) = store_bytes_for(kind) {
         obj.insert("storeBytes".into(), Value::Number(n.into()));
         obj.insert("storeBigEndian".into(), Value::Bool(false));
     }
     Value::Object(obj).to_string()
+}
+
+/// Union of map ids named by either snap. Sizes prefer `keyBytes` / `valueBytes`
+/// fields, then a `mapWrite` key list or a lookup/delete/update frozen tail.
+fn discover_env_maps(runs: &[&SnapRun]) -> Vec<EnvMap> {
+    let mut sizes: BTreeMap<u64, MapSize> = BTreeMap::new();
+    for_each_pred(runs, |pred| note_explicit_map(&mut sizes, pred));
+    for_each_pred(runs, |pred| note_key_bytes(&mut sizes, pred));
+    for_each_pred(runs, |pred| note_value_bytes(&mut sizes, pred));
+    sizes
+        .into_iter()
+        .map(|(id, size)| EnvMap {
+            id,
+            key_bytes: size
+                .key_bytes
+                .filter(|n| *n > 0)
+                .unwrap_or(DEFAULT_KEY_BYTES),
+            value_bytes: size
+                .value_bytes
+                .filter(|n| *n > 0)
+                .unwrap_or(DEFAULT_VALUE_BYTES),
+        })
+        .collect()
+}
+
+fn for_each_pred(runs: &[&SnapRun], mut f: impl FnMut(&PredIn)) {
+    for run in runs {
+        for node in &run.nodes {
+            for pred in &node.predicates {
+                f(pred);
+            }
+        }
+    }
+}
+
+fn note_explicit_map(sizes: &mut BTreeMap<u64, MapSize>, pred: &PredIn) {
+    let Some(id) = map_id_of(pred) else {
+        return;
+    };
+    let slot = sizes.entry(id).or_default();
+    if slot.key_bytes.is_none() {
+        slot.key_bytes = field_u32(&pred.fields, "keyBytes");
+    }
+    if slot.value_bytes.is_none() {
+        slot.value_bytes = field_u32(&pred.fields, "valueBytes");
+    }
+}
+
+fn note_key_bytes(sizes: &mut BTreeMap<u64, MapSize>, pred: &PredIn) {
+    let Some(id) = map_id_of(pred) else {
+        return;
+    };
+    let Some(slot) = sizes.get_mut(&id) else {
+        return;
+    };
+    if slot.key_bytes.is_some() {
+        return;
+    }
+    slot.key_bytes = structural_key_bytes(pred);
+}
+
+fn note_value_bytes(sizes: &mut BTreeMap<u64, MapSize>, pred: &PredIn) {
+    let Some(id) = map_id_of(pred) else {
+        return;
+    };
+    let key_bytes = sizes.get(&id).and_then(|s| s.key_bytes);
+    let Some(slot) = sizes.get_mut(&id) else {
+        return;
+    };
+    if slot.value_bytes.is_some() {
+        return;
+    }
+    slot.value_bytes = structural_value_bytes(pred, key_bytes);
+}
+
+fn map_id_of(pred: &PredIn) -> Option<u64> {
+    let kind = normalize_kind(&pred.kind);
+    match kind {
+        "mapWrite" => const_term(&field_str(&pred.fields, "map")),
+        "helper" => {
+            let id = field_u64(&pred.fields, "helperId")?;
+            if !matches!(id, 1 | 2 | 3) {
+                return None;
+            }
+            let args = pred.fields.get("args")?.as_array()?;
+            const_term(&value_term(args.first()?))
+        }
+        _ => None,
+    }
+}
+
+fn structural_key_bytes(pred: &PredIn) -> Option<u32> {
+    let kind = normalize_kind(&pred.kind);
+    match kind {
+        "mapWrite" => {
+            let n = u32::try_from(pred.fields.get("key")?.as_array()?.len()).ok()?;
+            (n > 0).then_some(n)
+        }
+        "helper" => {
+            let id = field_u64(&pred.fields, "helperId")?;
+            if !matches!(id, 1 | 3) {
+                return None;
+            }
+            let n = pred.fields.get("args")?.as_array()?.len().checked_sub(2)?;
+            let n = u32::try_from(n).ok()?;
+            (n > 0).then_some(n)
+        }
+        _ => None,
+    }
+}
+
+fn structural_value_bytes(pred: &PredIn, key_bytes: Option<u32>) -> Option<u32> {
+    if normalize_kind(&pred.kind) != "helper" || field_u64(&pred.fields, "helperId")? != 2 {
+        return None;
+    }
+    let key = key_bytes?;
+    let n = pred
+        .fields
+        .get("args")?
+        .as_array()?
+        .len()
+        .checked_sub(4)?
+        .checked_sub(usize::try_from(key).ok()?)?;
+    let n = u32::try_from(n).ok()?;
+    (n > 0).then_some(n)
+}
+
+fn const_term(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let digits = text
+        .strip_prefix("c32:")
+        .or_else(|| text.strip_prefix("c64:"))
+        .unwrap_or(text);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn value_term(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn field_u64(fields: &Map<String, Value>, key: &str) -> Option<u64> {
+    match fields.get(key)? {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn field_u32(fields: &Map<String, Value>, key: &str) -> Option<u32> {
+    field_u64(fields, key).and_then(|n| u32::try_from(n).ok())
 }
 
 fn predicate_wire(kind: &str, fields: &Map<String, Value>) -> String {
@@ -307,12 +501,12 @@ fn predicate_wire(kind: &str, fields: &Map<String, Value>) -> String {
     Value::Object(obj).to_string()
 }
 
-fn arrival_key(arch: &str, kind: &str, fields: &Map<String, Value>) -> LocalKey {
+fn arrival_key(arch: &str, kind: &str, fields: &Map<String, Value>, maps: &[EnvMap]) -> LocalKey {
     if !is_cross_kind(kind) {
         return LocalKey::Unparsed;
     }
     match lean_binding::cross_pred::normalize(
-        &cross_env_json(arch, kind),
+        &cross_env_json(arch, kind, maps),
         &predicate_wire(kind, fields),
     ) {
         Some(json) => LocalKey::Normalized(json),
@@ -326,10 +520,11 @@ fn push_arrival(
     index: usize,
     pred: &PredIn,
     preds: &mut Vec<Arrival>,
+    maps: &[EnvMap],
     unparsed_seq: &mut u64,
 ) {
     let kind = normalize_kind(&pred.kind).to_string();
-    let key = arrival_key(arch, &kind, &pred.fields);
+    let key = arrival_key(arch, &kind, &pred.fields, maps);
     let fingerprint = match &key {
         LocalKey::Normalized(json) => json.clone(),
         LocalKey::Unparsed => {
@@ -358,6 +553,7 @@ fn walk_segment(
     parent_id: Option<u32>,
     nodes: &HashMap<u32, ExpandNode>,
     edges: &[&WireEdge],
+    maps: &[EnvMap],
     unparsed_seq: &mut u64,
 ) -> Segment {
     let mut parent_preds = parent_id
@@ -374,7 +570,7 @@ fn walk_segment(
     for _ in 0..10_000 {
         let Some(n) = nodes.get(&cur) else { break };
         for (index, pred) in local_rows(&parent_preds, &n.predicates) {
-            push_arrival(arch, n, index, pred, &mut preds, unparsed_seq);
+            push_arrival(arch, n, index, pred, &mut preds, maps, unparsed_seq);
         }
         parent_preds = n.predicates.clone();
         if n.loc == "exit" {
@@ -1330,6 +1526,98 @@ mod tests {
         assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), cross);
         assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), cross);
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+    }
+
+    fn lookup_helper(map: &str, key_ptr: &str, keys: &[&str]) -> PredIn {
+        let mut args = vec![
+            Value::String(map.to_string()),
+            Value::String(key_ptr.to_string()),
+        ];
+        args.extend(keys.iter().map(|k| Value::String((*k).to_string())));
+        pred(
+            "helper",
+            json!({
+                "event": 7,
+                "helperId": 1,
+                "args": args
+            }),
+        )
+    }
+
+    #[test]
+    fn discovered_map_lookup_drops_differing_stack_key_ptr() {
+        let left = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "10",
+                vec![lookup_helper(
+                    "1077412492",
+                    "id32(add32(v32:0,4294967284))",
+                    &["1", "2", "3", "4"],
+                )],
+            )],
+            vec![],
+        );
+        let right = run(
+            "ebpf",
+            vec![enode(
+                0,
+                "6",
+                vec![lookup_helper(
+                    "c64:1077412492",
+                    "t64(id64(add64(id64(v64:0),18446744073709551612)))",
+                    &["c64:1", "c64:2", "c64:3", "c64:4"],
+                )],
+            )],
+            vec![],
+        );
+        let report = build_compare_tree(&left, &right);
+        let l = pred_fingerprint(&report.nodes[0].left, "helper");
+        let r = pred_fingerprint(&report.nodes[0].right, "helper");
+        assert!(l.contains("\"kind\":\"lookup\""), "{l}");
+        assert!(r.contains("\"kind\":\"lookup\""), "{r}");
+        assert!(!l.contains("4294967284"), "{l}");
+        assert!(!r.contains("18446744073709551612"), "{r}");
+        assert_eq!(l, r);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+    }
+
+    #[test]
+    fn discovered_maps_include_both_sides() {
+        let left = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "10",
+                vec![lookup_helper(
+                    "1077412584",
+                    "id32(add32(v32:0,4294967284))",
+                    &["1", "2", "3", "4"],
+                )],
+            )],
+            vec![],
+        );
+        let right = run(
+            "ebpf",
+            vec![enode(
+                0,
+                "6",
+                vec![lookup_helper(
+                    "c64:1077412492",
+                    "t64(id64(add64(id64(v64:0),18446744073709551604)))",
+                    &["c64:1", "c64:2", "c64:3", "c64:4"],
+                )],
+            )],
+            vec![],
+        );
+        let report = build_compare_tree(&left, &right);
+        let l = pred_fingerprint(&report.nodes[0].left, "helper");
+        let r = pred_fingerprint(&report.nodes[0].right, "helper");
+        assert!(l.contains("\"value\":\"1077412584\""), "{l}");
+        assert!(r.contains("\"value\":\"1077412492\""), "{r}");
+        assert!(l.contains("\"kind\":\"lookup\""), "{l}");
+        assert!(r.contains("\"kind\":\"lookup\""), "{r}");
     }
 
     fn fixture_segment(jsons: &[&str]) -> Segment {
