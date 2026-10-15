@@ -1,12 +1,3 @@
-mod bpf_image;
-mod driver;
-mod ebpf_disasm;
-mod engine;
-mod expand;
-mod pred_match;
-mod pred_tree;
-mod rv32_image;
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -20,14 +11,18 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine;
-use engine::InferencePool;
-use expand::{Arch, Session, Snapshot, WaveBatchPolicy};
 use futures_util::future::FutureExt;
 use futures_util::StreamExt;
 use lean_binding::compare;
 use lean_binding::ebpf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use server::bpf_image;
+use server::engine::InferencePool;
+use server::expand::{Arch, Session, Snapshot, WaveBatchPolicy};
+use server::pred_match;
+use server::pred_tree;
+use server::rv32_image;
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
@@ -180,14 +175,9 @@ async fn create_session(
     let id_for_store = id.clone();
     let session = match arch {
         Arch::Rv32imc => {
-            let program =
-                rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
+            let program = rv32_image::parse_xdp_elf(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
             app.pool
-                .run(move || {
-                    Arc::new(Mutex::new(Session::new(
-                        id, budget, arch, name, program,
-                    )))
-                })
+                .run(move || Arc::new(Mutex::new(Session::new(id, budget, arch, name, program))))
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         }

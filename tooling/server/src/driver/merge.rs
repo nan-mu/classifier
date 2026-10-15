@@ -47,7 +47,10 @@ pub enum MergeVerdict {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeEffect {
-    Reuse { taken: NodeId, reuse_from: NodeId },
+    Reuse {
+        taken: NodeId,
+        reuse_from: NodeId,
+    },
     /// Lean was consulted; exact-config did not grant reuse.
     Rejected {
         taken: NodeId,

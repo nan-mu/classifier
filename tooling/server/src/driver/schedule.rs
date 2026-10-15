@@ -302,7 +302,8 @@ impl Agenda {
                         if self.frames[i].phase == BranchPhase::OpenTaken {
                             self.try_merge_at_tip(i, parent, merge, node_lookup, effects);
                             if self.frames[i].merge_settled {
-                                suppress_ready.extend(self.frames[i].taken_arm_nodes.iter().copied());
+                                suppress_ready
+                                    .extend(self.frames[i].taken_arm_nodes.iter().copied());
                             }
                         }
                     }
@@ -537,7 +538,15 @@ mod tests {
             reason: RejectReason::InsufficientEvidence,
         });
         let mut effects = Vec::new();
-        agenda.on_successors(1, "0", &[], &mut records, &merge, &stub_lookup, &mut effects);
+        agenda.on_successors(
+            1,
+            "0",
+            &[],
+            &mut records,
+            &merge,
+            &stub_lookup,
+            &mut effects,
+        );
         assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
         assert!(agenda.ready_ids().contains(&2));
     }
@@ -551,7 +560,15 @@ mod tests {
         });
         let mut records = RecordStore::default();
         let mut effects = Vec::new();
-        agenda.on_successors(1, "0", &[], &mut records, &merge_insufficient, &stub_lookup, &mut effects);
+        agenda.on_successors(
+            1,
+            "0",
+            &[],
+            &mut records,
+            &merge_insufficient,
+            &stub_lookup,
+            &mut effects,
+        );
         let merge_merged = MergePort::fixed(MergeVerdict::Merged {
             reuse_suffix_from: 1,
         });
@@ -631,7 +648,15 @@ mod tests {
             );
             assert_eq!(agenda.frames[0].phase, BranchPhase::OpenNotTaken);
         }
-        agenda.on_successors(31, "18", &[], &mut records, &merge_reject, &stub_lookup, &mut effects);
+        agenda.on_successors(
+            31,
+            "18",
+            &[],
+            &mut records,
+            &merge_reject,
+            &stub_lookup,
+            &mut effects,
+        );
 
         // Drain nested Taken so the nested frame can close; outer should already
         // hold the join tip as a candidate and move to OpenTaken.
@@ -652,7 +677,15 @@ mod tests {
             &mut effects,
         );
         effects.clear();
-        agenda.on_successors(30, "18", &[], &mut records, &merge_merged, &stub_lookup, &mut effects);
+        agenda.on_successors(
+            30,
+            "18",
+            &[],
+            &mut records,
+            &merge_merged,
+            &stub_lookup,
+            &mut effects,
+        );
         assert_eq!(
             effects,
             vec![crate::driver::merge::MergeEffect::Reuse {
@@ -683,7 +716,15 @@ mod tests {
             &stub_lookup,
             &mut effects,
         );
-        agenda.on_successors(22, "18", &[], &mut records, &merge_reject, &stub_lookup, &mut effects);
+        agenda.on_successors(
+            22,
+            "18",
+            &[],
+            &mut records,
+            &merge_reject,
+            &stub_lookup,
+            &mut effects,
+        );
         assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
 
         agenda.on_successors(
@@ -723,7 +764,15 @@ mod tests {
             reuse_suffix_from: 22,
         });
         effects.clear();
-        agenda.on_successors(49, "18", &[], &mut records, &merge_merged, &stub_lookup, &mut effects);
+        agenda.on_successors(
+            49,
+            "18",
+            &[],
+            &mut records,
+            &merge_merged,
+            &stub_lookup,
+            &mut effects,
+        );
         assert_eq!(
             effects,
             vec![crate::driver::merge::MergeEffect::Reuse {

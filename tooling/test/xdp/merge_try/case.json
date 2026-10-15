@@ -1,0 +1,18 @@
+{
+  "id": "xdp.merge_try.dual_run",
+  "suite": "xdp",
+  "budget": 1024,
+  "artifacts": {
+    "rv32": "merge_try.elf",
+    "ebpf": "merge_try.bpf.o"
+  },
+  "steps": [
+    { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "create", "bind": "bpf", "arch": "ebpf", "artifact": "ebpf", "map_elf": "rv32" },
+    { "op": "run", "bind": "rv" },
+    { "op": "run", "bind": "bpf" },
+    { "op": "compare_tree", "left": "rv", "right": "bpf" }
+  ],
+  "expect": { "kind": "pass", "status": "complete", "compare_tree": { "fail": 0 } },
+  "assert": []
+}

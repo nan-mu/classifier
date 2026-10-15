@@ -1,0 +1,10 @@
+{
+  "id": "fail.raw_bin",
+  "suite": "fail",
+  "artifacts": { "bin": "esp32c3.bin" },
+  "steps": [
+    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "bin", "budget": 8 }
+  ],
+  "expect": { "kind": "error" },
+  "assert": []
+}

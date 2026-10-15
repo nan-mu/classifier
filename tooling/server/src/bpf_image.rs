@@ -21,7 +21,7 @@ pub enum BpfElfError {
     MisalignedSection,
 }
 
-/// Prefer a non-empty `.text`, else `xdp1` / `.xdp1` (clang often leaves `.text` empty).
+/// Prefer a non-empty `.text`, else `xdp1` / `xdp` (clang often leaves `.text` empty).
 pub fn extract_insn_words(bytes: &[u8]) -> Result<BpfProgram, BpfElfError> {
     let section = program_section_bytes(bytes)?;
     if section.len() % 8 != 0 {
@@ -61,6 +61,7 @@ fn program_section_bytes(bytes: &[u8]) -> Result<&[u8], BpfElfError> {
     let strtab = slice(bytes, shstr.offset, shstr.size)?;
 
     let mut text: Option<&[u8]> = None;
+    let mut xdp1: Option<&[u8]> = None;
     let mut xdp: Option<&[u8]> = None;
     for i in 0..e_shnum {
         let sh = section_header(bytes, e_shoff, e_shentsize, i)?;
@@ -71,11 +72,14 @@ fn program_section_bytes(bytes: &[u8]) -> Result<&[u8], BpfElfError> {
         let data = slice(bytes, sh.offset, sh.size)?;
         match name {
             ".text" if !data.is_empty() => text = Some(data),
-            "xdp1" | ".xdp1" if !data.is_empty() => xdp = Some(data),
+            "xdp1" | ".xdp1" if !data.is_empty() => xdp1 = Some(data),
+            "xdp" | ".xdp" if !data.is_empty() => xdp = Some(data),
             _ => {}
         }
     }
-    text.or(xdp).ok_or(BpfElfError::MissingProgramSection)
+    text.or(xdp1)
+        .or(xdp)
+        .ok_or(BpfElfError::MissingProgramSection)
 }
 
 struct Shdr {
@@ -108,7 +112,10 @@ fn section_header(
 
 fn c_str_at(strtab: &[u8], off: usize) -> Result<&str, BpfElfError> {
     let rest = strtab.get(off..).ok_or(BpfElfError::Truncated)?;
-    let end = rest.iter().position(|&b| b == 0).ok_or(BpfElfError::Truncated)?;
+    let end = rest
+        .iter()
+        .position(|&b| b == 0)
+        .ok_or(BpfElfError::Truncated)?;
     std::str::from_utf8(&rest[..end]).map_err(|_| BpfElfError::InvalidElf)
 }
 

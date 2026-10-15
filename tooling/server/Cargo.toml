@@ -3,7 +3,19 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Lean-backed Expand HTTP server for RV32IMC firmware images"
+description = "Lean-backed Expand domain, HTTP server, and JSON CLI"
+
+[lib]
+name = "server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[[bin]]
+name = "classifier"
+path = "src/bin/classifier.rs"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }

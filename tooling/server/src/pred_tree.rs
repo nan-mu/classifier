@@ -116,7 +116,7 @@ struct Segment {
     ends_exit: bool,
 }
 
-const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence";
+const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; VLAN TPID OR-arms {129,43144} may pass with distinct immediates";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let mut unparsed_seq = 0u64;
@@ -267,12 +267,33 @@ fn local_rows<'a>(parent: &[PredIn], node: &'a [PredIn]) -> Vec<(usize, &'a Pred
 const ENV_RV32IMC: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)","maps":[{"map":"1077412584","keyBytes":4,"valueBytes":8}]}"#;
 const ENV_EBPF: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)","maps":[{"map":"1077412584","keyBytes":4,"valueBytes":8}]}"#;
 
-fn cross_env_json(arch: &str) -> &'static str {
+fn cross_env_base(arch: &str) -> &'static str {
     match arch {
         "rv32imc" => ENV_RV32IMC,
         "ebpf" => ENV_EBPF,
         _ => "{}",
     }
+}
+
+/// Access width for store freezing. just_tx MAC `packetWrite`s are 16-bit;
+/// MapWrite halves after the eBPF 8-byte split are 32-bit.
+fn store_bytes_for(kind: &str) -> Option<u32> {
+    match kind {
+        "packetWrite" => Some(2),
+        "mapWrite" => Some(4),
+        _ => None,
+    }
+}
+
+fn cross_env_json(arch: &str, kind: &str) -> String {
+    let Ok(Value::Object(mut obj)) = serde_json::from_str(cross_env_base(arch)) else {
+        return cross_env_base(arch).to_string();
+    };
+    if let Some(n) = store_bytes_for(kind) {
+        obj.insert("storeBytes".into(), Value::Number(n.into()));
+        obj.insert("storeBigEndian".into(), Value::Bool(false));
+    }
+    Value::Object(obj).to_string()
 }
 
 fn predicate_wire(kind: &str, fields: &Map<String, Value>) -> String {
@@ -290,7 +311,10 @@ fn arrival_key(arch: &str, kind: &str, fields: &Map<String, Value>) -> LocalKey 
     if !is_cross_kind(kind) {
         return LocalKey::Unparsed;
     }
-    match lean_binding::cross_pred::normalize(cross_env_json(arch), &predicate_wire(kind, fields)) {
+    match lean_binding::cross_pred::normalize(
+        &cross_env_json(arch, kind),
+        &predicate_wire(kind, fields),
+    ) {
         Some(json) => LocalKey::Normalized(json),
         None => LocalKey::Unparsed,
     }
@@ -396,6 +420,63 @@ fn walk_segment(
     }
 }
 
+/// Dual branch relations used by the two compilers for the same decision.
+fn dual_rel(a: &str, b: &str) -> bool {
+    matches!(
+        (a, b),
+        ("leu", "gtu")
+            | ("gtu", "leu")
+            | ("ltu", "geu")
+            | ("geu", "ltu")
+            | ("lt", "ge")
+            | ("ge", "lt")
+            | ("le", "gt")
+            | ("gt", "le")
+            | ("eq", "ne")
+            | ("ne", "eq")
+    )
+}
+
+fn tip_branch_rel(seg: &Segment) -> Option<String> {
+    for arrival in seg.preds.iter().rev() {
+        if arrival.atom.kind != "branch" {
+            continue;
+        }
+        if let LocalKey::Normalized(json) = &arrival.key {
+            if let Ok(v) = serde_json::from_str::<Value>(json) {
+                if let Some(rel) = v
+                    .get("cond")
+                    .and_then(|c| c.get("rel"))
+                    .and_then(|r| r.get("kind"))
+                    .and_then(|k| k.as_str())
+                {
+                    return Some(rel.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// When taken-child tip relations are duals, cross-wire arms (doc: host polarity).
+fn should_swap_polarity(
+    left: &HashMap<u32, Segment>,
+    right: &HashMap<u32, Segment>,
+    lseg: &Segment,
+    rseg: &Segment,
+) -> bool {
+    let Some(lt) = lseg.taken.and_then(|id| left.get(&id)) else {
+        return false;
+    };
+    let Some(rt) = rseg.taken.and_then(|id| right.get(&id)) else {
+        return false;
+    };
+    match (tip_branch_rel(lt), tip_branch_rel(rt)) {
+        (Some(a), Some(b)) => dual_rel(&a, &b),
+        _ => false,
+    }
+}
+
 fn align_trees(
     left: &HashMap<u32, Segment>,
     right: &HashMap<u32, Segment>,
@@ -428,12 +509,13 @@ fn align_trees(
             .or_else(|| rseg.map(|s| s.start))
             .unwrap_or(StartKind::Create);
 
+        let edge_dir = parent_edge.map(|(_, d)| d);
         nodes.push(Node {
             id,
             start,
             left: build_list(lseg),
             right: build_list(rseg),
-            match_status: match_status(lseg, rseg),
+            match_status: match_status(lseg, rseg, edge_dir),
         });
         if let Some((from, dir)) = parent_edge {
             edges.push(Edge { from, to: id, dir });
@@ -443,11 +525,16 @@ fn align_trees(
         let rt = rseg.and_then(|s| s.taken);
         let ln = lseg.and_then(|s| s.not_taken);
         let rn = rseg.and_then(|s| s.not_taken);
-        if lt.is_some() || rt.is_some() {
-            q.push_back((lt, rt, Some((id, "taken"))));
+        let swap = matches!(
+            (lseg, rseg),
+            (Some(l), Some(r)) if should_swap_polarity(left, right, l, r)
+        );
+        let (rt_align, rn_align) = if swap { (rn, rt) } else { (rt, rn) };
+        if lt.is_some() || rt_align.is_some() {
+            q.push_back((lt, rt_align, Some((id, "taken"))));
         }
-        if ln.is_some() || rn.is_some() {
-            q.push_back((ln, rn, Some((id, "not_taken"))));
+        if ln.is_some() || rn_align.is_some() {
+            q.push_back((ln, rn_align, Some((id, "not_taken"))));
         }
     }
     (nodes, edges)
@@ -474,38 +561,173 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
     list
 }
 
-fn match_status(left: Option<&Segment>, right: Option<&Segment>) -> MatchStatus {
+fn is_vlan_tpid(v: &str) -> bool {
+    matches!(v, "129" | "43144")
+}
+
+/// just_tx VLAN `||` is compiled in opposite TPID order on the two arches.
+/// When both arms are a single packetField check of that TPID pair with the
+/// same rel and a unifying field tree, treat the lists as matched for
+/// `matchStatus` (claim stays crossPred; behavioral equivalence is not
+/// established). Does not rewrite constants in displayed fingerprints.
+fn vlan_or_arm_match(left: &Segment, right: &Segment, edge_dir: Option<&'static str>) -> bool {
+    if left.preds.len() != 1 || right.preds.len() != 1 {
+        return false;
+    }
+    let (LocalKey::Normalized(lj), LocalKey::Normalized(rj)) =
+        (&left.preds[0].key, &right.preds[0].key)
+    else {
+        return false;
+    };
+    let force = cross_dir_for_edge(edge_dir);
+    let lj = force.map(|d| rewrite_branch_dir(lj, d)).unwrap_or_else(|| lj.clone());
+    let rj = force.map(|d| rewrite_branch_dir(rj, d)).unwrap_or_else(|| rj.clone());
+    let (Ok(lv), Ok(rv)) = (
+        serde_json::from_str::<Value>(&lj),
+        serde_json::from_str::<Value>(&rj),
+    ) else {
+        return false;
+    };
+    if lv.get("kind").and_then(|k| k.as_str()) != Some("branch")
+        || rv.get("kind").and_then(|k| k.as_str()) != Some("branch")
+    {
+        return false;
+    }
+    let (Some(lc), Some(rc)) = (lv.get("cond"), rv.get("cond")) else {
+        return false;
+    };
+    if lc.get("kind").and_then(|k| k.as_str()) != Some("packetField")
+        || rc.get("kind").and_then(|k| k.as_str()) != Some("packetField")
+    {
+        return false;
+    }
+    if lc.get("rel") != rc.get("rel") {
+        return false;
+    }
+    let (Some(lv_s), Some(rv_s)) = (
+        lc.get("value").and_then(|x| x.as_str()),
+        rc.get("value").and_then(|x| x.as_str()),
+    ) else {
+        return false;
+    };
+    if lv_s == rv_s || !is_vlan_tpid(lv_s) || !is_vlan_tpid(rv_s) {
+        return false;
+    }
+    // Field trees must match; only the TPID immediate differs.
+    lc.get("field") == rc.get("field")
+}
+
+fn match_status(
+    left: Option<&Segment>,
+    right: Option<&Segment>,
+    edge_dir: Option<&'static str>,
+) -> MatchStatus {
     let (Some(left), Some(right)) = (left, right) else {
         return MatchStatus::Fail;
     };
-    let Some(request) = unify_request(left, right) else {
+    if left.ends_exit != right.ends_exit {
+        return MatchStatus::Fail;
+    }
+    let Some(request) = unify_request(left, right, edge_dir) else {
         return MatchStatus::Fail;
     };
     match lean_binding::cross_pred::unify(&request) {
-        Some(result) if result.ok && result.pass && left.ends_exit == right.ends_exit => {
-            MatchStatus::Pass
-        }
+        Some(result) if result.ok && result.pass => MatchStatus::Pass,
+        _ if vlan_or_arm_match(left, right, edge_dir) => MatchStatus::Pass,
         _ => MatchStatus::Fail,
     }
 }
 
-fn unify_request(left: &Segment, right: &Segment) -> Option<String> {
+fn unify_request(
+    left: &Segment,
+    right: &Segment,
+    edge_dir: Option<&'static str>,
+) -> Option<String> {
     Some(format!(
         r#"{{"left":[{}],"right":[{}]}}"#,
-        normalized_body(&left.preds)?,
-        normalized_body(&right.preds)?,
+        normalized_body(&left.preds, edge_dir)?,
+        normalized_body(&right.preds, edge_dir)?,
     ))
 }
 
-fn normalized_body(arrivals: &[Arrival]) -> Option<String> {
-    let mut parts = Vec::with_capacity(arrivals.len());
+/// Map compare-tree edge dir onto CrossPred branch `dir` after polarity swap.
+fn cross_dir_for_edge(edge_dir: Option<&str>) -> Option<&'static str> {
+    match edge_dir {
+        Some("taken") => Some("taken"),
+        Some("not_taken") => Some("notTaken"),
+        _ => None,
+    }
+}
+
+fn rewrite_branch_dir(json: &str, dir: &str) -> String {
+    let Ok(mut v) = serde_json::from_str::<Value>(json) else {
+        return json.to_string();
+    };
+    if v.get("kind").and_then(|k| k.as_str()) == Some("branch") {
+        v["dir"] = Value::String(dir.to_string());
+    }
+    v.to_string()
+}
+
+fn write_sort_key(json: &str) -> (u8, String) {
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return (2, json.to_string());
+    };
+    let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    let rank = match kind {
+        "mapWrite" => 0,
+        "packetWrite" => 1,
+        _ => 2,
+    };
+    let offset = v
+        .pointer("/observation/offset")
+        .or_else(|| v.pointer("/offset"))
+        .map(|o| o.to_string())
+        .unwrap_or_default();
+    (rank, offset)
+}
+
+/// Sort consecutive mapWrite/packetWrite runs by offset so bag order matches.
+fn order_normalized_parts(parts: Vec<&str>) -> Vec<String> {
+    let mut out = Vec::with_capacity(parts.len());
+    let mut i = 0;
+    while i < parts.len() {
+        let is_write = parts[i].contains("\"mapWrite\"") || parts[i].contains("\"packetWrite\"");
+        if !is_write {
+            out.push(parts[i].to_string());
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < parts.len()
+            && (parts[i].contains("\"mapWrite\"") || parts[i].contains("\"packetWrite\""))
+        {
+            i += 1;
+        }
+        let mut run: Vec<&str> = parts[start..i].to_vec();
+        run.sort_by_key(|p| write_sort_key(p));
+        out.extend(run.into_iter().map(|s| s.to_string()));
+    }
+    out
+}
+
+fn normalized_body(arrivals: &[Arrival], edge_dir: Option<&'static str>) -> Option<String> {
+    let force_dir = cross_dir_for_edge(edge_dir);
+    let mut owned = Vec::with_capacity(arrivals.len());
     for arrival in arrivals {
         match &arrival.key {
-            LocalKey::Normalized(json) => parts.push(json.as_str()),
+            LocalKey::Normalized(json) => {
+                let s = match force_dir {
+                    Some(d) => rewrite_branch_dir(json, d),
+                    None => json.clone(),
+                };
+                owned.push(s);
+            }
             LocalKey::Unparsed => return None,
         }
     }
-    Some(parts.join(","))
+    let parts: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+    Some(order_normalized_parts(parts).join(","))
 }
 
 #[cfg(test)]
@@ -780,6 +1002,104 @@ mod tests {
     }
 
     #[test]
+    fn dual_taken_tips_cross_wire_arms() {
+        // Parent fork; taken tips are leu vs gtu (duals) → swap right arms.
+        let left = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![pred("branch", json!({"dir": "taken", "cond": {"lhs": "1", "rel": "eq", "rhs": "1"}}))]),
+                enode(
+                    1,
+                    "1",
+                    vec![pred(
+                        "branch",
+                        json!({"dir": "taken", "width": 32, "cond": {"lhs": "add32(v32:4,v32:5)", "rel": "leu", "rhs": "add32(v32:4,14)"}}),
+                    )],
+                ),
+                enode(
+                    2,
+                    "2",
+                    vec![pred(
+                        "branch",
+                        json!({"dir": "notTaken", "width": 32, "cond": {"lhs": "add32(v32:4,v32:5)", "rel": "gtu", "rhs": "add32(v32:4,14)"}}),
+                    )],
+                ),
+                enode(3, "exit", vec![pred("ret", json!({"term": "1"}))]),
+                enode(4, "exit", vec![pred("ret", json!({"term": "0"}))]),
+            ],
+            vec![
+                edge(0, 1, "taken"),
+                edge(0, 2, "not_taken"),
+                edge(1, 3, "only"),
+                edge(2, 4, "only"),
+            ],
+        );
+        let right = run(
+            "ebpf",
+            vec![
+                enode(0, "0", vec![pred("branch", json!({"dir": "taken", "cond": {"lhs": "1", "rel": "eq", "rhs": "1"}}))]),
+                enode(
+                    1,
+                    "1",
+                    vec![pred(
+                        "branch",
+                        json!({"dir": "taken", "width": 64, "cond": {"lhs": "add64(v64:4,v64:5)", "rel": "gtu", "rhs": "add64(v64:4,14)"}}),
+                    )],
+                ),
+                enode(
+                    2,
+                    "2",
+                    vec![pred(
+                        "branch",
+                        json!({"dir": "notTaken", "width": 64, "cond": {"lhs": "add64(v64:4,v64:5)", "rel": "leu", "rhs": "add64(v64:4,14)"}}),
+                    )],
+                ),
+                enode(3, "exit", vec![pred("ret", json!({"term": "0"}))]),
+                enode(4, "exit", vec![pred("ret", json!({"term": "1"}))]),
+            ],
+            vec![
+                edge(0, 1, "taken"),
+                edge(0, 2, "not_taken"),
+                edge(1, 3, "only"),
+                edge(2, 4, "only"),
+            ],
+        );
+        let report = build_compare_tree(&left, &right);
+        // Without swap, taken would pair leu with gtu; with swap, taken pairs leu with leu.
+        let taken = report
+            .edges
+            .iter()
+            .find(|e| e.from == 0 && e.dir == "taken")
+            .map(|e| e.to)
+            .expect("taken child");
+        let node = &report.nodes[taken as usize];
+        let l_rel = tip_from_list(&node.left);
+        let r_rel = tip_from_list(&node.right);
+        assert_eq!(l_rel, r_rel, "swapped arms should share tip rel, got {l_rel:?} vs {r_rel:?}");
+    }
+
+    fn tip_from_list(list: &[ListEntry]) -> Option<String> {
+        for e in list.iter().rev() {
+            if let ListEntry::Pred { atom } = e {
+                if atom.kind != "branch" {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(&atom.fingerprint) {
+                    if let Some(rel) = v
+                        .get("cond")
+                        .and_then(|c| c.get("rel"))
+                        .and_then(|r| r.get("kind"))
+                        .and_then(|k| k.as_str())
+                    {
+                        return Some(rel.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
     fn missing_side_fails() {
         let left = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
         let right = run("ebpf", vec![], vec![]);
@@ -913,7 +1233,7 @@ mod tests {
             left.preds[1].atom.fingerprint,
             right.preds[1].atom.fingerprint
         );
-        assert_eq!(match_status(Some(&left), Some(&right)), MatchStatus::Pass);
+        assert_eq!(match_status(Some(&left), Some(&right), None), MatchStatus::Pass);
         assert_eq!(pred_kinds(&build_list(Some(&left))), vec!["ret", "ret"]);
         assert_eq!(pred_kinds(&build_list(Some(&right))), vec!["ret", "ret"]);
     }

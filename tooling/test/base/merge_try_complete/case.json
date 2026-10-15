@@ -1,0 +1,12 @@
+{
+  "id": "base.merge_try_complete",
+  "suite": "base",
+  "budget": 1024,
+  "artifacts": { "rv32": "../../xdp/merge_try/merge_try.elf" },
+  "steps": [
+    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "run", "bind": "s" }
+  ],
+  "expect": { "kind": "pass", "status": "complete" },
+  "assert": []
+}

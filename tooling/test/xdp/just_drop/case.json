@@ -1,0 +1,15 @@
+{
+  "id": "xdp.just_drop.rv32_run",
+  "suite": "xdp",
+  "budget": 1024,
+  "artifacts": {
+    "rv32": "just_drop.elf",
+    "ebpf": "just_drop.bpf.o"
+  },
+  "steps": [
+    { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "run", "bind": "rv" }
+  ],
+  "expect": { "kind": "pass", "status": "complete" },
+  "assert": []
+}

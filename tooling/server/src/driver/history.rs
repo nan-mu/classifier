@@ -9,10 +9,7 @@ pub type RecordId = u32;
 /// Until Lean emits true local Λ, package by applied snapshot refs only.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LambdaPackaging {
-    AppliedRefs {
-        parent: NodeId,
-        successor: NodeId,
-    },
+    AppliedRefs { parent: NodeId, successor: NodeId },
 }
 
 #[derive(Clone, Debug)]

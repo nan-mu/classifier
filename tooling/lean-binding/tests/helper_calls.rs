@@ -73,11 +73,7 @@ fn call_program_lookup_keyed(form: usize) -> (Vec<u32>, usize, u32) {
     for reg in 11..=15 {
         words.push(addi(reg, 0, reg));
     }
-    words.extend([
-        addi(13, 0, 0x101),
-        store(2, 13, 0, 4),
-        addi(12, 2, 0),
-    ]);
+    words.extend([addi(13, 0, 0x101), store(2, 13, 0, 4), addi(12, 2, 0)]);
     if form >= 2 {
         words.push(addi(1, 0, 0x101));
     }
@@ -284,7 +280,6 @@ fn context_identity_survives_returns_and_adjust_tail_keeps_data_end() {
         .clone();
     assert_eq!(after_end, before_end);
 }
-
 
 #[test]
 fn a_loop_revisiting_the_same_helper_gets_new_events() {

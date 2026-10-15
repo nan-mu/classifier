@@ -57,10 +57,7 @@ impl DisplayInsns {
             Self::Ebpf(words) => ebpf_disasm::disasm_words(words)
                 .into_iter()
                 .enumerate()
-                .map(|(j, text)| InsnOut {
-                    j: j as u32,
-                    text,
-                })
+                .map(|(j, text)| InsnOut { j: j as u32, text })
                 .collect(),
         }
     }
@@ -415,7 +412,10 @@ fn graph_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
             exprs: parse_exprs(n),
             predicates: parse_predicates(n),
             preds: preds.get(id).cloned().unwrap_or_default(),
-            merge_reuse_from: n.get("mergeReuseFrom").and_then(|v| v.as_u64()).map(|x| x as u32),
+            merge_reuse_from: n
+                .get("mergeReuseFrom")
+                .and_then(|v| v.as_u64())
+                .map(|x| x as u32),
         })
         .collect();
 
@@ -568,7 +568,10 @@ mod tests {
         assert_eq!(eq_term(&snap.nodes[0], "real32:0"), Some("0"));
         // Entry binds context cells + R_s (x8/x9/x18..x27) to t_entry; stack cells on first access.
         assert_eq!(eq_term(&snap.nodes[0], "context32:0"), Some("v32:4"));
-        assert_eq!(eq_term(&snap.nodes[0], "real32:8"), eq_term(&snap.nodes[0], "real32:9"));
+        assert_eq!(
+            eq_term(&snap.nodes[0], "real32:8"),
+            eq_term(&snap.nodes[0], "real32:9")
+        );
         assert!(eq_term(&snap.nodes[0], "real32:9").is_some());
         assert_eq!(snap.nodes[0].exprs.len(), 25);
         assert!(snap.nodes[0].predicates.is_empty());
@@ -689,7 +692,6 @@ mod tests {
         assert_eq!(after.nodes.len(), 2);
         assert_eq!(after.nodes[1].loc, "1");
     }
-
 
     fn firewall_session(id: &str, budget: u32) -> Session {
         Session::new(

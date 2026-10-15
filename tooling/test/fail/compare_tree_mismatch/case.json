@@ -1,0 +1,36 @@
+{
+  "id": "fail.compare_tree_mismatch",
+  "suite": "fail",
+  "artifacts": {},
+  "steps": [
+    {
+      "op": "compare_tree",
+      "left_inline": {
+        "arch": "rv32imc",
+        "nodes": [
+          { "id": 0, "loc": "0", "predicates": [{ "kind": "branch", "dir": "taken", "at": "3" }] },
+          { "id": 1, "loc": "exit", "predicates": [{ "kind": "ret", "term": "1" }] },
+          { "id": 2, "loc": "exit", "predicates": [{ "kind": "ret", "term": "0" }] }
+        ],
+        "edges": [
+          { "from": 0, "to": 1, "dir": "taken" },
+          { "from": 0, "to": 2, "dir": "not_taken" }
+        ]
+      },
+      "right_inline": {
+        "arch": "ebpf",
+        "nodes": [
+          { "id": 0, "loc": "0", "predicates": [{ "kind": "branch", "dir": "taken", "at": "3" }] },
+          { "id": 1, "loc": "exit", "predicates": [{ "kind": "ret", "term": "1" }] },
+          { "id": 2, "loc": "exit", "predicates": [{ "kind": "ret", "term": "0" }] }
+        ],
+        "edges": [
+          { "from": 0, "to": 1, "dir": "taken" },
+          { "from": 0, "to": 2, "dir": "not_taken" }
+        ]
+      }
+    }
+  ],
+  "expect": { "kind": "fail", "compare_tree": { "fail_at_least": 1 } },
+  "assert": []
+}

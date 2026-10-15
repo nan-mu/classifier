@@ -11,14 +11,8 @@ use crate::driver::{Agenda, ConfigSnapshot, Dir, MergeEffect, MergePort, RecordS
 
 /// ISA-owned program words and Meta for one expand session.
 enum IsaState {
-    Rv32 {
-        insns: Vec<u32>,
-        meta: Meta,
-    },
-    Ebpf {
-        insns: Vec<u64>,
-        meta: ebpf::Meta,
-    },
+    Rv32 { insns: Vec<u32>, meta: Meta },
+    Ebpf { insns: Vec<u64>, meta: ebpf::Meta },
 }
 
 impl IsaState {
@@ -31,12 +25,8 @@ impl IsaState {
 
     fn expand_step(&self, event: u32, j: u32, exprs: &str, preds: &str) -> String {
         match self {
-            Self::Rv32 { insns, meta } => {
-                rv32::expand_step(insns, meta, event, j, exprs, preds)
-            }
-            Self::Ebpf { insns, meta } => {
-                ebpf::expand_step(insns, meta, event, j, exprs, preds)
-            }
+            Self::Rv32 { insns, meta } => rv32::expand_step(insns, meta, event, j, exprs, preds),
+            Self::Ebpf { insns, meta } => ebpf::expand_step(insns, meta, event, j, exprs, preds),
         }
     }
 }
