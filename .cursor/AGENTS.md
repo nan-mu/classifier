@@ -84,7 +84,8 @@ web graph viewer, fixtures, scripts, and CI.
 tooling/Cargo.toml              Rust workspace (one Cargo.lock)
 tooling/lean-binding/           FFI to Lean create/step/merge (+ legacy test helpers)
 tooling/lean-binding/tests/     binding and snapshot regressions
-tooling/server/                 axum Expand API, ExpandSession, InferencePool
+tooling/server/                 Kernel lib, axum `server` bin, JSON `classifier` bin
+tooling/test/                   CaseSpec suites `base/`, `xdp/`, `fail/`
 tooling/web/                    Vite + Kuma + xyflow viewer
 tooling/scripts/dev.py          lake run dev supervisor
 tooling/scripts/smoke.py        live API smoke
@@ -103,6 +104,16 @@ Keep one workspace lockfile. Validate Compact XDP ELF uploads via sibling
 Default fixture budget notes used by tests/UI: HTTP/WebUI default budget
 1024; budget 512 remains a fuel-exhaustion regression on `just_tx`.
 Synthetic wrapper return address is `0x2000` (not an ELF field).
+
+`classifier` (`tooling/server/src/bin/classifier.rs`) prints one Envelope JSON
+per command. Exit 0 means `ok` true, exit 1 is a domain error, and exit 2 is
+usage. `Kernel::execute` is the sync reducer for create, step, run, get, and
+the compare commands (CLI/harness). HTTP handlers still gate Lean work with
+`InferencePool`. CaseSpec suites live under `tooling/test/{base,xdp,fail}/`
+(`classifier test --root tooling/test`). The axum bin keeps routes and the WebSocket
+run loop. `classifier test --root tooling/test` walks `tooling/test/{base,xdp,fail}/**/case.json`
+in process. `just_tx` is the XDP pair that requires compare-tree `fail` 0.
+The other product pairs require both arches to reach `status` `complete`.
 
 ## Lean surface for tooling: create, step, merge
 
