@@ -116,11 +116,14 @@ private def existingBufferKindsCheck : Bool := Id.run do
   let mapCall : HelperCall := ⟨.delete, 3, [Term.C64 42, mapPtr]⟩
   let packetCall : HelperCall := ⟨.lookup, 1, [Term.C64 42, Term.C64 0x1000]⟩
   let contextCall : HelperCall := ⟨.delete, 3, [Term.C64 42, p.tCtx]⟩
+  let openPacket := freezeHelperArgs p initial.exprs maps packetCall
+  let some openBytes := availableBufferBytes p initial.exprs (Term.C64 0x1000) 4 maps | return false
   return freezeHelperArgs p E maps mapCall ==
       mapCall.args ++ [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4] &&
     freezeHelperArgs p E maps packetCall ==
       packetCall.args ++ [Term.C64 5, Term.C64 6, Term.C64 7, Term.C64 8] &&
-    freezeHelperArgs p initial.exprs maps packetCall == packetCall.args &&
+    openPacket == packetCall.args ++ openBytes &&
+    openBytes.length == 4 &&
     freezeHelperArgs p E maps contextCall ==
       contextCall.args ++ [Term.C64 0, Term.C64 16, Term.C64 0, Term.C64 0] &&
     (availableBufferBytes p E mapPtr 9 maps).isNone

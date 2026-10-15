@@ -112,13 +112,11 @@ the compare commands (CLI/harness). HTTP handlers still gate Lean work with
 `InferencePool`. `classifier test --root tooling/test` walks
 `tooling/test/{base,xdp,fail}/**/case.json` in process. eBPF create binds map
 LDDW slots from the `.bpf.o` REL section to companion Compact ELF map VMAs
-(not hard-coded just_tx slot 34). `just_tx`, `just_drop`, and `merge_try`
-require both arches `complete` and compare-tree `fail` 0. `firewall` stays
-RV32-only: the product bpf uses variable `ip->ihl*4` addresses that eBPF
-`relativeOffset` rejects (`UndefinedSrc`), and rebuilding a fixed-ihl Compact
-ELF pair needs a firmware with `.xpost.mem` not present in this tree.
-`base/helper_loop` uses the `fib` pair and expects `LimitExceeded` under
-budget 64 (arithmetic loop; helper is after the loop).
+(not hard-coded just_tx slot 34). `just_tx`, `just_drop`, `merge_try`, and `firewall` require both arches
+`complete` and compare-tree `fail` 0. Suite `firewall` is a simplified
+blacklist (no `ihl*4`, no UDP ctrl path) rebuilt with firmware `.xpost.mem`.
+`base/helper_loop` uses `helper_loop.{elf,bpf.o}` and expects `LimitExceeded`
+under budget 64 with helper predicates on the frontier (lookup in the loop).
 
 ## Lean surface for tooling: create, step, merge
 

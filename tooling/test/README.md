@@ -23,11 +23,9 @@ Each case is a `case.json` (CaseSpec). The in-process harness drives
 ## XDP assets
 
 Copied from `/Volumes/SSD/bs/build/<prog>/` into `xdp/{just_tx,just_drop,merge_try,firewall}/`.
-`firewall.elf` in this suite is the known helper-completion fixture
-(`tooling/fixtures/xdp.elf`); the newer `build/firewall/firewall.elf` does not
-yet complete under RV32 expand, so firewall stays RV32-only until a matching
-pair is ready. eBPF Meta binds map LDDW slots from the `.bpf.o` REL section to
-companion Compact ELF map VMAs (not hard-coded just_tx slot 34).
+eBPF Meta binds map LDDW slots from the `.bpf.o` REL section to companion
+Compact ELF map VMAs (not hard-coded just_tx slot 34). The helper-completion
+fixture `tooling/fixtures/xdp.elf` remains for expand unit tests only.
 
 ## Coverage notes
 
@@ -35,10 +33,10 @@ The command prints one Envelope. Exit 0 means every case matched `expect`. Exit 
 
 Measured on the current images:
 
-- `just_tx`, `just_drop`, and `merge_try` dual runs finish `complete` on both
-  arches with compare-tree `fail` 0.
-- `firewall` asserts RV32 `complete` only. Product eBPF uses variable
-  `ip->ihl*4` packet addresses; expand rejects with `UndefinedSrc`. A fixed-ihl
-  dual pair needs libbpf-mcu rebuild with a `.xpost.mem` firmware.
-- `base/helper_loop` uses the `fib` pair. Both arches hit `LimitExceeded` under
-  budget 64 (frontier growth). The helper call is after the loop body.
+- `just_tx`, `just_drop`, `merge_try`, and `firewall` dual runs finish
+  `complete` on both arches with compare-tree `fail` 0. Firewall is a
+  simplified blacklist (no `ihl*4`, no UDP ctrl path) so packet-key MapWrite
+  and branch shapes unify.
+- `base/helper_loop` uses `helper_loop.{elf,bpf.o}`. Both arches hit
+  `LimitExceeded` under budget 64 with helper predicates on the frontier
+  (map lookup inside the loop body).

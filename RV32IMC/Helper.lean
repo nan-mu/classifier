@@ -145,13 +145,22 @@ private def completeMapBuffersCheck : Bool := Id.run do
         (abi ++ [Term.C32 4, Term.C32 0, Term.C32 0] ++ tail.drop 3) then return false
   let update := E.insertEq (Reg.real32 10) (Term.C32 2)
   let abiPrefix := [Term.C32 42, key, value, Term.C32 0]
-  let missing := { update with
-    entries := update.entries.filter (fun e => e.reg != Reg.packet 0 2) }
-  let .ok incompletePredicate := helperPredicate 70 missing maps | return false
+  -- Stack key still refuses when a required stack word is absent.
+  let missingStack := { update with
+    entries := update.entries.filter (fun e => e.reg != Reg.sw ((1 <<< 33) + 4)) }
+  let .ok incompletePredicate := helperPredicate 70 missingStack maps | return false
   let .ok ambiguous := helperPredicate 70 update (maps ++ maps) | return false
+  -- Packet value bytes materialize inputByte when Reg.packet equalities are absent.
+  let openPacket := { update with
+    entries := update.entries.filter (fun e =>
+      !(e.reg == Reg.packet 0 1 || e.reg == Reg.packet 0 2)) }
+  let .ok openPredicate := helperPredicate 70 openPacket maps | return false
+  let some openTail := readBufferBytes openPacket value 2 maps | return false
   return incompletePredicate == .helper 70 .update abiPrefix &&
     ambiguous == .helper 70 .update abiPrefix &&
-    (readBufferBytes missing value 2 maps).isNone
+    (readBufferBytes missingStack key 3 maps).isNone &&
+    openPredicate == .helper 70 .update (abiPrefix ++ [Term.C32 4, Term.C32 5, Term.C32 6] ++ openTail) &&
+    openTail.length == 2
 
 #guard completeMapBuffersCheck
 

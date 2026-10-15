@@ -192,9 +192,10 @@ private def bufferOrigin (p : EntryParams) (address : Term) :
     | _ => none
   | _ => none
 
-/-- Freeze one complete existing buffer with a single resource origin.
-Packet input materialization is disabled. Context bytes are views of the two
-existing canonical context words. -/
+/-- Freeze one complete buffer with a single resource origin.
+Packet bytes may materialize `inputByte` terms via `PacketAccess.read` when
+`inputBase` is bound. Stack, map, and context still require current equalities.
+Context bytes are views of the two existing canonical context words. -/
 def availableBufferBytes (p : EntryParams) (E : ExprSet) (address : Term)
     (n : Nat) (maps : List MapLayout := []) : Option (List Term) := do
   if !E.keysUnique || !E.wellTyped || address.width != .w64 then none else do
@@ -206,11 +207,11 @@ def availableBufferBytes (p : EntryParams) (E : ExprSet) (address : Term)
       if let some previous := origin then
         if previous != candidate then none
       origin := some candidate
-      let access := match access with
-        | .packet a => ResolvedAccess.packet { a with inputBase := none }
-        | .cells parts => .cells parts
       let (inputs, value) ← (readAccess E access).toOption
-      if !inputs.entries.isEmpty then none
+      let allowInputs := match access with
+        | .packet _ => true
+        | .cells _ => false
+      if !allowInputs && !inputs.entries.isEmpty then none
       bytes := value :: bytes
     some bytes.reverse
 
@@ -694,9 +695,13 @@ private def immediateAndSignedMemoryCheck : Bool := Id.run do
   let .ok initial := buildE0 p | return false
   let E := initial.exprs.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)
     |>.insertEq (Reg.packet 0 0) (Term.C32 0x55)
+  let some [open0] := availableBufferBytes p initial.exprs (Term.C64 0x2000) 1 | return false
+  let access : PacketAccess := ⟨0, 0, 1, .little, some p.tData⟩
+  let some expected := (access.read initial.exprs .w64 true).map (·.value) | return false
   return availableBufferBytes p E (Term.C64 0x1fff) 1 == some [Term.C64 0x11] &&
     availableBufferBytes p E (Term.C64 0x2000) 1 == some [Term.C64 0x55] &&
-    (availableBufferBytes p E (Term.C64 0x1fff) 2).isNone
+    (availableBufferBytes p E (Term.C64 0x1fff) 2).isNone &&
+    open0 == expected
 
 end EBPF
 

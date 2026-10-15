@@ -417,7 +417,7 @@ private inductive BufferOrigin where
 
 private inductive BufferByte where
   | cell (access : CellAccess)
-  | packet (reg : Reg)
+  | packet (access : PacketAccess)
 
 private def bufferByteAt (Eg : ExprSet) (addr : Term) (offset : Nat)
     (boundCtx : Option Term) : BufferOrigin → Option BufferByte
@@ -429,21 +429,20 @@ private def bufferByteAt (Eg : ExprSet) (addr : Term) (offset : Nat)
   | .map => do
       let (access, _) ← mapAccessInputsAt Eg addr offset 1 false
       some (.cell access)
-  | .packet => do
-      let access ← packetBindingAt Eg addr offset 1
-      some (.packet (Reg.packet access.κ access.offset))
+  | .packet => (packetBindingAt Eg addr offset 1).map BufferByte.packet
 
 private def BufferByte.read (byte : BufferByte) (Eg : ExprSet) : Option Term := do
   let value ← match byte with
     | .cell access => access.read Eg .w32 true
-    | .packet reg => do
-        let old ← Eg.lookupEq reg
-        if old.width != .w32 then none else some (star .w32 (.low 8 32) [old])
+    | .packet access => do
+        let result ← access.read Eg .w32 true
+        some result.value
   some (solve value)
 
 /-- Freeze only complete current bytes from one uniquely resolved resource.
 Map buffers require their lookup's unique layout and a nonwrapping value range.
-Context requires the explicit entry binding. Reads never materialize missing input. -/
+Context requires the explicit entry binding. Packet bytes may materialize
+`inputByte` terms via `PacketAccess.read` when `inputBase` is bound. -/
 def readBufferBytes (Eg : ExprSet) (addr : Term) (n : Nat) (maps : List MapLayout)
     (boundCtx : Option Term := none) : Option (List Term) := do
   if !guardEg Eg || addr.width != .w32 then none
@@ -968,8 +967,14 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
   let overlap := E.insertEq (Reg.real32 2) (Term.V32 4)
     |>.insertEq (Reg.sw ((1 <<< 32) + 5 * (1 <<< 32))) (Term.C32 0x01020304)
     |>.insertEq (Reg.packet 0 0) (Term.C32 4)
-  return (readBufferBytes overlap (Term.V32 4) 1 maps).isNone &&
-    (readBufferBytes E (addStar .w32 (Term.V32 4) (Term.C32 7)) 2 maps).isNone
+  if (readBufferBytes overlap (Term.V32 4) 1 maps).isSome ||
+      (readBufferBytes E (addStar .w32 (Term.V32 4) (Term.C32 7)) 2 maps).isSome then
+    return false
+  -- Untouched packet bytes freeze as inputByte under the ctx data binding.
+  let some [open0] := readBufferBytes E (Term.V32 4) 1 maps | return false
+  let access : PacketAccess := ⟨0, 0, 1, .little, some (Term.V32 4)⟩
+  let some expected := (access.read E .w32 true).map (fun r => solve r.value) | return false
+  return open0 == expected
 
 #guard frozenResourceBuffersCheck
 

@@ -3,8 +3,8 @@
   "suite": "base",
   "budget": 64,
   "artifacts": {
-    "rv32": "fib.elf",
-    "ebpf": "fib.bpf.o"
+    "rv32": "helper_loop.elf",
+    "ebpf": "helper_loop.bpf.o"
   },
   "steps": [
     { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
@@ -15,6 +15,6 @@
   "expect": { "kind": "fail", "status": "fail" },
   "assert": [
     { "path": "/payload/reason", "eq": "LimitExceeded" },
-    { "contains_kind": "branch" }
+    { "contains_kind": "helper" }
   ]
 }
