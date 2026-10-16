@@ -261,9 +261,8 @@ def exprWordLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
   | some Ei => some Ei
   | none => exprLOAD Eg rs1 rd offset boundCtx
 
-/-- Packet identity is the fixed context slot namespace. Only a uniquely normalized
-constant byte offset is admitted; symbolic offsets need a future binding rule. -/
-private def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
+/-- Legacy constant displacement binding, preserving its existing entry interval domain. -/
+private def constantPacketBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
     Option PacketAccess := do
   let α ← ctxBaseAlpha Eg
   let data ← Eg.lookupEq (Reg.ctx32 α)
@@ -280,9 +279,24 @@ private def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) 
       match affineAddress ending with
       | some (endRoot, endOff) =>
         if endRoot != root || endOff < dataOff || o + width > endOff - dataOff then none
-        else some ⟨α, o, width, .little, some data⟩
+        else some ⟨α, o, width, .little, some data, none⟩
       | none =>
-        if root.isNone then none else some ⟨α, o, width, .little, some data⟩
+        if root.isNone then none else some ⟨α, o, width, .little, some data, none⟩
+
+/-- Symbolic offsets require a packet-only format and a passed data_end constraint. -/
+def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
+    Option PacketAccess :=
+  (constantPacketBindingAt Eg source offset width).orElse fun _ => do
+    if !Eg.keysUnique || !Eg.wellTyped || ![1, 2, 4, 8].contains width then none else
+      let α ← ctxBaseAlpha Eg
+      let data ← Eg.lookupEq (Reg.ctx32 α)
+      let ending ← Eg.lookupEq (Reg.ctx32 (α + 1))
+      let displacement ← packetDisplacement Eg data source
+      let address := addStar .w32 source (Term.C32 offset)
+      let (strict, checkedEnd) ← packetBoundWitness Eg data address ending width
+      let compound : CompoundPacketReg :=
+        ⟨α, displacement.plus (.c offset), width, α + 1, strict, 0, checkedEnd⟩
+      pure ⟨α, 0, width, .little, some data, some compound⟩
 
 def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option PacketAccess := do
   let source ← readReg Eg rs1
@@ -329,7 +343,7 @@ def contextAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
 
 /-- Exactly one lookup-result base plus concrete displacement. Other helper results,
 numeric pointers and sums of symbolic bases do not establish a Map identity. -/
-private def lookupAddress : Term → Option (Nat × Nat × Term)
+def lookupAddress : Term → Option (Nat × Nat × Term)
   | .app .w32 (.id .w32) [a] => lookupAddress a
   | .app .w32 (.externalResult event 0) [id, map, key] =>
       if eval (solve id) == some 1 && map.width == .w32 && key.width == .w32 then
@@ -348,6 +362,16 @@ private def lookupAddress : Term → Option (Nat × Nat × Term)
       let displacement ← eval (solve b)
       some (event, MNat 32 (off + (1 <<< 32) - MNat 32 displacement), map)
   | _ => none
+
+theorem lookupAddress_const (w : Width) (n : Nat) :
+    lookupAddress (.const w n) = none := rfl
+
+theorem lookupAddress_ne_zero (source : Term) (event offset : Nat) (map : Term)
+    (h : lookupAddress source = some (event, offset, map)) :
+    source ≠ Term.C32 0 := by
+  intro hz
+  subst source
+  cases h
 
 /-- Resolve one event-local Map word. Word zero must retain its helper introduction.
 Later untouched words use externalResult event (1 + wordBase / 4) [C32 1]; these
@@ -431,13 +455,42 @@ private def bufferByteAt (Eg : ExprSet) (addr : Term) (offset : Nat)
       some (.cell access)
   | .packet => (packetBindingAt Eg addr offset 1).map BufferByte.packet
 
-private def BufferByte.read (byte : BufferByte) (Eg : ExprSet) : Option Term := do
-  let value ← match byte with
-    | .cell access => access.read Eg .w32 true
-    | .packet access => do
-        let result ← access.read Eg .w32 true
-        some result.value
-  some (solve value)
+/-- The cell-byte branch used by complete-buffer freezing. -/
+def freezeCellByte (access : CellAccess) (Eg : ExprSet) : Option Term :=
+  (access.read Eg .w32 true).map solve
+
+/-- The packet-byte branch uses the same read materialization as ordinary loads. -/
+def freezePacketByte (access : PacketAccess) (Eg : ExprSet) : Option Term :=
+  (access.read Eg .w32 true).map (fun result => solve result.value)
+
+theorem freezeCellByte_low8 (access : CellAccess) (Eg : ExprSet) (byte : Term)
+    (hb : access.bits = 8) (h : freezeCellByte access Eg = some byte) :
+    ∃ stored, Eg.lookupEq access.reg = some stored ∧
+      byte = solve (zStar 8 .w32 access.reg.width.bits
+        (star access.reg.width (.extract access.bitOffset 8 access.reg.width.bits) [stored])) := by
+  cases hr : access.read Eg .w32 true with
+  | none => simp [freezeCellByte, hr] at h
+  | some value =>
+    obtain ⟨stored, hs, hv⟩ := CellAccess.read_byte access Eg .w32 value hb hr
+    simp only [freezeCellByte, hr, Option.map_some, Option.some.injEq] at h
+    exact ⟨stored, hs, h ▸ congrArg solve hv⟩
+
+theorem freezePacketByte_low8 (access : PacketAccess) (Eg : ExprSet) (byte : Term)
+    (hb : access.bytes = 1) (h : freezePacketByte access Eg = some byte) :
+    ∃ stored, byte = solve
+      (orStar 32 .w32 (Term.C32 0)
+        (shlStar .w32 (zStar 8 .w32 32 stored) (Term.C32 0))) := by
+  cases hr : access.read Eg .w32 true with
+  | none => simp [freezePacketByte, hr] at h
+  | some result =>
+    obtain ⟨stored, hs⟩ := PacketAccess.read_byte access Eg .w32 result hb hr
+    simp only [freezePacketByte, hr, Option.map_some, Option.some.injEq] at h
+    exact ⟨stored, h ▸ congrArg solve hs⟩
+
+private def BufferByte.read (byte : BufferByte) (Eg : ExprSet) : Option Term :=
+  match byte with
+  | .cell access => freezeCellByte access Eg
+  | .packet access => freezePacketByte access Eg
 
 /-- Freeze only complete current bytes from one uniquely resolved resource.
 Map buffers require their lookup's unique layout and a nonwrapping value range.
@@ -489,6 +542,16 @@ def mapElementAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) :
   let source ← readReg Eg rs1
   let (event, displacement, mapTerm) ← lookupAddress (solve source)
   some (event, MNat 32 (displacement + offset), mapTerm, access)
+
+theorem mapElementAccess_preimage (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+    (event elementOff : Nat) (map : Term) (access : CellAccess)
+    (h : mapElementAccess Eg rs1 offset width = some (event, elementOff, map, access)) :
+    ∃ source displacement, readReg Eg rs1 = some source ∧
+      lookupAddress (solve source) = some (event, displacement, map) := by
+  simp only [mapElementAccess, Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  rcases h with ⟨_, _, source, hs, ⟨e, displacement, m⟩, hl, he⟩
+  cases he
+  exact ⟨source, displacement, hs, hl⟩
 
 /-- Local value effects alone do not authorize a resource observation. Map resolution
 retains lookup identity; frozen key bytes are Predicate-owned when Meta supplies layout. -/
@@ -972,7 +1035,7 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
     return false
   -- Untouched packet bytes freeze as inputByte under the ctx data binding.
   let some [open0] := readBufferBytes E (Term.V32 4) 1 maps | return false
-  let access : PacketAccess := ⟨0, 0, 1, .little, some (Term.V32 4)⟩
+  let access : PacketAccess := ⟨0, 0, 1, .little, some (Term.V32 4), none⟩
   let some expected := (access.read E .w32 true).map (fun r => solve r.value) | return false
   return open0 == expected
 

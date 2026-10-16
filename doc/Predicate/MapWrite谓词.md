@@ -7,23 +7,23 @@ MapWrite谓词记录一次向 Map 元素值内部写入的事件。其类型为�
 \[
 \mathrm{MapWrite}
 :=\bigsqcup_{w,v\in\{32,64\}}\ \bigsqcup_{n\in\mathbb N}
-\left\{\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,t):
+\left\{\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,q,t):
 \varepsilon\in\mathcal I_{\mathrm{write}},\
 t_m\in\mathrm{Term}_w,\
 \vec k\in\mathrm{BytesTerm}(n),\
 o\in\mathbb N,\
-t\in\mathrm{Term}_v\right\}.
+q\in\{8,16,32,64\},\ q\le v,\ t\in\mathrm{Term}_v\right\}.
 \]
 
-其中 \(\bigsqcup\) 保留 Map 项位宽 \(w\)、写入源项位宽 \(v\) 和完整键长度 \(n\)；\(\mathcal I_{\mathrm{write}}\) 是动态写入事件身份集合，身份没有机器位宽。\(t_m\) 是 Map 身份的符号项，\(\vec k\) 是完整元素键的符号字节数组，\(o\) 是元素值内部从零开始的起始字节偏移，\(t\) 是写入源值项。\(\mathrm{Term}_w\) 与 \(\mathrm{Term}_v\) 由 [Expr Term](../Expr/Term/Term.md#term)定义；\(\mathrm{BytesTerm}(n)\) 的字节取值集合 \(\mathbb B_8\)、数组顺序与解释由 [Helper 字节项数组](Helper谓词.md#字节项数组)定义。
+其中 \(\bigsqcup\) 保留 Map 项位宽 \(w\)、写入源项位宽 \(v\) 和完整键长度 \(n\)；\(\mathcal I_{\mathrm{write}}\) 是动态写入事件身份集合，身份没有机器位宽。\(t_m\) 是 Map 身份的符号项，\(\vec k\) 是完整元素键的符号字节数组，\(o\) 是元素值内部从零开始的起始字节偏移，\(q\) 是保存的访问位宽，\(t\) 是写入源值项。\(\mathrm{Term}_w\) 与 \(\mathrm{Term}_v\) 由 [Expr Term](../Expr/Term/Term.md#term)定义；\(\mathrm{BytesTerm}(n)\) 的字节取值集合 \(\mathbb B_8\)、数组顺序与解释由 [Helper 字节项数组](Helper谓词.md#字节项数组)定义。
 
 \(t_m\) 与 \(\vec k\) 共同选择 Map 元素，\(o\) 再选择该元素值内部的写入起点。\(o\) 不参与元素键的字节编号。
 
-同一类型中的两个 MapWrite谓词结构相等，当且仅当上述标签和五个构造分量分别结构相等。项的变元身份、运算符与参数均参与结构比较；键数组按其既定顺序逐项比较。
+同一类型中的两个 MapWrite谓词结构相等，当且仅当上述标签和六个构造分量分别结构相等。项的变元身份、运算符与参数均参与结构比较；键数组按其既定顺序逐项比较。
 
 ### 写入宽度与覆盖范围
 
-写入位宽 \(q\in\{8,16,32,64\}\) 是生成接口的显式输入，要求 \(q\le v\)。源项位宽 \(v\) 与实际写入位宽 \(q\) 分别检查。写入字节序 \(e\in\{\mathrm{LE},\mathrm{BE}\}\) 也由生成接口显式接收。
+写入位宽 \(q\in\{8,16,32,64\}\) 是生成接口的显式输入及保存的构造分量，要求 \(q\le v\)。源项位宽 \(v\) 与实际写入位宽 \(q\) 分别检查。RV32IMC 与 eBPF XDP 的写入字节序按定义固定为 \(e=\mathrm{LE}\)。
 
 \[
 \operatorname{mapWriteRange}(o,q)
@@ -48,18 +48,18 @@ t_{\mathrm{hi}}:=\operatorname{star}_{32}(\operatorname{extract}(32,32,64),[t]).
 
 ### 写入事件的解释
 
-令 \(p=\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,t)\)，其中 \(t\in\mathrm{Term}_v\)。解释显式接收写入位宽 \(q\)、字节序 \(e\)、变元赋值族 \(\nu\) 与未解释运算补全 \(\theta\)：
+令 \(p=\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,q,t)\)，其中 \(t\in\mathrm{Term}_v\)。解释读取保存的访问位宽 \(q\)，字节序使用上述固定小端约定；外部参数为变元赋值族 \(\nu\) 与未解释运算补全 \(\theta\)：
 
 \[
-\left[\!\left[p\right]\!\right]_{q,e,\nu,\theta}
+\left[\!\left[p\right]\!\right]_{\nu,\theta}
 :=\left(\mathsf{mapWrite},\varepsilon,
 \left[\!\left[t_m\right]\!\right]_{\nu,\theta},
 \left[\!\left[\vec k\right]\!\right]_{\nu,\theta},o,
-\left(\widehat D_{q/8,j,e,v}
+\left(\widehat D_{q/8,j,\mathrm{LE},v}
 \left(\left[\!\left[t\right]\!\right]_{\nu,\theta}\right)\right)_{j=0}^{q/8-1}\right).
 \]
 
-其中 \(\mathsf{mapWrite}\) 是事件类别标签，\(\varepsilon\) 是写入事件身份，\(t_m\) 与 \(\vec k\) 分别解释为 Map 值标识与完整键字节数组，\(o\) 给出首个目标字节；\(\widehat D_{q/8,j,e,v}\) 是 [Expr 写入拆分](../Expr/寄存器/包字节.md#读取拼接与写入拆分)拥有的第 \(j\) 个字节提取函数，最后一个分量按目标地址递增顺序记录 \(q/8\) 个写入字节。\(\nu\) 与 \(\theta\) 的类型及项解释见 [Expr 项的解释](../Expr/Term/Term.md#项的解释)与[解释补全](../Expr/Term/Term.md#未解释运算的解释补全)。解释的定义域沿用上述 \(q,e,v\) 条件。
+其中 \(\mathsf{mapWrite}\) 是事件类别标签，\(\varepsilon\) 是写入事件身份，\(t_m\) 与 \(\vec k\) 分别解释为 Map 值标识与完整键字节数组，\(o\) 给出首个目标字节；\(\widehat D_{q/8,j,\mathrm{LE},v}\) 是 [Expr 写入拆分](../Expr/寄存器/包字节.md#读取拼接与写入拆分)拥有的第 \(j\) 个小端字节提取函数，最后一个分量按目标地址递增顺序记录 \(q/8\) 个写入字节。\(\nu\) 与 \(\theta\) 的类型及项解释见 [Expr 项的解释](../Expr/Term/Term.md#项的解释)与[解释补全](../Expr/Term/Term.md#未解释运算的解释补全)。解释的定义域沿用上述 \(q,v\) 条件。
 
 ## 触发逻辑
 
@@ -77,14 +77,14 @@ Map 来源已确定的普通 `ST`、`STX` 写入按指令大小字段取得机�
 
 ## 生成条件
 
-生成输入包括本次事件身份 \(\varepsilon\)、执行前 Expr 关系 \(E_g\)、已解码指令 \(i\)，以及显式的 \(q,e,B,n_k,n_v,t_m,\vec k,o,t\)。其中 \(B\in\mathscr F(\mathbb N)\) 是候选覆盖范围，\(\mathscr F\) 是有限子集族；\(n_k,n_v\in\mathbb N\) 分别是目标 Map 布局的完整键字节数与元素值字节数。其余输入的类型见[类型定义](#类型定义)。所有来源校验均使用当前指令写入前的 \(E_g\) 与指令操作数。
+生成输入包括本次事件身份 \(\varepsilon\)、执行前 Expr 关系 \(E_g\)、已解码指令 \(i\)，以及显式的 \(q,B,n_k,n_v,t_m,\vec k,o,t\)。其中 \(B\in\mathscr F(\mathbb N)\) 是候选覆盖范围，\(\mathscr F\) 是有限子集族；\(n_k,n_v\in\mathbb N\) 分别是目标 Map 布局的完整键字节数与元素值字节数。其余输入的类型见[类型定义](#类型定义)。所有来源校验均使用当前指令写入前的 \(E_g\) 与指令操作数。
 
 成功构造要求：
 
 - \(E_g\) 有效，指令参数合法。
 - 地址源寄存器的项与指令偏移唯一确定此次访问的 Map 对象、元素及内部偏移，候选 \(t_m,\vec k,o\) 与该访问对象及[生成分解规则](#写入宽度与覆盖范围)确定的本次观察偏移一致。
 - \(n_k,n_v\) 与该对象的布局一致，且 \(\vec k\in\mathrm{BytesTerm}(n_k)\)。
-- \(q\) 与指令宽度字段及[生成分解规则](#写入宽度与覆盖范围)确定的本次观察宽度一致，\(e\) 与访问形式的字节序一致。
+- \(q\) 与指令宽度字段及[生成分解规则](#写入宽度与覆盖范围)确定的本次观察宽度一致，访问采用固定小端字节序。
 - \(t\) 是按[触发逻辑](#触发逻辑)从同一执行前关系取得的本次观察源项；分解调用使用完整源项的对应 32 位半部。
 - \(B=\operatorname{mapWriteRange}(o,q)\)，且 \(o+q/8\le n_v\)。
 - \(B\) 中各字节在 Map 值布局中的规范单元及字段唯一确定；跨单元访问具有既定的分段和组合规则。
@@ -94,11 +94,11 @@ Map 来源已确定的普通 `ST`、`STX` 写入按指令大小字段取得机�
 
 \[
 \operatorname{makeMapWritePredicate}
-(\varepsilon,E_g,i,q,e,B,n_k,n_v,t_m,\vec k,o,t)
-:=\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,t).
+(\varepsilon,E_g,i,q,B,n_k,n_v,t_m,\vec k,o,t)
+:=\operatorname{mapWrite}(\varepsilon,t_m,\vec k,o,q,t).
 \]
 
-其中 \(\operatorname{makeMapWritePredicate}\) 是上述定义域上的部分构造；\(\varepsilon,E_g,i\) 指定事件及取源语境，\(q,e,B,n_k,n_v\) 指定访问及布局检查输入，\(t_m,\vec k,o,t\) 是通过这些检查的五分量构造中的四个值分量。
+其中 \(\operatorname{makeMapWritePredicate}\) 是上述定义域上的部分构造；\(\varepsilon,E_g,i\) 指定事件及取源语境，\(q,B,n_k,n_v\) 指定访问及布局检查输入，结果保存 \(\varepsilon,t_m,\vec k,o,q,t\) 六个构造分量。
 
 \[
 P_i:=\{\operatorname{makeMapWritePredicate}(c):c\in C_i\}.
@@ -110,7 +110,7 @@ P_i:=\{\operatorname{makeMapWritePredicate}(c):c\in C_i\}.
 
 写入所用 Map 值引用若来自先前的 MapLookup，地址源寄存器的项须依 [Expr lookup 返回关联](Helper谓词.md#生成的-expr)确定它的引用来源。\(t_m\) 使用该来源对应的 Map 参数项；\(\vec k\) 复用 [MapLookup 观察](MapLookup谓词.md)在查询时保存的完整符号键。写入时不重新读取查询使用的原始键指针所指向的当前字节。
 
-两侧 lookup 的完整符号键均按[调用时的字节读取](Helper谓词.md#调用时的字节读取)冻结：Packet 键缓冲区可保存由 `inputByte` 物化的字节；Stack、Map、Context 键缓冲区仍须已有完整等式。产品 RV32IMC step 在 Meta `maps` 布局确定且完整缓冲区读取成功时，于 lookup 的 helper `args` 尾部直接保存 Term32 冻结键，MapWrite 再按 lookup 事件身份取回该数组。原生 eBPF 的 lookup 尾部保持 Term64；MapWrite 复用同次 lookup 冻结的键值，以规格规定的 Term32 键字节承载。闭字节折叠为 `C32 (c % 256)`；符号字节从冻结的 64 位零扩展项中取回原有的 32 位八位提取项，不重新读取当前键缓冲区。该来源规则不是 MW-O2 的证明，键值与载体转换的解释保持仍归 [CP-Bytes](跨架构谓词.md#待证明义务)。栈地址项保留复制产生的恒等包裹时，按[根与常数偏移的识别](../Expr/Term/solve.md#设计目标)该包裹不改变识别所得的根与常数偏移，冻结仍取到同一栈单元。冻结字节的取源可靠性、别名传播、空返回与失效引用的完备性仍列为 [MW-O2](#证明义务)，不能只凭 Map 编号、指针数值或返回寄存器变元判定该依赖已经满足。
+两侧 lookup 的完整符号键均按[调用时的字节读取](Helper谓词.md#调用时的字节读取)冻结：Packet 键缓冲区可保存由 `inputByte` 物化的字节；Stack、Map、Context 键缓冲区仍须已有完整等式。产品 RV32IMC step 在 Meta `maps` 布局确定且完整缓冲区读取成功时，于 lookup 的 helper `args` 尾部直接保存 Term32 冻结键，MapWrite 再按 lookup 事件身份取回该数组。原生 eBPF 的 lookup 尾部保持 Term64；MapWrite 复用同次 lookup 冻结的键值，以规格规定的 Term32 键字节承载。闭字节折叠为 `C32 (c % 256)`；符号字节从冻结的 64 位零扩展项中取回原有的 32 位八位提取项，其余开放字节取保存项的低八位。结构定理由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)维护。栈地址项保留复制产生的恒等包裹时，按[根与常数偏移的识别](../Expr/Term/solve.md#设计目标)该包裹不改变识别所得的根与常数偏移，冻结仍取到同一栈单元。地址原像上的事件与保存列表的联系由 [MW-O2](#证明义务)闭合。
 
 ### 错误类型
 
@@ -120,7 +120,7 @@ P_i:=\{\operatorname{makeMapWritePredicate}(c):c\in C_i\}.
 - 地址源寄存器的项与指令偏移不能唯一确定 Map 对象、元素或偏移；空 lookup 返回也不提供有效值引用。
 - 来自 lookup 的引用来源不能确定，或该来源保存的完整键无法取得。
 - 候选键长度与布局不符，或字节项不满足共享字节类型。
-- 候选宽度、字节序、覆盖范围或布局大小与指令宽度字段、生成分解规则、访问形式或对象布局不符。
+- 候选宽度、覆盖范围或布局大小与指令宽度字段、生成分解规则或对象布局不符，或访问形式与固定小端约定不符。
 - 覆盖越过元素值边界，或跨单元分段和组合规则缺失。
 - 所需访问有效性、权限或对齐条件不能成立。
 
@@ -132,7 +132,7 @@ P_i:=\{\operatorname{makeMapWritePredicate}(c):c\in C_i\}.
 
 **命题 MW1（构造唯一性）。** 固定一次构造调用的全部生成输入，且输入属于上述定义域时，生成的 MapWrite谓词唯一，该次调用贡献单元素有限集合。
 
-**证明。** 部分构造直接保存输入的五个分量，未在构造内部选择其他项或事件身份。其结果确定，每次调用贡献的集合只有该元素；机器写入的增量按各次调用结果汇集。\(\square\)
+**证明。** 部分构造直接保存输入的六个分量，未在构造内部选择其他项或事件身份。其结果确定，每次调用贡献的集合只有该元素；机器写入的增量按各次调用结果汇集。\(\square\)
 
 **命题 MW2（范围由宽度确定）。** 对 \(o\in\mathbb N\) 与 \(q\in\{8,16,32,64\}\)，覆盖范围包含恰好 \(q/8\) 个连续字节偏移。在生成条件的布局界限下，这些偏移均位于元素值内部。
 
@@ -146,34 +146,34 @@ P_i:=\{\operatorname{makeMapWritePredicate}(c):c\in C_i\}.
 
 [Expr 按键覆写](../Expr/Expr.md#赋值覆盖全部旧关系)中的键是 Expr 左值。写入一个 Map 值规范单元时，该单元左值的旧完整值关系与旧比较关系被删除，再写入新关系。若实际覆盖的是保存查询键字节的缓冲区单元，同样删除被写左值的旧关系；这与已经保存在 MapWrite 中的元素键数组是不同对象。
 
-**命题 MW4（固定观察不受 Expr 按键删除）。** 给定已经构造的 MapWrite谓词 \(p\)，对 Expr 分量施行其既定按键覆写，不会对 \(p\) 执行删除，也不会改变它的构造分量。在固定 \(q,e,\nu,\theta\) 下，\(p\) 的解释保持不变。
+**命题 MW4（固定观察不受 Expr 按键删除）。** 给定已经构造的 MapWrite谓词 \(p\)，对 Expr 分量施行其既定按键覆写，不会对 \(p\) 执行删除，也不会改变它的构造分量。在固定 \(\nu,\theta\) 下，\(p\) 的解释保持不变。
 
-**证明。** Expr 更新的输入与输出仅为 Expr 分量；过滤条件针对其关系的左值，MapWrite 不在该函数的定义域内。\(p\) 保存固定的项与键数组，不读取后来改变的真实寄存器或键缓冲区。其解释仅使用保存的分量及给定的 \(q,e,\nu,\theta\)，故结果不变。\(\square\)
+**证明。** Expr 更新的输入与输出仅为 Expr 分量；过滤条件针对其关系的左值，MapWrite 不在该函数的定义域内。\(p\) 保存固定的项、键数组及访问位宽，不读取后来改变的真实寄存器或键缓冲区。其解释仅使用保存的分量、固定小端约定及给定的 \(\nu,\theta\)，故结果不变。\(\square\)
 
 这个结论限于 Expr 更新对固定对象的作用。MapWrite 在全状态中按[结构并集](谓词定义.md#结构并集)保留；其与真实写入及历史的对应仍需满足下列义务。
 
 ### 跨架构变更观察与生成缺口
 
-M6 的直接写入与完整 Helper 更新、删除使用[统一 CrossMutation](跨架构谓词.md#条件与各类观察)。写入字节按[观察规范化](跨架构谓词.md#观察规范化)从冻结源项和本条观察的生成宽度、字节序取得；缺少访问元数据时保留 `source`。MW-O1 至 MW-O3 与跨架构 CP-Bytes 共同约束这些来源。
+M6 的直接写入与完整 Helper 更新、删除使用[统一 CrossMutation](跨架构谓词.md#条件与各类观察)。写入字节按[观察规范化](跨架构谓词.md#观察规范化)从冻结源项和保存的访问位宽取得，字节序固定为小端。谓词提供宽度时，比较结果与环境备用宽度无关；定理见 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)。
 
-两侧 lookup 的冻结键可含 Packet 键缓冲区中由 `inputByte` 物化的字节，这是[调用时的字节读取](Helper谓词.md#调用时的字节读取)的一般取源情形。MapWrite 仍只复用 lookup 保存的数组，取源可靠性归 [MW-O2](#证明义务)，键值与字节序的跨侧对应归 [CP-Bytes](跨架构谓词.md#待证明义务)。
+两侧 lookup 的冻结键可含 Packet 键缓冲区中由 `inputByte` 物化的字节，这是[调用时的字节读取](Helper谓词.md#调用时的字节读取)的一般取源情形。MapWrite 复用保存列表的事件来源由 [MW-O2](#证明义务)闭合，冻结字节的结构性质由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)闭合。
 
 原生 eBPF `just_tx` 在非空 lookup 后继执行 Map 元素写入：原始槽 38 的双字读取取得 `r0` 指向元素的值，槽 39 对 `r1` 加一，槽 40 的 `STX DW` 将该值写回元素。未确定的 lookup-null 条件保留两侧，产品 Meta 提供 Map 布局；完整前沿的有限检查要求同一节点保存 Map 项为 `1077412584`、同一写入事件与非空冻结键的两条 MapWrite，偏移分别为 0、4，源项载体均为 32 位，且两条观察各自良构并通过 wire 结构回读。
 
-工程对应：[程序槽数据](../../EBPF/JustTxProgram.lean)、[Step 的取源与调用](../../EBPF/Step.lean)、[Expand 的产品 Meta 与完整前沿检查](../../EBPF/Expand.lean)以及[Memory 的写入分派](../../EBPF/Memory.lean)。`resolveAccess` 将该元素解析为 Map 双字单元，`exprEffects` 的 `.cells` 分支在 Map 单元写入成功时，按地址引用的 lookup 事件身份从执行前谓词取回完整冻结键值，转换为 Term32 键字节。槽 40 的 DW 写入依[生成分解规则](#写入宽度与覆盖范围)提交低半、高半两条 MapWrite，两条复用同一冻结键，Expr 更新仍写入完整源项；1、2、4 字节写入保持一条观察。布局须匹配，冻结键须非空且长度等于 `keySize`，访问须满足非负偏移、元素值范围及不跨 8 字节单元；缺少生成前提或可用的键字节转换时拒绝 `UndefinedSrc`。该生成规则的冻结来源仍须满足 [MW-O2](#证明义务)，两侧冻结键值的对应仍归 [CP-Bytes](跨架构谓词.md#待证明义务)；规范化只处理已生成的观察。
+工程对应：[程序槽数据](../../EBPF/JustTxProgram.lean)、[Step 的取源与调用](../../EBPF/Step.lean)、[Expand 的产品 Meta 与完整前沿检查](../../EBPF/Expand.lean)以及[Memory 的写入分派](../../EBPF/Memory.lean)。`resolveAccess` 将该元素解析为 Map 双字单元，`exprEffects` 的 `.cells` 分支在 Map 单元写入成功时，按地址引用的 lookup 事件身份从执行前谓词取回完整冻结键值，转换为 Term32 键字节。槽 40 的 DW 写入依[生成分解规则](#写入宽度与覆盖范围)提交低半、高半两条 MapWrite，两条均保存 32 位访问宽度并复用同一冻结键，Expr 更新仍写入完整源项；1、2、4 字节写入保持一条观察。布局须匹配，冻结键须非空且长度等于 `keySize`，访问须满足非负偏移、元素值范围及不跨 8 字节单元；缺少生成前提或可用的键字节转换时拒绝 `UndefinedSrc`。保存列表的事件来源定理见 [MW-O2](#证明义务)；规范化处理已生成的观察，字节结构定理见 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)。
 
-2026-10-14 20:20 的 `/tmp/compare-just-tx.json` 中，两侧冻结键在常元键实例上均为四个零字节；符号键实例则复用同一 Map 项 `1077412584` 与同一组 `extract(0,8)`、`extract(8,8)`、`extract(16,8)`、`extract(24,8)` 切片。符号字节的来源为 `low8(inputByte0(v32:4,add32(v32:4,24)))`；对其拼接与载体转换中的 `or(0,shl(·,0))` 作零恒等剥除后，两侧四个冻结键字节结构相同。该实例的键值对应与来源可靠性仍受 MW-O2 和 [CP-Bytes](跨架构谓词.md#待证明义务)约束。
+2026-10-14 20:20 的历史快照 `/tmp/compare-just-tx.json` 中，两侧冻结键在常元键实例上均为四个零字节；符号键实例则复用同一 Map 项 `1077412584` 与同一组 `extract(0,8)`、`extract(8,8)`、`extract(16,8)`、`extract(24,8)` 切片。符号字节的来源为 `low8(inputByte0(v32:4,add32(v32:4,24)))`；对其拼接与载体转换中的 `or(0,shl(·,0))` 作零恒等剥除后，两侧四个冻结键字节结构相同。一般的保存列表来源由 [MW-O2](#证明义务)给出。
 
 值项中的寄存器名仍有 RV32IMC `real32:10` 与 eBPF `real64:0` 的静态 alpha 差异。该名称对应由跨架构合一替换 `CrossSubst.regs` 处理，不由项规范化擦除；合法重命名与机器值对应仍须具备生成侧依据。
 
 15 个 MapWrite 节点的值项现由[项规范化 R5、R6](跨架构谓词.md#项规范化)闭合规范键。RV32IMC 将 8 字节元素的更新分为偏移 0、4 的两条 32 位观察；eBPF 对一个 64 位值加一，再截取两半。低半覆盖共同 32 位表示的切片由 R5 剥除，高半包含两字来源的进位项由 R6 逐观察规范化。节点 26、34 的现场线对象各有分支及两条写入，有限检查确认两半在 Real 10→0 重命名后 JSON 相等，并经 host 所用合一入口取得唯一完整三对匹配。
 
-上述闭合以 R5 的共同 32 位所表示值前提及 R6 的同元素双字来源、机器进位和逐条四字节访问前提为条件；精确定义由[项规范化](跨架构谓词.md#项规范化)维护。字节对应、值域和宽度的机器解释仍须履行 [CP-Bytes 与 CP-Q](跨架构谓词.md#待证明义务)。R5 保留表示宽度小于 32 的冻结键字节切片，R6 的非单射规范键不替代来源证明；15 个节点的 host 通过数待重测。
+上述规范键相等以 R5 的共同 32 位所表示值前提及 R6 的同元素双字来源、机器进位为条件；精确定义与解释定理由 [CP-Q](跨架构谓词.md#cp-q-已实现规则的解释保持)维护。每条观察保存四字节访问宽度，拆分定义与宽度定理由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)闭合。R5 保留表示宽度小于 32 的冻结键字节切片，R6 的非单射规范键仍使用其来源前提；15 个节点的 host 通过数待重测。
 
 ### 证明义务
 
-- **MW-O1（宽度、字节序与事件身份）。** 五分量构造自身无法表达写入宽度与字节序。须证明每个动态写入身份 \(\varepsilon\) 唯一关联其观察的固有属性 \((q,e)\)，并使生成校验、解释与历史读取采用同一关联。原生 `STX DW` 的[生成分解](#写入宽度与覆盖范围)使一个机器写入的两半共用 \(\varepsilon\)，两条观察均为 \(q=32\) 且字节序相同，故仍须建立同一关联；机器访问宽度 64 由该生成规则处理。\(q\) 仍是生成接口输入，五分量构造无法存储它。同一 Term32 源项用于 `SB` 与 `SW` 时，覆盖范围分别由各自的宽度确定。若该关联无法证明，则构造需增分量，由操作者裁定。
-- **MW-O2（lookup 冻结键与引用来源）。** 依照 [Expr lookup 返回关联](Helper谓词.md#生成的-expr)与[指令结果的前提](../Expr/Expr.md#指令结果的前提)，证明地址源寄存器的值引用到 [MapLookup](MapLookup谓词.md)所保存 \(t_m,\vec k\) 的来源规则。按资源划分的冻结读取定义域见[调用时的字节读取](Helper谓词.md#调用时的字节读取)；仍须证明所保存字节的取源可靠，并证明别名传播、指针偏移和原始缓冲区覆写均保持所引用的查询键，以及空返回与失效引用被拒绝。
+- **MW-O1（保存宽度与事件生成对应）。** 访问位宽 \(q\) 是保存的构造分量，字节序由固定小端定义给出。须证明真实指令与生成器保存的 \(q\)、偏移和动态身份 \(\varepsilon\) 对应。原生 `STX DW` 的[生成分解](#写入宽度与覆盖范围)使一个机器写入的两半共用 \(\varepsilon\)，每条观察保存 \(q=32\)；机器访问宽度 64 与该有序分解的对应仍需生成侧证明。规范化取得保存宽度和相应字节数的结论由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)闭合。
+- **MW-O2（lookup 冻结键与引用来源，已闭合）。** [RV32IMC/Expr.lean](../../RV32IMC/Expr.lean) 的 `lookupAddress_const`、`lookupAddress_ne_zero` 与 [EBPF/Memory.lean](../../EBPF/Memory.lean) 的 `lookupAddress64_const`、`lookupAddress64_ne_zero` 证明任意常元地址均不能解析为 Map 访问地址，解析成功的源项不等于常元 0。[RV32IMC/Expand.lean](../../RV32IMC/Expand.lean) 的 `mapWriteObservation_frozen` 结合 `mapElementAccess_preimage` 证明生成成功时，地址原像的 lookup 事件在 \(P_g\) 中具有保存同一 Map 项及返回键列表的 lookup 观察。[EBPF/Memory.lean](../../EBPF/Memory.lean) 的同名定理证明该事件的 lookup 保存原始尾列表，返回键恰为该列表经 `mapWriteKeyByte` 的逐项像；每项的低八位结构沿用 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)。[ClassifierExpr/Insn.lean](../../ClassifierExpr/Insn.lean) 的 `lookupKeyAt_tie`、`lookupKeyAt_deterministic`、`lookupKeyAt_expr_update` 和 eBPF 的 `mapWriteKeyAt_deterministic`、`mapWriteKeyAt_expr_update` 证明键只由观察列表与该事件决定，后续 Expr 更新及缓冲区覆写保持该键；`mapWrite_saved_key`、`savedMapKey_expr_update` 证明已构造的观察保留保存列表。别名和指针偏移通过地址原像事件使用同一保存列表，其见证见 [CP-Reg](跨架构谓词.md#cp-reg-查询事件与元素槽)。生成条件保持原有规则，不另要求 lookup-null 分支检查，`just_tx` 写入继续适用。
 - **MW-O3（机器写入与布局兼容）。** 证明各架构触发指令取得的 \(t_m,\vec k,o,t,q,e,B,n_k,n_v\) 符合生成定义域，且字节拆分与实际写入一致。须覆盖权限、对齐、有效范围、规范单元分段、重叠访问与别名一致性；仅有范围界限不能证明这些性质。
 - **MW-O4（Expr 删除与键关系的含义）。** 已有覆写规则只按实际写入的 Expr 左值删除关系。若“删除一个 key 关系”意指另一种按 Map 元素键删除关联的操作，须先在 [Expr](../Expr/Expr.md#关系集合按键覆写)确定其关系类型、删除条件与作用范围，再证明该操作保留已经固定的 MapWrite 观察；现有按左值覆写不推出这种额外删除。
 - **MW-O5（观察累积与历史对应）。** 按[统一谓词域与混合累积](谓词定义.md#观察集合累积与可满足性)及 [History 状态组合](../NodeInference/History.md#状态组合的定义域)保存 MapWrite 增量，证明具体记录与成功写入的 Expr 和观察对应。证明历史保留所需事件顺序及 MW-O1 的属性。还须按 [History 完整依赖提取](../NodeInference/History.md#完整依赖提取)处理 Map 身份、冻结键与值项的依赖。

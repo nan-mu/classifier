@@ -36,6 +36,9 @@ inductive Op where
   /-- Byte in a resource's immutable input image; eval has no concrete image. -/
   | inputByte (resource : Nat)
   | mergeLow (q wbits : Nat)
+  /-- Value-preserving packet-read annotation. Remaining arguments encode the
+checked compound register; they are constants, not extra memory reads. -/
+  | packetRead (bytes endCtx : Nat)
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr
 
 /-- Constructor order and every raw semantic parameter, without carrier erasure. -/
@@ -53,6 +56,7 @@ def Op.orderKey : Op → List Nat
   | .zext q w v => [23, q, w.bits, v] | .sext q w v => [24, q, w.bits, v]
   | .bswap q v => [25, q, v] | .externalResult e l => [26, e, l]
   | .inputByte r => [27, r] | .mergeLow q v => [28, q, v]
+  | .packetRead bytes ending => [29, bytes, ending]
 
 /-- The shared authority for output carriers, input carriers and operator parameters. -/
 def Op.validSignature (op : Op) (output : Width) (inputs : List Width) : Bool :=
@@ -77,6 +81,8 @@ def Op.validSignature (op : Op) (output : Width) (inputs : List Width) : Bool :=
   | .inputByte _ => output == .w32 && match inputs with
     | [base, address] => base == address
     | _ => false
+  | .packetRead bytes _ => output == .w32 && [1, 2, 4, 8].contains bytes &&
+      !inputs.isEmpty && inputs.all (· == .w32)
 
 def interpretOp (op : Op) (args : List Nat) : Option Nat :=
   match op, args with
@@ -107,6 +113,7 @@ def interpretOp (op : Op) (args : List Nat) : Option Nat :=
   | .sext q w v, [a] => some (S q w v a)
   | .bswap q v, [a] => some (BSWAP q v a)
   | .mergeLow q wbits, [old, src] => some (mergeLow q wbits old src)
+  | .packetRead _ _, value :: _ => some value
   | _, _ => none
 
 end ClassifierExpr

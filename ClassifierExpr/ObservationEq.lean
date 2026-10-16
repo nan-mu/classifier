@@ -94,7 +94,8 @@ def rename (σ : CrossSubst) : CrossPred → CrossPred
   | .branch b => .branch { b with cond := applyCond σ b.cond }
   | .ret r => .ret ⟨applyTerm σ r.payload⟩
   | .mapWrite m => .mapWrite (applyMutation σ m)
-  | .packetWrite p => .packetWrite { p with value := applyValue σ p.value }
+  | .packetWrite p => .packetWrite
+      { p with offset := applyTerm σ p.offset, value := applyValue σ p.value }
 
 mutual
   def mergeList (σ : CrossSubst) : List CrossTerm → List CrossTerm → Option CrossSubst
@@ -153,9 +154,10 @@ def mergePred (σ : CrossSubst) : CrossPred → CrossPred → Option CrossSubst
   | .branch a, .branch b => if a.dir == b.dir then mergeCond σ a.cond b.cond else none
   | .ret a, .ret b => mergeTerm σ a.payload b.payload
   | .mapWrite a, .mapWrite b => mergeMutation σ a b
-  | .packetWrite a, .packetWrite b =>
-    if a.packet == b.packet && a.offset == b.offset then mergeValue σ a.value b.value
-    else none
+  | .packetWrite a, .packetWrite b => do
+    if a.packet != b.packet then none else
+      let σ ← mergeTerm σ a.offset b.offset
+      mergeValue σ a.value b.value
   | _, _ => none
 
 mutual
@@ -631,14 +633,22 @@ theorem mergePred_spec (σ τ : CrossSubst) (a b : CrossPred)
     obtain ⟨he, hj, ht⟩ := mergeMutation_spec σ τ a b hi h
     exact ⟨he, hj, fun υ he' hj' => by simp only [rename, ht υ he' hj']⟩
   case packetWrite.packetWrite a b =>
+    simp only [Option.bind_eq_bind] at h
     split at h
+    · simp at h
     · rename_i hp
-      obtain ⟨hp, ho⟩ : a.packet = b.packet ∧ a.offset = b.offset := by simpa using hp
-      obtain ⟨he, hj, ht⟩ := mergeValue_spec σ τ a.value b.value hi h
-      refine ⟨he, hj, fun υ he' hj' => ?_⟩
-      have ht := ht υ he' hj'
-      cases a; cases b; simp_all only [rename]
-    · contradiction
+      have hp : a.packet = b.packet := by simpa using hp
+      cases ho : mergeTerm σ a.offset b.offset with
+      | none => simp [ho] at h
+      | some σ₁ =>
+        simp only [ho, Option.bind_some] at h
+        obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a.offset b.offset hi ho
+        obtain ⟨he₂, hi₂, ht₂⟩ := mergeValue_spec σ₁ τ a.value b.value hi₁ h
+        refine ⟨extends_trans he₁ he₂, hi₂, fun υ he₃ hi₃ => ?_⟩
+        have ho' := (determined_extends (extends_trans he₂ he₃)
+          hi₁ hi₃ a.offset hd₁).2.trans ht₁
+        have hv' := ht₂ υ he₃ hi₃
+        cases a; cases b; simp_all only [rename]
 
 private theorem filtered_lookup_getD {α κ δ : Type}
     [BEq κ] [LawfulBEq κ] [BEq δ] [LawfulBEq δ]
@@ -726,7 +736,7 @@ def DeterminedPred (σ : CrossSubst) : CrossPred → Prop
   | .branch b => DeterminedCond σ b.cond
   | .ret r => Determined σ r.payload
   | .mapWrite m => DeterminedMutation σ m
-  | .packetWrite p => DeterminedValue σ p.value
+  | .packetWrite p => Determined σ p.offset ∧ DeterminedValue σ p.value
 
 theorem determinedPred_extends {σ τ : CrossSubst} (he : Extends σ τ)
     (hi : Injective σ) (hj : Injective τ) (p : CrossPred)
@@ -752,7 +762,7 @@ theorem determinedPred_extends {σ τ : CrossSubst} (he : Extends σ τ)
   | branch b => exact hc b.cond hd
   | ret r => exact ht r.payload hd
   | mapWrite m => exact hm m hd
-  | packetWrite p => exact hv p.value hd
+  | packetWrite p => exact ⟨ht p.offset hd.1, hv p.value hd.2⟩
 
 private theorem mergeValue_determined (σ τ : CrossSubst) (a b : CrossValue)
     (hi : Injective σ) (h : mergeValue σ a b = some τ) :
@@ -846,9 +856,17 @@ theorem mergePred_determined (σ τ : CrossSubst) (a b : CrossPred)
   case ret.ret a b => exact (mergeTerm_spec σ τ a.payload b.payload hi h).2.2.1
   case mapWrite.mapWrite a b => exact mergeMutation_determined σ τ a b hi h
   case packetWrite.packetWrite a b =>
+    simp only [Option.bind_eq_bind] at h
     split at h
-    · exact mergeValue_determined σ τ a.value b.value hi h
-    · contradiction
+    · simp at h
+    · cases ho : mergeTerm σ a.offset b.offset with
+      | none => simp [ho] at h
+      | some σ₁ =>
+        simp only [ho, Option.bind_some] at h
+        obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a.offset b.offset hi ho
+        obtain ⟨he₂, hi₂, _⟩ := mergeValue_spec σ₁ τ a.value b.value hi₁ h
+        exact ⟨(determined_extends he₂ hi₁ hi₂ a.offset hd₁).1,
+          mergeValue_determined σ₁ τ a.value b.value hi₁ h⟩
 
 /-! Theorems discharge the local merge and identity-stripping obligations.
 Malformed input substitutions still invalidate unconditional injectivity
@@ -1386,6 +1404,9 @@ private def parseRegClass : Nat → Option RegKind
 private def parseCrossOp (name : String) (params : List Nat) : Option CrossOp :=
   match name, params with
   | "add", [] => some .add | "sub", [] => some .sub | "mullo", [] => some .mullo
+  | "linear", [] => some .linear
+  | "packetReg", [bytes] => if [1, 2, 4, 8].contains bytes then some (.packetReg bytes) else none
+  | "packetRead", [bytes, ending] => some (.packetRead bytes ending)
   | "neg", [] => some .neg | "id", [] => some .id | "shl", [] => some .shl
   | "lshr", [] => some .lshr | "ashr", [] => some .ashr
   | "ltu", [] => some .ltu | "lts", [] => some .lts
@@ -1516,8 +1537,12 @@ def parseCrossPredJson (j : Lean.Json) : Option CrossPred := do
     if !exactFields j ["kind", "mutation"] then none
     pure (.mapWrite (← field j "mutation" >>= parseCrossMutationJson))
   | "packetWrite" =>
-    if !exactFields j ["kind", "packet", "offset", "value"] then none
-    pure (.packetWrite ⟨← natField j "packet", ← natField j "offset",
+    let symbolic := (field j "offsetTerm").isSome
+    let fields := ["kind", "packet", if symbolic then "offsetTerm" else "offset", "value"]
+    if !exactFields j fields then none
+    let offset ← if symbolic then termField j "offsetTerm"
+      else do pure (.c (← natField j "offset"))
+    pure (.packetWrite ⟨← natField j "packet", offset,
       ← field j "value" >>= parseCrossValueJson⟩)
   | _ => none
 

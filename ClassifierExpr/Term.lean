@@ -158,7 +158,12 @@ mutual
   def Term.orderKey : Term → List Nat
     | .const w c => [w.bits + 1, 1, c + 1]
     | .var w n => [w.bits + 1, 2, n + 1]
-    | .regVar event r => [r.width.bits + 1, 3, event + 1, regKindCode r.kind + 1, r.alpha + 1]
+    | .regVar event r =>
+      [r.width.bits + 1, 3, event + 1, regKindCode r.kind + 1, r.alpha + 1] ++
+        (match r.compound with
+        | none => [0]
+        | some p => [1, p.κ, p.bytes, p.endCtx, if p.strict then 1 else 0,
+            p.byteIndex, p.offset.orderKey.length] ++ p.offset.orderKey ++ p.checkedEnd.orderKey)
     | .app w op args =>
       [w.bits + 1, 4] ++ op.orderKey.map (· + 1) ++ [0] ++ termOrderKeys args ++ [0]
   termination_by t => sizeOf t

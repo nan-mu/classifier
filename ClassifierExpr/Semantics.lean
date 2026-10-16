@@ -30,6 +30,13 @@ private theorem interpretWith_total (θ : ExternalInterpretation) (hθ : θ.Tota
         cases values with
         | nil => simpa [interpretWith] using hθ.2 resource base address
         | cons extra values => simp at hv
+  case packetRead bytes ending =>
+    cases values with
+    | nil =>
+      cases widths with
+      | nil => simp [Op.validSignature] at hs
+      | cons width rest => simp at hl
+    | cons value rest => exact ⟨value, rfl⟩
   all_goals
     cases values with
     | nil => simp_all [Op.validSignature]

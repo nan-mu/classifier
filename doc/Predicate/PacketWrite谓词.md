@@ -2,33 +2,52 @@
 
 ## 类型定义
 
-PacketWrite谓词记录一次实际包存储的动态事件、包资源、起始字节偏移及写入前取得的完整源值项。其类型为：
+PacketWrite谓词记录一次实际包存储的动态事件、包资源、目的地址、访问位宽及写入前取得的完整源值项。常量地址分支的类型为：
 
 \[
-\mathrm{PacketWrite}
+\mathrm{PacketWrite}_{\mathrm{const}}
 :=\bigsqcup_{w\in\{32,64\}}
-\{\operatorname{packetWrite}(\varepsilon,\kappa,o,t):
+\{\operatorname{packetWrite}(\varepsilon,\kappa,o,q,t):
 \varepsilon\in\mathcal I_{\mathrm{write}},\ \kappa\in\mathcal K,
-\ o\in\mathbb N,\ t\in\mathrm{Term}_w\}.
+\ o\in\mathbb N,\ q\in\{8,16,32,64\},\ q\le w,\ t\in\mathrm{Term}_w\}.
 \]
 
-其中 \(\bigsqcup\) 保留项位宽标签，\(w\) 为源项的完整位宽，\(\mathrm{Term}_w\) 为 [Expr 的有限符号项类型](../Expr/Term/Term.md#有限项与类型)。\(\mathcal I_{\mathrm{write}}\) 为动态包写入事件身份集合，\(\varepsilon\) 标识本次写入；同一路径的不同次实际存储使用不同身份，循环中再次执行同一指令也须区分。\(\mathcal K\) 为[包资源身份集合](../寄存器定义.md)，\(\kappa\) 为既有包资源身份。\(o\in\mathbb N\) 是相对包起点的字节偏移，可以为零；\(t\) 为构造时保存的完整源值项。事件身份与包资源身份均无机器位宽。
+其中 \(\bigsqcup\) 保留项位宽标签，\(w\) 为源项的完整位宽，\(\mathrm{Term}_w\) 为 [Expr 的有限符号项类型](../Expr/Term/Term.md#有限项与类型)。\(\mathcal I_{\mathrm{write}}\) 为动态包写入事件身份集合，\(\varepsilon\) 标识本次写入；同一路径的不同次实际存储使用不同身份，循环中再次执行同一指令也须区分。\(\mathcal K\) 为[包资源身份集合](../寄存器定义.md)，\(\kappa\) 为既有包资源身份。\(o\in\mathbb N\) 是相对包起点的字节偏移，可以为零；\(q\) 是保存的访问位宽，\(t\) 为构造时保存的完整源值项。事件身份与包资源身份均无机器位宽。RV32IMC 与 eBPF XDP 的写入字节序按定义固定为小端。
 
 访问采用[寄存器定义的 Packet 规范字节单元](../寄存器定义.md)：\(\operatorname{Packet}(\kappa,o)\) 承载一个字节，使用 32 位完整项且高 24 位为零。PacketWrite 只有起始字节偏移这一偏移分量，没有 Map key 或元素内偏移。源项位宽与单个包字节的承载位宽分别属于不同对象。
 
-PacketWrite谓词结构相等，当且仅当动态事件身份、包资源身份、起始偏移、源项位宽及源项结构分别相同。项的运算符、参数与变元身份参与结构比较。
+PacketWrite谓词结构相等，当且仅当动态事件身份、包资源身份、起始偏移、访问位宽、源项位宽及源项结构分别相同。项的运算符、参数与变元身份参与结构比较。
+
+令 \(\mathcal P_0\) 为[复合包记录](跨架构谓词.md#项与关系)中访问内下标为零的子集。完整谓词域还包含复合地址分支：
+
+\[
+\mathrm{PacketWrite}:=\mathrm{PacketWrite}_{\mathrm{const}}\sqcup
+\bigsqcup_{w\in\{32,64\}}\{\operatorname{packetWriteCompound}(\varepsilon,p,q,t):
+\varepsilon\in\mathcal I_{\mathrm{write}},\ p\in\mathcal P_0,\ q=8p.\mathrm{bytes}\le w,\ t\in\mathrm{Term}_w\}.
+\]
+
+该分支保存整次访问的 \(p\) 及访问位宽 \(q\)，包身份为 \(p.\kappa\)，各目的字节为 `Reg.compoundPacket {p with byteIndex := j}`。Lean 以 `Predicate.packetWrite ε p.κ 0 q t (some p)` 表示此分支，并检查 `q == 8 * p.bytes`；常量分支的最后一项为 `none`。两个分支及复合记录的全部分量参与结构相等。
 
 ### 写入事件的解释
 
 \[
-\left[\!\left[\operatorname{packetWrite}(\varepsilon,\kappa,o,t)\right]\!\right]_{\nu,\theta}
-:=\bigl(\mathsf{packetWrite},\varepsilon,\kappa,o,w,
+\left[\!\left[\operatorname{packetWrite}(\varepsilon,\kappa,o,q,t)\right]\!\right]_{\nu,\theta}
+:=\bigl(\mathsf{packetWrite},\varepsilon,\kappa,o,q,w,
 \left[\!\left[t\right]\!\right]_{\nu,\theta}\bigr).
 \]
 
-其中 \(\mathsf{packetWrite}\) 为包写入观察的类别标签，\(\varepsilon\)、\(\kappa\)、\(o\) 为构造保存的事件身份、资源身份与起始字节偏移，\(t\in\mathrm{Term}_w\)。\(\nu\) 为各位宽变元的赋值族，\(\theta\) 为按运算签名提供值函数的解释补全，项解释 \(\left[\!\left[t\right]\!\right]_{\nu,\theta}\in\mathbb B_w\) 见 [Expr 项解释](../Expr/Term/Term.md#项的解释)与[解释补全](../Expr/Term/Term.md#未解释运算的解释补全)。该解释保存完整源值；它与实际写入字节的联系见[证明义务](#证明义务)。
+其中 \(\mathsf{packetWrite}\) 为包写入观察的类别标签，\(\varepsilon\)、\(\kappa\)、\(o\)、\(q\) 为构造保存的事件身份、资源身份、起始字节偏移和访问位宽，\(t\in\mathrm{Term}_w\)。\(\nu\) 为各位宽变元的赋值族，\(\theta\) 为按运算签名提供值函数的解释补全，项解释 \(\left[\!\left[t\right]\!\right]_{\nu,\theta}\in\mathbb B_w\) 见 [Expr 项解释](../Expr/Term/Term.md#项的解释)与[解释补全](../Expr/Term/Term.md#未解释运算的解释补全)。该事件保存完整源值；其小端字节投影由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)定义并证明，机器存储对应见[证明义务](#证明义务)。
 
-固定相同的身份、偏移、项位宽及同一赋值与解释补全时，两个结构不同的项可以求值得到相同值。
+固定相同的身份、偏移、访问位宽、项位宽及同一赋值与解释补全时，两个结构不同的项可以求值得到相同值。
+
+复合分支的解释还依赖包字节单元赋值 \(\rho:\mathbb N\to\mathbb B_8\)。以各字节的自然数代表作叶赋值，按 [PacketOffset 赋值](跨架构谓词.md#cp-end-已通过检查的包范围)取得偏移 \(d_\rho\)。其事件解释为
+
+\[
+\left[\!\left[\operatorname{packetWriteCompound}(\varepsilon,p,q,t)\right]\!\right]_{\rho,\nu,\theta}
+:=(\mathsf{packetWrite},\varepsilon,p.\kappa,d_\rho,q,w,\left[\!\left[t\right]\!\right]_{\nu,\theta}).
+\]
+
+\(d=p.\mathrm{offset}\)，\(q=8p.\mathrm{bytes}\)。保存的已通过结束检查与覆盖条件在自然数地址上给出的范围结论由 [CP-End](跨架构谓词.md#cp-end-已通过检查的包范围)闭合；同包基地址与结束地址使用[输入假设 C-A](../NodeInference/跨架构比较.md#输入与对应假设)。偏移与两架构模位向量地址计算的联系使用 [CP-Q](跨架构谓词.md#cp-q-已实现规则的解释保持)的相应前提。已保存的结束比较见证保留生成依据。
 
 ## 触发逻辑
 
@@ -50,29 +69,31 @@ PacketWrite谓词结构相等，当且仅当动态事件身份、包资源身份
 
 生成输入包括架构 \(A\in\{\mathrm{RV32IMC},\mathrm{eBPF}\}\)、合法的已解码指令实例 \(i\)、本次动态写入身份 \(\varepsilon\)、执行前有效 Expr 关系 \(E_g\)。\(E_g\) 的完整值绑定分量提供寄存器源值，比较约束不补出缺失的完整源值。构造对执行前谓词集合 \(P_g\) 无成员前提。
 
-输入还包括解码的写入位宽 \(q\)、字节序 \(\delta\)、覆盖的相对字节偏移集合 \(R\) 及本次准备的 \(E_i\)。\(q\) 为正的 8 的倍数，\(\delta\in\{\mathrm{LE},\mathrm{BE}\}\)，\(R\in\mathscr F(\mathbb N)\)，\(E_i\) 为有效 Expr 分量；\(\mathscr F\) 为有限子集族。宽度和字节序的归属见[包访问参数与拆分](../Expr/寄存器/包字节.md#读取拼接与写入拆分)。
+输入还包括解码的写入位宽 \(q\)、覆盖的相对字节偏移集合 \(R\) 及本次准备的 \(E_i\)。\(q\in\{8,16,32,64\}\)，\(R\in\mathscr F(\mathbb N)\)，\(E_i\) 为有效 Expr 分量；\(\mathscr F\) 为有限子集族。字节拆分使用[包访问规则](../Expr/寄存器/包字节.md#读取拼接与写入拆分)的小端实例。
 
-部分构造的定义域要求以下条件：
+常量地址部分构造的定义域要求以下条件：
 
 - \(A\) 与 \(i\) 满足对应架构的[触发逻辑](#触发逻辑)。\(q\) 与该指令的访问宽度一致。
 - 地址源寄存器的项与指令偏移唯一确定既有包资源 \(\kappa\) 与起始字节偏移 \(o\)。其访问前提采用[指令结果的前提](../Expr/Expr.md#指令结果的前提)。
-- \(\delta\) 为访问形式的字节序。令 \(m=q/8\)，\(R\) 恰为从 \(o\) 起连续 \(m\) 个字节的偏移集合。
+- 令 \(m=q/8\)，\(R\) 恰为从 \(o\) 起连续 \(m\) 个字节的偏移集合。
 - 数据源按对应架构的取源规则唯一取得完整项 \(t\in\mathrm{Term}_w\)，且 \(q\le w\)。符号项不要求数值可求。
-- \(E_i\) 使用上述同一个 \(t\)、\(\kappa\)、\(o\)、\(m\) 及 \(\delta\)，满足[既有包写入拆分规则](../Expr/寄存器/包字节.md#读取拼接与写入拆分)。它完整写入 \(R\) 对应的全部 Packet 字节单元。
+- \(E_i\) 使用上述同一个 \(t\)、\(\kappa\)、\(o\)、\(m\) 及固定小端字节序，满足[既有包写入拆分规则](../Expr/寄存器/包字节.md#读取拼接与写入拆分)。它完整写入 \(R\) 对应的全部 Packet 字节单元。
 - \(\varepsilon\) 按[动态事件身份条件](#类型定义)标识这次实际存储。
 
 \[
-\operatorname{makePacketWritePredicate}(A,i,\varepsilon,E_g,q,\delta,R,E_i)
-:=\operatorname{packetWrite}(\varepsilon,\kappa,o,t).
+\operatorname{makePacketWritePredicate}(A,i,\varepsilon,E_g,q,R,E_i)
+:=\operatorname{packetWrite}(\varepsilon,\kappa,o,q,t).
 \]
 
-其中 \(\operatorname{makePacketWritePredicate}\) 为上述定义域上的部分构造，\(A\)、\(i\)、\(\varepsilon\)、\(E_g\)、\(q\)、\(\delta\)、\(R\)、\(E_i\) 均为显式输入；\(\kappa\)、\(o\) 为地址源寄存器在 \(E_g\) 中的项及指令偏移唯一确定的包身份与起始偏移，\(t\) 为按该指令唯一取得的完整源值项，成功结果属于 \(\mathrm{PacketWrite}\)。
+其中 \(\operatorname{makePacketWritePredicate}\) 为上述定义域上的部分构造，\(A\)、\(i\)、\(\varepsilon\)、\(E_g\)、\(q\)、\(R\)、\(E_i\) 均为显式输入；\(\kappa\)、\(o\) 为地址源寄存器在 \(E_g\) 中的项及指令偏移唯一确定的包身份与起始偏移，\(t\) 为按该指令唯一取得的完整源值项，成功结果保存 \(q\) 并属于 \(\mathrm{PacketWrite}\)。
 
 \[
-P_i:=\{\operatorname{packetWrite}(\varepsilon,\kappa,o,t)\}.
+P_i:=\{\operatorname{packetWrite}(\varepsilon,\kappa,o,q,t)\}.
 \]
 
-其中 \(P_i\in\mathscr F(\mathrm{PacketWrite})\) 为这次实际存储的局部观察增量，\(\varepsilon\)、\(\kappa\)、\(o\)、\(t\) 为成功构造取得的四个分量。一次多字节存储可以生成一个 PacketWrite谓词，Expr 同时更新对应的多个规范字节单元。Expr 最终更新采用[按键覆写](../Expr/Expr.md#关系集合按键覆写)，未写入的单元关系由该规则保留。
+其中 \(P_i\in\mathscr F(\mathrm{PacketWrite})\) 为这次实际存储的局部观察增量，\(\varepsilon\)、\(\kappa\)、\(o\)、\(q\)、\(t\) 为成功构造取得的五个分量。一次多字节存储可以生成一个 PacketWrite谓词，Expr 同时更新对应的多个规范字节单元。Expr 最终更新采用[按键覆写](../Expr/Expr.md#关系集合按键覆写)，未写入的单元关系由该规则保留。
+
+复合地址分支取两架构地址绑定共同识别出的 \(p\)，要求受限偏移格式成立、当前比较约束列表中已有匹配的结束检查；多个匹配时取列表中首项。源项仍取同一执行前关系，保存的访问位宽须满足 \(q=8p.\mathrm{bytes}\le w\)，Expr 按该记录及固定小端定义逐字节写入，再生成 `packetWriteCompound(ε,p,q,t)`。格式失败或缺失检查时构造无定义。该分支的范围与字节覆盖由整次访问记录给出，常量分支仍沿用上述 \(o,m,R\)。
 
 ### 错误类型
 
@@ -81,7 +102,7 @@ P_i:=\{\operatorname{packetWrite}(\varepsilon,\kappa,o,t)\}.
 - 地址源寄存器的项与指令偏移不能唯一确定 \(\kappa\)、\(o\)，或指令宽度不能确定实际覆盖范围。
 - 访问前提不成立：包括未获依据的范围、权限或执行环境要求的对齐条件，见[包访问条件](../Expr/寄存器/包字节.md#指令与字节单元)。
 - 源关系无效，所需完整源项缺失或不唯一，或源项位宽错误：不能构造写入值。
-- 指令宽度、字节序或覆盖范围与生成输入不一致：不能把不确定的字节效果作为已识别存储。
+- 指令宽度或覆盖范围与生成输入不一致，或访问形式与固定小端约定不符：不能把不确定的字节效果作为已识别存储。
 - \(E_i\) 不满足生成定义域中的既有拆分规则，或事件身份未满足身份条件：不能提交 \(\sigma_i=(E_i,P_i)\)，其中 \(E_i\) 是 Expr 分量，\(P_i\) 是谓词分量。
 - 包原子访问或其他尚未定义的特殊存储：既有[包字节规则边界](../Expr/寄存器/包字节.md#读取拼接与写入拆分)未提供成功生成依据。
 
@@ -91,30 +112,30 @@ P_i:=\{\operatorname{packetWrite}(\varepsilon,\kappa,o,t)\}.
 
 **命题 PW1（给定输入的生成唯一性）。** 固定全部生成输入，且该输入属于生成定义域时，所得 PacketWrite谓词唯一，局部观察增量恰有一个元素。
 
-**证明。** 定义域要求地址源寄存器的项与指令偏移唯一确定包对象和起始偏移，且源项唯一，故 \(\kappa\)、\(o\)、\(t\) 唯一。\(\varepsilon\) 是给定输入。四分量构造因此唯一，其单元素集合的基数为一。\(\square\)
+**证明。** 常量分支的地址与源项前提唯一确定 \(\kappa,o,t\)；复合分支的地址绑定、约束列表首匹配规则及取源规则唯一确定 \(p,t\)，并要求 \(q=8p.\mathrm{bytes}\)。\(\varepsilon,q\) 是给定输入且被构造保存。两分支各自的构造因而唯一，成功时局部单元素集合的基数为一。\(\square\)
 
-**命题 PW2（保存项的解释）。** 对成功构造得到的谓词，固定适配其源项的赋值 \(\nu\) 与解释补全 \(\theta\)，其解释的值分量等于构造时取得的完整源项的解释。
+**命题 PW2（保存项的解释）。** 对成功构造得到的谓词，固定适配其源项的赋值 \(\nu\)、解释补全 \(\theta\)，复合地址时还固定包字节赋值 \(\rho\)，其解释的值分量等于构造时取得的完整源项的解释。
 
 **证明。** 构造保存项 \(t\)，[写入事件解释](#写入事件的解释)的值分量按定义为该项在 \((\nu,\theta)\) 下的解释。\(\square\)
 
 ### 跨架构包写入比较
 
-包写入规范结果使用[CrossPacketWrite](跨架构谓词.md#条件与各类观察)，保留静态包资源及起始偏移。事件身份和项载体的处理由[观察规范化](跨架构谓词.md#观察规范化)维护；写入字节仍须取得同次指令的访问宽度及字节序。原始四分量不足以自行恢复这些属性，已有第三项证明义务与[CP-Bytes](跨架构谓词.md#待证明义务)因此保持。
+包写入规范结果使用[CrossPacketWrite](跨架构谓词.md#条件与各类观察)，保留静态包资源及常量或复合目的项。事件身份和项载体的处理由[观察规范化](跨架构谓词.md#观察规范化)维护。常量分支从保存的访问位宽 \(q\) 取得 \(q/8\) 个小端源字节；复合分支使用 `p.bytes`，良构条件保证其等于 \(q/8\)。宽度、环境无关性与逐字节结构定理由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)闭合。
 
-2026-10-14 20:20 的 `/tmp/compare-just-tx.json` 中，12 个包写入不匹配节点对应 `just_tx.c` 的 `swap_src_dst_mac`。源程序 `/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_tx.c` 第 32–45 行通过 `unsigned short` 在字节偏移 0、2、4、6、8、10 处作六次 16 位读取与六次 16 位写入。节点 46 的偏移零观察中，RV32IMC `loc:"65"` 保存 `lh` 将 16 位值符号扩展到 32 位的 `sext16/32` 源项；eBPF `loc:"47"` 保存同一无符号 16 位值的 64 位载体，源项没有该符号扩展包裹。
+2026-10-14 20:20 的历史快照 `/tmp/compare-just-tx.json` 中，12 个包写入不匹配节点对应 `just_tx.c` 的 `swap_src_dst_mac`。源程序 `/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_tx.c` 第 32–45 行通过 `unsigned short` 在字节偏移 0、2、4、6、8、10 处作六次 16 位读取与六次 16 位写入。节点 46 的偏移零观察中，RV32IMC `loc:"65"` 保存 `lh` 将 16 位值符号扩展到 32 位的 `sext16/32` 源项；eBPF `loc:"47"` 保存同一无符号 16 位值的 64 位载体，源项没有该符号扩展包裹。
 
-这些观察仅保存 \((\varepsilon,\kappa,o,t)\)，类型中的 \(w\) 是完整源项载体宽度，不能据此把上述写入判为 32 位或 64 位。访问宽度 \(q=16\) 与字节序须来自同次生成；比较路径须为每条观察提供 `storeBytes`，其值为 \(q/8=2\)。该快照的比较环境未提供 `storeBytes`，规范值因而仍为 `source`，两侧完整源项保留符号扩展差异。
+现行观察均保存 \(q=16\)，项位宽 \(w\) 仅表示完整源项载体。规范化直接取得两个小端字节，不依赖环境备用宽度。
 
-在同次访问的小端字节序与 `storeBytes:2` 已提供时，两条冻结字节分别取源项的 `extract(0,8)`、`extract(8,8)`。两片均位于 16 位符号扩展点以下，属于[项规范化](跨架构谓词.md#项规范化)中位于符号扩展点以下时的切片剥除规则，其位值不依赖符号扩展。配合零恒等剥除，两侧的两个规范字节项结构相同。这是该快照的有限对应实例，访问元数据与实际机器存储的可靠对应仍由下列义务承担。
+两个冻结字节分别取源项的 `extract(0,8)`、`extract(8,8)`。两片均位于 16 位符号扩展点以下，属于[项规范化](跨架构谓词.md#项规范化)中位于符号扩展点以下的切片剥除规则。配合零恒等剥除，两侧的两个规范字节项结构相同；`liveNode46WriteBytesNormalize` 与 `predicateStoreWidthCheck` 固定该有限实例，实际机器存储对应由下列义务承担。
 
 ### 证明义务
 
 1. **机器存储识别与取源。** 证明各架构的指令识别、完整源项取得及立即数扩展符合实际存储语义。证明地址源寄存器的项与指令偏移正确确定 Packet 及其相对偏移，并为实际访问提供范围、权限与对齐依据。PW1、PW2 只给出定义域内的构造性质。
 2. **宽度、字节序、范围与 Expr 一致性。** 证明每次成功识别的实际存储确实满足生成定义域中的一致性条件。证明它写入恰好 \(R\) 的字节。证明 Expr 拆分的每个新字节值对应源值的指定字节，并保持规范单元中每个字节的 \(\mathbb B_8\) 取值。证明按键覆写得到实际写后状态，范围外字节未受该存储修改。既有[拼接与重叠性质](../Expr/寄存器/包字节.md#拼接与重叠性质)不提供指令操作数与机器执行的这一对应。
-3. **四分量观察与写入语义的联系。** 构造保存完整源项，其标签不决定窄存储宽度，构造也不含字节序或覆盖范围。须证明被比较的观察能通过生成输入及其记录来源取得这些访问信息；否则须明确该观察不足以恢复哪些写入事实。同一完整源值在不同宽度下可写不同范围；不同完整源值也可具有相同待写低位。不得仅凭完整源值相等或不等断定实际写入字节相同或不同。
+3. **保存分量与写入语义的联系。** 构造保存完整源项及访问位宽，小端字节投影由 [CP-Bytes](跨架构谓词.md#cp-bytes-写入字节与冻结尾部)闭合。仍须证明实际指令对应保存的宽度、源项与目的范围。同一完整源值在不同宽度下可写不同范围；不同完整源值也可具有相同待写低位。实际字节相等以保存宽度内的逐字节投影为依据。
 4. **动态事件身份与历史对应。** 给出事件身份的具体生成方式，证明重复执行得到的身份满足类型定义的区分要求，并与实际存储及[History 的逐步记录](../NodeInference/History.md#逐步记录与统一类型)对应。统一谓词域中的混合观察按结构并集累积；须证明具体记录和重建与每个成功存储的 Expr 效果及观察对应，相关边界见[观察累积](谓词定义.md#观察集合累积与可满足性)与[历史状态组合](../NodeInference/History.md#状态组合的定义域)。
 
-上述 16 位实例要求第三项义务把生成宽度 \(q=16\) 传到每条比较观察的 `storeBytes:2`，并把同次访问字节序传到字节拆分。第二项义务须联系机器写入与两个低位字节，并满足切片终点不超过符号扩展点的前提；这些对应归 [CP-Bytes](跨架构谓词.md#待证明义务)。完整 32 位与 64 位载体的差异不替代这些宽度、字节序及范围义务。
+上述 16 位实例的规范化读取保存的 \(q=16\)，并按固定小端定义取低两个字节。第二、三项义务联系实际机器写入、保存宽度与冻结源项；切片剥除的解释条件由 [CP-Q](跨架构谓词.md#cp-q-已实现规则的解释保持)维护。
 
 ## 相关文档
 

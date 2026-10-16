@@ -217,7 +217,7 @@ private def memoryChecks : Except String Unit := do
   let c ← one "ST-packet" (ebpf #[raw 0x6a 2 0 3 0x7788, 0x95] loaded.exprs)
   expect "ST-packet byte values" (c.E_k.lookupEq (Reg.packet 0 3), c.E_k.lookupEq (Reg.packet 0 4))
     (some (Term.C32 0x88), some (Term.C32 0x77))
-  expect "ST-packet full-source observation" c.P_k [.packetWrite 70 0 3 (Term.C64 0x7788)]
+  expect "ST-packet full-source observation" c.P_k [.packetWrite 70 0 3 16 (Term.C64 0x7788)]
   reject "ST packet boundary" (ebpf #[raw 0x6a 2 0 63 0x7788, 0x95] loaded.exprs) .undefinedSrc
 
 private def atomicChecks : Except String Unit := do

@@ -12,13 +12,26 @@ private def parseWidth : String → Option Width
   | _ => none
 
 def parseReg (text : String) : Option Reg := do
+  if text.startsWith "packetCompound:" then
+    let [_, κ, bytes, ending, strict, index, code, checked] := text.splitOn ":" | none
+    let bytes ← bytes.toNat?
+    let strict ← strict.toNat?
+    let code ← (code.splitOn ".").mapM String.toNat?
+    let (offset, []) ← PacketOffset.decode code.length code | none
+    let checked ← (checked.splitOn ".").mapM String.toNat?
+    let (checkedEnd, []) ← PacketOffset.decode checked.length checked | none
+    if strict > 1 then none else
+      let p : CompoundPacketReg :=
+        ⟨← κ.toNat?, offset, bytes, ← ending.toNat?, strict == 1, ← index.toNat?, checkedEnd⟩
+      let r := Reg.compoundPacket p
+      if r.valid then return r else none
   let [head, alpha] := text.splitOn ":" | none
   let alpha ← alpha.toNat?
   let (kind, width) ← ([ ("real", RegKind.real), ("stack", .stack),
     ("map", .map), ("packet", .packet), ("context", .context) ].findSome? fun (stem, kind) => do
       if !head.startsWith stem then none else
         pure (kind, ← parseWidth (head.drop stem.length).toString))
-  let r : Reg := ⟨kind, width, alpha⟩
+  let r : Reg := ⟨kind, width, alpha, none⟩
   if r.valid then some r else none
 
 def parseRel (text : String) : Option Rel :=
@@ -57,6 +70,9 @@ private def parseOp (text : String) (w : Width) : Option Op := do
   if text.startsWith "mergeLow" then
     let [q, bits] := (text.drop 8).toString.splitOn "," | none
     return .mergeLow (← q.toNat?) (← bits.toNat?)
+  if text.startsWith "packetRead" then
+    let [bytes, ending] := (text.drop 10).toString.splitOn "_" | none
+    return .packetRead (← bytes.toNat?) (← ending.toNat?)
   if text.startsWith "externalResult" then
     let [event, lane] := (text.drop 14).toString.splitOn "_" | none
     return .externalResult (← event.toNat?) (← lane.toNat?)
@@ -97,7 +113,7 @@ private def opArity : Op → Option Nat
   | .neg _ | .id _ | .low _ _ | .extract _ _ _ | .zext _ _ _ | .sext _ _ _
   | .bswap _ _ => some 1
   | .selectEq _ => some 4
-  | .externalResult _ _ => none
+  | .externalResult _ _ | .packetRead _ _ => none
   | _ => some 2
 
 private def tokenChar (c : Char) : Bool := c != '(' && c != ')' && c != ','
@@ -199,11 +215,18 @@ def predicateWellFormed : Predicate → Bool
       predicateRelWellFormed cond.lhs.width cond.rel &&
       cond.lhs.wellFormed && cond.rhs.wellFormed
   | .ret term => term.wellFormed
-  | .mapWrite _ map key _ source =>
-    map.wellFormed && source.wellFormed &&
+  | .mapWrite _ map key _ bits source =>
+    [8, 16, 32, 64].contains bits && bits ≤ source.width.bits &&
+      map.wellFormed && source.wellFormed &&
       key.all (fun t => t.width == .w32 && t.wellFormed &&
         match t with | .const _ c => c < 256 | _ => true)
-  | .packetWrite _ _ _ source => source.wellFormed
+  | .packetWrite _ packet offset bits source compound =>
+    [8, 16, 32, 64].contains bits && bits ≤ source.width.bits &&
+      source.wellFormed && match compound with
+      | none => true
+      | some p => (Reg.compoundPacket p).valid && p.κ == packet &&
+          offset == 0 && p.byteIndex == 0 && 8 * p.bytes ≤ source.width.bits &&
+          bits == 8 * p.bytes
 
 private def jsonNat (value : Lean.Json) (key : String) : Option Nat :=
   (value.getObjVal? key >>= Lean.Json.getNat?).toOption
@@ -224,8 +247,8 @@ private def predicateJsonTerm (value : Lean.Json) (key : String) (w : Width) : O
   let (term, []) ← parseTermChars w text.toList true | none
   if term.width != w then none else some term
 
-/-- Strict five-class schema. Every object has exactly its documented fields;
-new classes supply numeric carrier widths, while Helper keeps its existing wire shape. -/
+/-- Strict five-class schema. Write widths describe the machine access; their
+source strings carry their own term widths in the fixed w32 parsing context. -/
 def parsePredicateJson (value : Lean.Json) : Option Predicate := do
   let predicate : Predicate ← match ← jsonString value "kind" with
     | "helper" => do
@@ -263,15 +286,26 @@ def parsePredicateJson (value : Lean.Json) : Option Predicate := do
           let (term, []) ← parseTermChars .w32 text.toList true | none
           if term.width != .w32 then none else some term
         let offset ← jsonNat value "offset"
-        let source ← predicateJsonTerm value "source" (← jsonWidth value "sourceWidth")
-        pure (.mapWrite event map key offset source)
+        let bits ← jsonNat value "sourceWidth"
+        let source ← parseTerm (← jsonString value "source") .w32
+        pure (.mapWrite event map key offset bits source)
     | "packetWrite" => do
-      if !exactFields value ["kind", "event", "packet", "offset", "width", "source"] then none else
+      let hasCompound := (value.getObjVal? "compound").isOk
+      let fields := ["kind", "event", "packet", "offset", "width", "source"] ++
+        if hasCompound then ["compound"] else []
+      if !exactFields value fields then none else
         let event ← jsonNat value "event"
         let packet ← jsonNat value "packet"
         let offset ← jsonNat value "offset"
-        let source ← predicateJsonTerm value "source" (← jsonWidth value "width")
-        pure (.packetWrite event packet offset source)
+        let bits ← jsonNat value "width"
+        let source ← parseTerm (← jsonString value "source") .w32
+        let compound ← if hasCompound then do
+          let text ← jsonString value "compound"
+          let reg ← parseReg text
+          let p ← reg.compound
+          pure (some p)
+        else pure none
+        pure (.packetWrite event packet offset bits source compound)
     | _ => none
   if predicateWellFormed predicate then some predicate else none
 
@@ -379,12 +413,14 @@ private def fiveClassRoundTripCheck : Bool :=
     .ret (Term.app .w64 (.sext 8 .w64 32) [Term.V32 1]),
     .ret (Term.app .w64 (.low 8 32) [Term.C32 255]),
     .ret (Term.app .w32 (.bswap 32 64) [max64]),
-    .mapWrite 5 (Term.C32 1) [] 0 (Term.C32 2),
-    .mapWrite 6 max64 [Term.C32 0, Term.C32 255, byte] 8 max64,
-    .mapWrite 9 max64 [Term.V32 1, Term.V32 1] 0 (Term.C32 0),
-    .mapWrite 10 (Term.C32 1) [byte] 0 max64,
-    .packetWrite 7 3 0 (Term.C32 42),
-    .packetWrite 8 3 4 max64].all predicateRoundTrip
+    .mapWrite 5 (Term.C32 1) [] 0 32 (Term.C32 2),
+    .mapWrite 6 max64 [Term.C32 0, Term.C32 255, byte] 8 32 max64,
+    .mapWrite 9 max64 [Term.V32 1, Term.V32 1] 0 32 (Term.C32 0),
+    .mapWrite 10 (Term.C32 1) [byte] 0 32 max64,
+    .packetWrite 7 3 0 8 (Term.C32 42),
+    .packetWrite 8 3 4 64 max64,
+    .packetWrite 9 3 0 16 (Term.V64 1),
+    .packetWrite 10 3 0 32 (Term.V32 1)].all predicateRoundTrip
 
 private def branchComplementCheck : Bool :=
   let rels := [Rel.eq, .ne, .ltu, .leu, .gtu, .geu, .lts, .les, .gts, .ges,
@@ -420,8 +456,12 @@ private def malformedPredicateCheck : Bool :=
     .branch 1 .taken ⟨Term.C32 0, .eqN 0, Term.C32 0⟩,
     .branch 1 .taken ⟨Term.C32 0, .bitsnz 33, Term.C32 0⟩,
     .branch 1 .taken ⟨Term.C32 0, .eq, Term.V64 1⟩,
-    .mapWrite 0 (Term.C32 0) [Term.C32 256] 0 (Term.C32 0),
-    .mapWrite 0 (Term.C32 0) [Term.V64 1] 0 (Term.C32 0)]
+    .mapWrite 0 (Term.C32 0) [Term.C32 256] 0 32 (Term.C32 0),
+    .mapWrite 0 (Term.C32 0) [Term.V64 1] 0 32 (Term.C32 0),
+    .mapWrite 0 (Term.C32 0) [] 0 24 (Term.C32 0),
+    .packetWrite 0 0 0 0 (Term.C32 0),
+    .packetWrite 0 0 0 24 (Term.C32 0),
+    .packetWrite 0 0 0 64 (Term.C32 0)]
   badTerms.all (fun t =>
     !predicateWellFormed (.ret t) && rejected (renderPredicateJson (.ret t))) &&
   badPredicates.all (fun p =>
@@ -448,8 +488,8 @@ private def fiveClassSemStateCheck : Bool :=
   let ps := [Predicate.helper 1 .clock [],
     .branch 1 .notTaken ⟨Term.V32 1, .ne, Term.C32 0⟩,
     .ret (Term.C64 18446744073709551615),
-    .mapWrite 2 (Term.C64 1) [Term.C32 255] 0 (Term.C32 3),
-    .packetWrite 3 0 0 (Term.C64 4)]
+    .mapWrite 2 (Term.C64 1) [Term.C32 255] 0 32 (Term.C32 3),
+    .packetWrite 3 0 0 64 (Term.C64 4)]
   match parseSemStateJson "[]" ("[" ++ renderPredicatesJson ps ++ "]") with
   | some state => state.predicates == ps
   | none => false

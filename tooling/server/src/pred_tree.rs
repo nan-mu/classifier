@@ -299,9 +299,20 @@ fn cross_env_base(arch: &str) -> &'static str {
     }
 }
 
-/// Access width for store freezing. just_tx MAC `packetWrite`s are 16-bit;
-/// MapWrite halves after the eBPF 8-byte split are 32-bit.
-fn store_bytes_for(kind: &str) -> Option<u32> {
+/// Byte width of one store. The predicate's own bit width wins.
+/// `packetWrite.width` and `mapWrite.sourceWidth` are bit counts.
+/// A missing field keeps the historical kind default (MAC 2, map half 4).
+fn store_bytes_for(kind: &str, fields: &Map<String, Value>) -> Option<u32> {
+    let bits = match kind {
+        "packetWrite" => field_u32(fields, "width"),
+        "mapWrite" => field_u32(fields, "sourceWidth"),
+        _ => None,
+    };
+    if let Some(bits) = bits {
+        if bits > 0 && bits % 8 == 0 {
+            return Some(bits / 8);
+        }
+    }
     match kind {
         "packetWrite" => Some(2),
         "mapWrite" => Some(4),
@@ -309,7 +320,7 @@ fn store_bytes_for(kind: &str) -> Option<u32> {
     }
 }
 
-fn cross_env_json(arch: &str, kind: &str, maps: &[EnvMap]) -> String {
+fn cross_env_json(arch: &str, kind: &str, fields: &Map<String, Value>, maps: &[EnvMap]) -> String {
     let Ok(Value::Object(mut obj)) = serde_json::from_str(cross_env_base(arch)) else {
         return cross_env_base(arch).to_string();
     };
@@ -326,7 +337,7 @@ fn cross_env_json(arch: &str, kind: &str, maps: &[EnvMap]) -> String {
             .collect();
         obj.insert("maps".into(), Value::Array(layouts));
     }
-    if let Some(n) = store_bytes_for(kind) {
+    if let Some(n) = store_bytes_for(kind, fields) {
         obj.insert("storeBytes".into(), Value::Number(n.into()));
         obj.insert("storeBigEndian".into(), Value::Bool(false));
     }
@@ -506,7 +517,7 @@ fn arrival_key(arch: &str, kind: &str, fields: &Map<String, Value>, maps: &[EnvM
         return LocalKey::Unparsed;
     }
     match lean_binding::cross_pred::normalize(
-        &cross_env_json(arch, kind, maps),
+        &cross_env_json(arch, kind, fields, maps),
         &predicate_wire(kind, fields),
     ) {
         Some(json) => LocalKey::Normalized(json),

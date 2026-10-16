@@ -55,15 +55,15 @@ private def rejectionChecks : String :=
   let unbound := E.insertEq (Reg.real32 12) (Term.V32 99)
   let symbolic := E.insertEq (Reg.real32 12)
     (addStar .w32 (Term.V32 4) (Term.V32 99))
-  let badWidth := E.insertEq ⟨.packet, .w64, 0⟩ (Term.C64 0)
+  let badWidth := E.insertEq ⟨.packet, .w64, 0, none⟩ (Term.C64 0)
   let emptyCell : CellAccess := ⟨Reg.map64 1, 8, 8⟩
-  let noInput : PacketAccess := ⟨0, 0, 1, .little, none⟩
+  let noInput : PacketAccess := ⟨0, 0, 1, .little, none, none⟩
   let concrete := bindingEntry.insertEq (Reg.real32 2) (Term.C32 0x3000)
     |>.insertEq (Reg.real32 12) (Term.C32 0x1003)
     |>.insertEq (Reg.ctx32 0) (Term.C32 0x1000)
     |>.insertEq (Reg.ctx32 1) (Term.C32 0x1040)
   let concreteRead := stepEffects concrete (.LOAD (0#12, .Regidx 12#5, .Regidx 14#5, true, 4))
-  let independentInput : PacketAccess := ⟨1, 0, 1, .little, some (Term.C32 0x1000)⟩
+  let independentInput : PacketAccess := ⟨1, 0, 1, .little, some (Term.C32 0x1000), none⟩
   let otherInput := { independentInput with κ := 2 }
   let checks := [
     ("unbound", (stepEffects unbound (.LOAD (0#12, .Regidx 12#5, zreg, true, 1))).isNone),

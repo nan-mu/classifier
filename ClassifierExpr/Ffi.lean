@@ -41,7 +41,7 @@ def exportCellAccess (kind width hasOld bitOffset bits sourceWidth isUnsigned wr
     let w ← ffiWidth width
     let v ← ffiWidth sourceWidth
     let k ← if kind == 0 then some RegKind.stack else if kind == 1 then some .map else none
-    let reg : Reg := ⟨k, w, 7⟩
+    let reg : Reg := ⟨k, w, 7, none⟩
     let E := if hasOld == 0 then ExprSet.empty else ExprSet.empty.insertEq reg (Term.C w old.toNat)
     let access : CellAccess := ⟨reg, bitOffset.toNat, bits.toNat⟩
     if write == 0 then
@@ -63,7 +63,7 @@ def exportPacketAccess (values : Array UInt32)
       E.insertEq (Reg.packet κ.toNat j) (Term.C32 (MNat 8 value.toNat))) ExprSet.empty
     let access : PacketAccess := ⟨κ.toNat, offset.toNat, bytes.toNat,
       if bigEndian == 0 then .little else .big,
-      if allowInput == 0 then none else some (Term.V64 κ.toNat)⟩
+      (if allowInput == 0 then none else some (Term.V64 κ.toNat)), none⟩
     if write == 0 then
       let read ← access.read E w (isUnsigned != 0)
       some s!"\{\"value\":\"{renderTerm read.value}\",\"inputs\":[{renderExprSetJson read.inputs}]}"

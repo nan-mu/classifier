@@ -66,6 +66,16 @@ def lookupAddress64 : Term → Option (Nat × Int × Term)
     | _, _ => none
   | _ => none
 
+theorem lookupAddress64_const (w : Width) (n : Nat) :
+    lookupAddress64 (.const w n) = none := rfl
+
+theorem lookupAddress64_ne_zero (source : Term) (event : Nat) (offset : Int) (map : Term)
+    (h : lookupAddress64 source = some (event, offset, map)) :
+    source ≠ Term.C64 0 := by
+  intro hz
+  subst source
+  cases h
+
 /-- Unit zero starts at tSp-4. A fixed stride is injective because unit < 128. -/
 def stackUnitReg (resource unit : Nat) : Reg := Reg.sw (128 * resource + unit)
 
@@ -151,7 +161,17 @@ def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : In
     if let some displacement := relativeOffset root address then
       let o := displacement + offset
       if o ≥ 0 && o.toNat + bytes ≤ p.packetBytes then
-        candidates := .packet ⟨p.κPacket, o.toNat, bytes, .little, some p.tData⟩ :: candidates
+        candidates := .packet ⟨p.κPacket, o.toNat, bytes, .little, some p.tData, none⟩ :: candidates
+    else if let some displacement := packetDisplacement E root address then
+      if offset ≥ 0 then
+        let accessAddress := addStar .w64 address (Term.C64 offset.toNat)
+        let endingAccess : CellAccess := ⟨Reg.ctx32 (p.αCtx + 1), 0, 32⟩
+        if let some ending := endingAccess.read E .w64 true then
+          if let some (strict, checkedEnd) := packetBoundWitness E root accessAddress ending bytes then
+            let compound : CompoundPacketReg :=
+              ⟨p.κPacket, displacement.plus (.c offset.toNat), bytes, p.αCtx + 1, strict, 0, checkedEnd⟩
+            candidates := .packet ⟨p.κPacket, 0, bytes, .little, some p.tData, some compound⟩ ::
+              candidates
   if let some (event, displacement, mapTerm) := lookupAddress64 address then
     if let some layout := uniqueMapLayout maps mapTerm then
       let rel := displacement + offset
@@ -238,17 +258,10 @@ def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except Reje
       shift := shift + part.bits
     pure updates
 
-/-- Map term and frozen key tail from the owning lookup observation. This lives
-below Helper because Helper's freezing rule depends on stackBytes. -/
-private def lookupFrozenKey (p : Predicate) : Option (Term × List Term) :=
-  match p with
-  | .helper _ .lookup (map :: _keyPtr :: frozen) => some (map, frozen)
-  | _ => none
-
 /-- Re-carrier saved native stack bytes without consulting the current key buffer.
 Open bytes reuse the saved 32-bit extract; readAccess's zero OR/shift wrappers
 leave that byte unchanged. -/
-private def mapWriteKeyByte (byte : Term) : Option Term :=
+def mapWriteKeyByte (byte : Term) : Option Term :=
   match eval (solve byte) with
   | some c => some (Term.C32 (c % 256))
   | none => match byte with
@@ -261,8 +274,37 @@ private def mapWriteKeyByte (byte : Term) : Option Term :=
         some (solve field)
     | _ => if byte.width == .w64 then some (zStar 8 .w32 64 byte) else none
 
+theorem mapWriteKeyByte_constant (byte : Term) (c : Nat)
+    (h : eval (solve byte) = some c) :
+    mapWriteKeyByte byte = some (Term.C32 (c % 256)) := by
+  simp [mapWriteKeyByte, h]
+
+/-- Open re-carriering either recovers the saved eight-bit field or takes
+the low eight bits of the saved native byte; no current buffer is read. -/
+theorem mapWriteKeyByte_open (byte result : Term)
+    (hc : eval (solve byte) = none) (h : mapWriteKeyByte byte = some result) :
+    (∃ offset stored,
+      let field := Term.app .w32 (.extract offset 8 32) [stored]
+      (byte = .app .w64 (.zext 8 .w64 32) [field] ∨
+        byte = .app .w64 (.or 64) [.C64 0,
+          .app .w64 (.shl .w64)
+            [.app .w64 (.zext 8 .w64 32) [field], .C64 0]]) ∧
+        result = solve field) ∨ result = zStar 8 .w32 64 byte := by
+  unfold mapWriteKeyByte at h
+  rw [hc] at h
+  dsimp only at h
+  split at h
+  · simp only [Option.some.injEq] at h
+    exact Or.inl ⟨_, _, Or.inl rfl, h.symm⟩
+  · simp only [Option.some.injEq] at h
+    exact Or.inl ⟨_, _, Or.inr rfl, h.symm⟩
+  · split at h
+    · simp only [Option.some.injEq] at h
+      exact Or.inr h.symm
+    · simp at h
+
 /-- Map writes reuse the lookup's frozen key, never the current key buffer. -/
-private def mapWriteObservation (E : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
+def mapWriteObservation (E : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
     (base : Nat) (offset : Int) (bytes : Nat) : Option (Term × List Term × Nat) := do
   let address ← E.lookupEq (Reg.real64 base)
   let (lookupEvent, displacement, mapTerm) ← lookupAddress64 address
@@ -270,23 +312,78 @@ private def mapWriteObservation (E : ExprSet) (Pg : List Predicate) (maps : List
   let rel := displacement + offset
   if rel < 0 || rel.toNat + bytes > layout.valueSize || rel.toNat % 8 + bytes > 8 then none
   else
-    let p ← Pg.find? fun p => match p with
-      | .helper event .lookup _ => event == lookupEvent
-      | _ => false
-    let (map, frozen) ← lookupFrozenKey p
+    let (map, frozen) ← lookupKeyAt Pg lookupEvent
     if map != mapTerm || frozen.isEmpty || frozen.length != layout.keySize then none
     else do
       let key ← frozen.mapM mapWriteKeyByte
       some (map, key, rel.toNat)
+
+/-- This key depends only on the saved observations and the pre-image event. -/
+def mapWriteKeyAt (Pg : List Predicate) (event : NodeId) : Option (List Term) := do
+  let (_, frozen) ← lookupKeyAt Pg event
+  frozen.mapM mapWriteKeyByte
+
+theorem mapWriteObservation_frozen (E : ExprSet) (Pg : List Predicate)
+    (maps : List MapLayout) (base : Nat) (offset : Int) (bytes : Nat)
+    (map : Term) (key : List Term) (elementOff : Nat)
+    (h : mapWriteObservation E Pg maps base offset bytes = some (map, key, elementOff)) :
+    ∃ event address displacement frozen,
+      E.lookupEq (Reg.real64 base) = some address ∧
+      lookupAddress64 address = some (event, displacement, map) ∧
+      LookupTie Pg event map frozen ∧
+      lookupKeyAt Pg event = some (map, frozen) ∧
+      frozen.mapM mapWriteKeyByte = some key ∧ mapWriteKeyAt Pg event = some key := by
+  unfold mapWriteObservation at h
+  simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  rcases h with ⟨address, ha, ⟨event, displacement, pointerMap⟩, hl, layout, _, h⟩
+  split at h
+  · cases h
+  · simp only [Option.bind_eq_some_iff] at h
+    rcases h with ⟨⟨m, frozen⟩, hk, h⟩
+    split at h
+    · cases h
+    · rename_i valid
+      have hm : m = pointerMap := by
+        by_cases hm : m = pointerMap
+        · exact hm
+        · simp [hm] at valid
+      simp only [Option.bind_eq_some_iff] at h
+      rcases h with ⟨converted, hc, he⟩
+      cases he
+      exact ⟨event, address, displacement, frozen, ha, hm ▸ hl,
+        lookupKeyAt_tie Pg event map frozen hk, hk, hc, by simp [mapWriteKeyAt, hk, hc]⟩
+
+theorem mapWriteKeyAt_expr_update (E updates : ExprSet) (Pg : List Predicate)
+    (event : NodeId) :
+    mapWriteKeyAt (SemState.mk (updateExpr E updates) Pg).predicates event =
+      mapWriteKeyAt Pg event := rfl
+
+theorem mapWriteKeyAt_deterministic (Pg : List Predicate) (event : NodeId)
+    (key₁ key₂ : List Term)
+    (h₁ : mapWriteKeyAt Pg event = some key₁)
+    (h₂ : mapWriteKeyAt Pg event = some key₂) : key₁ = key₂ :=
+  Option.some.inj (h₁.symm.trans h₂)
 
 /-- A native Map DW write observes the low half before the high half, while the
 value effect still uses the complete pre-state source. Narrow stores keep it intact. -/
 private def mapWriteObservations (event : NodeId) (map : Term) (frozen : List Term)
     (elementOff bytes : Nat) (source : Term) : List Predicate :=
   if bytes == 8 then
-    [.mapWrite event map frozen elementOff (star .w32 (.extract 0 32 64) [source]),
-      .mapWrite event map frozen (elementOff + 4) (star .w32 (.extract 32 32 64) [source])]
-  else [.mapWrite event map frozen elementOff source]
+    [.mapWrite event map frozen elementOff 32 (star .w32 (.extract 0 32 64) [source]),
+      .mapWrite event map frozen (elementOff + 4) 32 (star .w32 (.extract 32 32 64) [source])]
+  else [.mapWrite event map frozen elementOff (8 * bytes) source]
+
+theorem mapWriteObservations_saved_key (event : NodeId) (map : Term)
+    (key : List Term) (elementOff bytes : Nat) (source : Term) (p : Predicate)
+    (h : p ∈ mapWriteObservations event map key elementOff bytes source) :
+    p.savedMapKey? = some key := by
+  unfold mapWriteObservations at h
+  split at h
+  · simp only [List.mem_cons, List.not_mem_nil, or_false] at h
+    rcases h with rfl | rfl <;> rfl
+  · simp only [List.mem_singleton] at h
+    subst p
+    rfl
 
 private def storeEffect (p : EntryParams) (event : NodeId) (E : ExprSet)
     (maps : List MapLayout) (Pg : List Predicate) (bytes base : Nat)
@@ -294,7 +391,7 @@ private def storeEffect (p : EntryParams) (event : NodeId) (E : ExprSet)
   let access ← resolveAccess p E base offset bytes true maps
   let updates ← writeAccess E access source
   let predicates ← match access with
-    | .packet a => pure [.packetWrite event a.κ a.offset source]
+    | .packet a => pure [.packetWrite event a.κ a.offset (8 * bytes) source a.compound]
     | .cells parts =>
       if parts.any (fun part => part.reg.kind == .map) then do
         let some (map, frozen, elementOff) := mapWriteObservation E Pg maps base offset bytes
@@ -507,12 +604,12 @@ private def mapStoreObservationsCheck : Bool := Id.run do
     exprEffects memoryEntry (ev + 1) E (.stx 4 0 1 4) mapStoreLayouts [mapStoreLookup]
     | return false
   return predicates ==
-      [.mapWrite ev (Term.C64 1077412584) mapStoreKey 0
+      [.mapWrite ev (Term.C64 1077412584) mapStoreKey 0 32
         (star .w32 (.extract 0 32 64) [source]),
-       .mapWrite ev (Term.C64 1077412584) mapStoreKey 4
+       .mapWrite ev (Term.C64 1077412584) mapStoreKey 4 32
         (star .w32 (.extract 32 32 64) [source])] &&
     partialPredicates ==
-      [.mapWrite (ev + 1) (Term.C64 1077412584) mapStoreKey 4 source] &&
+      [.mapWrite (ev + 1) (Term.C64 1077412584) mapStoreKey 4 32 source] &&
     effect.inputs == ExprSet.empty &&
     effect.updates.lookupEq (Reg.mapDword 7 0) == some source &&
     effect.validFor E
@@ -530,7 +627,7 @@ private def symbolicMapStoreFrozenKeyCheck : Bool := Id.run do
     |>.insertEq (stackUnitReg 5 0) (Term.C32 0)
   let .ok (effect, predicates) :=
     exprEffects memoryEntry 77 E (.stx 8 0 1 0) mapStoreLayouts Pg | return false
-  let [.mapWrite 77 mapLo keyLo 0 valueLo, .mapWrite 77 mapHi keyHi 4 valueHi] :=
+  let [.mapWrite 77 mapLo keyLo 0 32 valueLo, .mapWrite 77 mapHi keyHi 4 32 valueHi] :=
     predicates | return false
   let some updated := effect.updates.lookupEq (Reg.mapDword 7 0) | return false
   let next := E.override effect.delta
@@ -696,7 +793,7 @@ private def immediateAndSignedMemoryCheck : Bool := Id.run do
   let E := initial.exprs.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)
     |>.insertEq (Reg.packet 0 0) (Term.C32 0x55)
   let some [open0] := availableBufferBytes p initial.exprs (Term.C64 0x2000) 1 | return false
-  let access : PacketAccess := ⟨0, 0, 1, .little, some p.tData⟩
+  let access : PacketAccess := ⟨0, 0, 1, .little, some p.tData, none⟩
   let some expected := (access.read initial.exprs .w64 true).map (·.value) | return false
   return availableBufferBytes p E (Term.C64 0x1fff) 1 == some [Term.C64 0x11] &&
     availableBufferBytes p E (Term.C64 0x2000) 1 == some [Term.C64 0x55] &&

@@ -69,13 +69,6 @@ private def helperCallOfPredicate (p : Predicate) : Except RejectReason (NodeId 
   if abi.any (fun t => t.width != .w32) || !frozenTailOk tail then throw .undefinedSrc
   pure (event, ⟨kind, kind.id, abi⟩)
 
-/-- Map term and frozen key bytes from a lookup observation (empty key ⇒ not frozen). -/
-def lookupFrozenKey (p : Predicate) : Option (Term × List Term) :=
-  match p with
-  | .helper _ .lookup (map :: _keyPtr :: frozen) => some (map, frozen)
-  | .helper _ .lookup _ => none
-  | _ => none
-
 /-- The return item is determined by the call's identity and ABI arguments. -/
 private def callReturnTerm (p : Predicate) : Except RejectReason Term := do
   let (event, call) ← helperCallOfPredicate p

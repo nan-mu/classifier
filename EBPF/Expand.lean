@@ -1,6 +1,7 @@
 import EBPF.JustTxProgram
 import PathMerge.Budget
 import ClassifierExpr.Parse
+import EBPF.CompoundPacketFixture
 
 namespace EBPF
 open ClassifierExpr PathMerge
@@ -255,15 +256,15 @@ private def productMapWriteCheck : Bool := Id.run do
   let .complete graph := expand I.size (ebpfStep I context 0) ws | return false
   return graph.nodes.any fun node =>
     node.state.predicates.any fun low => match low with
-      | .mapWrite event map key offset source =>
+      | .mapWrite event map key offset bits source =>
         map == Term.C64 1077412584 && !key.isEmpty && offset == 0 &&
-        source.width == .w32 && predicateWellFormed low &&
+        bits == 32 && source.width == .w32 && predicateWellFormed low &&
         ((Lean.Json.parse (renderPredicateJson low)).toOption >>= parsePredicateJson) ==
           some low &&
         node.state.predicates.any fun high => match high with
-          | .mapWrite highEvent highMap highKey highOffset highSource =>
+          | .mapWrite highEvent highMap highKey highOffset highBits highSource =>
             highEvent == event && highMap == map && highKey == key && highOffset == 4 &&
-            highSource.width == .w32 && predicateWellFormed high &&
+            highBits == 32 && highSource.width == .w32 && predicateWellFormed high &&
             ((Lean.Json.parse (renderPredicateJson high)).toOption >>= parsePredicateJson) ==
               some high
           | _ => false

@@ -356,8 +356,9 @@ theorem determinedPred_swap (σ : CrossSubst) (hi : Injective σ)
     obtain ⟨hd, ht⟩ := determinedMutation_swap σ hi m hd
     exact ⟨hd, by simp only [rename, ht]⟩
   | packetWrite p =>
-    obtain ⟨hd, ht⟩ := determinedValue_swap σ hi p.value hd
-    exact ⟨hd, by simp only [rename, ht]⟩
+    obtain ⟨hd₁, ht₁⟩ := determined_swap σ hi p.offset hd.1
+    obtain ⟨hd₂, ht₂⟩ := determinedValue_swap σ hi p.value hd.2
+    exact ⟨⟨hd₁, hd₂⟩, by simp only [rename, ht₁, ht₂]⟩
 
 theorem rename_swap_of_determined (σ : CrossSubst) (hi : Injective σ)
     (p : CrossPred) (hd : DeterminedPred σ p) :
@@ -644,8 +645,10 @@ theorem mergePred_complete (σ υ : CrossSubst) (a : CrossPred)
   | ret a => exact mergeTerm_complete σ υ a.payload hi hj he hd
   | mapWrite a => exact mergeMutation_complete σ υ a hi hj he hd
   | packetWrite a =>
-    obtain ⟨τ, hm, he'⟩ := mergeValue_complete σ υ a.value hi hj he hd
-    exact ⟨τ, by simpa [mergePred, rename] using hm, he'⟩
+    obtain ⟨σ₁, hm, he₁⟩ := mergeTerm_complete σ υ a.offset hi hj he hd.1
+    have hi₁ := (mergeTerm_spec σ σ₁ a.offset (applyTerm υ a.offset) hi hm).2.1
+    obtain ⟨τ, hv, he₂⟩ := mergeValue_complete σ₁ υ a.value hi₁ hj he₁ hd.2
+    exact ⟨τ, by simp [mergePred, rename, hm, hv], he₂⟩
 
 end ClassifierExpr.CrossSubst
 
@@ -1396,6 +1399,37 @@ theorem unify_ambiguous_pairs_need_not_swap :
       (unifyLists R L).pairs = [(1, 0)] ∧
       (unifyLists R L).pairs ≠ (unifyLists L R).pairs.map Prod.swap := by
   decide +kernel
+
+/-- Compound keys use the ordinary recursive app case: packet-offset leaves and
+the bound context cell participate in renaming; width, packet id and strictness do not. -/
+theorem compoundPacket_apply (σ : CrossSubst) (p : CompoundPacketReg) :
+    CrossSubst.applyTerm σ p.toCross =
+      .app (.packetReg p.bytes) [.c p.κ, CrossSubst.applyTerm σ p.offset.toCross,
+        .reg .context (σ.regLookup .context p.endCtx),
+        .c (if p.strict then 1 else 0), .c p.byteIndex,
+        CrossSubst.applyTerm σ p.checkedEnd.toCross] := by
+  simp only [CompoundPacketReg.toCross, CrossSubst.applyTerm, CrossSubst.applyTerms]
+
+theorem compoundPacket_determined (σ : CrossSubst) (p : CompoundPacketReg) :
+    CrossSubst.Determined σ p.toCross ↔
+      CrossSubst.Determined σ p.offset.toCross ∧
+        (∃ b, σ.regImage? .context p.endCtx = some b) ∧
+        CrossSubst.Determined σ p.checkedEnd.toCross := by
+  simp [CompoundPacketReg.toCross, CrossSubst.Determined, CrossSubst.DeterminedTerms]
+
+theorem compoundPacket_merge (σ τ : CrossSubst) (a b : CompoundPacketReg)
+    (hi : σ.Injective) (h : CrossSubst.mergeTerm σ a.toCross b.toCross = some τ) :
+    CrossSubst.Extends σ τ ∧ τ.Injective ∧
+      CrossSubst.Determined τ a.toCross ∧ CrossSubst.applyTerm τ a.toCross = b.toCross :=
+  CrossSubst.mergeTerm_spec σ τ a.toCross b.toCross hi h
+
+theorem compoundPacket_determinedCond (σ : CrossSubst) (p : CompoundPacketReg)
+    (r : CrossRel) (z : Int) :
+    CrossSubst.DeterminedCond σ (.packetField p.toCross r z) ↔
+      CrossSubst.Determined σ p.offset.toCross ∧
+        (∃ b, σ.regImage? .context p.endCtx = some b) ∧
+        CrossSubst.Determined σ p.checkedEnd.toCross :=
+  compoundPacket_determined σ p
 
 end ObservationEqProofObligations
 end ClassifierExpr

@@ -21,7 +21,12 @@ def renderRegKind : RegKind → String
   | .context => "context"
 
 def renderReg (r : Reg) : String :=
-  s!"{renderRegKind r.kind}{renderWidth r.width}:{r.alpha}"
+  match r.compound with
+  | none => s!"{renderRegKind r.kind}{renderWidth r.width}:{r.alpha}"
+  | some p =>
+    let code := String.intercalate "." (p.offset.code.map toString)
+    let checked := String.intercalate "." (p.checkedEnd.code.map toString)
+    s!"packetCompound:{p.κ}:{p.bytes}:{p.endCtx}:{if p.strict then 1 else 0}:{p.byteIndex}:{code}:{checked}"
 
 def renderRel : Rel → String
   | .eq => "eq" | .ne => "ne"
@@ -64,6 +69,7 @@ def renderOp : Op → String
   | .externalResult event lane => s!"externalResult{event}_{lane}"
   | .inputByte resource => s!"inputByte{resource}"
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
+  | .packetRead bytes ending => s!"packetRead{bytes}_{ending}"
 
 /-- Shared term rendering preserves mixed-width constants and operator input carriers. -/
 private partial def renderTermAt (context : Width) : Term → String
@@ -101,11 +107,14 @@ def renderPredicateJson : Predicate → String
     s!"\{\"kind\":\"branch\",\"position\":{position},\"dir\":\"{direction}\",\"width\":{w.bits},\"cond\":\{\"lhs\":\"{renderTermAt w cond.lhs}\",\"rel\":\"{renderRel cond.rel}\",\"rhs\":\"{renderTermAt w cond.rhs}\"}}"
   | .ret term =>
     s!"\{\"kind\":\"ret\",\"width\":{term.width.bits},\"term\":\"{renderTermAt term.width term}\"}"
-  | .mapWrite event map key offset source =>
+  | .mapWrite event map key offset bits source =>
     let keys := String.intercalate "," (key.map fun t => s!"\"{renderTermAt .w32 t}\"")
-    s!"\{\"kind\":\"mapWrite\",\"event\":{event},\"mapWidth\":{map.width.bits},\"map\":\"{renderTermAt map.width map}\",\"key\":[{keys}],\"offset\":{offset},\"sourceWidth\":{source.width.bits},\"source\":\"{renderTermAt source.width source}\"}"
-  | .packetWrite event packet offset source =>
-    s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"packet\":{packet},\"offset\":{offset},\"width\":{source.width.bits},\"source\":\"{renderTermAt source.width source}\"}"
+    s!"\{\"kind\":\"mapWrite\",\"event\":{event},\"mapWidth\":{map.width.bits},\"map\":\"{renderTermAt map.width map}\",\"key\":[{keys}],\"offset\":{offset},\"sourceWidth\":{bits},\"source\":\"{renderTermAt .w32 source}\"}"
+  | .packetWrite event packet offset bits source compound =>
+    let destination := match compound with
+      | none => ""
+      | some p => s!",\"compound\":\"{renderReg (Reg.compoundPacket p)}\""
+    s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"packet\":{packet},\"offset\":{offset},\"width\":{bits},\"source\":\"{renderTermAt .w32 source}\"{destination}}"
 def renderExprSetJson (E : ExprSet) : String :=
   String.intercalate "," (E.entries.map renderExprJson ++ E.constraints.map fun e =>
     s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}")

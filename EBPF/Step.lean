@@ -342,7 +342,7 @@ private def packetStoreObservationCheck : Bool := Id.run do
   return access.κ == p.κPacket && access.offset == 5 && access.bytes == 2 &&
     E.lookupEq (Reg.real64 0) == some source &&
     c.dir == .ok && c.loc == .pos 1 &&
-    c.P_k == [.packetWrite 77 access.κ access.offset source] &&
+    c.P_k == [.packetWrite 77 access.κ access.offset 16 source] &&
     c.E_k.entries.length == 2 && c.E_k.constraints.isEmpty &&
     c.E_k.lookupEq (Reg.packet access.κ 5) == some (Term.C32 0x88) &&
     c.E_k.lookupEq (Reg.packet access.κ 6) == some (Term.C32 0x77) &&
@@ -368,7 +368,7 @@ private def storeObservationCategoryCheck : Bool := Id.run do
     if (!c.P_k.isEmpty) != isPacket then return false
     match access with
     | .packet a =>
-      if c.P_k != [.packetWrite 88 a.κ a.offset (Term.V64 9)] then return false
+      if c.P_k != [.packetWrite 88 a.κ a.offset (8 * bytes) (Term.V64 9)] then return false
     | .cells _ => if !c.P_k.isEmpty then return false
   return true
 

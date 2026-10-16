@@ -57,9 +57,60 @@ inductive Predicate where
   | helper (event : NodeId) (kind : HelperKind) (args : List Term)
   | branch (position : Nat) (dir : BranchDirection) (cond : Cond)
   | ret (term : Term)
-  | mapWrite (event : NodeId) (map : Term) (key : List Term) (offset : Nat) (source : Term)
-  | packetWrite (event : NodeId) (packet : Nat) (offset : Nat) (source : Term)
+  | mapWrite (event : NodeId) (map : Term) (key : List Term) (offset : Nat) (bits : Nat)
+      (source : Term)
+  | packetWrite (event : NodeId) (packet : Nat) (offset : Nat) (bits : Nat) (source : Term)
+      (compound : Option CompoundPacketReg := none)
   deriving BEq, Repr, Inhabited
+
+/-- The lookup event on the address pre-image ties a slot to its saved Map and key. -/
+def LookupTie (Pg : List Predicate) (event : NodeId) (map : Term)
+    (key : List Term) : Prop :=
+  ∃ keyPtr, Predicate.helper event .lookup (map :: keyPtr :: key) ∈ Pg
+
+/-- Select the first lookup at the given event, then read its stored tail. -/
+def lookupKeyAt (Pg : List Predicate) (event : NodeId) : Option (Term × List Term) := do
+  let p ← Pg.find? fun p => match p with
+    | .helper e .lookup _ => e == event
+    | _ => false
+  match p with
+  | .helper _ .lookup (map :: _keyPtr :: key) => some (map, key)
+  | _ => none
+
+theorem lookupKeyAt_tie (Pg : List Predicate) (event : NodeId)
+    (map : Term) (key : List Term) (h : lookupKeyAt Pg event = some (map, key)) :
+    LookupTie Pg event map key := by
+  unfold lookupKeyAt at h
+  cases hf : Pg.find? (fun p => match p with
+    | .helper e .lookup _ => e == event
+    | _ => false) with
+  | none => simp [hf] at h
+  | some p =>
+    have hm := List.mem_of_find?_eq_some hf
+    have hp := List.find?_some hf
+    cases p with
+    | helper e kind args =>
+      cases kind <;> simp_all
+      case lookup =>
+        cases args with
+        | nil => simp at h
+        | cons m args =>
+          cases args with
+          | nil => simp at h
+          | cons ptr tail =>
+            simp at h
+            rcases h with ⟨rfl, rfl⟩
+            exact ⟨ptr, hm⟩
+    | branch _ _ _ | ret _ | mapWrite _ _ _ _ _ _ | packetWrite _ _ _ _ _ _ =>
+      simp_all
+
+def Predicate.savedMapKey? : Predicate → Option (List Term)
+  | .mapWrite _ _ key _ _ _ => some key
+  | _ => none
+
+theorem mapWrite_saved_key (event : NodeId) (map : Term) (key : List Term)
+    (offset bits : Nat) (source : Term) :
+    (Predicate.mapWrite event map key offset bits source).savedMapKey? = some key := rfl
 
 inductive Location where
   | pos (j : Nat)
@@ -73,6 +124,21 @@ structure SemState where
   deriving Repr, Inhabited
 
 def SemState.empty : SemState := ⟨ExprSet.empty, []⟩
+
+theorem savedMapKey_expr_update (p : Predicate) (E updates : ExprSet) :
+    (SemState.mk (E.override updates) [p]).predicates = [p] := rfl
+
+theorem lookupKeyAt_expr_update (E updates : ExprSet) (Pg : List Predicate)
+    (event : NodeId) :
+    lookupKeyAt (SemState.mk (E.override updates) Pg).predicates event =
+      lookupKeyAt Pg event := rfl
+
+theorem lookupKeyAt_deterministic (Pg : List Predicate) (event : NodeId)
+    (map₁ map₂ : Term) (key₁ key₂ : List Term)
+    (h₁ : lookupKeyAt Pg event = some (map₁, key₁))
+    (h₂ : lookupKeyAt Pg event = some (map₂, key₂)) :
+    map₁ = map₂ ∧ key₁ = key₂ := by
+  exact Prod.mk.inj (Option.some.inj (h₁.symm.trans h₂))
 
 /-- One step record (position, direction, successor position, ordered local results).
 Position is the document's 1-based instruction position; validity is an external premise. -/

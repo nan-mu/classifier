@@ -379,8 +379,8 @@ private def mergeMixedPredicates : List Predicate :=
   [.helper 7 .clock [Term.C32 1],
    .branch 1 .taken ⟨Term.V32 1, .ltu, Term.C32 4⟩,
    .ret (Term.V64 2),
-   .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
-   .packetWrite 9 2 0 (Term.V32 5)]
+   .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 4),
+   .packetWrite 9 2 0 32 (Term.V32 5)]
 
 private def mergeMixedRequest (a b : List Predicate) (model : String := "FiveClass") : String :=
   mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨ExprSet.empty, a⟩)
@@ -413,20 +413,22 @@ private def mergeChangedClassFieldCheck : Bool :=
       [.branch 1 .taken ⟨Term.V32 1, .ltuN 16, Term.C32 4⟩]),
     (.ret (Term.V64 2), [.ret (Term.V64 3), .ret (Term.V32 2)]),
     (mapWrite, [
-      .mapWrite 10 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
-      .mapWrite 8 (Term.V64 6) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
-      .mapWrite 8 (Term.V32 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 4),
-      .mapWrite 8 (Term.V64 3) [Term.C32 2, Term.C32 1] 0 (Term.V32 4),
-      .mapWrite 8 (Term.V64 3) [Term.C32 1] 0 (Term.V32 4),
-      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 1 (Term.V32 4),
-      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V32 6),
-      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 (Term.V64 4)]),
+      .mapWrite 10 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 4),
+      .mapWrite 8 (Term.V64 6) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 4),
+      .mapWrite 8 (Term.V32 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 2, Term.C32 1] 0 32 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1] 0 32 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 1 32 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 16 (Term.V32 4),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 6),
+      .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V64 4)]),
     (packetWrite, [
-      .packetWrite 10 2 0 (Term.V32 5),
-      .packetWrite 9 3 0 (Term.V32 5),
-      .packetWrite 9 2 1 (Term.V32 5),
-      .packetWrite 9 2 0 (Term.V32 6),
-      .packetWrite 9 2 0 (Term.V64 5)])]
+      .packetWrite 10 2 0 32 (Term.V32 5),
+      .packetWrite 9 3 0 32 (Term.V32 5),
+      .packetWrite 9 2 1 32 (Term.V32 5),
+      .packetWrite 9 2 0 16 (Term.V32 5),
+      .packetWrite 9 2 0 32 (Term.V32 6),
+      .packetWrite 9 2 0 32 (Term.V64 5)])]
   cases.all fun (original, variants) =>
     variants.all fun changed =>
       let a := mergeMixedPredicates ++ [original]

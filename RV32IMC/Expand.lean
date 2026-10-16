@@ -101,22 +101,52 @@ private def valueRejection : Insn → RejectReason
 /-- Recover map term + frozen key from Pg for the lookup that owns this Map address.
 Reject when the pointer's Map provenance disagrees with the frozen-key observation Map
 (aligned with eBPF `mapWriteObservation`). -/
-private def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
+def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
     (rs1 rs2 : regidx) (offset width : Nat) :
     Option (Term × List Term × Nat × Term) := do
   let (lookupEvent, elementOff, mapTerm, _) ← mapElementAccess Eg rs1 offset width
   let source ← readReg Eg rs2
   if source.width != .w32 then none
   else
-    let p ← Pg.find? fun p => match p with
-      | .helper e .lookup _ => e == lookupEvent
-      | _ => false
-    let (map, frozen) ← lookupFrozenKey p
+    let (map, frozen) ← lookupKeyAt Pg lookupEvent
     if map != mapTerm || frozen.isEmpty then none
     else
       let layout ← findMapLayout maps map
       if frozen.length != layout.keySize || elementOff + width > layout.valueSize then none
       else some (map, frozen, elementOff, solve source)
+
+theorem mapWriteObservation_frozen (Eg : ExprSet) (Pg : List Predicate)
+    (maps : List MapLayout) (rs1 rs2 : regidx) (offset width : Nat)
+    (map : Term) (key : List Term) (elementOff : Nat) (value : Term)
+    (h : mapWriteObservation Eg Pg maps rs1 rs2 offset width =
+      some (map, key, elementOff, value)) :
+    ∃ event source displacement,
+      readReg Eg rs1 = some source ∧
+      lookupAddress (solve source) = some (event, displacement, map) ∧
+      lookupKeyAt Pg event = some (map, key) ∧ LookupTie Pg event map key := by
+  unfold mapWriteObservation at h
+  simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+  rcases h with ⟨⟨event, off, pointerMap, access⟩, ha, source, hs, h⟩
+  split at h
+  · cases h
+  · simp only [Option.bind_eq_some_iff] at h
+    rcases h with ⟨⟨m, frozen⟩, hk, h⟩
+    split at h
+    · cases h
+    · rename_i valid
+      have hm : m = pointerMap := by
+        by_cases hm : m = pointerMap
+        · exact hm
+        · simp [hm] at valid
+      simp only [Option.bind_eq_some_iff] at h
+      rcases h with ⟨layout, _, h⟩
+      split at h
+      · cases h
+      · cases h
+        rcases mapElementAccess_preimage Eg rs1 offset width event elementOff map access
+          (hm ▸ ha) with ⟨address, displacement, hr, hl⟩
+        exact ⟨event, address, displacement, hr, hl, hk,
+          lookupKeyAt_tie Pg event map key hk⟩
 
 /-- Each successful store delta touches one resource category, selected by the value step.
 MapWrite needs frozen lookup keys + Meta layout; PacketWrite needs a dynamic event. -/
@@ -129,14 +159,14 @@ private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet) (Pg : List Pr
     | RegKind.map =>
       match event, mapWriteObservation Eg Pg maps rs1 rs2 offset width, nextPosition I j with
       | some event, some (map, key, o, source), some loc =>
-        .candidates [⟨.ok, loc, Ei, [.mapWrite event map key o source]⟩]
+        .candidates [⟨.ok, loc, Ei, [.mapWrite event map key o (8 * width) source]⟩]
       | _, _, none => .reject .unboundTarget
       | _, _, _ => .reject .undefinedSrc
     | RegKind.packet =>
       match event, packetBinding Eg rs1 offset width, readReg Eg rs2, nextPosition I j with
       | some event, some access, some source, some loc =>
         .candidates [⟨.ok, loc, Ei,
-          [.packetWrite event access.κ access.offset source]⟩]
+          [.packetWrite event access.κ access.offset (8 * width) source access.compound]⟩]
       | _, _, _, none => .reject .unboundTarget
       | _, _, _, _ => .reject .undefinedSrc
     | _ => emit .ok (nextPosition I j) Ei
@@ -941,7 +971,7 @@ private def packetStoreObservationsCheck : Bool := Id.run do
   for (i, offset, bytes) in cases do
     let I := #[i, decodeInsnWord 0x0001]
     let .candidates [c] := inferStep I {} 77 0 ⟨E, []⟩ | return false
-    if c.P_k != [.packetWrite 77 p.αCtx offset value] ||
+    if c.P_k != [.packetWrite 77 p.αCtx offset (8 * bytes) value] ||
         c.E_k.entries.length != bytes || c.loc != .pos 1 ||
         !c.E_k.entries.all (fun e => e.reg.kind == .packet) then return false
     for j in List.range bytes do
@@ -951,13 +981,13 @@ private def packetStoreObservationsCheck : Bool := Id.run do
     if child.exprs.lookupEq (Reg.packet p.αCtx 20) != some (Term.C32 99) then return false
     let .candidates [again] := inferStep I {} 78 0 child | return false
     let .ok repeated := PathMerge.applyLocal child again.E_k again.P_k | return false
-    if repeated.predicates != [.packetWrite 77 p.αCtx offset value,
-        .packetWrite 78 p.αCtx offset value] then return false
+    if repeated.predicates != [.packetWrite 77 p.αCtx offset (8 * bytes) value,
+        .packetWrite 78 p.αCtx offset (8 * bytes) value] then return false
   let I := #[Insn.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 2), decodeInsnWord 0x0001]
   let symbolic := Term.V32 900
   let symbolicE := E.insertEq (Reg.real32 11) symbolic
   let .candidates [c] := inferStep I {} 77 0 ⟨symbolicE, []⟩ | return false
-  if c.P_k != [.packetWrite 77 p.αCtx 2 symbolic] ||
+  if c.P_k != [.packetWrite 77 p.αCtx 2 16 symbolic] ||
       c.E_k.lookupEq (Reg.packet p.αCtx 2) !=
         some (star .w32 (.extract 0 8 32) [symbolic]) ||
       c.E_k.lookupEq (Reg.packet p.αCtx 3) !=
@@ -965,10 +995,10 @@ private def packetStoreObservationsCheck : Bool := Id.run do
   let .ok child := PathMerge.applyLocal ⟨symbolicE, []⟩ c.E_k c.P_k | return false
   let .ok overwritten := PathMerge.applyLocal child
     (ExprSet.empty.insertEq (Reg.real32 11) (Term.C32 0)) [] | return false
-  if overwritten.predicates != [.packetWrite 77 p.αCtx 2 symbolic] then return false
+  if overwritten.predicates != [.packetWrite 77 p.αCtx 2 16 symbolic] then return false
   let zeroI := #[Insn.STORE (0#12, zreg, .Regidx 12#5, 1), decodeInsnWord 0x0001]
   let .candidates [zero] := inferStep zeroI {} 79 0 ⟨E, []⟩ | return false
-  return zero.P_k == [.packetWrite 79 p.αCtx 0 (Term.C32 0)] &&
+  return zero.P_k == [.packetWrite 79 p.αCtx 0 8 (Term.C32 0)] &&
     zero.E_k.lookupEq (Reg.packet p.αCtx 0) == some (Term.C32 0)
 
 private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
@@ -1019,19 +1049,19 @@ private def mapStoreObservationsCheck : Bool := Id.run do
   for (i, width) in stores do
     let I := #[i, decodeInsnWord 0x0001]
     let .candidates [c] := inferStep I ctx 77 0 ⟨E, [lookup]⟩ | return false
-    let want := .mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)
+    let want := .mapWrite 77 (Term.C32 42) key 0 (8 * width) (Term.C32 0xaabbccdd)
     if c.P_k != [want] || c.loc != .pos 1 then return false
     let .ok child := PathMerge.applyLocal ⟨E, [lookup]⟩ c.E_k c.P_k | return false
     if !child.predicates.contains lookup || !child.predicates.contains want then return false
     if width == 0 then return false
   let .candidates [again] := inferStep #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4),
       decodeInsnWord 0x0001] ctx 78 0
-      ⟨E, [lookup, .mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)]⟩ | return false
+      ⟨E, [lookup, .mapWrite 77 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd)]⟩ | return false
   let .ok kept := PathMerge.applyLocal
-      ⟨E, [lookup, .mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)]⟩
+      ⟨E, [lookup, .mapWrite 77 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd)]⟩
       again.E_k again.P_k | return false
-  return kept.predicates.contains (.mapWrite 77 (Term.C32 42) key 0 (Term.C32 0xaabbccdd)) &&
-    kept.predicates.contains (.mapWrite 78 (Term.C32 42) key 0 (Term.C32 0xaabbccdd))
+  return kept.predicates.contains (.mapWrite 77 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd)) &&
+    kept.predicates.contains (.mapWrite 78 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd))
 
 /-- The skipped sequential instruction makes source node identity differ from instruction index. -/
 private def packetSnapshotEventCheck : Bool :=
@@ -1041,8 +1071,8 @@ private def packetSnapshotEventCheck : Bool :=
     Insn.STORE (0#12, zreg, .Regidx 12#5, 1),
     decodeInsnWord 0x00008067]
   let json := rv32Snapshot I smokeEntryParams 0 3 5
-  json.contains (renderPredicateJson (.packetWrite 2 smokeEntryParams.αCtx 0 (Term.C32 0))) &&
-    !(json.contains (renderPredicateJson (.packetWrite 3 smokeEntryParams.αCtx 0 (Term.C32 0))))
+  json.contains (renderPredicateJson (.packetWrite 2 smokeEntryParams.αCtx 0 8 (Term.C32 0))) &&
+    !(json.contains (renderPredicateJson (.packetWrite 3 smokeEntryParams.αCtx 0 8 (Term.C32 0))))
 
 /-- Matching pointer Map and frozen-key observation Map still authorizes MapWrite. -/
 private def mapWriteProvenanceMatchCheck : Bool :=
@@ -1058,7 +1088,7 @@ private def mapWriteProvenanceMatchCheck : Bool :=
   match inferStep I ctx 77 0 ⟨E, [lookup]⟩ with
   | .candidates [c] =>
       c.loc == .pos 1 &&
-        c.P_k == [.mapWrite 77 (Term.C32 42) key 0 (Term.C32 123)]
+        c.P_k == [.mapWrite 77 (Term.C32 42) key 0 32 (Term.C32 123)]
   | _ => false
 
 /-- Pointer Map 42 with frozen-key observation Map 17 must reject (no successor). -/
