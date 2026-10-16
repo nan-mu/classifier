@@ -106,7 +106,8 @@ private def crossRegAlpha (r : Reg) : Nat :=
   if r.kind == .map then r.alpha - triangle (pairDiagonal r.alpha 0 r.alpha)
   else r.alpha
 
-/-- Lane zero is the ABI return value: keep helper id and resource, not frame pointers. -/
+/-- Lane zero keeps at most the first two ABI arguments; for Map helpers these
+are the helper id and Map term. Other helper kinds need not share that meaning. -/
 private def abiPrefix (lane : Nat) (args : List Term) : List Term :=
   if lane == 0 then args.take 2 else args
 
@@ -121,6 +122,32 @@ private theorem abiPrefix_sizeOf_le (lane : Nat) (args : List Term) :
       | nil => simp
       | cons b args => cases args <;> simp +arith [List.take]
   · exact Nat.le_refl _
+
+theorem abiPrefix_zero_take (args : List Term) : abiPrefix 0 args = args.take 2 := rfl
+
+theorem abiPrefix_zero_three (a b c : Term) : abiPrefix 0 [a,b,c] = [a,b] := rfl
+
+theorem abiPrefix_zero_singleton (a : Term) : abiPrefix 0 [a] = [a] := rfl
+
+theorem abiPrefix_zero_length_le (args : List Term) : (abiPrefix 0 args).length ≤ 2 := by
+  cases args with
+  | nil => simp [abiPrefix]
+  | cons a args =>
+    cases args with
+    | nil => simp [abiPrefix]
+    | cons b args => simp [abiPrefix, List.take]
+
+theorem abiPrefix_idempotent (lane : Nat) (args : List Term) :
+    abiPrefix lane (abiPrefix lane args) = abiPrefix lane args := by
+  by_cases h : lane = 0
+  · subst lane
+    cases args with
+    | nil => rfl
+    | cons a args =>
+      cases args with
+      | nil => rfl
+      | cons b args => simp [abiPrefix, List.take]
+  · simp [abiPrefix, h]
 
 /-- Total structural order: constructor rank, then constructor fields in order. -/
 private def crossRank : CrossTerm → Nat
@@ -200,8 +227,9 @@ private def combineAffine : AffineAdd → AffineAdd → Option AffineAdd
   | .base t x, .pure y | .pure y, .base t x => some (.base t (x + y))
   | .base _ _, .base _ _ => none
 
-/-- Same refusal as host `fold_add_const`: an `add` with two non-constant bases
-does not fold, and a non-binary `add` does not fold. Sums are exact `Int` sums. -/
+/-- Lean-side cross-term normalization; there is no host folding counterpart.
+Two non-constant bases and non-binary `add` nodes do not fold.
+Sums of `.c` leaves are exact `Int` sums. -/
 private def affineAdd : CrossTerm → Option AffineAdd
   | .c k => some (.pure k)
   | .app .add [a, b] =>
@@ -1065,6 +1093,35 @@ private def opFixtures : List CrossOp :=
 #guard toCrossTerm (.app .w32 (.externalResult 1 2) [.C32 1, .C32 2, .C32 3]) ==
   .external 2 [.c 1, .c 2, .c 3]
 
+namespace ABIPrefixFixtures
+
+-- One lookup's return term and observation share the ABI prefix. Frozen bytes
+-- belong only to the observation, exactly as in the helper generators.
+private def lookupFixture (pointer : Term) (bytes : List Term) : Term × Predicate :=
+  (.app .w32 (.externalResult 7 0) [.C32 1, .C32 42, pointer],
+    .helper 7 .lookup ([.C32 42, pointer] ++ bytes))
+
+private def normalizedLookup (pointer : Term) (bytes : List Term) : CrossTerm × CrossPred :=
+  let (result, observation) := lookupFixture pointer bytes
+  (toCrossTerm result, toCross mutationEnv observation)
+
+private def returnAndFrozenKey : Bool :=
+  normalizedLookup (.V32 100) [.C32 9] ==
+    (.external 0 [.c 1, .c 42], .helper (.lookup (.c 42) [.c 9]))
+#guard returnAndFrozenKey
+
+private def droppedPointerEqual : Bool :=
+  normalizedLookup (.V32 100) [.C32 9] == normalizedLookup (.V32 200) [.C32 9]
+#guard droppedPointerEqual
+
+private def differentFrozenKeyDistinct : Bool :=
+  let a := normalizedLookup (.V32 100) [.C32 9]
+  let b := normalizedLookup (.V32 200) [.C32 10]
+  a.1 == b.1 && a.2 != b.2
+#guard differentFrozenKeyDistinct
+
+end ABIPrefixFixtures
+
 -- Live 2026-10-14 20:20 pairs: loc is the host atom location, not position.
 -- Branch directions below are forced from the compare-tree edge, as on the host.
 private def liveEnvRJson : String :=
@@ -1124,6 +1181,26 @@ private def liveNode31FlatR : String :=
   .app .add [.var 4, .c 38]
 #guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .V32 5], .C32 10]) ==
   .app .add [.app .add [.var 5, .var 4], .c 10]
+
+#guard toCrossTerm (.app .w32 (.add .w32) [.C32 40, .app .w32 (.add .w32) [.C32 18, .V32 4]]) ==
+  .app .add [.var 4, .c 58]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 4294967280], .C32 15]) ==
+  .app .add [.var 4, .c (-1)]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 4294967280], .C32 16]) ==
+  .app .add [.var 4, .c 0]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 2147483647], .C32 1]) ==
+  .app .add [.var 4, .c 2147483648]
+#guard (CrossTerm.compareBits (.app .add [.var 4, .c 2147483648])) == 64
+#guard toCrossCond envR ⟨.app .w32 (.add .w32) [.V32 4, .V32 5], .geu,
+    .app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 2147483647], .C32 1]⟩ ==
+  .packetBound (.var 4) ⟨.geu, 64⟩ (.app .add [.var 4, .c 2147483648])
+#guard toCrossTerm (.app .w32 (.add .w32) [.V32 4, .C32 0]) ==
+  .app .add [.var 4, .c 0]
+#guard toCrossTerm (.app .w32 (.add .w32) [.V32 4, .C32 18, .C32 40]) ==
+  .app .add [.var 4, .c 18, .c 40]
+#guard toCrossTerm (.app .w32 (.add .w32)
+    [.app .w32 (.add .w32) [.V32 4, .C32 18, .C32 40], .C32 1]) ==
+  .app .add [.app .add [.var 4, .c 18, .c 40], .c 1]
 #guard exportCrossPredNormalize liveEnvRJson liveNode15BranchR ==
   exportCrossPredNormalize liveEnvRJson liveNode15FlatR
 #guard exportCrossPredNormalize liveEnvRJson liveNode31BranchR ==
