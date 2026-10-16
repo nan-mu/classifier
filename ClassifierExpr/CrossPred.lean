@@ -127,6 +127,14 @@ theorem abiPrefix_zero_take (args : List Term) : abiPrefix 0 args = args.take 2 
 
 theorem abiPrefix_zero_three (a b c : Term) : abiPrefix 0 [a,b,c] = [a,b] := rfl
 
+theorem abiPrefix_zero_cons_cons (a b : Term) (tail : List Term) :
+    abiPrefix 0 (a :: b :: tail) = [a, b] := rfl
+
+theorem abiPrefix_zero_append (ret key : List Term) (h : 2 ≤ ret.length) :
+    abiPrefix 0 (ret ++ key) = abiPrefix 0 ret := by
+  simp only [abiPrefix_zero_take, List.take_append, Nat.sub_eq_zero_of_le h,
+    List.take_zero, List.append_nil]
+
 theorem abiPrefix_zero_singleton (a : Term) : abiPrefix 0 [a] = [a] := rfl
 
 theorem abiPrefix_zero_length_le (args : List Term) : (abiPrefix 0 args).length ≤ 2 := by
@@ -227,9 +235,10 @@ private def combineAffine : AffineAdd → AffineAdd → Option AffineAdd
   | .base t x, .pure y | .pure y, .base t x => some (.base t (x + y))
   | .base _ _, .base _ _ => none
 
-/-- Lean-side cross-term normalization; there is no host folding counterpart.
-Two non-constant bases and non-binary `add` nodes do not fold.
-Sums of `.c` leaves are exact `Int` sums. -/
+/-- Whole-term normalization of `add` sums its `.c` leaves to one exact `Int`.
+The result retains a single non-constant base plus that sum, or just the sum.
+At the boundary of two non-constant bases or a non-binary `add` node,
+the sorted binary application is retained. -/
 private def affineAdd : CrossTerm → Option AffineAdd
   | .c k => some (.pure k)
   | .app .add [a, b] =>
@@ -1120,6 +1129,51 @@ private def differentFrozenKeyDistinct : Bool :=
   a.1 == b.1 && a.2 != b.2
 #guard differentFrozenKeyDistinct
 
+private def complexEnv : CrossEnv :=
+  { maps := [⟨.c 42, 4, 4⟩] }
+
+private def complexPointer : Term :=
+  .app .w32 (.add .w32) [.V32 4, .app .w32 (.add .w32) [.C32 18, .C32 40]]
+
+private def differentComplexPointer : Term :=
+  .app .w32 (.add .w32) [.V32 6, .app .w32 (.add .w32) [.C32 20, .C32 41]]
+
+-- Node 15's four byte trees, with a nested constant offset inside inputByte.
+private def complexKeyBytes (offset : String) : Option (List Term) :=
+  ([0, 8, 16, 24] : List Nat).mapM fun bit =>
+    parseTerm s!"extract{bit},8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,{offset})))),0)))"
+
+private def normalizedComplexLookup (pointer : Term) (offset : String) :
+    Option (CrossTerm × CrossPred) := do
+  let bytes ← complexKeyBytes offset
+  let (result, observation) := lookupFixture pointer bytes
+  pure (toCrossTerm result, toCross complexEnv observation)
+
+private def complexReturnPointerIndependent : Bool :=
+  match normalizedComplexLookup complexPointer "add32(18,6)",
+      normalizedComplexLookup differentComplexPointer "add32(18,6)" with
+  | some a, some b =>
+    a.1 == .external 0 [.c 1, .c 42] && b.1 == .external 0 [.c 1, .c 42]
+  | _, _ => false
+#guard complexReturnPointerIndependent
+
+private def complexKeyNormalizes : Bool :=
+  match normalizedComplexLookup complexPointer "add32(18,6)" with
+  | some (_, .helper (.lookup (.c 42) key)) =>
+    let byte : CrossTerm :=
+      .app (.low 8) [.app (.inputByte 0) [.var 4, .app .add [.var 4, .c 24]]]
+    key == [.app (.extract 0 8) [byte], .app (.extract 8 8) [byte],
+      .app (.extract 16 8) [byte], .app (.extract 24 8) [byte]]
+  | _ => false
+#guard complexKeyNormalizes
+
+private def complexDeepKeyDistinct : Bool :=
+  match normalizedComplexLookup complexPointer "add32(18,6)",
+      normalizedComplexLookup complexPointer "add32(18,7)" with
+  | some a, some b => a.1 == b.1 && a.2 != b.2
+  | _, _ => false
+#guard complexDeepKeyDistinct
+
 end ABIPrefixFixtures
 
 -- Live 2026-10-14 20:20 pairs: loc is the host atom location, not position.
@@ -1175,6 +1229,11 @@ private def liveNode31FlatR : String :=
   .app .add [.var 4, .c 58]
 #guard toCrossTerm (.app .w64 (.add .w64) [.app .w64 (.add .w64) [.V32 4, .C64 18], .C64 40]) ==
   .app .add [.var 4, .c 58]
+#guard toCrossTerm (.app .w32 (.add .w32)
+    [.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 18], .C32 20], .C32 21]) ==
+  .app .add [.var 4, .c 59]
+#guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 18], .C32 40]) ==
+  toCrossTerm (.app .w64 (.add .w64) [.app .w64 (.add .w64) [.V64 4, .C64 18], .C64 40])
 #guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.V32 4, .C32 18], .C32 20]) ==
   .app .add [.var 4, .c 38]
 #guard toCrossTerm (.app .w32 (.add .w32) [.app .w32 (.add .w32) [.C32 18, .V32 4], .C32 20]) ==

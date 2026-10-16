@@ -237,7 +237,7 @@ RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构
 eBPF 的局部候选由 [EBPF/Step.lean](../../EBPF/Step.lean)生成，内存写入观察由 [EBPF/Memory.lean](../../EBPF/Memory.lean)与值效果一起返回：
 
 - Helper 覆盖 [EBPF.Encode](../../EBPF/Encode.lean) 解码出的 `.callHelper imm`，即操作码 `0x85` 且 `dst=src=off=0`。`EBPF.ebpfStep` 先检查下一原始槽位存在，再由 [parseHelperCall](../../EBPF/Helper.lean) 检查执行前 Expr 的 `keysUnique` 与 `wellTyped`，按立即数编号读取恰好 `helperArity kind` 个完整 64 位参数；缺失或宽度不符为 `UndefinedSrc`。成功时发射 `.helper event call.kind args`，创建 `real64:0` 返回等式；lookup 另创建 `Reg.mapDword event 0 = Term.regVar event (Reg.real64 0)`。`EBPF.freezeHelperArgs` 经统一的 `EBPF.Memory.availableBufferBytes` 从唯一可解析的 Stack、Map、Packet、Context 冻结字节，lookup/delete 追加完整键，update 仅在键和值均齐备时追加全部尾部；每项为 Term64。失败保留原 ABI 参数，返回项仍只使用该前缀。独立 ABI 与事件解释见[Helper 共同规则](../Predicate/Helper谓词.md#类型定义)。
-  Stack、Map、Context 仍要求已有的唯一、位宽匹配的完整等式，不补造字节项。Packet 分支要求 `packetRoot` 经 ctx-data 单元读取取得包基，以该包基解析地址，并检查非负偏移和 Meta 的 `packetBytes` 范围；`availableBufferBytes` 保留 `inputBase`，只对 Packet 接纳 `PacketAccess.read` 产生的输入项。未记录的包字节可物化 `inputByte`，已写入字节复用当前完整等式，仅有比较关系时读取无定义；详细定义域见[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)。
+  Stack、Map、Context 仍要求已有的唯一、位宽匹配的完整等式。Packet 分支要求 `packetRoot` 经 ctx-data 单元读取取得包基，以该包基解析地址，并检查非负偏移和 Meta 的 `packetBytes` 范围；`availableBufferBytes` 保留 `inputBase`，只对 Packet 接纳 `PacketAccess.read` 产生的输入项。未记录的包字节可物化 `inputByte`，已写入字节复用当前完整等式，仅有比较关系时读取无定义；详细定义域见[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)。
   Context 的逐字节冻结只投影两个已有 Context32 单元；普通地址解析仍仅允许这两个单元的完整四字节读取，没有因此增加普通 Context 访问权限。
   每个字节的资源解析须唯一，并以 `BufferOrigin` 要求整段保持同一 Stack、Context、Map 或 Packet 身份，跨资源拼接不冻结完整尾。
 
