@@ -25,12 +25,12 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lake_lib.display());
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
-    // EBPF before PathMerge/RV32 so unresolved compare/expand symbols resolve from
-    // the arch-specific dylib when Lake packs them there; PathMerge still linked.
+    // EBPF before Node/RV32 so unresolved compare/expand symbols resolve from
+    // the arch-specific dylib when Lake packs them there; Node still linked.
     println!("cargo:rustc-link-lib=dylib=classifier_EBPF");
-    println!("cargo:rustc-link-lib=dylib=classifier_RV32IMC");
-    println!("cargo:rustc-link-lib=dylib=classifier_PathMerge");
-    println!("cargo:rustc-link-lib=dylib=classifier_ClassifierExpr");
+    println!("cargo:rustc-link-lib=dylib=classifier_RV32");
+    println!("cargo:rustc-link-lib=dylib=classifier_Node");
+    println!("cargo:rustc-link-lib=dylib=classifier_Core");
     println!("cargo:rustc-link-lib=dylib=leanshared");
     println!("cargo:rustc-link-lib=dylib=Init_shared");
 

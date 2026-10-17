@@ -56,7 +56,7 @@ def decodeInsnWord (word : UInt64) : Insn :=
   let dst := (n >>> 8) % 16
   let src := (n >>> 12) % 16
   let offBits := (n >>> 16) % 65536
-  let offset := ClassifierExpr.s 16 offBits
+  let offset := Core.s 16 offBits
   let imm := UInt32.ofNat (n >>> 32)
   let registerSource := opcode % 16 ≥ 8
   let operand := if registerSource then Source.reg src else .imm imm
@@ -101,7 +101,7 @@ def decodeInsnWord (word : UInt64) : Insn :=
     if dst == 0 && src == 0 && imm == 0 then .ja offset else .illegal word
   else if opcode == 0x06 then
     if dst == 0 && src == 0 && offBits == 0 then
-      .ja (ClassifierExpr.s 32 imm.toNat)
+      .ja (Core.s 32 imm.toNat)
     else .illegal word
   else if opcode == 0x18 then
     if dst ≤ 9 && offBits == 0 && src ≤ 6 then
@@ -110,7 +110,7 @@ def decodeInsnWord (word : UInt64) : Insn :=
   else if opcode == 0x85 then
     if dst == 0 && src == 0 && offBits == 0 then .callHelper imm else .illegal word
   else if cls == 4 || cls == 7 then
-    let width := if cls == 4 then ClassifierExpr.Width.w32 else .w64
+    let width := if cls == 4 then Core.Width.w32 else .w64
     if dst ≥ 10 then .illegal word
     else if code == 13 then
       if src == 0 && offBits == 0 && [16, 32, 64].contains imm.toNat &&

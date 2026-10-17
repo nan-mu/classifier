@@ -19,7 +19,7 @@
 - [寄存器/包字节](寄存器/包字节.md)：包字节读写。
 - [Term/位向量](Term/位向量.md)：记号与位向量。
 - [Term/数值函数](Term/数值函数.md)：共同数值函数。
-- [工程模块与迁移](../NodeInference/路径合并FFI.md#工程模块与迁移)：表达式实现的 ClassifierExpr 归属，以及与 PathMerge、RV32IMC、EBPF 的依赖分工；跨架构研究与证明限度见[语义范围与证据边界](../NodeInference/路径合并FFI.md#语义范围与证据边界)。
+- [工程模块与迁移](../NodeInference/路径合并FFI.md#工程模块与迁移)：表达式实现的 Core 归属，以及与 Node、RV32、EBPF 的依赖分工；跨架构研究与证明限度见[语义范围与证据边界](../NodeInference/路径合并FFI.md#语义范围与证据边界)。
 
 ## 表达式定义
 
@@ -89,7 +89,7 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 \(\rho,\nu\) 是关系的数学解释。推论仅保证单个关系的解释保持性，不包含两个架构的中间关系集合相同这一结论。
 
-含外部结果或包输入的良构右侧项在固定完整补全 \(\theta\) 下也有相同的单关系结论。Lean 实现 `interpretExpr ρ ν θ e : Option Bool` 显式接收外部环境；在 `θ.Total` 与 `e.term.wellFormed=true` 下，`ClassifierExpr.solve_interpret` 保持右侧解释，`solve_width` 保持位宽检查，故按 `interpretExpr` 定义可得求解前后结果相等。这是由项定理得到的推论，未另行声称存在独立的 Expr 保持定理。一般项定理及部分环境反例见 [solve 的解释保持性](Term/solve.md#解释保持性)。
+含外部结果或包输入的良构右侧项在固定完整补全 \(\theta\) 下也有相同的单关系结论。Lean 实现 `interpretExpr ρ ν θ e : Option Bool` 显式接收外部环境；在 `θ.Total` 与 `e.term.wellFormed=true` 下，`Core.solve_interpret` 保持右侧解释，`solve_width` 保持位宽检查，故按 `interpretExpr` 定义可得求解前后结果相等。这是由项定理得到的推论，未另行声称存在独立的 Expr 保持定理。一般项定理及部分环境反例见 [solve 的解释保持性](Term/solve.md#解释保持性)。
 
 ## 关系符定义
 

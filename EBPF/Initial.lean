@@ -1,7 +1,7 @@
-import PathMerge.Path
+import Node.Path
 
 namespace EBPF
-open ClassifierExpr PathMerge
+open Core Node
 
 /-! External correspondence TBD.
 The entry binds r1=tCtx, r10=tSp, xdp_md.data=tData and data_end=tData+packetBytes.

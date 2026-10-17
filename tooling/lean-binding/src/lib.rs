@@ -1,5 +1,5 @@
-//! Thin Rust interface over Lean `@[export]` symbols from `ClassifierExpr`,
-//! `PathMerge`, `RV32IMC`, and `EBPF`.
+//! Thin Rust interface over Lean `@[export]` symbols from `Core`,
+//! `Node`, `RV32`, and `EBPF`.
 //!
 //! FFI runs on a fixed pool of [`LEAN_WORKERS`] Lean-initialized OS threads
 //! (`lean_initialize_thread`). The process runtime is initialized once; there is
@@ -26,9 +26,9 @@ pub(crate) mod ffi {
         pub fn lean_finalize_thread();
 
         pub fn initialize_Init(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_ClassifierExpr(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_PathMerge(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_RV32IMC(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Core(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Node(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_RV32(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_EBPF(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
@@ -71,7 +71,7 @@ pub(crate) mod ffi {
             exprs_json: LeanObj,
             preds_json: LeanObj,
         ) -> LeanObj;
-        /// HelperOnly ExactConfig merge (`PathMerge/Merge.lean`).
+        /// HelperOnly ExactConfig merge (`Node/Merge.lean`).
         pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
 
         pub fn lean_ebpf_expand_create(meta_json: LeanObj) -> LeanObj;
@@ -90,14 +90,14 @@ pub(crate) mod ffi {
             budget: u32,
         ) -> LeanObj;
 
-        /// Structural same/diff of two run snapshots (`PathMerge/Compare.lean`).
+        /// Structural same/diff of two run snapshots (`Node/Compare.lean`).
         pub fn lean_compare_run_same_diff(request_json: LeanObj) -> LeanObj;
 
-        /// CrossPred normalize (`ClassifierExpr.exportCrossPredNormalize`).
+        /// CrossPred normalize (`Core.exportCrossPredNormalize`).
         /// Success is CrossPred JSON. Failure is the four characters `null`.
         pub fn lean_cross_pred_normalize(env_json: LeanObj, pred_json: LeanObj) -> LeanObj;
 
-        /// CrossPred unify (`ClassifierExpr.exportCrossPredUnify`).
+        /// CrossPred unify (`Core.exportCrossPredUnify`).
         /// Success is unify JSON. Failure is the four characters `null`.
         pub fn lean_cross_pred_unify(request_json: LeanObj) -> LeanObj;
     }
@@ -142,9 +142,9 @@ pub fn init() {
         ffi::lean_initialize();
         let world = std::ptr::null_mut();
         let _ = ffi::initialize_Init(1, world);
-        let _ = ffi::initialize_classifier_ClassifierExpr(1, world);
-        let _ = ffi::initialize_classifier_PathMerge(1, world);
-        let _ = ffi::initialize_classifier_RV32IMC(1, world);
+        let _ = ffi::initialize_classifier_Core(1, world);
+        let _ = ffi::initialize_classifier_Node(1, world);
+        let _ = ffi::initialize_classifier_RV32(1, world);
         let _ = ffi::initialize_classifier_EBPF(1, world);
         ffi::lean_io_mark_end_initialization();
     });
@@ -187,7 +187,7 @@ pub mod rv32 {
     use super::{ffi, lean_call};
     use std::ffi::CStr;
 
-    /// Instruction tags matching `RV32IMC.insnTag`.
+    /// Instruction tags matching `RV32.insnTag`.
     pub mod tag {
         pub const ILLEGAL: u32 = 0;
         pub const LUI: u32 = 2;

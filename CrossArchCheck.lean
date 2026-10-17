@@ -1,6 +1,7 @@
-import PathMerge.Compare
+import Node.Compare
 import EBPF.Expand
-import RV32IMC.Expand
+import RV32.Expand
+import CrossArch.CompoundPacketFixture
 
 open Lean
 
@@ -31,7 +32,7 @@ private def snapshotRun (arch response : String) : Except String Json := do
   pure (Json.mkObj [("arch", .str arch), ("nodes", .arr nodes), ("edges", .arr edges)])
 
 private def report (left right : Json) : Except String Json :=
-  Json.parse (PathMerge.exportCompareRunSameDiff
+  Json.parse (Node.exportCompareRunSameDiff
     (Json.mkObj [("left", left), ("right", right)]).compress)
 
 private def droppedRun (run : Json) : Except String Json := do
@@ -87,12 +88,12 @@ private def checks : Except String (List String) := do
       let ps ← fieldArray n "predicates"
       let returns ← ps.toList.filterMapM fun p => do
         if (← fieldString p "kind") != "ret" then pure none
-        else pure (ClassifierExpr.parseTerm (← fieldString p "term") .w64)
+        else pure (Core.parseTerm (← fieldString p "term") .w64)
       pure (some returns)
-  if !terminalReturns.any (·.contains (ClassifierExpr.Term.C64 3)) then
+  if !terminalReturns.any (·.contains (Core.Term.C64 3)) then
     throw "eBPF fixture missing concrete TX return 3"
   let ebpf ← snapshotRun "ebpf" ebpfResponse
-  let rv32Response := RV32IMC.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60
+  let rv32Response := RV32.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60
   let rv32Snapshot ← Json.parse rv32Response
   let rv32Status ← fieldString rv32Snapshot "status"
   let rv32Reason ← fieldString rv32Snapshot "reason"

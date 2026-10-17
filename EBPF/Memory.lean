@@ -1,10 +1,10 @@
 import EBPF.Initial
 import EBPF.Expr
-import ClassifierExpr.Virtual
-import ClassifierExpr.MapLayout
+import Core.Virtual
+import Core.MapLayout
 
 namespace EBPF
-open ClassifierExpr PathMerge
+open Core Node
 
 inductive ResolvedAccess where
   | cells (parts : List CellAccess)

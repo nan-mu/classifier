@@ -1,7 +1,7 @@
 import EBPF.Step
 
 namespace EBPF
-open ClassifierExpr
+open Core
 
 /-- The 58 little-endian UInt64 slots of `/Volumes/SSD/bs/build/just_tx/bpf.o`,
 section `xdp1`. This is raw decode input, not a compacted instruction list:

@@ -1,6 +1,6 @@
 # Classifier
 
-基于 Lean 的指令符号表达式与有预算展开项目。`ClassifierExpr` 提供寄存器、符号项、表达式和 wire 类型。`PathMerge` 比较 HelperOnly 的 ExactConfig。`RV32IMC` 提供 RV32 解码、值转换和有预算展开。`EBPF/` 提供有限解码、ALU 值转换、入口和局部 step。
+基于 Lean 的指令符号表达式与有预算展开项目。`Core` 提供寄存器、符号项、表达式和 wire 类型。`Node` 比较 HelperOnly 的 ExactConfig。`RV32` 提供 RV32 解码、值转换和有预算展开。`EBPF/` 提供有限解码、ALU 值转换、入口和局部 step。
 
 ## 文档入口
 
@@ -47,10 +47,11 @@ lake test
 
 ## 工作区布局
 
-- `ClassifierExpr/`：数学值对象、wire 类型与解析。
-- `PathMerge/`：路径与 HelperOnly ExactConfig 合并。
-- `RV32IMC/`：RV32 解码、展开、预算，以及 create 和 step。
+- `Core/`：数学值对象、wire 类型与解析（跨架构簇在 `Core/Cross/`）。
+- `Node/`：路径与 HelperOnly ExactConfig 合并。
+- `RV32/`：RV32 解码、展开、预算，以及 create 和 step。
 - `EBPF/`：有限解码、ALU 值转换、入口和局部 step。
+- `CrossArch/`：双架构夹具（不进 server 共享库）。
 - `tooling/`：Rust/Cargo 工作区、前后端、FFI 绑定、启动工具与测试镜像。组件说明见 [工具工作区](tooling/README.md)。
 - `doc/`：数学定义、推导、证明与研究文档。
 

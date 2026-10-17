@@ -1,8 +1,9 @@
 import EBPF.Expand
-import RV32IMC.Expand
-import ClassifierExpr.ObservationEq
+import RV32.Expand
+import Core.Cross.Unify
+import CrossArch.CompoundPacketFixture
 
-open ClassifierExpr PathMerge
+open Core Node
 open Lean (Json)
 
 namespace SemanticCheck
@@ -281,8 +282,8 @@ private def rvWord (funct : Nat) : UInt32 :=
   UInt32.ofNat (0x02000033 + 9 * 1048576 + 8 * 32768 + funct * 4096 + 10 * 128)
 
 private def rv (words : Array UInt32) (E : ExprSet)
-    (ctx : RV32IMC.StepContext := {}) : StepResult :=
-  RV32IMC.inferStep (RV32IMC.decodeProgram words) ctx 70 0 ⟨E, []⟩
+    (ctx : RV32.StepContext := {}) : StepResult :=
+  RV32.inferStep (RV32.decodeProgram words) ctx 70 0 ⟨E, []⟩
 
 private def rvMChecks : Except String Unit := do
   let rows : List (Nat × Op × Nat) := [
@@ -364,7 +365,7 @@ private def helperChecks : Except String Unit := do
     |>.insertEq (Reg.real32 14) (Term.C32 0)
     |>.insertEq (Reg.sw 8589934592) (Term.C32 0x04030201)
     |>.insertEq (Reg.sw 8589934596) (Term.C32 0x08070605)
-  let ctx : RV32IMC.StepContext := {
+  let ctx : RV32.StepContext := {
     imageBase := some 0x1000, helperAddress := some 0x1100, maps := maps }
   for (id, kind, abi, tail) in [
       (1, HelperKind.lookup, [Term.C32 42, key32], [Term.C32 4, Term.C32 5, Term.C32 6]),
@@ -623,12 +624,12 @@ private def ffiChecks : Except String Unit := do
     "exit" [(Reg.real64 0, Term.C64 7)] [.ret (Term.C64 7)]
   let rvMeta := "{\"base\":4096,\"helperAddress\":4352,\"returnAddress\":8192}"
   expectStep "RV String FFI actual open M"
-    (RV32IMC.exportRv32ExpandStep #[rvWord 5, 0x0001] rvMeta 70 0
+    (RV32.exportRv32ExpandStep #[rvWord 5, 0x0001] rvMeta 70 0
       "[{\"reg\":\"real32:8\",\"rel\":\"eq\",\"term\":\"v32:41\"},{\"reg\":\"real32:9\",\"rel\":\"eq\",\"term\":\"v32:42\"}]" "[]")
     "1" [(Reg.real32 8, Term.V32 41), (Reg.real32 9, Term.V32 42),
       (Reg.real32 10, .app .w32 (.udiv .w32 4294967295) [Term.V32 41, Term.V32 42])] []
   expectFailure "RV String FFI illegal all-or-nothing"
-    (RV32IMC.exportRv32ExpandStep #[0xffffffff, 0x0001] rvMeta 70 0 "[]" "[]") "LocalReject"
+    (RV32.exportRv32ExpandStep #[0xffffffff, 0x0001] rvMeta 70 0 "[]" "[]") "LocalReject"
 
 private def rvFixture : Array UInt32 :=
   #[4417, 50694, 50210, 49702, 2048, 16644, 16716, 14976531, 17669, 180744035, 12899843, 26285,
@@ -680,7 +681,7 @@ private def regressionChecks : Except String Unit := do
         else pure (parseTerm (← strField p "term") .w64)
       pure (some rs)
   expect "just_tx eBPF concrete TX return" (terminalReturns.any (·.contains (Term.C64 3))) true
-  let r ← Json.parse (RV32IMC.exportRv32BoundWordsSnapshot rvFixture
+  let r ← Json.parse (RV32.exportRv32BoundWordsSnapshot rvFixture
     "{\"base\":1077412352,\"helperAddress\":1077411840,\"returnAddress\":8192,\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}" 60 60)
   expect "just_tx RV frontier status" (← strField r "status") "fail"
   expect "just_tx RV frontier reason" (← strField r "reason") "UnboundTarget"

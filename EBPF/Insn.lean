@@ -1,7 +1,7 @@
-import ClassifierExpr.Expr
+import Core.Expr
 
 namespace EBPF
-open ClassifierExpr
+open Core
 
 /-- Immediate and register operands retain the raw 32-bit immediate bits. -/
 inductive Source where

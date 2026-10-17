@@ -1,7 +1,7 @@
 import EBPF.Memory
 
 namespace EBPF
-open ClassifierExpr PathMerge
+open Core Node
 
 /-- Native ABI prefix: immediate helper id, r1 through rn at full width. -/
 structure HelperCall where

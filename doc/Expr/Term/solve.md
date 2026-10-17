@@ -149,7 +149,7 @@ R1 以 \(D_w\) 为判据：只有闭项且 \(D_w(t)\) 取得数值时才折为�
 \]
 **证明。** 加法脊内常数已合并并置于末位，非恒等项的次序与结合方向固定，规则暴露范围内的相消项和单位元项已消去。若规范化结果闭合且可求值，最后一次整项 R1 将其折成规范常元；否则第二次 R1 仍取得相同的未定结果。未暴露的子树保持原项，第二次规范化只会再次收集同一有序加项及同一模常数，再次重建得到原结果。故第二次 solve 不变。若启用可选 R7，还须证明投影消去后的结果满足同一规范形条件。\(\square\)
 
-Lean 的 `ClassifierExpr.solve_idempotent` 对任意原始 `Term` 证明命题 5，`ClassifierExpr.solve_width` 证明位宽保持，`ClassifierExpr.solve_support` 证明输出变元属于输入变元集合。这三个定理不要求输入良构；坏签名输入由 `solve` 原样保留。良构输入的良构保持由 `foldClosed_wellFormed`、`normalizeAlgebra_wellFormed` 和末次 `foldClosed_wellFormed` 组合得到，`normalizeAlgebra_idempotent` 的前提为输入 `wellFormed=true`。这些定理位于 [Term.lean](../../../ClassifierExpr/Term.lean)，均已通过 Lean kernel。
+Lean 的 `Core.solve_idempotent` 对任意原始 `Term` 证明命题 5，`Core.solve_width` 证明位宽保持，`Core.solve_support` 证明输出变元属于输入变元集合。这三个定理不要求输入良构；坏签名输入由 `solve` 原样保留。良构输入的良构保持由 `foldClosed_wellFormed`、`normalizeAlgebra_wellFormed` 和末次 `foldClosed_wellFormed` 组合得到，`normalizeAlgebra_idempotent` 的前提为输入 `wellFormed=true`。这些定理位于 [Term.lean](../../../Core/Term.lean)，均已通过 Lean kernel。
 
 ## 解释保持性
 
@@ -166,7 +166,7 @@ Lean 的 `ClassifierExpr.solve_idempotent` 对任意原始 `Term` 证明命题 5
 
 若外部解释允许缺失值，命题 7 的等式一般不成立。令 \(e\) 为缺少 \(\theta\) 解释的外部结果项，则严格部分解释对 \(\mathrm{SUB}(e,e)\) 返回 `none`，R5 化简后 \(C_w(0)\) 的解释为 `some 0`。因此，完整补全上的数值等式与任意部分 `Option` 求值结果相等是两个不同命题。
 
-命题 7 的 Lean 对应为 [SolvePreservation.lean](../../../ClassifierExpr/SolvePreservation.lean) 导出的 `ClassifierExpr.solve_interpret`：对任意 `ν : Var → Nat`、`θ : ExternalInterpretation` 和 `t : Term`，在 `θ.Total` 与 `t.wellFormed=true` 下，`interpretTerm ν θ (solve t) = interpretTerm ν θ t`。它覆盖开放项及完整 R1 至 R6，已通过 Lean kernel。R2 至 R6 的一般保持定理为同一文件中的 `ClassifierExpr.normalizeAlgebra_interpret`，使用相同前提；R1 的 `ClassifierExpr.foldClosed_interpret` 对任意部分环境已成立。文件内 `SolvePreservation` 命名空间维护辅助证明，两个保持定理实际导出在 `ClassifierExpr` 命名空间。
+命题 7 的 Lean 对应为 [SolvePreservation.lean](../../../Core/SolvePreservation.lean) 导出的 `Core.solve_interpret`：对任意 `ν : Var → Nat`、`θ : ExternalInterpretation` 和 `t : Term`，在 `θ.Total` 与 `t.wellFormed=true` 下，`interpretTerm ν θ (solve t) = interpretTerm ν θ t`。它覆盖开放项及完整 R1 至 R6，已通过 Lean kernel。R2 至 R6 的一般保持定理为同一文件中的 `Core.normalizeAlgebra_interpret`，使用相同前提；R1 的 `Core.foldClosed_interpret` 对任意部分环境已成立。文件内 `SolvePreservation` 命名空间维护辅助证明，两个保持定理实际导出在 `Core` 命名空间。
 
-Lean 的 `θ.Total` 只要求外部函数处处返回某个自然数，节点解释再按载体取模；它比数学完整补全的字节值域条件弱，见 [Term 的解释补全](Term.md#未解释运算的解释补全)。数值代数引理见 [NumericProofs.lean](../../../ClassifierExpr/NumericProofs.lean) 的 `ADD_assoc`、`ADD_comm`、`SUB_eq_ADD_NEG`、`SUB_self`、`XOR_self` 及相应单位元定理。可选 R7 不在上述已证规则范围内。化简不声称完备：语义等价而规范形不同的项仍视为不同项。
+Lean 的 `θ.Total` 只要求外部函数处处返回某个自然数，节点解释再按载体取模；它比数学完整补全的字节值域条件弱，见 [Term 的解释补全](Term.md#未解释运算的解释补全)。数值代数引理见 [NumericProofs.lean](../../../Core/NumericProofs.lean) 的 `ADD_assoc`、`ADD_comm`、`SUB_eq_ADD_NEG`、`SUB_self`、`XOR_self` 及相应单位元定理。可选 R7 不在上述已证规则范围内。化简不声称完备：语义等价而规范形不同的项仍视为不同项。
 

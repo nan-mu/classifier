@@ -112,7 +112,7 @@ copies and constant add/subtract aliases of one lookup return, requiring that
 first-word equality and an access contained in one four-byte word. Reads and
 subword stores materialize untouched later words through `ExprEffect.inputs`;
 full-word stores can create them directly. Reads write only the real
-destination; stores use ClassifierExpr CellAccess and preserve other bits for
+destination; stores use Core CellAccess and preserve other bits for
 subword writes. Changing a0 does not change the lookup identity. Null/numeric
 pointers, other helper returns, symbolic offsets and cross-word accesses
 reject. The event-local association proves neither lookup success nor actual
@@ -128,7 +128,7 @@ undecodable instruction. This is a prefix heuristic, not an ELF executable-secti
 proof. Container parsing and helper binding use `xpost-elf` independently.
 
 `tooling/fixtures/esp32c3.bin` supplies the generated
-`RV32IMC/Esp32c3Program.lean`. Its analysis now rejects the symbolic packet offset
+`RV32/Esp32c3Program.lean`. Its analysis now rejects the symbolic packet offset
 at position 25 before the queued out-of-image jump at position 36. It remains a
 partial-graph rejection regression. Regenerate those words with:
 

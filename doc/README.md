@@ -15,7 +15,7 @@ create、step、history、merge 与合并步使用数学契约；create 的入�
 7. [数学 step](NodeInference/step.md)：接收指令序列、当前指令序号与执行前状态，返回候选的局部语义增量；调用方按既有规则施加组合，其归属[尚待讨论](NodeInference/step.md#状态变换的组合)。统一的 \(\mathrm{Record}_{\mathbf I}\) 与 \(\mathrm{History}_{\mathbf I}\) 见 [共同 History](NodeInference/History.md#逐步记录与统一类型)，记录涵盖 Helper、Branch、Return、MapWrite 与 PacketWrite 的局部结果；混合观察的组合边界见[History 的状态组合定义域](NodeInference/History.md#状态组合的定义域)。RV32IMC 产品 step 的接口差异见[工程边界](NodeInference/路径合并FFI.md#共同接口与实现边界)。
 8. [证明义务-路径合并完备](NodeInference/Jump/证明义务-路径合并完备.md)：精确配置共享判据的完备性及在前提 P1 至 P4 下的有限后续共享性质。
 9. [共同路径合并契约](NodeInference/Jump/路径合并-接口契约.md)：同次分支两侧记录的 merge 契约，规定后缀复用、特殊循环准入与拒绝的结果保证及证据义务。
-10. [共同分支合并处理](NodeInference/分支合并处理.md)：一次条件分支的推进顺序、merge-step 与结果处置。PathMerge 的精确配置比较单 String 导出、线协议、运行诊断及证据边界见[路径合并FFI](NodeInference/路径合并FFI.md)。
+10. [共同分支合并处理](NodeInference/分支合并处理.md)：一次条件分支的推进顺序、merge-step 与结果处置。Node 的精确配置比较单 String 导出、线协议、运行诊断及证据边界见[路径合并FFI](NodeInference/路径合并FFI.md)。
 11. [跨架构比较](NodeInference/跨架构比较.md)：[跨架构谓词](Predicate/跨架构谓词.md)的判断、规范 JSON、位置覆盖和控制流对应；既有七类结构诊断的线协议及其实现偏差单独保留，结构结论不建立行为等价。
 
 每个主题的定义和公式在对应正文中维护，其他正文通过链接引用。
@@ -29,7 +29,7 @@ create、step、history、merge 与合并步使用数学契约；create 的入�
 
 ## 证明之间的依赖
 
-良构符号项与纯数值全函数假设给出纯数值闭项求值的良定义性。solve 的 R1 至 R6 解释保持已有一般 Lean 定理 `ClassifierExpr.solve_interpret`，前提为 `θ.Total` 与输入良构；数学完整补全及任意部分环境的区别见[解释保持性](Expr/Term/solve.md#解释保持性)。值绑定唯一性与严格覆写性质支撑初态、\(\sigma_i=(E_i,P_i)\) 和状态更新的结构有效性，其中 \(E_i\) 是 Expr 分量，\(P_i\) 是谓词分量。
+良构符号项与纯数值全函数假设给出纯数值闭项求值的良定义性。solve 的 R1 至 R6 解释保持已有一般 Lean 定理 `Core.solve_interpret`，前提为 `θ.Total` 与输入良构；数学完整补全及任意部分环境的区别见[解释保持性](Expr/Term/solve.md#解释保持性)。值绑定唯一性与严格覆写性质支撑初态、\(\sigma_i=(E_i,P_i)\) 和状态更新的结构有效性，其中 \(E_i\) 是 Expr 分量，\(P_i\) 是谓词分量。
 
 精确配置共享判据及其条件性后续一致性见[证明义务-路径合并完备](NodeInference/Jump/证明义务-路径合并完备.md)，共享后的完整历史解释仍需证明。该判据本身不证明 \(\sigma_i\) 符合真实指令语义。
 

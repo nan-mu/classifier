@@ -39,7 +39,7 @@ When the task touches expand, merge, or the viewer:
 
 Rust/Cargo workspace under `tooling/`: Lean FFI binding, Expand HTTP API,
 web graph viewer, fixtures, scripts, and CI — plus Lean math/implementation
-under `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`, and specs under
+under `Core/`, `Node/`, `RV32/`, `EBPF/`, and specs under
 `doc/`.
 
 ```text
@@ -56,8 +56,9 @@ tooling/fixtures/just_tx.elf    default Compact XDP ELF
 tooling/fixtures/xdp.elf        firewall / helper-call fixture
 .github/workflows/rust.yml      mirrors rust-ci.sh
 doc/                            math defs, proofs, research notes
-ClassifierExpr/ PathMerge/      Lean libraries
-RV32IMC/ EBPF/
+Core/ Node/ RV32/ EBPF/         Lean libraries
+Core/Cross/                     cross-arch normalize / unify
+CrossArch/                      dual-arch fixtures (not in server dylibs)
 ```
 
 Use Lake as the repo entrypoint (`lake build`, `lake test`, `lake run dev`).
@@ -98,7 +99,7 @@ supported expand contract is three stateless String FFI calls (via
 - `expand_merge(requestJson)` → exact-config merge verdict JSON
   (`merged` / `reject`). Request is arch-neutral: `taken` + `notTaken[]`
   applied snapshots and `observationModel: HelperOnly` (no program / Meta).
-  Export: `lean_expand_merge` in `PathMerge/Merge.lean`.
+  Export: `lean_expand_merge` in `Node/Merge.lean`.
 
 No Lean expand object stays alive across calls. Legacy snapshot helpers may exist
 for tests; do not grow new product paths on them.
@@ -157,7 +158,7 @@ lake run dev          # API :8788 (PORT overrides), Vite :5173
 After Lean or `doc/` edits that affect expand/merge semantics:
 
 ```bash
-lake build ClassifierExpr PathMerge RV32IMC EBPF
+lake build Core Node RV32 EBPF
 ```
 
 After any change under `tooling/**/*.rs`, `tooling/**/Cargo.toml`,

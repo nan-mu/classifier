@@ -1,10 +1,9 @@
 import EBPF.JustTxProgram
-import PathMerge.Budget
-import ClassifierExpr.Parse
-import EBPF.CompoundPacketFixture
+import Node.Budget
+import Core.Parse
 
 namespace EBPF
-open ClassifierExpr PathMerge
+open Core Node
 
 /-- Static entry and resource bindings, outside the executing SemState. -/
 structure Meta where

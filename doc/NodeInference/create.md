@@ -223,7 +223,7 @@ t_{\mathrm{packet}}(E_g)
 :=R_Z^\star(t_{\mathrm{data},g}).
 \]
 
-该项的数值解释是完整 32 位 data 值向 64 位的零扩展；入口时 \(t_{\mathrm{data},0}=t_{\mathrm{data}}\)。地址分类与 LDX W 的读取结果复用同一字段读取路径构造的根项。data 的完整等式缺失时，没有 Packet 分类候选。其实现对应为 [EBPF/Memory.lean](../../EBPF/Memory.lean) 的 `packetRoot` 与 [CellAccess.read](../../ClassifierExpr/Virtual.lean)。
+该项的数值解释是完整 32 位 data 值向 64 位的零扩展；入口时 \(t_{\mathrm{data},0}=t_{\mathrm{data}}\)。地址分类与 LDX W 的读取结果复用同一字段读取路径构造的根项。data 的完整等式缺失时，没有 Packet 分类候选。其实现对应为 [EBPF/Memory.lean](../../EBPF/Memory.lean) 的 `packetRoot` 与 [CellAccess.read](../../Core/Virtual.lean)。
 
 对字节数 \(b\in\{1,2,4,8\}\)，相对该根地址的自然数字节偏移 \(o\) 必须满足
 

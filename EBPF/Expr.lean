@@ -1,7 +1,7 @@
 import EBPF.Insn
 
 namespace EBPF
-open ClassifierExpr
+open Core
 
 private def readReg (E : ExprSet) (r : Nat) : Option Term := do
   if r > 10 then none else do

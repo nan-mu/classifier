@@ -1,9 +1,9 @@
 import EBPF.Encode
 import EBPF.Helper
-import PathMerge.Path
+import Node.Path
 
 namespace EBPF
-open ClassifierExpr PathMerge
+open Core Node
 
 /-- Static resource binding at the first raw slot of an LDDW instruction. -/
 structure ResourceLocation where
@@ -167,11 +167,11 @@ private def aluExitSequenceCheck : Bool := Id.run do
   let p := checkContext.entry
   let .ok root := buildE0 p | return false
   let .candidates [mov] := ebpfStep I checkContext 0 0 root | return false
-  let .ok afterMov := PathMerge.applyLocal root mov.E_k mov.P_k | return false
+  let .ok afterMov := Node.applyLocal root mov.E_k mov.P_k | return false
   let .candidates [add] := ebpfStep I checkContext 1 1 afterMov | return false
-  let .ok afterAdd := PathMerge.applyLocal afterMov add.E_k add.P_k | return false
+  let .ok afterAdd := Node.applyLocal afterMov add.E_k add.P_k | return false
   let .candidates [exit] := ebpfStep I checkContext 2 2 afterAdd | return false
-  let .ok final := PathMerge.applyLocal afterAdd exit.E_k exit.P_k | return false
+  let .ok final := Node.applyLocal afterAdd exit.E_k exit.P_k | return false
   return mov.dir == .ok && mov.loc == .pos 1 &&
     add.dir == .ok && add.loc == .pos 2 &&
     exit.dir == .ok && exit.loc == .exit &&
