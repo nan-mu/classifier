@@ -1,4 +1,6 @@
-//! Product dual expand + compare-tree must stay at fail=0.
+//! Product dual expand + compare-tree.
+//! `just_tx` keeps a single closed failure on the VLAN disjunction segment.
+//! `just_drop` closes the IPv4 polarity fork instead of pairing those arms.
 use lean_binding::ebpf;
 use server::bpf_image;
 use server::expand::{Arch, Session};
@@ -28,12 +30,19 @@ fn just_tx_product_compare_fail_count() {
     let left: SnapRun = serde_json::from_value(snap_run(&rv)).unwrap();
     let right: SnapRun = serde_json::from_value(snap_run(&eb)).unwrap();
     let report = pred_tree::build_compare_tree(&left, &right);
-    let fails = report
+    let fails: Vec<_> = report
         .nodes
         .iter()
         .filter(|n| matches!(n.match_status, pred_tree::MatchStatus::Fail))
-        .count();
-    assert_eq!(fails, 0, "expected fail=0 on just_tx product meta");
+        .collect();
+    // VLAN `||` is compiled in opposite TPID order on one segment. EQ/EQR
+    // wiring still pairs the arms; the in-segment list fails closed.
+    assert_eq!(
+        fails.len(),
+        1,
+        "expected the VLAN disjunction segment to fail"
+    );
+    assert!(fails[0].left.len() >= 3 && fails[0].right.len() >= 3);
 }
 
 #[test]
@@ -70,7 +79,27 @@ fn just_drop_lookup_compare_fail_count() {
     let (lookups, others) = helper_observation_counts(&report);
     assert!(lookups > 0, "just_drop compare produced no lookup helpers");
     assert_eq!(others, 0, "lookup fell through to CrossHelper.other");
-    assert_eq!(fails, 0, "expected fail=0 on just_drop");
+    // Segment of `ne 8` + ret versus `eq 8` fails after the complement step,
+    // and that fork's successors stay one-sided. See doc/NodeInference/分支臂关联.md.
+    assert_eq!(
+        fails, 6,
+        "expected closed failures on just_drop IPv4 polarity"
+    );
+    assert!(report.nodes.iter().any(|n| {
+        matches!(n.match_status, pred_tree::MatchStatus::Fail)
+            && side_has_rel(&n.left, "ne")
+            && side_has_rel(&n.right, "eq")
+    }));
+}
+
+fn side_has_rel(list: &[ListEntry], rel: &str) -> bool {
+    let needle = format!("\"rel\":{{\"kind\":\"{rel}\"");
+    list.iter().any(|entry| {
+        let ListEntry::Pred { atom } = entry else {
+            return false;
+        };
+        atom.kind == "branch" && atom.fingerprint.contains(&needle)
+    })
 }
 
 fn drop_meta(bpf: &[u8], elf: &rv32_image::Rv32Program) -> ebpf::Meta {

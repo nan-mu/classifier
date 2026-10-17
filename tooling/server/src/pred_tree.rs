@@ -116,30 +116,14 @@ struct Segment {
     ends_exit: bool,
 }
 
-const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; VLAN TPID OR-arms {129,43144} may pass with distinct immediates";
+const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; fork wiring is EQ or EQR by arm-condition unify";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let maps = discover_env_maps(&[left, right]);
     let mut unparsed_seq = 0u64;
     let left_segs = segments_from_snap(left, &maps, &mut unparsed_seq);
     let right_segs = segments_from_snap(right, &maps, &mut unparsed_seq);
-    let (mut nodes, edges) = align_trees(&left_segs, &right_segs);
-    let left_fx = tree_effects(&left_segs);
-    let right_fx = tree_effects(&right_segs);
-    let same_effects = left_fx == right_fx
-        && left_fx.iter().any(|s| {
-            s.starts_with("packetWrite") || s.starts_with("mapWrite") || s.starts_with("helper")
-        });
-    if same_effects {
-        for node in &mut nodes {
-            node.match_status = MatchStatus::Pass;
-        }
-    } else if std::env::var("CLASSIFIER_DUMP_FAILS").is_ok() {
-        let _ = std::fs::write(
-            "/tmp/effect-bags.txt",
-            format!("L {}\nR {}\n", left_fx.join(" "), right_fx.join(" ")),
-        );
-    }
+    let (nodes, edges) = align_trees(&left_segs, &right_segs);
     TreeReport {
         status: "tree",
         claim: "crossPred",
@@ -643,122 +627,127 @@ fn walk_segment(
     }
 }
 
-/// Dual branch relations used by the two compilers for the same decision.
-fn dual_rel(a: &str, b: &str) -> bool {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wire {
+    Same,
+    Cross,
+}
+
+fn is_fork(seg: &Segment) -> bool {
+    seg.taken.is_some() && seg.not_taken.is_some()
+}
+
+fn child(map: &HashMap<u32, Segment>, id: Option<u32>) -> Option<&Segment> {
+    id.and_then(|i| map.get(&i))
+}
+
+/// Boolean complement of a normalized relation family. Operand order stays.
+fn complement_rel(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "eq" => "ne",
+        "ne" => "eq",
+        "ltu" => "geu",
+        "geu" => "ltu",
+        "leu" => "gtu",
+        "gtu" => "leu",
+        "lts" => "ges",
+        "ges" => "lts",
+        "les" => "gts",
+        "gts" => "les",
+        "bitsnz" => "bitsz",
+        "bitsz" => "bitsnz",
+        _ => return None,
+    })
+}
+
+fn complement_branch_json(json: &str) -> Option<String> {
+    let mut v: Value = serde_json::from_str(json).ok()?;
+    if v.get("kind").and_then(|k| k.as_str()) != Some("branch") {
+        return None;
+    }
+    let rel = v.pointer_mut("/cond/rel/kind")?;
+    let name = rel.as_str()?;
+    *rel = Value::String(complement_rel(name)?.to_string());
+    Some(v.to_string())
+}
+
+fn branch_json(arrival: &Arrival) -> Option<&str> {
+    match &arrival.key {
+        LocalKey::Normalized(json) => Some(json.as_str()),
+        LocalKey::Unparsed => None,
+    }
+}
+
+fn branch_dir(json: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    Some(v.get("dir")?.as_str()?.to_string())
+}
+
+/// First branch on a successor, and only when its direction is the entry edge.
+fn arm_json(seg: &Segment, entry: &str) -> Option<String> {
+    let arrival = seg.preds.iter().find(|p| p.atom.kind == "branch")?;
+    let json = branch_json(arrival)?;
+    let want = cross_dir_for_edge(Some(entry))?;
+    if branch_dir(json)?.as_str() != want {
+        return None;
+    }
+    Some(json.to_string())
+}
+
+fn unify_pair(left: &str, right: &str) -> bool {
+    let request = format!(r#"{{"left":[{left}],"right":[{right}]}}"#);
     matches!(
-        (a, b),
-        ("leu", "gtu")
-            | ("gtu", "leu")
-            | ("ltu", "geu")
-            | ("geu", "ltu")
-            | ("lt", "ge")
-            | ("ge", "lt")
-            | ("le", "gt")
-            | ("gt", "le")
-            | ("eq", "ne")
-            | ("ne", "eq")
+        lean_binding::cross_pred::unify(&request),
+        Some(result) if result.ok && result.pass
     )
 }
 
-fn tip_branch_rel(seg: &Segment) -> Option<String> {
-    for arrival in seg.preds.iter().rev() {
-        if arrival.atom.kind != "branch" {
-            continue;
-        }
-        if let LocalKey::Normalized(json) = &arrival.key {
-            if let Ok(v) = serde_json::from_str::<Value>(json) {
-                if let Some(rel) = v
-                    .get("cond")
-                    .and_then(|c| c.get("rel"))
-                    .and_then(|r| r.get("kind"))
-                    .and_then(|k| k.as_str())
-                {
-                    return Some(rel.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
-fn segment_has_effects(seg: &Segment) -> bool {
-    seg.preds
-        .iter()
-        .any(|p| matches!(p.atom.kind.as_str(), "packetWrite" | "mapWrite" | "helper"))
-}
-
-fn child_has_effects(map: &HashMap<u32, Segment>, id: Option<u32>) -> bool {
-    id.is_some_and(|i| descendant_has_effects(map, i, 3))
-}
-
-fn descendant_has_effects(map: &HashMap<u32, Segment>, id: u32, depth: usize) -> bool {
-    let Some(seg) = map.get(&id) else {
+fn arms_unify(
+    left: &Segment,
+    left_dir: &str,
+    right: &Segment,
+    right_dir: &str,
+    force: &str,
+) -> bool {
+    let Some(left_json) = arm_json(left, left_dir) else {
         return false;
     };
-    if segment_has_effects(seg) {
-        return true;
-    }
-    if depth == 0 {
+    let Some(right_json) = arm_json(right, right_dir) else {
         return false;
-    }
-    [seg.taken, seg.not_taken]
-        .into_iter()
-        .flatten()
-        .any(|child| descendant_has_effects(map, child, depth - 1))
+    };
+    let Some(force_dir) = cross_dir_for_edge(Some(force)) else {
+        return false;
+    };
+    unify_pair(
+        &rewrite_branch_dir(&left_json, force_dir),
+        &rewrite_branch_dir(&right_json, force_dir),
+    )
 }
 
-/// A bounds check that this arch fused or split has no store or call on this
-/// segment. Step to the child that does, at most two forks.
-fn slide_toward_effects(
-    map: &HashMap<u32, Segment>,
-    id: Option<u32>,
-    other_has: bool,
-) -> Option<u32> {
-    let mut cur = id?;
-    if !other_has {
-        return Some(cur);
-    }
-    for _ in 0..2 {
-        let Some(seg) = map.get(&cur) else {
-            return Some(cur);
-        };
-        if segment_has_effects(seg) {
-            return Some(cur);
-        }
-        let Some(child) = [seg.taken, seg.not_taken]
-            .into_iter()
-            .flatten()
-            .find(|child| descendant_has_effects(map, *child, 2))
-        else {
-            return Some(cur);
-        };
-        cur = child;
-    }
-    Some(cur)
-}
-
-/// When taken-child tip relations are duals, cross-wire arms (doc: host polarity).
-/// Also cross-wire when the stores and calls sit on opposite arms.
-fn should_swap_polarity(
+/// EQ or EQR, only when exactly one wiring's arm conditions unify.
+fn choose_wire(
     left: &HashMap<u32, Segment>,
     right: &HashMap<u32, Segment>,
     lseg: &Segment,
     rseg: &Segment,
-) -> bool {
-    let lt = lseg.taken.and_then(|id| left.get(&id));
-    let rt = rseg.taken.and_then(|id| right.get(&id));
-    if let (Some(lt), Some(rt)) = (lt, rt) {
-        if let (Some(a), Some(b)) = (tip_branch_rel(lt), tip_branch_rel(rt)) {
-            if dual_rel(&a, &b) {
-                return true;
-            }
-        }
+) -> Option<Wire> {
+    let (Some(lt), Some(ln), Some(rt), Some(rn)) = (
+        child(left, lseg.taken),
+        child(left, lseg.not_taken),
+        child(right, rseg.taken),
+        child(right, rseg.not_taken),
+    ) else {
+        return None;
+    };
+    let eq = arms_unify(lt, "taken", rt, "taken", "taken")
+        && arms_unify(ln, "not_taken", rn, "not_taken", "not_taken");
+    let eqr = arms_unify(lt, "taken", rn, "not_taken", "taken")
+        && arms_unify(ln, "not_taken", rt, "taken", "not_taken");
+    match (eq, eqr) {
+        (true, false) => Some(Wire::Same),
+        (false, true) => Some(Wire::Cross),
+        _ => None,
     }
-    let lt_fx = child_has_effects(left, lseg.taken);
-    let ln_fx = child_has_effects(left, lseg.not_taken);
-    let rt_fx = child_has_effects(right, rseg.taken);
-    let rn_fx = child_has_effects(right, rseg.not_taken);
-    lt_fx != rt_fx && lt_fx == rn_fx && ln_fx == rt_fx
 }
 
 fn align_trees(
@@ -785,14 +774,6 @@ fn align_trees(
         if lid.is_none() && rid.is_none() {
             continue;
         }
-        let left_has = lid
-            .and_then(|i| left.get(&i))
-            .is_some_and(segment_has_effects);
-        let right_has = rid
-            .and_then(|i| right.get(&i))
-            .is_some_and(segment_has_effects);
-        let lid = slide_toward_effects(left, lid, right_has && !left_has);
-        let rid = slide_toward_effects(right, rid, left_has && !right_has);
         let id = next_id;
         next_id += 1;
         let lseg = lid.and_then(|i| left.get(&i));
@@ -818,16 +799,33 @@ fn align_trees(
         let rt = rseg.and_then(|s| s.taken);
         let ln = lseg.and_then(|s| s.not_taken);
         let rn = rseg.and_then(|s| s.not_taken);
-        let swap = matches!(
-            (lseg, rseg),
-            (Some(l), Some(r)) if should_swap_polarity(left, right, l, r)
-        );
-        let (rt_align, rn_align) = if swap { (rn, rt) } else { (rt, rn) };
-        if lt.is_some() || rt_align.is_some() {
-            q.push_back((lt, rt_align, Some((id, "taken"))));
-        }
-        if ln.is_some() || rn_align.is_some() {
-            q.push_back((ln, rn_align, Some((id, "not_taken"))));
+        let wire = match (lseg, rseg) {
+            (Some(l), Some(r)) if is_fork(l) && is_fork(r) => choose_wire(left, right, l, r),
+            _ => None,
+        };
+        match wire {
+            Some(Wire::Same) => {
+                q.push_back((lt, rt, Some((id, "taken"))));
+                q.push_back((ln, rn, Some((id, "not_taken"))));
+            }
+            Some(Wire::Cross) => {
+                q.push_back((lt, rn, Some((id, "taken"))));
+                q.push_back((ln, rt, Some((id, "not_taken"))));
+            }
+            None => {
+                if lt.is_some() {
+                    q.push_back((lt, None, Some((id, "taken"))));
+                }
+                if rt.is_some() {
+                    q.push_back((None, rt, Some((id, "taken"))));
+                }
+                if ln.is_some() {
+                    q.push_back((ln, None, Some((id, "not_taken"))));
+                }
+                if rn.is_some() {
+                    q.push_back((None, rn, Some((id, "not_taken"))));
+                }
+            }
         }
     }
     (nodes, edges)
@@ -854,64 +852,35 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
     list
 }
 
-fn is_vlan_tpid(v: &str) -> bool {
-    matches!(v, "129" | "43144")
+fn prepared_branch(json: &str, edge_dir: Option<&str>, complement: bool) -> Option<String> {
+    let json = if complement {
+        complement_branch_json(json)?
+    } else {
+        json.to_string()
+    };
+    match cross_dir_for_edge(edge_dir) {
+        Some(dir) => Some(rewrite_branch_dir(&json, dir)),
+        None => Some(json),
+    }
 }
 
-/// just_tx VLAN `||` is compiled in opposite TPID order on the two arches.
-/// When both arms are a single packetField check of that TPID pair with the
-/// same rel and a unifying field tree, treat the lists as matched for
-/// `matchStatus` (claim stays crossPred; behavioral equivalence is not
-/// established). Does not rewrite constants in displayed fingerprints.
-fn vlan_or_arm_match(left: &Segment, right: &Segment, edge_dir: Option<&'static str>) -> bool {
-    if left.preds.len() != 1 || right.preds.len() != 1 {
-        return false;
-    }
-    let (LocalKey::Normalized(lj), LocalKey::Normalized(rj)) =
-        (&left.preds[0].key, &right.preds[0].key)
-    else {
+/// Same-path branch: exactly one of equality or complement unifies.
+fn branch_step(left: &str, right: &str, edge_dir: Option<&str>) -> bool {
+    let Some(eq_l) = prepared_branch(left, edge_dir, false) else {
         return false;
     };
-    let force = cross_dir_for_edge(edge_dir);
-    let lj = force
-        .map(|d| rewrite_branch_dir(lj, d))
-        .unwrap_or_else(|| lj.clone());
-    let rj = force
-        .map(|d| rewrite_branch_dir(rj, d))
-        .unwrap_or_else(|| rj.clone());
-    let (Ok(lv), Ok(rv)) = (
-        serde_json::from_str::<Value>(&lj),
-        serde_json::from_str::<Value>(&rj),
-    ) else {
+    let Some(eq_r) = prepared_branch(right, edge_dir, false) else {
         return false;
     };
-    if lv.get("kind").and_then(|k| k.as_str()) != Some("branch")
-        || rv.get("kind").and_then(|k| k.as_str()) != Some("branch")
-    {
-        return false;
-    }
-    let (Some(lc), Some(rc)) = (lv.get("cond"), rv.get("cond")) else {
-        return false;
+    let equal = unify_pair(&eq_l, &eq_r);
+    let dual = match (
+        prepared_branch(left, edge_dir, false),
+        prepared_branch(right, edge_dir, true),
+    ) {
+        (Some(l), Some(r)) => unify_pair(&l, &r),
+        _ => false,
     };
-    if lc.get("kind").and_then(|k| k.as_str()) != Some("packetField")
-        || rc.get("kind").and_then(|k| k.as_str()) != Some("packetField")
-    {
-        return false;
-    }
-    if lc.get("rel") != rc.get("rel") {
-        return false;
-    }
-    let (Some(lv_s), Some(rv_s)) = (
-        lc.get("value").and_then(|x| x.as_str()),
-        rc.get("value").and_then(|x| x.as_str()),
-    ) else {
-        return false;
-    };
-    if lv_s == rv_s || !is_vlan_tpid(lv_s) || !is_vlan_tpid(rv_s) {
-        return false;
-    }
-    // Field trees must match; only the TPID immediate differs.
-    lc.get("field") == rc.get("field")
+    equal != dual
 }
 
 fn match_status(
@@ -922,47 +891,42 @@ fn match_status(
     let (Some(left), Some(right)) = (left, right) else {
         return MatchStatus::Fail;
     };
-    if both_branch_only(left, right) {
-        return MatchStatus::Pass;
-    }
-    if left.ends_exit != right.ends_exit {
+    if is_fork(left) != is_fork(right) || left.ends_exit != right.ends_exit {
         return MatchStatus::Fail;
     }
-    if effects_match(left, right, edge_dir) {
-        return MatchStatus::Pass;
-    }
-    let Some(request) = unify_request(left, right, edge_dir) else {
-        return MatchStatus::Fail;
-    };
-    match lean_binding::cross_pred::unify(&request) {
-        Some(result) if result.ok && result.pass => MatchStatus::Pass,
-        _ if vlan_or_arm_match(left, right, edge_dir) => MatchStatus::Pass,
-        _ => MatchStatus::Fail,
+    if segment_match(left, right, edge_dir) {
+        MatchStatus::Pass
+    } else {
+        MatchStatus::Fail
     }
 }
 
-/// Fused and split length checks leave different branch predicates on the
-/// success segment. Compare the stores, calls, and returns.
-fn effects_match(left: &Segment, right: &Segment, edge_dir: Option<&'static str>) -> bool {
-    let keep = |seg: &Segment| {
-        let mut copy = seg.clone();
-        copy.preds.retain(|p| {
-            matches!(
-                p.atom.kind.as_str(),
-                "packetWrite" | "mapWrite" | "helper" | "ret"
-            )
-        });
-        copy
-    };
-    let left = keep(left);
-    let right = keep(right);
-    if left.preds.is_empty() || left.preds.len() != right.preds.len() {
-        return false;
+/// Walk branch observations in order. A later branch may be the complement of
+/// the other side; that does not cross the segment's graph successors.
+/// The remaining helper, return, and write observations unify as one list.
+fn segment_match(left: &Segment, right: &Segment, edge_dir: Option<&str>) -> bool {
+    let mut i = 0;
+    let mut j = 0;
+    while i < left.preds.len() && j < right.preds.len() {
+        let lb = left.preds[i].atom.kind == "branch";
+        let rb = right.preds[j].atom.kind == "branch";
+        if !lb || !rb {
+            break;
+        }
+        let (Some(lj), Some(rj)) = (branch_json(&left.preds[i]), branch_json(&right.preds[j]))
+        else {
+            return false;
+        };
+        if !branch_step(lj, rj, edge_dir) {
+            return false;
+        }
+        i += 1;
+        j += 1;
     }
-    if same_effect_shape(&left, &right) {
+    if i == left.preds.len() && j == right.preds.len() {
         return true;
     }
-    let Some(request) = unify_request(&left, &right, edge_dir) else {
+    let Some(request) = unify_request_slice(&left.preds[i..], &right.preds[j..], edge_dir) else {
         return false;
     };
     matches!(
@@ -971,76 +935,15 @@ fn effects_match(left: &Segment, right: &Segment, edge_dir: Option<&'static str>
     )
 }
 
-fn tree_effects(segs: &HashMap<u32, Segment>) -> Vec<String> {
-    let mut out = Vec::new();
-    for seg in segs.values() {
-        for pred in &seg.preds {
-            if let Some(sig) = atom_effect_sig(&pred.atom) {
-                out.push(sig);
-            }
-        }
-    }
-    out.sort();
-    out
-}
-
-fn both_branch_only(left: &Segment, right: &Segment) -> bool {
-    let only =
-        |seg: &Segment| !seg.preds.is_empty() && seg.preds.iter().all(|p| p.atom.kind == "branch");
-    only(left) && only(right)
-}
-
-fn atom_effect_sig(atom: &crate::pred_match::PredAtom) -> Option<String> {
-    let field = |key: &str| -> String {
-        match atom.fields.get(key) {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Number(n)) => n.to_string(),
-            Some(other) => other.to_string(),
-            None => String::new(),
-        }
-    };
-    match atom.kind.as_str() {
-        "packetWrite" => Some(format!(
-            "packetWrite:{}:{}",
-            field("packet"),
-            field("width")
-        )),
-        "mapWrite" => Some(format!("mapWrite:{}:{}", field("map"), field("offset"))),
-        "helper" => Some(format!("helper:{}", field("helperId"))),
-        "ret" => Some(format!("ret:{}", field("term"))),
-        _ => None,
-    }
-}
-
-fn same_effect_shape(left: &Segment, right: &Segment) -> bool {
-    let sigs = |seg: &Segment| -> Vec<String> {
-        seg.preds
-            .iter()
-            .filter_map(|p| atom_effect_sig(&p.atom))
-            .collect()
-    };
-    let mut ls = sigs(left);
-    let mut rs = sigs(right);
-    let interesting = |sig: &str| {
-        sig.starts_with("packetWrite") || sig.starts_with("mapWrite") || sig.starts_with("helper")
-    };
-    if ls.is_empty() || ls.len() != rs.len() || !ls.iter().any(|s| interesting(s)) {
-        return false;
-    }
-    ls.sort();
-    rs.sort();
-    ls == rs
-}
-
-fn unify_request(
-    left: &Segment,
-    right: &Segment,
-    edge_dir: Option<&'static str>,
+fn unify_request_slice(
+    left: &[Arrival],
+    right: &[Arrival],
+    edge_dir: Option<&str>,
 ) -> Option<String> {
     Some(format!(
         r#"{{"left":[{}],"right":[{}]}}"#,
-        normalized_body(&left.preds, edge_dir)?,
-        normalized_body(&right.preds, edge_dir)?,
+        normalized_body(left, edge_dir)?,
+        normalized_body(right, edge_dir)?,
     ))
 }
 
@@ -1105,7 +1008,7 @@ fn order_normalized_parts(parts: Vec<&str>) -> Vec<String> {
     out
 }
 
-fn normalized_body(arrivals: &[Arrival], edge_dir: Option<&'static str>) -> Option<String> {
+fn normalized_body(arrivals: &[Arrival], edge_dir: Option<&str>) -> Option<String> {
     let force_dir = cross_dir_for_edge(edge_dir);
     let mut owned = Vec::with_capacity(arrivals.len());
     for arrival in arrivals {
@@ -1225,8 +1128,9 @@ mod tests {
         assert_eq!(report.behavioral_equivalence, "notEstablished");
         assert_eq!(report.phase, "local_increment");
         assert_eq!(report.note, NOTE);
-        assert_eq!(report.nodes.len(), 3);
-        assert_eq!(report.edges.len(), 2);
+        // Unparsed arm conditions do not unify, so the fork stays unpaired.
+        assert_eq!(report.nodes.len(), 5);
+        assert_eq!(report.edges.len(), 4);
         let create = &report.nodes[0];
         assert_eq!(create.start, StartKind::Create);
         assert_eq!(create.match_status, MatchStatus::Pass);
@@ -1234,9 +1138,10 @@ mod tests {
         let taken = report
             .nodes
             .iter()
-            .find(|n| n.start == StartKind::Taken)
+            .find(|n| n.start == StartKind::Taken && !n.left.is_empty())
             .expect("taken node");
         assert_eq!(pred_kinds(&taken.left), vec!["branch", "ret"]);
+        assert!(taken.right.is_empty());
         assert_eq!(pred_fingerprint(&taken.left, "branch"), "unparsed:0",);
         assert_ne!(
             pred_fingerprint(&taken.left, "branch"),
@@ -1828,12 +1733,13 @@ mod tests {
             ],
         );
         let report = build_compare_tree(&snap, &snap);
-        assert_eq!(report.nodes.len(), 3);
-        assert_eq!(report.edges.len(), 2);
+        // The fork node's branch does not normalize, so successors stay unpaired.
+        assert_eq!(report.nodes.len(), 5);
+        assert_eq!(report.edges.len(), 4);
         assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);
         assert_eq!(
             report.edges.iter().map(|e| e.dir).collect::<Vec<_>>(),
-            vec!["taken", "not_taken"]
+            vec!["taken", "taken", "not_taken", "not_taken"]
         );
     }
 }
