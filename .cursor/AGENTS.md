@@ -8,9 +8,6 @@ Cursor owns the full repository: `tooling/`, `doc/`, Lean4 / Lake sources,
 `.cursor/`, `README.md`, and `.github/`. Edit Lean and `doc/` directly in this
 session. Do not delegate to `omp`, `spec-author`, or any external agent harness.
 
-Always-on summary lives in `.cursor/rules/cursor-harness.mdc`
-(`alwaysApply: true`). Keep it aligned with this file.
-
 ## Specs, Lean, and end-to-end work
 
 Current `doc/` specs define Create / Step / History / Merge / Merge-Step
