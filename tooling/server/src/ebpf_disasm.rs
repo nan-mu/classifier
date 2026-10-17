@@ -20,7 +20,7 @@ pub fn disasm_words(words: &[u64]) -> Vec<String> {
             if let Some(upper) = words.get(i + 1) {
                 if upper & 0xffff_ffff == 0 {
                     let imm_lo = (word >> 32) as u32 as u64;
-                    let imm_hi = (*upper >> 32) as u64;
+                    let imm_hi = *upper >> 32;
                     let bits = imm_lo | (imm_hi << 32);
                     let dst = ((word >> 8) & 0xf) as u8;
                     let src_type = ((word >> 12) & 0xf) as u8;

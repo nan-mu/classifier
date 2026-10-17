@@ -61,7 +61,7 @@ fn layout_byte_size(layout: &[u8]) -> Option<u32> {
         }
         bits = bits.checked_add(u32::from(w))?;
     }
-    if bits % 8 != 0 {
+    if !bits.is_multiple_of(8) {
         return None;
     }
     Some(bits / 8)
@@ -386,8 +386,8 @@ mod tests {
 
     #[test]
     fn lean_words_match_checked_in() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../RV32/Esp32c3Program.lean");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../RV32/Esp32c3Program.lean");
         let expected = emit_lean_words(esp32c3_image());
         if std::env::var_os("UPDATE_ESP32C3_LEAN").is_some() {
             std::fs::write(&path, &expected).expect("write Esp32c3Program.lean");

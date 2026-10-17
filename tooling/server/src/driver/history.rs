@@ -54,8 +54,15 @@ fn strings_in(value: &Value, out: &mut Vec<String>) {
             for (key, child) in map {
                 if matches!(
                     key.as_str(),
-                    "kind" | "dir" | "position" | "width" | "helperId" | "event" | "mapWidth"
-                        | "offset" | "map"
+                    "kind"
+                        | "dir"
+                        | "position"
+                        | "width"
+                        | "helperId"
+                        | "event"
+                        | "mapWidth"
+                        | "offset"
+                        | "map"
                 ) {
                     continue;
                 }
@@ -84,10 +91,7 @@ pub fn variables_at_branch(exprs: &Value, preds: &Value) -> BTreeSet<String> {
     let mut terms = Vec::new();
     strings_in(exprs, &mut terms);
     strings_in(preds, &mut terms);
-    terms
-        .iter()
-        .flat_map(|term| variables_in(term))
-        .collect()
+    terms.iter().flat_map(|term| variables_in(term)).collect()
 }
 
 /// NotTaken's register list. A predicate on the path contributes the
@@ -181,6 +185,24 @@ impl RecordStore {
     }
 }
 
+impl HistoryShell {
+    /// Package an arm from applied refs only (no SemState copy, no invented deltas).
+    pub fn from_arm(entry: NodeId, jb_doc: u32, dir: Dir, arm_root: NodeId) -> Self {
+        Self {
+            entry,
+            records: vec![RecordShell {
+                j_doc: jb_doc,
+                dir,
+                j_prime_doc: None,
+                lambda: LambdaPackaging::AppliedRefs {
+                    parent: entry,
+                    successor: arm_root,
+                },
+            }],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{merge_allows, registers_outliving_branch, taken_return};
@@ -237,23 +259,5 @@ mod tests {
         ]);
         let taken = taken_return(&exprs, &json!([]), &path, &back);
         assert!(!merge_allows(&history, &taken));
-    }
-}
-
-impl HistoryShell {
-    /// Package an arm from applied refs only (no SemState copy, no invented deltas).
-    pub fn from_arm(entry: NodeId, jb_doc: u32, dir: Dir, arm_root: NodeId) -> Self {
-        Self {
-            entry,
-            records: vec![RecordShell {
-                j_doc: jb_doc,
-                dir,
-                j_prime_doc: None,
-                lambda: LambdaPackaging::AppliedRefs {
-                    parent: entry,
-                    successor: arm_root,
-                },
-            }],
-        }
     }
 }

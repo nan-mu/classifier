@@ -439,7 +439,7 @@ fn map_id_of(pred: &PredIn) -> Option<u64> {
         "mapWrite" => const_term(&field_str(&pred.fields, "map")),
         "helper" => {
             let id = field_u64(&pred.fields, "helperId")?;
-            if !matches!(id, 1 | 2 | 3) {
+            if !matches!(id, 1..=3) {
                 return None;
             }
             let args = pred.fields.get("args")?.as_array()?;
@@ -714,9 +714,7 @@ fn slide_toward_effects(
     id: Option<u32>,
     other_has: bool,
 ) -> Option<u32> {
-    let Some(mut cur) = id else {
-        return None;
-    };
+    let mut cur = id?;
     if !other_has {
         return Some(cur);
     }
@@ -779,7 +777,8 @@ fn align_trees(
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut next_id = 0u32;
-    let mut q: VecDeque<(Option<u32>, Option<u32>, Option<(u32, &'static str)>)> = VecDeque::new();
+    type AlignItem = (Option<u32>, Option<u32>, Option<(u32, &'static str)>);
+    let mut q: VecDeque<AlignItem> = VecDeque::new();
     q.push_back((left_root, right_root, None));
 
     while let Some((lid, rid, parent_edge)) = q.pop_front() {
@@ -874,8 +873,12 @@ fn vlan_or_arm_match(left: &Segment, right: &Segment, edge_dir: Option<&'static 
         return false;
     };
     let force = cross_dir_for_edge(edge_dir);
-    let lj = force.map(|d| rewrite_branch_dir(lj, d)).unwrap_or_else(|| lj.clone());
-    let rj = force.map(|d| rewrite_branch_dir(rj, d)).unwrap_or_else(|| rj.clone());
+    let lj = force
+        .map(|d| rewrite_branch_dir(lj, d))
+        .unwrap_or_else(|| lj.clone());
+    let rj = force
+        .map(|d| rewrite_branch_dir(rj, d))
+        .unwrap_or_else(|| rj.clone());
     let (Ok(lv), Ok(rv)) = (
         serde_json::from_str::<Value>(&lj),
         serde_json::from_str::<Value>(&rj),
@@ -982,9 +985,8 @@ fn tree_effects(segs: &HashMap<u32, Segment>) -> Vec<String> {
 }
 
 fn both_branch_only(left: &Segment, right: &Segment) -> bool {
-    let only = |seg: &Segment| {
-        !seg.preds.is_empty() && seg.preds.iter().all(|p| p.atom.kind == "branch")
-    };
+    let only =
+        |seg: &Segment| !seg.preds.is_empty() && seg.preds.iter().all(|p| p.atom.kind == "branch");
     only(left) && only(right)
 }
 
@@ -998,7 +1000,11 @@ fn atom_effect_sig(atom: &crate::pred_match::PredAtom) -> Option<String> {
         }
     };
     match atom.kind.as_str() {
-        "packetWrite" => Some(format!("packetWrite:{}:{}", field("packet"), field("width"))),
+        "packetWrite" => Some(format!(
+            "packetWrite:{}:{}",
+            field("packet"),
+            field("width")
+        )),
         "mapWrite" => Some(format!("mapWrite:{}:{}", field("map"), field("offset"))),
         "helper" => Some(format!("helper:{}", field("helperId"))),
         "ret" => Some(format!("ret:{}", field("term"))),
@@ -1008,7 +1014,10 @@ fn atom_effect_sig(atom: &crate::pred_match::PredAtom) -> Option<String> {
 
 fn same_effect_shape(left: &Segment, right: &Segment) -> bool {
     let sigs = |seg: &Segment| -> Vec<String> {
-        seg.preds.iter().filter_map(|p| atom_effect_sig(&p.atom)).collect()
+        seg.preds
+            .iter()
+            .filter_map(|p| atom_effect_sig(&p.atom))
+            .collect()
     };
     let mut ls = sigs(left);
     let mut rs = sigs(right);
@@ -1392,7 +1401,14 @@ mod tests {
         let left = run(
             "rv32imc",
             vec![
-                enode(0, "0", vec![pred("branch", json!({"dir": "taken", "cond": {"lhs": "1", "rel": "eq", "rhs": "1"}}))]),
+                enode(
+                    0,
+                    "0",
+                    vec![pred(
+                        "branch",
+                        json!({"dir": "taken", "cond": {"lhs": "1", "rel": "eq", "rhs": "1"}}),
+                    )],
+                ),
                 enode(
                     1,
                     "1",
@@ -1422,7 +1438,14 @@ mod tests {
         let right = run(
             "ebpf",
             vec![
-                enode(0, "0", vec![pred("branch", json!({"dir": "taken", "cond": {"lhs": "1", "rel": "eq", "rhs": "1"}}))]),
+                enode(
+                    0,
+                    "0",
+                    vec![pred(
+                        "branch",
+                        json!({"dir": "taken", "cond": {"lhs": "1", "rel": "eq", "rhs": "1"}}),
+                    )],
+                ),
                 enode(
                     1,
                     "1",
@@ -1460,7 +1483,10 @@ mod tests {
         let node = &report.nodes[taken as usize];
         let l_rel = tip_from_list(&node.left);
         let r_rel = tip_from_list(&node.right);
-        assert_eq!(l_rel, r_rel, "swapped arms should share tip rel, got {l_rel:?} vs {r_rel:?}");
+        assert_eq!(
+            l_rel, r_rel,
+            "swapped arms should share tip rel, got {l_rel:?} vs {r_rel:?}"
+        );
     }
 
     fn tip_from_list(list: &[ListEntry]) -> Option<String> {
@@ -1710,7 +1736,10 @@ mod tests {
             left.preds[1].atom.fingerprint,
             right.preds[1].atom.fingerprint
         );
-        assert_eq!(match_status(Some(&left), Some(&right), None), MatchStatus::Pass);
+        assert_eq!(
+            match_status(Some(&left), Some(&right), None),
+            MatchStatus::Pass
+        );
         assert_eq!(pred_kinds(&build_list(Some(&left))), vec!["ret", "ret"]);
         assert_eq!(pred_kinds(&build_list(Some(&right))), vec!["ret", "ret"]);
     }

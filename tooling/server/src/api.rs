@@ -254,7 +254,11 @@ impl Kernel {
     ) -> Envelope {
         let sessions = self.sessions.lock().expect("sessions");
         let Some(handle) = sessions.get(session_id).cloned() else {
-            return Envelope::err(command, "not_found", format!("unknown session {session_id}"));
+            return Envelope::err(
+                command,
+                "not_found",
+                format!("unknown session {session_id}"),
+            );
         };
         drop(sessions);
         let mut session = handle.lock().expect("session");
@@ -332,7 +336,7 @@ fn bind_map_lddw(
         });
     }
     let terms: Vec<&ebpf::MapLayout> = if maps.len() == 1 {
-        std::iter::repeat(&maps[0]).take(slots.len()).collect()
+        std::iter::repeat_n(&maps[0], slots.len()).collect()
     } else if maps.len() == slots.len() {
         maps.iter().collect()
     } else {

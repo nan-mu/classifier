@@ -13,7 +13,11 @@ fn dump_fixed_firewall() {
     let mut rv = Session::new("rv", 512, Arch::Rv32imc, "firewall.elf".into(), elf.clone());
     rv.run_all();
     let snap = rv.snapshot();
-    assert_eq!(snap.status, "complete", "RV failed={:?} reason={:?}", snap.failed, snap.reason);
+    assert_eq!(
+        snap.status, "complete",
+        "RV failed={:?} reason={:?}",
+        snap.failed, snap.reason
+    );
 
     let slots = bpf_image::map_lddw_slots(BPF).unwrap();
     let map = elf.maps.first().expect("map");

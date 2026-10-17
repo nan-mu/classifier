@@ -38,7 +38,10 @@ pub fn find_file() -> Result<PathBuf, String> {
         if path.is_file() {
             return Ok(path);
         }
-        return Err(format!("CLASSIFIER_PROFILE is not a file: {}", path.display()));
+        return Err(format!(
+            "CLASSIFIER_PROFILE is not a file: {}",
+            path.display()
+        ));
     }
     let mut starts = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {

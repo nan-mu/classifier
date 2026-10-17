@@ -607,8 +607,11 @@ impl Agenda {
                     let cb = self.frames[i].cb;
                     let jb_doc = self.frames[i].jb_doc;
                     let nt_root = self.frames[i].not_taken_root.unwrap_or(cb);
-                    let nt_ids: Vec<NodeId> =
-                        self.frames[i].not_taken_candidates.iter().copied().collect();
+                    let nt_ids: Vec<NodeId> = self.frames[i]
+                        .not_taken_candidates
+                        .iter()
+                        .copied()
+                        .collect();
                     if let Some(branch) = node_lookup(cb) {
                         let path_preds = union_preds(&nt_ids, node_lookup);
                         self.frames[i].history_regs = Some(history::registers_outliving_branch(

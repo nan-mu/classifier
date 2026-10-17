@@ -269,7 +269,10 @@ fn run_test(args: &[String]) -> ExitCode {
             Err(message) => return emit(usage_err("test", message)),
         };
         let Some(program) = profile.get(name).cloned() else {
-            return emit(usage_err("test", format!("profile.toml has no program {name}")));
+            return emit(usage_err(
+                "test",
+                format!("profile.toml has no program {name}"),
+            ));
         };
         harness::run_profile(std::slice::from_ref(&program))
     } else if let Some(root) = flag(args, "--root") {

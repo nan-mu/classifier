@@ -28,8 +28,10 @@ pub fn extract_insn_words(bytes: &[u8]) -> Result<BpfProgram, BpfElfError> {
         return Err(BpfElfError::MisalignedSection);
     }
     let words = section
-        .chunks_exact(8)
-        .map(|c| u64::from_le_bytes(c.try_into().expect("8-byte chunk")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| u64::from_le_bytes(*c))
         .collect();
     Ok(BpfProgram { words })
 }
@@ -238,4 +240,3 @@ mod tests {
         );
     }
 }
-

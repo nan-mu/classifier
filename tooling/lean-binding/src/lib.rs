@@ -486,31 +486,6 @@ pub mod ebpf {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::Meta;
-
-        #[test]
-        fn just_tx_product_json_binds_slot_34_and_map() {
-            assert_eq!(
-                Meta::just_tx_product().to_json(),
-                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":"1077412584"}],"maps":[{"mapId":1077412584,"keySize":4,"valueSize":8}]}"#
-            );
-        }
-
-        #[test]
-        fn just_tx_and_unbound_map_stay_empty_of_layouts() {
-            assert_eq!(
-                Meta::just_tx().to_json(),
-                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[],"maps":[]}"#
-            );
-            assert_eq!(
-                Meta::just_tx_unbound_map().to_json(),
-                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":null}],"maps":[]}"#
-            );
-        }
-    }
-
     unsafe fn take_string(obj: ffi::LeanObj) -> String {
         let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
             .to_string_lossy()
@@ -571,6 +546,31 @@ pub mod ebpf {
                 arr, meta, steps, budget,
             ))
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::Meta;
+
+        #[test]
+        fn just_tx_product_json_binds_slot_34_and_map() {
+            assert_eq!(
+                Meta::just_tx_product().to_json(),
+                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":"1077412584"}],"maps":[{"mapId":1077412584,"keySize":4,"valueSize":8}]}"#
+            );
+        }
+
+        #[test]
+        fn just_tx_and_unbound_map_stay_empty_of_layouts() {
+            assert_eq!(
+                Meta::just_tx().to_json(),
+                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[],"maps":[]}"#
+            );
+            assert_eq!(
+                Meta::just_tx_unbound_map().to_json(),
+                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":null}],"maps":[]}"#
+            );
+        }
     }
 }
 

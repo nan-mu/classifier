@@ -367,9 +367,8 @@ fn value_soft(a: &Value, b: &Value) -> f64 {
             let n = x.len().max(y.len());
             let mut s = 0.0;
             for i in 0..n {
-                match (x.get(i), y.get(i)) {
-                    (Some(a), Some(b)) => s += value_soft(a, b),
-                    _ => {}
+                if let (Some(a), Some(b)) = (x.get(i), y.get(i)) {
+                    s += value_soft(a, b);
                 }
             }
             s / n as f64
@@ -484,7 +483,7 @@ fn align_at_loc(left: &[PredAtom], right: &[PredAtom]) -> Vec<PredPair> {
             });
         }
     }
-    pairs.sort_by(|a, b| pair_ord(a).cmp(&pair_ord(b)));
+    pairs.sort_by_key(pair_ord);
     pairs
 }
 

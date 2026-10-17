@@ -175,7 +175,11 @@ pub fn run_suite(root: &Path) -> SuiteReport {
     for (case_path, suite) in cases {
         eprintln!("case {suite} {}", case_path.display());
         let outcome = run_case_file(&case_path, &suite);
-        eprintln!("case {suite} {} {}", case_path.display(), if outcome.ok { "ok" } else { "FAIL" });
+        eprintln!(
+            "case {suite} {} {}",
+            case_path.display(),
+            if outcome.ok { "ok" } else { "FAIL" }
+        );
         outcomes.push(outcome);
     }
     SuiteReport { cases: outcomes }
@@ -254,11 +258,7 @@ pub fn run_case(spec: &CaseSpec, case_dir: &Path) -> Result<(), String> {
             if spec.expect.kind == "error" {
                 return Ok(());
             }
-            return Err(format!(
-                "step {} failed: {:?}",
-                last.command,
-                last.error
-            ));
+            return Err(format!("step {} failed: {:?}", last.command, last.error));
         }
     }
 
@@ -331,12 +331,8 @@ fn exec_step(
             } else {
                 let lb = step.left.as_deref().ok_or("compare_tree needs left")?;
                 let rb = step.right.as_deref().ok_or("compare_tree needs right")?;
-                let lid = binds
-                    .get(lb)
-                    .ok_or_else(|| format!("unbound {lb}"))?;
-                let rid = binds
-                    .get(rb)
-                    .ok_or_else(|| format!("unbound {rb}"))?;
+                let lid = binds.get(lb).ok_or_else(|| format!("unbound {lb}"))?;
+                let rid = binds.get(rb).ok_or_else(|| format!("unbound {rb}"))?;
                 let ls = kernel
                     .snapshot_value(lid)
                     .ok_or_else(|| format!("missing snapshot {lid}"))?;
@@ -366,10 +362,7 @@ fn check_expect(
         }
         "fail" | "pass" => {
             if !last.ok {
-                return Err(format!(
-                    "expected ok envelope, got error {:?}",
-                    last.error
-                ));
+                return Err(format!("expected ok envelope, got error {:?}", last.error));
             }
             if spec.expect.kind == "fail"
                 && spec.expect.status.is_none()
@@ -391,10 +384,7 @@ fn check_expect(
                         let snap = kernel
                             .snapshot_value(id)
                             .ok_or_else(|| format!("missing snapshot {bind}"))?;
-                        let got = snap
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let got = snap.get("status").and_then(|v| v.as_str()).unwrap_or("");
                         if got != status {
                             let reason = snap.get("reason").cloned().unwrap_or(Value::Null);
                             let nodes = snap
@@ -440,22 +430,47 @@ fn fail_sample(env: &Envelope) -> String {
         return String::new();
     };
     if std::env::var("CLASSIFIER_DUMP_FAILS").is_ok() {
-        let fails: Vec<_> = nodes.iter().filter(|n| n.get("matchStatus").and_then(|m| m.as_str()) == Some("fail")).cloned().collect();
-        let _ = std::fs::write("/tmp/compare-fails.json", serde_json::to_string(&fails).unwrap_or_default());
+        let fails: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.get("matchStatus").and_then(|m| m.as_str()) == Some("fail"))
+            .cloned()
+            .collect();
+        let _ = std::fs::write(
+            "/tmp/compare-fails.json",
+            serde_json::to_string(&fails).unwrap_or_default(),
+        );
     }
     let mut out = String::new();
-    for node in nodes.iter().filter(|n| n.get("matchStatus").and_then(|m| m.as_str()) == Some("fail")).take(4) {
+    for node in nodes
+        .iter()
+        .filter(|n| n.get("matchStatus").and_then(|m| m.as_str()) == Some("fail"))
+        .take(4)
+    {
         let brief = |side: &str| -> String {
             node.get(side)
                 .and_then(|v| v.as_array())
                 .map(|items| {
-                    items.iter().take(8).map(|item| {
-                        item.get("atom").and_then(|a| a.get("kind")).and_then(|k| k.as_str()).unwrap_or("exit").to_string()
-                    }).collect::<Vec<_>>().join(",")
+                    items
+                        .iter()
+                        .take(8)
+                        .map(|item| {
+                            item.get("atom")
+                                .and_then(|a| a.get("kind"))
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("exit")
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
                 })
                 .unwrap_or_default()
         };
-        out.push_str(&format!(" [{} L={} R={}]", node.get("id").and_then(|v| v.as_u64()).unwrap_or(0), brief("left"), brief("right")));
+        out.push_str(&format!(
+            " [{} L={} R={}]",
+            node.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
+            brief("left"),
+            brief("right")
+        ));
     }
     out
 }
@@ -489,7 +504,10 @@ fn check_assert(last: &Envelope, a: &Assert) -> Result<(), String> {
         }
         return Ok(());
     }
-    let path = a.path.as_deref().ok_or("assert needs path or contains_kind")?;
+    let path = a
+        .path
+        .as_deref()
+        .ok_or("assert needs path or contains_kind")?;
     let val = pointer(last, path);
     if a.exists == Some(true) {
         if val.is_none() {
@@ -522,7 +540,11 @@ fn walk_value<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
         return Some(v);
     }
     let mut cur = v;
-    for seg in path.trim_start_matches('/').split('/').filter(|s| !s.is_empty()) {
+    for seg in path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+    {
         cur = match cur {
             Value::Object(map) => map.get(seg)?,
             Value::Array(arr) => {
