@@ -1,0 +1,69 @@
+# Test images. Paths are relative to this file.
+# libbpf-mcu writes Compact ELF and eBPF objects under ../build/<name>/.
+
+build = "../build"
+
+[[program]]
+name = "bitswap"
+elf = "bitswap/bitswap.elf"
+bpf = "bitswap/bpf.o"
+
+[[program]]
+name = "bsort"
+elf = "bsort/bsort.elf"
+bpf = "bsort/bpf.o"
+
+[[program]]
+name = "buf"
+elf = "buf/buf.elf"
+bpf = "buf/bpf.o"
+
+[[program]]
+name = "fib"
+elf = "fib/fib.elf"
+bpf = "fib/bpf.o"
+
+[[program]]
+name = "firewall"
+elf = "firewall/firewall.elf"
+bpf = "firewall/bpf.o"
+
+[[program]]
+name = "fletcher32"
+elf = "fletcher32/fletcher32.elf"
+bpf = "fletcher32/bpf.o"
+
+[[program]]
+name = "helper_loop"
+elf = "helper_loop/helper_loop.elf"
+bpf = "helper_loop/bpf.o"
+
+[[program]]
+name = "incr"
+elf = "incr/incr.elf"
+bpf = "incr/bpf.o"
+
+[[program]]
+name = "just_drop"
+elf = "just_drop/just_drop.elf"
+bpf = "just_drop/bpf.o"
+
+[[program]]
+name = "just_tx"
+elf = "just_tx/just_tx.elf"
+bpf = "just_tx/bpf.o"
+
+[[program]]
+name = "memcpy"
+elf = "memcpy/memcpy.elf"
+bpf = "memcpy/bpf.o"
+
+[[program]]
+name = "merge_try"
+elf = "merge_try/merge_try.elf"
+bpf = "merge_try/bpf.o"
+
+[[program]]
+name = "square"
+elf = "square/square.elf"
+bpf = "square/bpf.o"

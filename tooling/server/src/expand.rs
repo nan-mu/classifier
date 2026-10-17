@@ -863,13 +863,13 @@ mod tests {
     }
 
     #[test]
-    fn just_tx_budget_512_exhausts_after_passing_x9_spill() {
+    fn just_tx_budget_512_completes() {
         // Product entry binds R_s (incl. x8/x9); idx-3 no longer UndefinedSrc.
         let mut session = default_session("s", 512);
         session.run_all();
         let snap = session.snapshot();
-        assert_eq!(snap.status, "fail");
-        assert_eq!(snap.reason.as_deref(), Some("LimitExceeded"));
+        assert_eq!(snap.status, "complete");
+        assert!(snap.reason.is_none());
         assert!(
             snap.nodes.len() > 4,
             "must pass early x9 spill; nodes={}",
@@ -917,7 +917,7 @@ mod tests {
         assert!(snap.edges.iter().any(|e| e.dir == "not_taken"));
         assert!(snap.nodes.iter().any(|n| n.loc == "exit"));
         // Return observations are not yet a Lean Predicate constructor; Exit is the
-        // normal-completion marker (see bound return checks in RV32IMC/Expand.lean).
+        // normal-completion marker (see bound return checks in RV32/Expand.lean).
         assert!(snap.nodes.iter().any(|n| {
             n.exprs
                 .iter()

@@ -22,6 +22,7 @@ import "@xyflow/react/dist/style.css";
 import {
   compareTree,
   createSession,
+  fetchProfile,
   runSessionStream,
   stepSession,
   type RunStreamStats,
@@ -276,6 +277,8 @@ function DebugScreen() {
   const [budget, setBudget] = useState(1024);
   const [firmwareName, setFirmwareName] = useState("just_tx.elf");
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
+  const [programs, setPrograms] = useState<string[]>([]);
+  const [programName, setProgramName] = useState("just_tx");
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -341,7 +344,13 @@ function DebugScreen() {
   );
 
   const boot = useCallback(
-    async (nextArch: ArchKind, b: number, name: string, image: ArrayBuffer | null) => {
+    async (
+      nextArch: ArchKind,
+      b: number,
+      name: string,
+      image: ArrayBuffer | null,
+      program: string,
+    ) => {
       runAbortRef.current?.abort();
       runAbortRef.current = null;
       setBusy(true);
@@ -355,6 +364,7 @@ function DebugScreen() {
           arch: nextArch,
           name,
           image,
+          program,
         });
         apply(next, { immediate: true });
         if (tabRef.current === nextArch) {
@@ -375,8 +385,16 @@ function DebugScreen() {
   );
 
   useEffect(() => {
-    void boot("rv32imc", 1024, "just_tx.elf", null);
-  }, [boot]);
+    void fetchProfile()
+      .then((rows) => setPrograms(rows.map((row) => row.name)))
+      .catch(() => setPrograms([]));
+  }, []);
+
+  useEffect(() => {
+    if (firmwareBytes) return;
+    const label = archTab === "ebpf" ? `${programName}/bpf.o` : `${programName}.elf`;
+    void boot(archTab ?? "rv32imc", budget, label, null, programName);
+  }, [boot, programName]);
 
   const onFirmwarePick = useCallback((ev: ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
@@ -597,8 +615,8 @@ function DebugScreen() {
       // Always expand default just_tx fixtures at current budget (ignore snap cache).
       setCompareUi({
         tag: "expanding",
-        left: emptySlot("rv32imc"),
-        right: emptySlot("ebpf"),
+        left: { ...emptySlot("rv32imc"), label: `${programName}.elf` },
+        right: { ...emptySlot("ebpf"), label: `${programName}/bpf.o` },
       });
       const patchSlot = (
         side: "left" | "right",
@@ -615,8 +633,18 @@ function DebugScreen() {
         });
       };
       const [left0, right0] = await Promise.all([
-        createSession({ budget, arch: "rv32imc", name: "just_tx.elf" }),
-        createSession({ budget, arch: "ebpf", name: "just_tx.bpf.o" }),
+        createSession({
+          budget,
+          arch: "rv32imc",
+          name: `${programName}.elf`,
+          program: programName,
+        }),
+        createSession({
+          budget,
+          arch: "ebpf",
+          name: `${programName}/bpf.o`,
+          program: programName,
+        }),
       ]);
       const [left, right] = await Promise.all([
         runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
@@ -664,8 +692,12 @@ function DebugScreen() {
           edgeKey: null,
         }));
       } else if (!busy && !streaming) {
-        const name = firmwareBytes ? firmwareName : defaultName(next);
-        void boot(next, budget, name, firmwareBytes);
+        const name = firmwareBytes
+          ? firmwareName
+          : next === "ebpf"
+            ? `${programName}/bpf.o`
+            : `${programName}.elf`;
+        void boot(next, budget, name, firmwareBytes, programName);
       }
       if (!firmwareBytes) {
         setFirmwareName(defaultName(next));
@@ -813,6 +845,22 @@ function DebugScreen() {
 
         {!comparing ? (
           <>
+            <Text className="muted">程序</Text>
+            <select
+              className="toolbar__input mono"
+              value={programName}
+              disabled={busy || programs.length === 0}
+              onChange={(ev) => {
+                setFirmwareBytes(null);
+                setProgramName(ev.target.value);
+              }}
+            >
+              {(programs.length > 0 ? programs : [programName]).map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
             <Text className="muted">XDP ELF</Text>
             <label className="toolbar__file">
               <input
@@ -827,7 +875,7 @@ function DebugScreen() {
             <Text className="mono muted" fontSize={11} title={firmwareName}>
               {firmwareBytes
                 ? firmwareName
-                : `${archTab ? defaultName(archTab) : "just_tx.elf"}（默认）`}
+                : `${programName}（../build）`}
             </Text>
             {firmwareBytes ? (
               <Button
@@ -866,7 +914,7 @@ function DebugScreen() {
             className="toolbar__btn"
             disabled={busy}
             onClick={() =>
-              void boot(archTab, budget, firmwareName, firmwareBytes)
+              void boot(archTab, budget, firmwareName, firmwareBytes, programName)
             }
           >
             新建运行

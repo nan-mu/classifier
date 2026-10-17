@@ -1,12 +1,20 @@
 //! Agenda-owned schedule: ready set encodes NotTaken-before-Taken for one frame.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 
-use super::history::{HistoryShell, RecordStore};
+use super::history::{self, HistoryShell, RecordStore};
 use super::loc::wire_loc_to_doc;
 use super::merge::{ConfigSnapshot, MergeEffect, MergePort, MergeVerdict, RejectReason};
 
 pub type NodeId = u32;
+
+fn loc_of(successors: &[(Dir, NodeId, String)], id: NodeId) -> &str {
+    successors
+        .iter()
+        .find(|(_, n, _)| *n == id)
+        .map(|(_, _, loc)| loc.as_str())
+        .unwrap_or("exit")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dir {
@@ -46,6 +54,8 @@ pub struct BranchFrame {
     pub taken_root: Option<NodeId>,
     pub history_n: Option<HistoryShell>,
     pub history_t: Option<HistoryShell>,
+    /// Variables history recorded for the finished NotTaken path.
+    history_regs: Option<BTreeSet<String>>,
     /// Suffix-entry candidates on the NotTaken arm (exact-config merge).
     not_taken_candidates: HashSet<NodeId>,
     /// All nodes scheduled on the Taken arm (for cancel-on-reuse).
@@ -110,6 +120,15 @@ impl Agenda {
     }
 
     /// Snapshot of ready node ids (HTTP `work` field).
+    /// Nodes already reached on a NotTaken arm. Taken arrivals may reuse one of these.
+    pub fn not_taken_join_ids(&self) -> Vec<NodeId> {
+        let mut ids = Vec::new();
+        for frame in &self.frames {
+            ids.extend(frame.not_taken_candidates.iter().copied());
+        }
+        ids
+    }
+
     pub fn ready_ids(&self) -> Vec<NodeId> {
         self.items
             .iter()
@@ -165,6 +184,7 @@ impl Agenda {
             taken_root: Some(taken),
             history_n: None,
             history_t: None,
+            history_regs: None,
             not_taken_candidates,
             taken_arm_nodes,
             taken_tip: Some(taken),
@@ -183,6 +203,29 @@ impl Agenda {
     /// After Lean successors are committed into the applied graph.
     /// `parent_loc_wire` is the expanded head's wire loc (for `jb` doc ordinal).
     pub fn on_successors(
+        &mut self,
+        parent: NodeId,
+        parent_loc_wire: &str,
+        successors: &[(Dir, NodeId, String)],
+        records: &mut RecordStore,
+        merge: &MergePort,
+        node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
+        effects: &mut Vec<MergeEffect>,
+    ) {
+        self.on_successors_with(
+            parent,
+            parent_loc_wire,
+            successors,
+            records,
+            merge,
+            node_lookup,
+            effects,
+        );
+    }
+
+    /// NotTaken runs to completion before Taken. A successor that lands back
+    /// on the conditional jump is the end of that path, not a fresh join.
+    pub fn on_successors_with(
         &mut self,
         parent: NodeId,
         parent_loc_wire: &str,
@@ -310,24 +353,121 @@ impl Agenda {
                 }
 
                 for id in linear {
-                    if !suppress_ready.contains(&id) {
-                        self.items.push_back(WorkItem::Ready(id));
-                    }
+                    let loc = loc_of(successors, id).to_string();
+                    self.enqueue_fresh(id, &loc, &suppress_ready, node_lookup, effects);
                 }
                 if let Some(t) = t_only {
-                    if !suppress_ready.contains(&t) {
-                        self.items.push_back(WorkItem::Ready(t));
-                    }
+                    let loc = loc_of(successors, t).to_string();
+                    self.enqueue_fresh(t, &loc, &suppress_ready, node_lookup, effects);
                 }
                 if let Some(n) = n_only {
-                    if !suppress_ready.contains(&n) {
-                        self.items.push_back(WorkItem::Ready(n));
-                    }
+                    let loc = loc_of(successors, n).to_string();
+                    self.enqueue_fresh(n, &loc, &suppress_ready, node_lookup, effects);
                 }
             }
         }
 
         self.advance_frames(records, merge, node_lookup, effects);
+    }
+
+    fn enqueue_fresh(
+        &mut self,
+        id: NodeId,
+        loc: &str,
+        suppress: &HashSet<NodeId>,
+        node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
+        effects: &mut Vec<MergeEffect>,
+    ) {
+        if suppress.contains(&id) {
+            return;
+        }
+        if self.returned_to_jump(id, loc, node_lookup, effects) {
+            return;
+        }
+        self.items.push_back(WorkItem::Ready(id));
+    }
+
+    /// `loc` is the conditional jump itself.
+    /// NotTaken ending here finishes that path.
+    /// Taken ending here is the only call into merge.
+    fn returned_to_jump(
+        &mut self,
+        id: NodeId,
+        loc: &str,
+        node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
+        effects: &mut Vec<MergeEffect>,
+    ) -> bool {
+        if loc == "exit" {
+            return false;
+        }
+        let frames: Vec<usize> = self
+            .frames
+            .iter()
+            .enumerate()
+            .filter(|(_, frame)| {
+                frame.pending_not_taken.contains(&id) || frame.pending_taken.contains(&id)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let mut stopped = false;
+        for index in frames {
+            let Some(branch) = node_lookup(self.frames[index].cb) else {
+                continue;
+            };
+            if branch.loc != loc {
+                continue;
+            }
+            let reuse_from = self.frames[index].cb;
+            let stop = match self.frames[index].phase {
+                BranchPhase::OpenNotTaken => true,
+                BranchPhase::OpenTaken => self.taken_merge_allows(index, id, node_lookup),
+                _ => false,
+            };
+            if !stop {
+                continue;
+            }
+            self.drop_pending(id);
+            effects.push(MergeEffect::Reuse {
+                taken: id,
+                reuse_from,
+            });
+            stopped = true;
+        }
+        stopped
+    }
+
+    fn taken_merge_allows(
+        &self,
+        frame_idx: usize,
+        return_id: NodeId,
+        node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
+    ) -> bool {
+        let Some(history_regs) = &self.frames[frame_idx].history_regs else {
+            return false;
+        };
+        let Some(branch) = node_lookup(self.frames[frame_idx].cb) else {
+            return false;
+        };
+        let Some(back) = node_lookup(return_id) else {
+            return false;
+        };
+        let facts = history::taken_return(
+            &branch.exprs,
+            &branch.predicates,
+            &back.predicates,
+            &back.exprs,
+        );
+        history::merge_allows(history_regs, &facts)
+    }
+
+    fn drop_pending(&mut self, id: NodeId) {
+        self.items.retain(|item| match item {
+            WorkItem::Ready(n) | WorkItem::BlockedTaken { node: n, .. } => *n != id,
+        });
+        for frame in &mut self.frames {
+            frame.pending_not_taken.remove(&id);
+            frame.pending_taken.remove(&id);
+        }
     }
 
     fn try_merge_at_tip(
@@ -467,6 +607,16 @@ impl Agenda {
                     let cb = self.frames[i].cb;
                     let jb_doc = self.frames[i].jb_doc;
                     let nt_root = self.frames[i].not_taken_root.unwrap_or(cb);
+                    let nt_ids: Vec<NodeId> =
+                        self.frames[i].not_taken_candidates.iter().copied().collect();
+                    if let Some(branch) = node_lookup(cb) {
+                        let path_preds = union_preds(&nt_ids, node_lookup);
+                        self.frames[i].history_regs = Some(history::registers_outliving_branch(
+                            &branch.exprs,
+                            &branch.predicates,
+                            &path_preds,
+                        ));
+                    }
                     let history_n = HistoryShell::from_arm(cb, jb_doc, Dir::NotTaken, nt_root);
                     let _ = records.alloc(history_n.records[0].clone());
                     self.frames[i].history_n = Some(history_n);
@@ -510,6 +660,28 @@ impl Agenda {
             }
         }
     }
+}
+
+fn union_preds(
+    ids: &[NodeId],
+    node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
+) -> serde_json::Value {
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        let Some(cfg) = node_lookup(*id) else {
+            continue;
+        };
+        let Some(arr) = cfg.predicates.as_array() else {
+            continue;
+        };
+        for row in arr {
+            if seen.insert(row.to_string()) {
+                rows.push(row.clone());
+            }
+        }
+    }
+    serde_json::Value::Array(rows)
 }
 
 #[cfg(test)]

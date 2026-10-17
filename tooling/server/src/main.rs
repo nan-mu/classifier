@@ -43,6 +43,8 @@ struct CreateBody {
     name: Option<String>,
     /// Optional base64-encoded image bytes. Omitted → embedded fixture for the arch.
     image_b64: Option<String>,
+    /// Name in profile.toml. When set and image_b64 is omitted, load that program's elf or bpf.
+    program: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +59,7 @@ const API_BODY_LIMIT: usize = 32 * 1024 * 1024;
 
 fn app(state: AppState) -> Router {
     Router::new()
+        .route("/api/profile", get(get_profile))
         .route("/api/session", post(create_session))
         .route("/api/session/{id}/step", post(step_session))
         .route("/api/session/{id}/run", post(run_session))
@@ -120,8 +123,8 @@ fn default_name(arch: Arch) -> &'static str {
 }
 
 /// Default HTTP create: just_tx bpf LDDW slots + just_tx.elf maps (same as Kernel path).
-fn ebpf_product_meta(bpf_bytes: &[u8]) -> Result<ebpf::Meta, StatusCode> {
-    let maps = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF)
+fn ebpf_product_meta(bpf_bytes: &[u8], elf_bytes: &[u8]) -> Result<ebpf::Meta, StatusCode> {
+    let maps = rv32_image::parse_xdp_elf(elf_bytes)
         .map_err(|_| StatusCode::BAD_REQUEST)?
         .maps;
     let slots = bpf_image::map_lddw_slots(bpf_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -161,40 +164,108 @@ fn default_bytes(arch: Arch) -> &'static [u8] {
     }
 }
 
+fn profile_bytes(program: &str, arch: Arch) -> Result<(String, Vec<u8>, Vec<u8>), StatusCode> {
+    let profile = server::profile::load().map_err(|_| StatusCode::NOT_FOUND)?;
+    let found = profile.get(program).ok_or(StatusCode::NOT_FOUND)?;
+    let elf = std::fs::read(&found.elf).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let bpf = std::fs::read(&found.bpf).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let name = match arch {
+        Arch::Rv32imc => found
+            .elf
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(program)
+            .to_string(),
+        Arch::Ebpf => found
+            .bpf
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(program)
+            .to_string(),
+    };
+    Ok((name, elf, bpf))
+}
+
+async fn get_profile() -> Result<Json<serde_json::Value>, StatusCode> {
+    let profile = server::profile::load().map_err(|_| StatusCode::NOT_FOUND)?;
+    let programs: Vec<_> = profile
+        .programs
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "elf": p.elf.display().to_string(),
+                "bpf": p.bpf.display().to_string(),
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "build": profile.build.display().to_string(),
+        "programs": programs,
+    })))
+}
+
 async fn create_session(
     State(app): State<AppState>,
     body: Bytes,
 ) -> Result<Json<Snapshot>, StatusCode> {
-    let (budget, arch, name, bin) = if body.iter().all(|byte| byte.is_ascii_whitespace()) {
-        (
-            1024,
-            Arch::Rv32imc,
-            rv32_image::DEFAULT_NAME.to_string(),
-            rv32_image::DEFAULT_ELF.to_vec(),
-        )
-    } else {
-        let parsed: CreateBody =
-            serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
-        let arch = match parsed.arch.as_deref() {
-            None | Some("") => Arch::Rv32imc,
-            Some(s) => Arch::parse(s).ok_or(StatusCode::BAD_REQUEST)?,
-        };
-        let name = parsed
-            .name
-            .filter(|s| !s.trim().is_empty())
-            .unwrap_or_else(|| default_name(arch).to_string());
-        let bin = match parsed.image_b64.as_deref() {
-            None | Some("") => default_bytes(arch).to_vec(),
-            Some(b64) => {
-                let bytes = decode_image_b64(b64)?;
-                if bytes.is_empty() || bytes.len() > 256 * 1024 {
-                    return Err(StatusCode::BAD_REQUEST);
+    let (budget, arch, name, bin, elf_for_maps) =
+        if body.iter().all(|byte| byte.is_ascii_whitespace()) {
+            (
+                1024,
+                Arch::Rv32imc,
+                rv32_image::DEFAULT_NAME.to_string(),
+                rv32_image::DEFAULT_ELF.to_vec(),
+                rv32_image::DEFAULT_ELF.to_vec(),
+            )
+        } else {
+            let parsed: CreateBody =
+                serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+            let arch = match parsed.arch.as_deref() {
+                None | Some("") => Arch::Rv32imc,
+                Some(s) => Arch::parse(s).ok_or(StatusCode::BAD_REQUEST)?,
+            };
+            let program = parsed.program.filter(|s| !s.trim().is_empty());
+            let (name, bin, elf_for_maps) = match parsed.image_b64.as_deref() {
+                Some(b64) if !b64.is_empty() => {
+                    let bytes = decode_image_b64(b64)?;
+                    if bytes.is_empty() || bytes.len() > 256 * 1024 {
+                        return Err(StatusCode::BAD_REQUEST);
+                    }
+                    let name = parsed
+                        .name
+                        .filter(|s| !s.trim().is_empty())
+                        .unwrap_or_else(|| default_name(arch).to_string());
+                    let elf = match program.as_deref() {
+                        Some(key) => profile_bytes(key, Arch::Rv32imc)?.1,
+                        None => rv32_image::DEFAULT_ELF.to_vec(),
+                    };
+                    (name, bytes, elf)
                 }
-                bytes
-            }
+                _ => match program.as_deref() {
+                    Some(key) => {
+                        let (name, elf, bpf) = profile_bytes(key, arch)?;
+                        let bin = match arch {
+                            Arch::Rv32imc => elf.clone(),
+                            Arch::Ebpf => bpf,
+                        };
+                        (name, bin, elf)
+                    }
+                    None => {
+                        let name = parsed
+                            .name
+                            .filter(|s| !s.trim().is_empty())
+                            .unwrap_or_else(|| default_name(arch).to_string());
+                        (
+                            name,
+                            default_bytes(arch).to_vec(),
+                            rv32_image::DEFAULT_ELF.to_vec(),
+                        )
+                    }
+                },
+            };
+            (parsed.budget.unwrap_or(1024), arch, name, bin, elf_for_maps)
         };
-        (parsed.budget.unwrap_or(1024), arch, name, bin)
-    };
     let id = format!("{}", app.next_id.fetch_add(1, Ordering::Relaxed));
     let id_for_store = id.clone();
     let session = match arch {
@@ -208,7 +279,7 @@ async fn create_session(
         Arch::Ebpf => {
             let program =
                 bpf_image::extract_insn_words(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
-            let meta = ebpf_product_meta(&bin)?;
+            let meta = ebpf_product_meta(&bin, &elf_for_maps)?;
             app.pool
                 .run(move || {
                     Arc::new(Mutex::new(Session::new_ebpf(

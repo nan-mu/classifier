@@ -1,10 +1,10 @@
 {
   "id": "fail.budget_exhaust",
   "suite": "fail",
-  "budget": 512,
+  "budget": 64,
   "artifacts": { "rv32": "just_tx.elf" },
   "steps": [
-    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "rv32", "budget": 512 },
+    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "rv32", "budget": 64 },
     { "op": "run", "bind": "s" }
   ],
   "expect": { "kind": "fail", "status": "fail" },

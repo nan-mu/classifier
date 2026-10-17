@@ -43,7 +43,8 @@ fn usage() {
          classifier get --session ID\n\
          classifier compare-tree --left PATH.json --right PATH.json\n\
          classifier exec   # one Command-shaped JSON on stdin (see docs)\n\
-         classifier test --root DIR\n\
+         classifier test [--root DIR]\n\
+         test with no --root reads profile.toml and loads each program's elf and bpf\n\
          stdout: one Envelope JSON; exit 0 ok, 1 error, 2 usage"
     );
 }
@@ -85,11 +86,26 @@ fn do_create(kernel: &Kernel, args: &[String]) -> Envelope {
         .unwrap_or("1024")
         .parse()
         .unwrap_or(1024);
-    let image = match flag(args, "--image") {
-        None => ImageSource::Default,
+    let from_profile = flag(args, "--program").map(|name| name.to_string());
+    let image_flag = flag(args, "--image").map(|p| p.to_string());
+    let image = match image_flag.as_deref() {
         Some(p) => ImageSource::Path(PathBuf::from(p)),
+        None => match profile_image(from_profile.as_deref(), arch) {
+            Ok(path) => ImageSource::Path(path),
+            Err(message) => return usage_err("create", message),
+        },
     };
-    let map_elf = flag(args, "--map-elf").map(|p| ImageSource::Path(PathBuf::from(p)));
+    let map_elf = match flag(args, "--map-elf") {
+        Some(p) => Some(ImageSource::Path(PathBuf::from(p))),
+        None if image_flag.is_none() => {
+            let name = from_profile.as_deref().unwrap_or("just_tx");
+            match profile_image(Some(name), Arch::Rv32imc) {
+                Ok(path) => Some(ImageSource::Path(path)),
+                Err(message) => return usage_err("create", message),
+            }
+        }
+        None => None,
+    };
     let name = flag(args, "--name").map(|s| s.to_string());
     kernel.execute(Command::Create {
         arch,
@@ -230,11 +246,41 @@ fn usage_err(command: &str, message: impl Into<String>) -> Envelope {
     }
 }
 
-fn run_test(args: &[String]) -> ExitCode {
-    let Some(root) = flag(args, "--root") else {
-        return emit(usage_err("test", "missing --root"));
+fn profile_image(program: Option<&str>, arch: Arch) -> Result<PathBuf, String> {
+    let name = program.unwrap_or("just_tx");
+    let profile = server::profile::load()?;
+    let program = profile
+        .get(name)
+        .ok_or_else(|| format!("profile.toml has no program {name}"))?;
+    let path = match arch {
+        Arch::Rv32imc => program.elf.clone(),
+        Arch::Ebpf => program.bpf.clone(),
     };
-    let report = harness::run_suite(&PathBuf::from(root));
+    if !path.is_file() {
+        return Err(format!("missing {}", path.display()));
+    }
+    Ok(path)
+}
+
+fn run_test(args: &[String]) -> ExitCode {
+    let report = if let Some(name) = flag(args, "--program") {
+        let profile = match server::profile::load() {
+            Ok(profile) => profile,
+            Err(message) => return emit(usage_err("test", message)),
+        };
+        let Some(program) = profile.get(name).cloned() else {
+            return emit(usage_err("test", format!("profile.toml has no program {name}")));
+        };
+        harness::run_profile(std::slice::from_ref(&program))
+    } else if let Some(root) = flag(args, "--root") {
+        harness::run_suite(&PathBuf::from(root))
+    } else {
+        let profile = match server::profile::load() {
+            Ok(profile) => profile,
+            Err(message) => return emit(usage_err("test", message)),
+        };
+        harness::run_profile(&profile.programs)
+    };
     let env = Envelope {
         v: 1,
         ok: report.all_ok(),

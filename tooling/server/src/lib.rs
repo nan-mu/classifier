@@ -9,6 +9,7 @@ pub mod expand;
 pub mod harness;
 pub mod pred_match;
 pub mod pred_tree;
+pub mod profile;
 pub mod rv32_image;
 
 pub use api::{Command, Envelope, ImageSource, Kernel, KernelError};

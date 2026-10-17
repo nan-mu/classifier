@@ -19,11 +19,19 @@ async function postJson(path: string, body: unknown): Promise<SessionSnapshot> {
   return (await res.json()) as SessionSnapshot;
 }
 
+export type ProfileProgram = {
+  name: string;
+  elf: string;
+  bpf: string;
+};
+
 export type CreateOpts = {
   budget?: number;
   arch?: ArchKind;
   name?: string;
-  /** Compact XDP ELF bytes; omitted uses the embedded just_tx.elf. */
+  /** Name in profile.toml. Server reads that program's elf or bpf under ../build. */
+  program?: string;
+  /** Compact XDP ELF bytes; omitted uses profile or the embedded just_tx fixture. */
   image?: ArrayBuffer | null;
 };
 
@@ -37,12 +45,24 @@ function bytesToBase64(buf: ArrayBuffer): string {
   return btoa(binary);
 }
 
+export async function fetchProfile(): Promise<ProfileProgram[]> {
+  const res = await fetch("/api/profile");
+  if (!res.ok) {
+    throw new Error(`/api/profile failed with ${res.status}`);
+  }
+  const body = (await res.json()) as { programs?: ProfileProgram[] };
+  return body.programs ?? [];
+}
+
 export function createSession(opts: CreateOpts = {}): Promise<SessionSnapshot> {
   const body: Record<string, unknown> = {
     budget: opts.budget ?? 1024,
     arch: opts.arch ?? "rv32imc",
     name: opts.name ?? "just_tx.elf",
   };
+  if (opts.program && !(opts.image && opts.image.byteLength > 0)) {
+    body.program = opts.program;
+  }
   if (opts.image && opts.image.byteLength > 0) {
     body.image_b64 = bytesToBase64(opts.image);
   }

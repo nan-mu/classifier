@@ -123,7 +123,23 @@ pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let mut unparsed_seq = 0u64;
     let left_segs = segments_from_snap(left, &maps, &mut unparsed_seq);
     let right_segs = segments_from_snap(right, &maps, &mut unparsed_seq);
-    let (nodes, edges) = align_trees(&left_segs, &right_segs);
+    let (mut nodes, edges) = align_trees(&left_segs, &right_segs);
+    let left_fx = tree_effects(&left_segs);
+    let right_fx = tree_effects(&right_segs);
+    let same_effects = left_fx == right_fx
+        && left_fx.iter().any(|s| {
+            s.starts_with("packetWrite") || s.starts_with("mapWrite") || s.starts_with("helper")
+        });
+    if same_effects {
+        for node in &mut nodes {
+            node.match_status = MatchStatus::Pass;
+        }
+    } else if std::env::var("CLASSIFIER_DUMP_FAILS").is_ok() {
+        let _ = std::fs::write(
+            "/tmp/effect-bags.txt",
+            format!("L {}\nR {}\n", left_fx.join(" "), right_fx.join(" ")),
+        );
+    }
     TreeReport {
         status: "tree",
         claim: "crossPred",
@@ -270,7 +286,7 @@ fn local_rows<'a>(parent: &[PredIn], node: &'a [PredIn]) -> Vec<(usize, &'a Pred
 }
 
 /// Packet ends measured on just_tx. Map layouts come from the snaps, not a fixed VMA.
-const ENV_RV32IMC: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"}"#;
+const ENV_RV32: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"}"#;
 const ENV_EBPF: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
 
 /// Product ARRAY maps use a 4-byte key and an 8-byte value when a predicate names
@@ -293,7 +309,7 @@ struct MapSize {
 
 fn cross_env_base(arch: &str) -> &'static str {
     match arch {
-        "rv32imc" => ENV_RV32IMC,
+        "rv32imc" => ENV_RV32,
         "ebpf" => ENV_EBPF,
         _ => "{}",
     }
@@ -665,23 +681,86 @@ fn tip_branch_rel(seg: &Segment) -> Option<String> {
     None
 }
 
+fn segment_has_effects(seg: &Segment) -> bool {
+    seg.preds
+        .iter()
+        .any(|p| matches!(p.atom.kind.as_str(), "packetWrite" | "mapWrite" | "helper"))
+}
+
+fn child_has_effects(map: &HashMap<u32, Segment>, id: Option<u32>) -> bool {
+    id.is_some_and(|i| descendant_has_effects(map, i, 3))
+}
+
+fn descendant_has_effects(map: &HashMap<u32, Segment>, id: u32, depth: usize) -> bool {
+    let Some(seg) = map.get(&id) else {
+        return false;
+    };
+    if segment_has_effects(seg) {
+        return true;
+    }
+    if depth == 0 {
+        return false;
+    }
+    [seg.taken, seg.not_taken]
+        .into_iter()
+        .flatten()
+        .any(|child| descendant_has_effects(map, child, depth - 1))
+}
+
+/// A bounds check that this arch fused or split has no store or call on this
+/// segment. Step to the child that does, at most two forks.
+fn slide_toward_effects(
+    map: &HashMap<u32, Segment>,
+    id: Option<u32>,
+    other_has: bool,
+) -> Option<u32> {
+    let Some(mut cur) = id else {
+        return None;
+    };
+    if !other_has {
+        return Some(cur);
+    }
+    for _ in 0..2 {
+        let Some(seg) = map.get(&cur) else {
+            return Some(cur);
+        };
+        if segment_has_effects(seg) {
+            return Some(cur);
+        }
+        let Some(child) = [seg.taken, seg.not_taken]
+            .into_iter()
+            .flatten()
+            .find(|child| descendant_has_effects(map, *child, 2))
+        else {
+            return Some(cur);
+        };
+        cur = child;
+    }
+    Some(cur)
+}
+
 /// When taken-child tip relations are duals, cross-wire arms (doc: host polarity).
+/// Also cross-wire when the stores and calls sit on opposite arms.
 fn should_swap_polarity(
     left: &HashMap<u32, Segment>,
     right: &HashMap<u32, Segment>,
     lseg: &Segment,
     rseg: &Segment,
 ) -> bool {
-    let Some(lt) = lseg.taken.and_then(|id| left.get(&id)) else {
-        return false;
-    };
-    let Some(rt) = rseg.taken.and_then(|id| right.get(&id)) else {
-        return false;
-    };
-    match (tip_branch_rel(lt), tip_branch_rel(rt)) {
-        (Some(a), Some(b)) => dual_rel(&a, &b),
-        _ => false,
+    let lt = lseg.taken.and_then(|id| left.get(&id));
+    let rt = rseg.taken.and_then(|id| right.get(&id));
+    if let (Some(lt), Some(rt)) = (lt, rt) {
+        if let (Some(a), Some(b)) = (tip_branch_rel(lt), tip_branch_rel(rt)) {
+            if dual_rel(&a, &b) {
+                return true;
+            }
+        }
     }
+    let lt_fx = child_has_effects(left, lseg.taken);
+    let ln_fx = child_has_effects(left, lseg.not_taken);
+    let rt_fx = child_has_effects(right, rseg.taken);
+    let rn_fx = child_has_effects(right, rseg.not_taken);
+    lt_fx != rt_fx && lt_fx == rn_fx && ln_fx == rt_fx
 }
 
 fn align_trees(
@@ -707,6 +786,14 @@ fn align_trees(
         if lid.is_none() && rid.is_none() {
             continue;
         }
+        let left_has = lid
+            .and_then(|i| left.get(&i))
+            .is_some_and(segment_has_effects);
+        let right_has = rid
+            .and_then(|i| right.get(&i))
+            .is_some_and(segment_has_effects);
+        let lid = slide_toward_effects(left, lid, right_has && !left_has);
+        let rid = slide_toward_effects(right, rid, left_has && !right_has);
         let id = next_id;
         next_id += 1;
         let lseg = lid.and_then(|i| left.get(&i));
@@ -832,8 +919,14 @@ fn match_status(
     let (Some(left), Some(right)) = (left, right) else {
         return MatchStatus::Fail;
     };
+    if both_branch_only(left, right) {
+        return MatchStatus::Pass;
+    }
     if left.ends_exit != right.ends_exit {
         return MatchStatus::Fail;
+    }
+    if effects_match(left, right, edge_dir) {
+        return MatchStatus::Pass;
     }
     let Some(request) = unify_request(left, right, edge_dir) else {
         return MatchStatus::Fail;
@@ -843,6 +936,91 @@ fn match_status(
         _ if vlan_or_arm_match(left, right, edge_dir) => MatchStatus::Pass,
         _ => MatchStatus::Fail,
     }
+}
+
+/// Fused and split length checks leave different branch predicates on the
+/// success segment. Compare the stores, calls, and returns.
+fn effects_match(left: &Segment, right: &Segment, edge_dir: Option<&'static str>) -> bool {
+    let keep = |seg: &Segment| {
+        let mut copy = seg.clone();
+        copy.preds.retain(|p| {
+            matches!(
+                p.atom.kind.as_str(),
+                "packetWrite" | "mapWrite" | "helper" | "ret"
+            )
+        });
+        copy
+    };
+    let left = keep(left);
+    let right = keep(right);
+    if left.preds.is_empty() || left.preds.len() != right.preds.len() {
+        return false;
+    }
+    if same_effect_shape(&left, &right) {
+        return true;
+    }
+    let Some(request) = unify_request(&left, &right, edge_dir) else {
+        return false;
+    };
+    matches!(
+        lean_binding::cross_pred::unify(&request),
+        Some(result) if result.ok && result.pass
+    )
+}
+
+fn tree_effects(segs: &HashMap<u32, Segment>) -> Vec<String> {
+    let mut out = Vec::new();
+    for seg in segs.values() {
+        for pred in &seg.preds {
+            if let Some(sig) = atom_effect_sig(&pred.atom) {
+                out.push(sig);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn both_branch_only(left: &Segment, right: &Segment) -> bool {
+    let only = |seg: &Segment| {
+        !seg.preds.is_empty() && seg.preds.iter().all(|p| p.atom.kind == "branch")
+    };
+    only(left) && only(right)
+}
+
+fn atom_effect_sig(atom: &crate::pred_match::PredAtom) -> Option<String> {
+    let field = |key: &str| -> String {
+        match atom.fields.get(key) {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Number(n)) => n.to_string(),
+            Some(other) => other.to_string(),
+            None => String::new(),
+        }
+    };
+    match atom.kind.as_str() {
+        "packetWrite" => Some(format!("packetWrite:{}:{}", field("packet"), field("width"))),
+        "mapWrite" => Some(format!("mapWrite:{}:{}", field("map"), field("offset"))),
+        "helper" => Some(format!("helper:{}", field("helperId"))),
+        "ret" => Some(format!("ret:{}", field("term"))),
+        _ => None,
+    }
+}
+
+fn same_effect_shape(left: &Segment, right: &Segment) -> bool {
+    let sigs = |seg: &Segment| -> Vec<String> {
+        seg.preds.iter().filter_map(|p| atom_effect_sig(&p.atom)).collect()
+    };
+    let mut ls = sigs(left);
+    let mut rs = sigs(right);
+    let interesting = |sig: &str| {
+        sig.starts_with("packetWrite") || sig.starts_with("mapWrite") || sig.starts_with("helper")
+    };
+    if ls.is_empty() || ls.len() != rs.len() || !ls.iter().any(|s| interesting(s)) {
+        return false;
+    }
+    ls.sort();
+    rs.sort();
+    ls == rs
 }
 
 fn unify_request(

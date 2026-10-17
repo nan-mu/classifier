@@ -110,6 +110,57 @@ impl SuiteReport {
     }
 }
 
+/// Dual-arch cases for every program in `profile.toml`. Budget 1024, compare fail 0.
+pub fn run_profile(programs: &[crate::profile::Program]) -> SuiteReport {
+    let mut outcomes = Vec::new();
+    for program in programs {
+        eprintln!("profile {}", program.name);
+        let spec = profile_case(program);
+        let outcome = match run_case(&spec, Path::new(".")) {
+            Ok(()) => CaseOutcome {
+                id: spec.id,
+                suite: "profile".into(),
+                ok: true,
+                detail: "pass".into(),
+            },
+            Err(detail) => CaseOutcome {
+                id: spec.id.clone(),
+                suite: "profile".into(),
+                ok: false,
+                detail,
+            },
+        };
+        eprintln!(
+            "profile {} {}",
+            program.name,
+            if outcome.ok { "ok" } else { "FAIL" }
+        );
+        outcomes.push(outcome);
+    }
+    SuiteReport { cases: outcomes }
+}
+
+fn profile_case(program: &crate::profile::Program) -> CaseSpec {
+    let raw = serde_json::json!({
+        "id": format!("profile.{}", program.name),
+        "suite": "profile",
+        "budget": 1024,
+        "artifacts": {
+            "rv32": program.elf.display().to_string(),
+            "ebpf": program.bpf.display().to_string(),
+        },
+        "steps": [
+            { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
+            { "op": "create", "bind": "bpf", "arch": "ebpf", "artifact": "ebpf", "map_elf": "rv32" },
+            { "op": "run", "bind": "rv" },
+            { "op": "run", "bind": "bpf" },
+            { "op": "compare_tree", "left": "rv", "right": "bpf" }
+        ],
+        "expect": { "kind": "pass", "status": "complete", "compare_tree": { "fail": 0 } },
+    });
+    serde_json::from_value(raw).expect("profile case")
+}
+
 pub fn run_suite(root: &Path) -> SuiteReport {
     let mut cases = Vec::new();
     for suite in ["base", "xdp", "fail"] {
@@ -366,7 +417,10 @@ fn check_expect(
                 let fails = count_match_fails(last);
                 if let Some(exact) = ct.fail {
                     if fails != exact {
-                        return Err(format!("compare fail want {exact} got {fails}"));
+                        return Err(format!(
+                            "compare fail want {exact} got {fails}{}",
+                            fail_sample(last)
+                        ));
                     }
                 }
                 if let Some(min) = ct.fail_at_least {
@@ -379,6 +433,31 @@ fn check_expect(
         }
         other => Err(format!("unknown expect.kind {other}")),
     }
+}
+
+fn fail_sample(env: &Envelope) -> String {
+    let Some(nodes) = pointer(env, "/payload/nodes").and_then(|v| v.as_array()) else {
+        return String::new();
+    };
+    if std::env::var("CLASSIFIER_DUMP_FAILS").is_ok() {
+        let fails: Vec<_> = nodes.iter().filter(|n| n.get("matchStatus").and_then(|m| m.as_str()) == Some("fail")).cloned().collect();
+        let _ = std::fs::write("/tmp/compare-fails.json", serde_json::to_string(&fails).unwrap_or_default());
+    }
+    let mut out = String::new();
+    for node in nodes.iter().filter(|n| n.get("matchStatus").and_then(|m| m.as_str()) == Some("fail")).take(4) {
+        let brief = |side: &str| -> String {
+            node.get(side)
+                .and_then(|v| v.as_array())
+                .map(|items| {
+                    items.iter().take(8).map(|item| {
+                        item.get("atom").and_then(|a| a.get("kind")).and_then(|k| k.as_str()).unwrap_or("exit").to_string()
+                    }).collect::<Vec<_>>().join(",")
+                })
+                .unwrap_or_default()
+        };
+        out.push_str(&format!(" [{} L={} R={}]", node.get("id").and_then(|v| v.as_u64()).unwrap_or(0), brief("left"), brief("right")));
+    }
+    out
 }
 
 fn count_match_fails(env: &Envelope) -> u64 {
