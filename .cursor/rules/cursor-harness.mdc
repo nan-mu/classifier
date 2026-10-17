@@ -1,5 +1,5 @@
 ---
-description: Cursor tooling harness — freezes doc/ and Lean4; points at .cursor/AGENTS.md
+description: Cursor owns the full classifier repo — tooling, doc/, and Lean4
 alwaysApply: true
 ---
 
@@ -7,27 +7,17 @@ alwaysApply: true
 
 You are in the **Cursor** harness. Full guide: `.cursor/AGENTS.md`.
 
-## Split from omp
+## Scope
 
-- **Cursor** writes `tooling/`, `.cursor/`, `README.md`, `.github/` only.
-- **omp** (`.omp/AGENTS.md`) writes `doc/` and Lean4 / Lake sources.
-- Never mix write scopes.
+Cursor owns writes across the whole repo: `tooling/`, `doc/`, Lean4 / Lake
+sources (`*.lean`, `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`,
+`lakefile.lean`, `lean-toolchain`, `lake-manifest.json`), `.cursor/`,
+`README.md`, and `.github/`.
 
-## Refuse writes here
-
-Refuse create/edit/delete/rename/move/regenerate/format of:
-
-- `doc/**`
-- `*.lean`, `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`, `lakefile.lean`, `lean-toolchain`, `lake-manifest.json`
-
-Allowed: read/search/cite. `lake build` / `lake test` only as verification.
-
-If the task needs Lean or `doc/` edits, decline and delegate to the `omp` CLI.
-Ask for a `spec-author` spawn; never assert the omp session's identity ("You are
-spec-author") and never attach `@.omp/agents/spec-author.md` — the DeepSeek main
-session would adopt that identity and do the work itself. See `.cursor/AGENTS.md`
-§ Delegating to omp.
+Do **not** refuse Lean or `doc/` edits. Do **not** delegate to an external
+`omp` CLI, `spec-author`, or any other harness.
 
 ## Lean for tooling
 
-Only the create/step expand FFI matters. Do not grow product code on other Lean APIs. Details in `.cursor/AGENTS.md`.
+Only the create/step expand FFI matters for product Rust paths. Do not grow
+product code on other Lean APIs. Details in `.cursor/AGENTS.md`.

@@ -1,11 +1,11 @@
 ---
-name: inference-e2e-omp
+name: inference-e2e
 description: >-
   Completes Classifier inference per current doc specs (Create/Step/History/Merge/Merge-Step),
-  delegates Lean4/doc work via omp CLI (not Q&A-only), integrates tooling/Web UI, and verifies
-  real end-to-end Web UI runs. Use when implementing or fixing expand/merge, syncing Lean with
+  edits Lean4 and doc/ directly in Cursor, integrates tooling/Web UI, and verifies real
+  end-to-end Web UI runs. Use when implementing or fixing expand/merge, syncing Lean with
   docs, wiring backend/viewer, verifying Merge actually runs, or when the user asks for full
-  inference flow / Web UI e2e / omp Lean delegation.
+  inference flow / Web UI e2e.
 ---
 
 # 任务：按照现行文档规范完成推理流程，并验证 Web UI 全流程正确运行
@@ -56,62 +56,23 @@ description: >-
 
 请特别注意：**任务不是让新规范适配旧代码，而是让整个系统正确实现新规范。**
 
-## 三、可以通过 OMP 委派 Lean 4 任务
+## 三、在本会话直接修改 Lean 4 与 `doc/`
 
-当前环境已提供 `omp`（Oh My Pi）CLI。
+Cursor 负责全仓库，包括 `doc/` 与 Lean4 / Lake 源码。**不要**转交 `omp` CLI、
+`spec-author` 或其他外部 harness。
 
-你可以通过终端调用 OMP，将 Lean 4 相关工作委派给独立 Agent。
+在本会话中直接完成：
 
-OMP 具有自己的模型、上下文、工具及 Skills，可以直接处理项目文件。
-
-### 允许委派的工作
-
-- Lean 4 数学定义及推理语义的分析。
-- Lean 4 代码实现、修改和重构。
+- Lean 4 数学定义及推理语义的分析与实现。
 - Create、Step、History、Merge、Merge-Step 相关逻辑的修复。
 - Lean 4 接口和数据结构的调整。
-- Lean 4 代码与规范文档的一致性检查。
-- Lean 4 相关规范文档的同步更新。
+- Lean 4 代码与规范文档的同步更新。
 - Lean 4 编译错误、证明错误及运行错误的修复。
+- `tooling/` 后端与 Web UI 的集成修改。
 
-调用前可以使用 `omp --help` 确认当前版本支持的命令参数。
-
-### 委派是两跳
-
-1. **Cursor → OMP 主会话**：一次性任务用非交互模式，`omp -p @.cursor/omp-handoff-<task>.md`；需要连续迭代时可用 OMP 的会话机制。
-2. **OMP 主会话 → `spec-author`**：`.omp/config.yml` 让主会话跑在 DeepSeek 上，而 `omp --help` 只有 `--model`、没有 `--agent`，所以主会话无法"变成"某个 agent。`.omp/AGENTS.md` 因此要求它把每一处 `doc/` 与 Lean 修改交给 `spec-author`（pin 在 `openai-codex/gpt-6.1-sol:high`）执行，并禁止它自己动手。
-
-第二步是 OMP 内部的事，你只需要在任务书里点名要这个 spawn。
-
-### 任务书怎么写
-
-对**派发者**说话，只说要做的改动：
-
-```text
-# Task: <Cursor 需要的改动>
-每一处 doc/Lean 修改都 spawn `agent: spec-author` 执行，不要自己编辑。
-<tooling 侧事实：实测节点/fuel 数字、fixture 路径、Cursor 已改动的部分>
-```
-
-- **不要**写 "You are **omp**（`spec-author`）"，**不要**附带 `@.omp/agents/spec-author.md`。主会话一旦读到身份就会认领它，直接用自己的模型把活干完，Codex 完全不会运行。
-- 不要用 `--model openai-codex/...` 把顶层会话钉到 Codex；Codex 只属于被 spawn 的 `spec-author`。
-- tooling 侧事实写进任务书。OMP 可以自由读 `tooling/`，但不改它。
-
-### Agent 职责划分
-
-你是本次任务的主 Agent，负责：
-
-- 理解完整项目结构和当前规范。
-- 规划整体修改。
-- 维护 Lean 4、后端和 Web UI 之间的接口一致性。
-- 将合适的 Lean 4 任务委派给 OMP。
-- 负责 Web UI 和后端的修改与集成。
-- 检查 OMP 的实际修改结果。
-- 执行最终端到端验证。
-
-**不要将 OMP 仅作为问答工具。** 需要修复 Lean 4 实现时，在任务书里直接要求 OMP spawn `spec-author` 完成代码修改，而不是让主会话自己改。
-
-OMP 完成后，请检查文件差异、构建结果及实际运行行为，并自行执行 `lake build ClassifierExpr PathMerge RV32IMC EBPF`、`.audit/` 三个文档门禁与 live `/run`。不能仅凭 OMP 的文字回复认定任务完成，编译通过也不等于语义证明。
+改完后自行执行 `lake build ClassifierExpr PathMerge RV32IMC EBPF`、相关
+`.audit/` 文档门禁（若适用）与 live `/run` 或 Web UI 端到端验证。编译通过不
+等于语义证明。
 
 ## 四、Lean 4 实现与文档必须同步
 
@@ -188,7 +149,7 @@ Merge 和 Merge-Step 是本次任务的重点验收对象。
 
 优先保证 Lean 4 推理语义正确。
 
-如果核心实现不满足规范，可以通过 OMP 委派修复，并检查其修改结果。
+如果核心实现不满足规范，在本会话直接修改 Lean 与 `doc/`。
 
 对受影响的 Lean 4 文档同步维护。
 
@@ -237,8 +198,7 @@ Merge 和 Merge-Step 是本次任务的重点验收对象。
 - 当前有效的规范高于历史实现和旧版限制。
 - 允许对阻碍新规范落地的旧代码进行必要重构。
 - Lean 4 文档必须始终与实际代码行为保持同步。
-- 合适的 Lean 4 工作可以主动交给 OMP，无须每次询问。
-- 不能因为 OMP 报告完成，就跳过主 Agent 的检查和集成验证。
+- Lean 4 与 `doc/` 在本会话直接修改，不转交外部 harness。
 - 不得以删除关键推理步骤、放宽语义约束或使用模拟结果的方式掩盖问题。
 - 不得将 Merge 和 Merge-Step 的存在等同于它们已被正确使用。
 - 遇到问题应继续定位和修复，不要仅生成问题清单就停止工作。

@@ -1,84 +1,22 @@
-# Cursor harness guide (tooling)
+# Cursor harness guide
 
 Canonical path: `.cursor/AGENTS.md`. There is no repo-root `AGENTS.md`.
-Do not treat `.omp/AGENTS.md` as Cursor policy.
 
-## Two harnesses (do not mix)
+## One harness
 
-| Harness | Guide | Owns writes | Must refuse writes |
-| --- | --- | --- | --- |
-| **Cursor** (this chat) | `.cursor/AGENTS.md` | `tooling/`, `.cursor/`, `README.md`, `.github/` | `doc/`, Lean4 / Lake sources |
-| **omp** | `.omp/AGENTS.md` | `doc/`, Lean4 / Lake sources — through a `spec-author` spawn | `tooling/` |
+Cursor owns the full repository: `tooling/`, `doc/`, Lean4 / Lake sources,
+`.cursor/`, `README.md`, and `.github/`. Edit Lean and `doc/` directly in this
+session. Do not delegate to `omp`, `spec-author`, or any external agent harness.
 
-**注意事项.**
-
-1. Never import the other harness's write scope.
-2. Lean / `doc/` edits belong to omp or a human. Cursor refuses them.
-3. `tooling/` edits belong to Cursor. omp refuses them.
-4. Split cross-harness tasks. Do not touch the frozen side "to help".
-5. Always-on freeze text lives in `.cursor/rules/cursor-harness.mdc`
-   (`alwaysApply: true`). Keep it aligned with this file.
-
-## Freeze: `doc/` and Lean4 are read-only
-
-Refuse create/edit/delete/rename/move/regenerate/format of:
-
-- `doc/**`
-- `*.lean`, `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`,
-  `lakefile.lean`, `lean-toolchain`, `lake-manifest.json` when present
-
-Allowed on those paths: read, search, cite. `lake build` / `lake test` only
-as verification that does not rewrite them.
-
-**Writable.** `.cursor/`, `README.md`, `tooling/`, `.github/`.
-
-## Delegating to omp (Lean / `doc/` work)
-
-Cursor never edits the frozen side. It delegates through the `omp` CLI and keeps
-the integration and the final verification. Delegation is two hops, and the
-second one is omp's own:
-
-1. **Cursor → omp main session.** A one-shot brief, run non-interactively via
-   **interactive fish** so the local `omp` wrapper injects `QWEN_API_KEY`
-   (non-interactive `fish -c` exits `config.fish` before the function loads):
-   `fish -ic 'omp -p @.cursor/omp-handoff-<task>.md'`.
-   Keep the repo default model (`qianwen/...` in `.omp/config.yml`). Do not
-   retarget the dispatcher to a bare `deepseek/...` id.
-2. **omp main session → `spec-author`.** `.omp/config.yml` runs that session on a
-   DeepSeek-via-QWEN model, and no CLI flag makes a session *be* a named agent
-   (`omp --help` has `--model`, not `--agent`). `.omp/AGENTS.md` therefore
-   requires it to spawn `spec-author` — pinned to `openai-codex/gpt-6.1-sol:high`
-   — for every `doc/` or Lean edit, and forbids it from editing those paths itself.
-
-**Briefs address the dispatcher, never assert an identity.** Asking for the spawn
-is the contract:
-
-```text
-# Task: <what Cursor needs>
-Spawn `agent: spec-author` for every doc/Lean item below; do not edit them yourself.
-<tooling-side facts: measured node/fuel numbers, fixture paths, what Cursor changed>
-```
-
-- Never write "You are **omp** (`spec-author`)" and never attach
-  `@.omp/agents/spec-author.md`. A main session that reads an identity adopts it
-  and does the work on the DeepSeek model, so Codex never runs at all.
-- Do not pin the main session to `openai-codex/...` to force Codex at the top
-  level; the Codex work belongs to the spawned agent.
-- Tooling-side facts go in the brief. omp reads `tooling/` freely and never edits
-  it.
-
-**Verification stays with Cursor.** After omp yields, read `git diff`, require
-`lake build ClassifierExpr PathMerge RV32IMC EBPF` and the three `.audit/` doc
-gates, then do the live `/run` check yourself. omp's prose is not evidence, and a
-green build is not a semantic proof.
-
-Handoff notes live in `.cursor/omp-handoff-<task>.md`, describe the tooling side
-only, and are one-shot inputs — not agent definitions.
+Always-on summary lives in `.cursor/rules/cursor-harness.mdc`
+(`alwaysApply: true`). Keep it aligned with this file.
 
 ## What Cursor owns
 
 Rust/Cargo workspace under `tooling/`: Lean FFI binding, Expand HTTP API,
-web graph viewer, fixtures, scripts, and CI.
+web graph viewer, fixtures, scripts, and CI — plus Lean math/implementation
+under `ClassifierExpr/`, `PathMerge/`, `RV32IMC/`, `EBPF/`, and specs under
+`doc/`.
 
 ```text
 tooling/Cargo.toml              Rust workspace (one Cargo.lock)
@@ -93,6 +31,9 @@ tooling/scripts/rust-ci.sh      nightly fmt + clippy gate
 tooling/fixtures/just_tx.elf    default Compact XDP ELF
 tooling/fixtures/xdp.elf        firewall / helper-call fixture
 .github/workflows/rust.yml      mirrors rust-ci.sh
+doc/                            math defs, proofs, research notes
+ClassifierExpr/ PathMerge/      Lean libraries
+RV32IMC/ EBPF/
 ```
 
 Use Lake as the repo entrypoint (`lake build`, `lake test`, `lake run dev`).
@@ -175,8 +116,9 @@ loop, and concurrency (`tooling/server/src/engine.rs`, `tooling/server/src/drive
 - A rejected step must not mutate the graph. Unknown target / missing source
   must not become a silent Exit or empty success.
 
-If create/step behavior looks wrong, fix tooling adapters/tests first. Changing
-Lean belongs to omp.
+If create/step behavior looks wrong, fix tooling adapters/tests first. When the
+bug is in Lean semantics or `doc/`, edit those paths in this session and keep
+docs aligned with code.
 
 ## Build and check
 
@@ -186,6 +128,12 @@ From repo root:
 lake build
 lake test
 lake run dev          # API :8788 (PORT overrides), Vite :5173
+```
+
+After Lean or `doc/` edits that affect expand/merge semantics:
+
+```bash
+lake build ClassifierExpr PathMerge RV32IMC EBPF
 ```
 
 After any change under `tooling/**/*.rs`, `tooling/**/Cargo.toml`,
@@ -205,11 +153,9 @@ built Lean libs, and sibling `../xpost`.
 
 Before reporting done: `git status` / `git diff`, preserve unrelated dirty
 files, run checks that match what you edited. Do not commit unless asked.
-Never commit `.codex/` or `.omp/`.
+Never commit `.codex/` or leftover `.omp/` directories.
 
 ## Model policy
 
 Follow `~/.cursor/rules/model-access.mdc`. Cursor parent and Task subagents use
-**Auto** only. Do not pin paid Task model slugs. Do not open Codex/MCP write
-handoffs for Lean or `doc/`: hand those to the `omp` CLI, which spawns its pinned
-Codex `spec-author` (see "Delegating to omp").
+**Auto** only. Do not pin paid Task model slugs.
