@@ -11,6 +11,33 @@ session. Do not delegate to `omp`, `spec-author`, or any external agent harness.
 Always-on summary lives in `.cursor/rules/cursor-harness.mdc`
 (`alwaysApply: true`). Keep it aligned with this file.
 
+## Specs, Lean, and end-to-end work
+
+Current `doc/` specs define Create / Step / History / Merge / Merge-Step
+semantics. They outrank older code, obsolete limits, and historical design
+assumptions. Adapt the system to the current specs; do not weaken specs to
+match old code. If a spec is internally ambiguous, resolve from the math and
+the live expand flow — do not silently drop requirements.
+
+**Lean ↔ `doc/` stay aligned.** Changing Lean behavior updates affected docs;
+changing operation semantics updates Lean. Docs state math (I/O, preconditions,
+state change, rules), not incidental implementation detail. Do not leave dead
+docs as if they were still normative.
+
+**Acceptance is a real runnable flow**, not compile / unit-test green alone.
+When the task touches expand, merge, or the viewer:
+
+1. Prefer fixing Lean semantics first, then tooling adapters and Web UI.
+2. Merge and Merge-Step must actually run under current specs (not merely
+   exist as APIs). Merge is not full-machine equality and is not state
+   synthesis unless the spec allows it. History predicates must not vanish
+   solely because a suffix is reused.
+3. Verify with `lake run dev` (or live `/run`) and, when UI is in scope, a
+   real Web UI create → step/run → complete path. Prefer fixtures that
+   exercise merge (`merge_try`, etc.); “merge never fired” is not a pass.
+4. Distinguish measured behavior from code-reading inference. Say what was
+   not verified if the environment lacks a dependency.
+
 ## What Cursor owns
 
 Rust/Cargo workspace under `tooling/`: Lean FFI binding, Expand HTTP API,
