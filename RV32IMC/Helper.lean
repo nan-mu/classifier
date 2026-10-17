@@ -20,9 +20,12 @@ def parseHelperCall (Eg : ExprSet) : Except RejectReason HelperCall := do
   let kind := helperKind id
   let mut args := []
   for j in [:helperArity kind] do
-    let some t := Eg.lookupEq (Reg.real32 (11 + j)) | throw .undefinedSrc
-    if t.width != .w32 then throw .undefinedSrc
-    args := args ++ [solve t]
+    match Eg.lookupEq (Reg.real32 (11 + j)) with
+    | some t =>
+      if t.width != .w32 then throw .undefinedSrc
+      args := args ++ [solve t]
+    | none =>
+      if j < helperRequired kind then throw .undefinedSrc else break
   pure ⟨kind, id, args⟩
 
 /-- Byte-valued frozen key/value tail after the ABI prefix. -/
@@ -63,7 +66,7 @@ private def helperCallOfPredicate (p : Predicate) : Except RejectReason (NodeId 
   let .helper event kind args := p | throw .unsupported
   if kind.id ≥ (1 <<< 32) || helperKind kind.id != kind then throw .unsupported
   let arity := helperArity kind
-  if args.length < arity then throw .undefinedSrc
+  if args.length < helperRequired kind then throw .undefinedSrc
   let abi := args.take arity
   let tail := args.drop arity
   if abi.any (fun t => t.width != .w32) || !frozenTailOk tail then throw .undefinedSrc

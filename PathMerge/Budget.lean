@@ -62,16 +62,35 @@ def prepareAll (σ : SemState) (progLen : Nat) :
       | Except.error e => Except.error e
       | Except.ok rows => Except.ok (row :: rows)
 
+/-- Visits of one instruction along a single path. A symbolic loop otherwise
+keeps both directions and spends the budget. Other paths may visit it again. -/
+def loopVisitLimit : Nat := 4
+
+private def pathVisits (nodes : Array Node) (edges : Array Edge) (start : NodeId)
+    (loc : Location) : Nat :=
+  let rec go (id : NodeId) (fuel : Nat) : Nat :=
+    if fuel = 0 then 0 else
+      let here := match nodes[id]? with
+        | some node => if node.loc == loc then 1 else 0
+        | none => 0
+      match edges.find? (fun e => e.dst == id) with
+      | some e => here + go e.src (fuel - 1)
+      | none => here
+  go start (nodes.size + 1)
+
 private def appendPrepared (eta : NodeId) (nodes : Array Node) (edges : Array Edge)
     (work : List NodeId) :
     List (Direction × Location × SemState) → Array Node × Array Edge × List NodeId
   | [] => (nodes, edges, work)
   | (d, loc, σ') :: rs =>
-    let zeta := nodes.size
-    let nodes := nodes.push ⟨loc, σ'⟩
-    let edges := edges.push ⟨eta, d, zeta⟩
-    let work := if PathMerge.isExit loc then work else work ++ [zeta]
-    appendPrepared eta nodes edges work rs
+    if !PathMerge.isExit loc && pathVisits nodes edges eta loc ≥ loopVisitLimit then
+      appendPrepared eta nodes edges work rs
+    else
+      let zeta := nodes.size
+      let nodes := nodes.push ⟨loc, σ'⟩
+      let edges := edges.push ⟨eta, d, zeta⟩
+      let work := if PathMerge.isExit loc then work else work ++ [zeta]
+      appendPrepared eta nodes edges work rs
 
 /-- One node expansion (`doc/NodeInference/step.md`). `progLen` bounds non-Exit targets. -/
 def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
@@ -109,6 +128,21 @@ partial def expand (progLen : Nat) (step : Nat → SemState → StepResult) (ws 
   match expandOne progLen step ws with
   | Sum.inl outcome => outcome
   | Sum.inr ws' => expand progLen step ws'
+
+private def loopVisitCheck : Bool :=
+  let step (_j : Nat) (_σ : SemState) : StepResult :=
+    .candidates [
+      ⟨.taken, .pos 0, ExprSet.empty, []⟩,
+      ⟨.notTaken, .exit, ExprSet.empty, [.ret (Term.C32 1)]⟩]
+  match expandInit 1 0 ⟨.empty, []⟩ 100 with
+  | .error _ => false
+  | .ok ws =>
+    match expand 1 step ws with
+    | .complete g => g.nodes.size ≤ 2 * loopVisitLimit + 1 &&
+        g.nodes.any (fun n => n.loc == .exit)
+    | _ => false
+
+#guard loopVisitCheck
 
 /-- Run `n` successful `expandOne` calls (or stop at earlier terminal). -/
 def expandN (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :

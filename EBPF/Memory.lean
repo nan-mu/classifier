@@ -146,7 +146,8 @@ entry-register name. Content availability is checked by readAccess/writeAccess.
 Lookup anchors word zero; other Map words have no implicit content relation
 and accesses reject undefinedSrc until such a relation is explicitly available. -/
 def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : Int)
-    (bytes : Nat) (maps : List MapLayout := []) (contextByteView : Bool := false) :
+    (bytes : Nat) (maps : List MapLayout := []) (contextByteView : Bool := false)
+    (preds : List Predicate := []) :
     Except RejectReason ResolvedAccess := do
   if !E.keysUnique || !E.wellTyped || address.width != .w64 ||
       ![1, 2, 4, 8].contains bytes then throw .undefinedSrc
@@ -167,7 +168,7 @@ def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : In
         let accessAddress := addStar .w64 address (Term.C64 offset.toNat)
         let endingAccess : CellAccess := ⟨Reg.ctx32 (p.αCtx + 1), 0, 32⟩
         if let some ending := endingAccess.read E .w64 true then
-          if let some (strict, checkedEnd) := packetBoundWitness E root accessAddress ending bytes then
+          if let some (strict, checkedEnd) := packetBoundWitness E root accessAddress ending bytes preds then
             let compound : CompoundPacketReg :=
               ⟨p.κPacket, displacement.plus (.c offset.toNat), bytes, p.αCtx + 1, strict, 0, checkedEnd⟩
             candidates := .packet ⟨p.κPacket, 0, bytes, .little, some p.tData, some compound⟩ ::
@@ -185,12 +186,13 @@ def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : In
   | _ => throw .undefinedSrc
 
 def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
-    (bytes : Nat) (isWrite : Bool) (maps : List MapLayout := []) :
+    (bytes : Nat) (isWrite : Bool) (maps : List MapLayout := [])
+    (preds : List Predicate := []) :
     Except RejectReason ResolvedAccess := do
   let _ := isWrite
   if base > 10 then throw .undefinedSrc
   let some address := E.lookupEq (Reg.real64 base) | throw .undefinedSrc
-  resolveAddress p E address offset bytes maps
+  resolveAddress p E address offset bytes maps false preds
 
 private inductive BufferOrigin where
   | stack (resource : Nat)
@@ -388,7 +390,7 @@ theorem mapWriteObservations_saved_key (event : NodeId) (map : Term)
 private def storeEffect (p : EntryParams) (event : NodeId) (E : ExprSet)
     (maps : List MapLayout) (Pg : List Predicate) (bytes base : Nat)
     (offset : Int) (source : Term) : Except RejectReason (ExprEffect × List Predicate) := do
-  let access ← resolveAccess p E base offset bytes true maps
+  let access ← resolveAccess p E base offset bytes true maps Pg
   let updates ← writeAccess E access source
   let predicates ← match access with
     | .packet a => pure [.packetWrite event a.κ a.offset (8 * bytes) source a.compound]
@@ -449,12 +451,12 @@ def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn)
   match i with
   | .ldx bytes dst base offset | .loadAcq bytes dst base offset =>
     if dst > 9 then throw .undefinedSrc
-    let access ← resolveAccess p E base offset bytes false maps
+    let access ← resolveAccess p E base offset bytes false maps Pg
     let (inputs, value) ← readAccess E access
     pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst) value⟩, [])
   | .memsx bytes dst base offset =>
     if dst > 9 || ![1, 2, 4].contains bytes then throw .undefinedSrc
-    let access ← resolveAccess p E base offset bytes false maps
+    let access ← resolveAccess p E base offset bytes false maps Pg
     let (inputs, value) ← readAccess E access
     pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst)
       (sStar (8 * bytes) .w64 64 value)⟩, [])

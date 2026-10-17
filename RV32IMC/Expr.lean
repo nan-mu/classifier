@@ -284,8 +284,8 @@ private def constantPacketBindingAt (Eg : ExprSet) (source : Term) (offset width
         if root.isNone then none else some ⟨α, o, width, .little, some data, none⟩
 
 /-- Symbolic offsets require a packet-only format and a passed data_end constraint. -/
-def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
-    Option PacketAccess :=
+def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat)
+    (preds : List Predicate := []) : Option PacketAccess :=
   (constantPacketBindingAt Eg source offset width).orElse fun _ => do
     if !Eg.keysUnique || !Eg.wellTyped || ![1, 2, 4, 8].contains width then none else
       let α ← ctxBaseAlpha Eg
@@ -293,20 +293,21 @@ def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
       let ending ← Eg.lookupEq (Reg.ctx32 (α + 1))
       let displacement ← packetDisplacement Eg data source
       let address := addStar .w32 source (Term.C32 offset)
-      let (strict, checkedEnd) ← packetBoundWitness Eg data address ending width
+      let (strict, checkedEnd) ← packetBoundWitness Eg data address ending width preds
       let compound : CompoundPacketReg :=
         ⟨α, displacement.plus (.c offset), width, α + 1, strict, 0, checkedEnd⟩
       pure ⟨α, 0, width, .little, some data, some compound⟩
 
-def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option PacketAccess := do
+def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+    (preds : List Predicate := []) : Option PacketAccess := do
   let source ← readReg Eg rs1
-  packetBindingAt Eg source offset width
+  packetBindingAt Eg source offset width preds
 
 def exprPacketLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
-    (isUnsigned : Bool) : Option ExprSet := do
+    (isUnsigned : Bool) (preds : List Predicate := []) : Option ExprSet := do
   if !guardEg Eg then none
   else
-    let access ← packetBinding Eg rs1 offset width
+    let access ← packetBinding Eg rs1 offset width preds
     let result ← access.read Eg .w32 isUnsigned
     some (assign rd result.value)
 
@@ -410,7 +411,8 @@ def mapAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option CellAc
   (mapAccessInputs Eg rs1 offset width false).map Prod.fst
 
 def exprSizedLOADEffects (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
-    (isUnsigned : Bool) (boundCtx : Option Term := none) : Option ExprEffect := do
+    (isUnsigned : Bool) (boundCtx : Option Term := none)
+    (preds : List Predicate := []) : Option ExprEffect := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
   else
     let cell := (stackAccess Eg rs1 offset width).orElse
@@ -425,7 +427,7 @@ def exprSizedLOADEffects (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
         let value ← access.read (updateExpr Eg inputs) .w32 isUnsigned
         some ⟨inputs, assign rd value⟩
       | none =>
-        let access ← packetBinding Eg rs1 offset width
+        let access ← packetBinding Eg rs1 offset width preds
         let read ← access.read Eg .w32 isUnsigned
         some ⟨read.inputs, assign rd read.value⟩
 
@@ -556,7 +558,7 @@ theorem mapElementAccess_preimage (Eg : ExprSet) (rs1 : regidx) (offset width : 
 /-- Local value effects alone do not authorize a resource observation. Map resolution
 retains lookup identity; frozen key bytes are Predicate-owned when Meta supplies layout. -/
 def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
-    : Option ExprEffect := do
+    (preds : List Predicate := []) : Option ExprEffect := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
   else
     let value ← readReg Eg rs2
@@ -571,7 +573,7 @@ def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
         let updates ← access.write (updateExpr Eg inputs) value
         some ⟨inputs, updates⟩
       | none =>
-        let access ← packetBinding Eg rs1 offset width
+        let access ← packetBinding Eg rs1 offset width preds
         let updates ← access.write Eg value
         some ⟨.empty, updates⟩
 
@@ -725,17 +727,18 @@ def expr (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option Exp
   | .C_EBREAK _ => exprReject
 
 /-- Classify input observations separately from the instruction's actual writes. -/
-def stepEffects (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option ExprEffect := do
+def stepEffects (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none)
+    (preds : List Predicate := []) : Option ExprEffect := do
   let effect ← match i with
     | .LOAD (imm, rs1, rd, unsigned, width) =>
-      exprSizedLOADEffects Eg rs1 rd (immI32 imm) width unsigned boundCtx
+      exprSizedLOADEffects Eg rs1 rd (immI32 imm) width unsigned boundCtx preds
     | .C_LW (imm, rs1, rd) =>
-      exprSizedLOADEffects Eg (creg2reg_idx rs1) (creg2reg_idx rd) (imm.toNat <<< 2) 4 true boundCtx
+      exprSizedLOADEffects Eg (creg2reg_idx rs1) (creg2reg_idx rd) (imm.toNat <<< 2) 4 true boundCtx preds
     | .STORE (imm, rs2, rs1, width) =>
-      exprSTOREEffects Eg rs1 rs2 (immI32 imm) width
+      exprSTOREEffects Eg rs1 rs2 (immI32 imm) width preds
     | .C_SW (imm, rs1, rs2) =>
-      exprSTOREEffects Eg (creg2reg_idx rs1) (creg2reg_idx rs2) (imm.toNat <<< 2) 4
-    | .C_SWSP (imm, rs2) => exprSTOREEffects Eg sp rs2 (imm.toNat <<< 2) 4
+      exprSTOREEffects Eg (creg2reg_idx rs1) (creg2reg_idx rs2) (imm.toNat <<< 2) 4 preds
+    | .C_SWSP (imm, rs2) => exprSTOREEffects Eg sp rs2 (imm.toNat <<< 2) 4 preds
     | _ => do
       let updates ← expr Eg i boundCtx
       some (ExprEffect.mk .empty updates)
@@ -743,8 +746,9 @@ def stepEffects (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Opt
 
 /-- Expansion transports both fresh input relations and local writes in one delta.
 `expr` and `stepEffects.updates` retain the instruction-only assignment interface. -/
-def step (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option ExprSet := do
-  let effect ← stepEffects Eg i boundCtx
+def step (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none)
+    (preds : List Predicate := []) : Option ExprSet := do
+  let effect ← stepEffects Eg i boundCtx preds
   some effect.delta
 
 -- ADDI replaces x1 locally; the unrelated x2 must not appear in the result.

@@ -15,9 +15,12 @@ def parseHelperCall (E : ExprSet) (id : Nat) : Except RejectReason HelperCall :=
   let kind := helperKind id
   let mut args := []
   for j in [:helperArity kind] do
-    let some t := E.lookupEq (Reg.real64 (1 + j)) | throw .undefinedSrc
-    if t.width != .w64 then throw .undefinedSrc
-    args := args ++ [solve t]
+    match E.lookupEq (Reg.real64 (1 + j)) with
+    | some t =>
+      if t.width != .w64 then throw .undefinedSrc
+      args := args ++ [solve t]
+    | none =>
+      if j < helperRequired kind then throw .undefinedSrc else break
   pure ⟨kind, id, args⟩
 
 /-- Freeze complete current key/value buffers from one pre-call snapshot.
@@ -62,6 +65,11 @@ def helperExpr (event : NodeId) (call : HelperCall) : ExprSet :=
 #guard match parseHelperCall ExprSet.empty 999 with
   | .ok call => call.kind == .unsupported 999 && call.args.isEmpty &&
       callReturnTerm 7 call == Term.C64 18446744073709551615
+  | _ => false
+#guard match parseHelperCall
+    (ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 1)
+      |>.insertEq (Reg.real64 2) (Term.C64 10)) 6 with
+  | .ok call => call.kind == .printk && call.args == [Term.V64 1, Term.C64 10]
   | _ => false
 #guard match parseHelperCall
     (ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 3)

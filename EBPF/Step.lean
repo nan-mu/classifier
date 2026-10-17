@@ -57,6 +57,23 @@ private def jumpTarget (I : Array Insn) (j : Nat) (offset : Int) : Option Locati
   else if I[target.toNat]? == some .continuation then none
   else some (.pos target.toNat)
 
+private partial def containsInputByte : Term → Bool
+  | .app _ (.inputByte _) _ => true
+  | .app _ _ args => args.any containsInputByte
+  | _ => false
+
+/-- Straight-line `exit`, or `rN = 0` followed by `exit`. Not a jump. -/
+private def straightAbort (I : Array Insn) (j : Nat) : Bool :=
+  match I[j]? with
+  | some .exit => true
+  | some (.mov _ _ (.imm 0)) => I[j + 1]? == some .exit
+  | _ => false
+
+private def abortLoc (I : Array Insn) : Option Location → Bool
+  | some .exit => true
+  | some (.pos j) => straightAbort I j
+  | none => false
+
 private def comparisonCandidate (I : Array Insn) (j : Nat) (offset : Int)
     (dir : BranchDirection) (lhs : Term) (e : Expr) : Except RejectReason Candidate := do
   let some target := jumpTarget I j offset | throw .unboundTarget
@@ -76,9 +93,21 @@ private def branchCandidates (I : Array Insn) (j : Nat) (E : ExprSet)
   | some true => pure [← comparisonCandidate I j offset .taken lhs taken]
   | some false => pure [← comparisonCandidate I j 0 .notTaken lhs fall]
   | none =>
-    let takenCandidate ← comparisonCandidate I j offset .taken lhs taken
-    let fallCandidate ← comparisonCandidate I j 0 .notTaken lhs fall
-    pure [takenCandidate, fallCandidate]
+    -- A packet byte has no single concrete outcome. Keep one arm so an unrolled
+    -- nest stays inside the fuel budget. RV often puts `li a0, 0; ret` on the
+    -- fallthrough of the same check that eBPF falls into the body, so a straight
+    -- return is not the arm to keep.
+    if containsInputByte lhs || containsInputByte rhs then
+      let takenLoc := jumpTarget I j offset
+      let fallLoc := jumpTarget I j 0
+      if abortLoc I fallLoc && !abortLoc I takenLoc then
+        pure [← comparisonCandidate I j offset .taken lhs taken]
+      else
+        pure [← comparisonCandidate I j 0 .notTaken lhs fall]
+    else
+      let takenCandidate ← comparisonCandidate I j offset .taken lhs taken
+      let fallCandidate ← comparisonCandidate I j 0 .notTaken lhs fall
+      pure [takenCandidate, fallCandidate]
 
 private def wideImmediate (I : Array Insn) (context : StepContext) (j dst : Nat)
     (srcType : UInt8) (bits : UInt64) : Except RejectReason Candidate := do

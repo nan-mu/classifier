@@ -39,6 +39,12 @@ def helperArity : HelperKind → Nat
   | .printk | .checksum => 5
   | .clock | .unsupported _ => 0
 
+/-- Registers the call must have materialized. `printk` is variadic: the format
+pointer and its length are required, and later words are kept only when present. -/
+def helperRequired : HelperKind → Nat
+  | .printk => 2
+  | k => helperArity k
+
 /-- Selected conditional successor; separate from history's unconditional direction. -/
 inductive BranchDirection where
   | taken | notTaken

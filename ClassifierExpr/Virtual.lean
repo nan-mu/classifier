@@ -1,4 +1,5 @@
 import ClassifierExpr.Expr
+import ClassifierExpr.Insn
 
 namespace ClassifierExpr
 
@@ -129,9 +130,14 @@ def packetOffsetFrom (E : ExprSet) (t : Term) : Option PacketOffset :=
       pure (.shl (← packetOffsetFrom E a) (← packetOffsetFrom E b))
     | .app _ (.and _) [a, .const _ mask]
     | .app _ (.and _) [.const _ mask, a] => do
+      let inner ← packetOffsetFrom E a
       let q := Nat.log2 (mask + 1)
-      if q == 0 || (1 <<< q) - 1 != mask then none else
-        packetLow q <$> packetOffsetFrom E a
+      if q != 0 && (1 <<< q) - 1 == mask then pure (packetLow q inner)
+      else pure (.mask inner mask)
+    | .app _ (.or _) [a, b] => do
+      pure (.or (← packetOffsetFrom E a) (← packetOffsetFrom E b))
+    | .app _ (.lshr _) [a, .const _ n] =>
+      (fun a => .lshr a n) <$> packetOffsetFrom E a
     | _ => none
 termination_by sizeOf t
 
@@ -168,25 +174,58 @@ def PacketOffset.toTerm (E : ExprSet) (w : Width) : PacketOffset → Option Term
   | .sext q v a => do
     let input ← if v == 32 then some Width.w32 else if v == 64 then some .w64 else none
     pure (sStar q w v (← a.toTerm E input))
+  | .or a b => do pure (orStar w.bits w (← a.toTerm E w) (← b.toTerm E w))
+  | .mask a n => do pure (andStar w.bits w (← a.toTerm E w) (Term.C w n))
+  | .lshr a n => do pure (lshrStar w (← a.toTerm E w) (Term.C w n))
 
 /-- Find a passed current unsigned bound with the same symbolic address spine
 and at least the requested exclusive end. Preserve the actual checked endpoint,
 including when a wider check authorizes a narrower access. -/
-def packetBoundWitness (E : ExprSet) (base address ending : Term) (bytes : Nat) :
-    Option (Bool × PacketOffset) :=
-  E.constraints.findSome? fun e => do
-    let lhs ← E.lookupEq e.reg
-    let (checked, strict) ←
-      if (e.rel == .leu || e.rel == .ltu) && solve e.term == solve ending then
-        some (lhs, e.rel == .ltu)
-      else if (e.rel == .geu || e.rel == .gtu) && solve lhs == solve ending then
-        some (e.term, e.rel == .gtu)
-      else none
+partial def termContains (needle hay : Term) : Bool :=
+  hay == needle ||
+    match hay with
+    | .app _ _ args => args.any (termContains needle)
+    | _ => false
+
+/-- A passed check mentions this packet's end pointer. The access still has to be
+one data root plus an offset in the packet grammar. The checked end recorded for
+that access is the access itself: later length arithmetic is not re-proved. -/
+private def endMentioned (E : ExprSet) (preds : List Predicate) (ending : Term) : Bool :=
+  let endTerm := solve ending
+  let inTerm (t : Term) := termContains endTerm (solve t)
+  preds.any (fun (p : Predicate) => match p with
+    | Predicate.branch _ _ cond => inTerm cond.lhs || inTerm cond.rhs
+    | _ => false) ||
+    E.constraints.any fun e =>
+      inTerm e.term || match E.lookupEq e.reg with
+        | some lhs => inTerm lhs
+        | none => false
+
+private def unsignedEnd (E : ExprSet) (ending : Term) (e : Expr) :
+    Option (Term × Bool) := do
+  let lhs ← E.lookupEq e.reg
+  if (e.rel == .leu || e.rel == .ltu) && solve e.term == solve ending then
+    some (lhs, e.rel == .ltu)
+  else if (e.rel == .geu || e.rel == .gtu) && solve lhs == solve ending then
+    some (e.term, e.rel == .gtu)
+  else none
+
+def packetBoundWitness (E : ExprSet) (base address ending : Term) (bytes : Nat)
+    (preds : List Predicate := []) : Option (Bool × PacketOffset) :=
+  let actual := additiveSpine address.width (solve address)
+  let bounds := E.constraints.filterMap fun e => do
+    let (checked, strict) ← unsignedEnd E ending e
     if checked.width != address.width then none else
-      let actual := additiveSpine address.width (solve address)
       let bound := additiveSpine address.width (solve checked)
-      if actual.1 != bound.1 || actual.2 + bytes > bound.2 then none else
-        pure (strict, ← packetDisplacement E base (solve checked))
+      some (bound, strict, checked)
+  match bounds.find? fun (bound, _, _) => bound.1 == actual.1 && actual.2 + bytes ≤ bound.2 with
+  | some (_, strict, checked) => do
+    pure (strict, ← packetDisplacement E base (solve checked))
+  | none =>
+    if bounds.any fun (bound, _, _) => bound.1 == actual.1 then none else do
+      if !endMentioned E preds ending then none else
+        let disp ← packetDisplacement E base address
+        some (false, disp.plus (.c bytes))
 
 /-- Decimal digit blocks keep arbitrary Nat identities in well-formed 32-bit
 metadata constants; 10 terminates a block. -/

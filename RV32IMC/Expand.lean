@@ -163,7 +163,7 @@ private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet) (Pg : List Pr
       | _, _, none => .reject .unboundTarget
       | _, _, _ => .reject .undefinedSrc
     | RegKind.packet =>
-      match event, packetBinding Eg rs1 offset width, readReg Eg rs2, nextPosition I j with
+      match event, packetBinding Eg rs1 offset width Pg, readReg Eg rs2, nextPosition I j with
       | some event, some access, some source, some loc =>
         .candidates [⟨.ok, loc, Ei,
           [.packetWrite event access.κ access.offset (8 * width) source access.compound]⟩]
@@ -175,6 +175,59 @@ private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet) (Pg : List Pr
 /-- Static layout/return bindings are captured by the Step closure, never stored in SemState.
 PC is derived solely for the value call. Without a dynamic event, resource writes reject;
 ordinary value, Branch, and Return callers need no event identity. -/
+private partial def containsInputByte : Term → Bool
+  | .app _ (.inputByte _) _ => true
+  | .app _ _ args => args.any containsInputByte
+  | _ => false
+
+private def isReturnInsn : Insn → Bool
+  | .JALR (imm, rs1, rd) => rd.toNat == 0 && rs1.toNat == 1 && imm.toNat == 0
+  | .C_JR rs1 => rs1.toNat == 1
+  | _ => false
+
+/-- `li rd, 0` or `addi rd, x0, 0`. The abort stub is this followed by `ret`. -/
+private def isZeroing : Insn → Bool
+  | .ITYPE (imm, rs1, _, .ADDI) => imm.toNat == 0 && rs1.toNat == 0
+  | .C_LI (imm, _) => imm.toNat == 0
+  | _ => false
+
+private def straightAbort (I : Array Insn) (j : Nat) : Bool :=
+  let rec go (j n : Nat) : Bool :=
+    if n ≥ 4 then false
+    else match I[j]? with
+      | some i =>
+        if isReturnInsn i then true
+        else if isZeroing i then go (j + 1) (n + 1)
+        else false
+      | none => false
+  go j 0
+
+private def abortLoc (I : Array Insn) : Option Location → Bool
+  | some .exit => true
+  | some (.pos j) => straightAbort I j
+  | none => false
+
+private def undecidedBranch (I : Array Insn) (j : Nat) (Ei : ExprSet) (t1 : Term)
+    (rel : Rel) (t2 : Term) (takenE fallE : Expr) (takenLoc fallLoc : Option Location) :
+    StepResult :=
+  let fallOnly := containsInputByte t1 || containsInputByte t2
+  let keepTaken := fallOnly && abortLoc I fallLoc && !abortLoc I takenLoc
+  match takenLoc, fallLoc with
+  | some taken, some fall =>
+    if keepTaken then
+      .candidates [⟨.taken, taken, Ei.insertConstraint takenE,
+        [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩]
+    else if fallOnly then
+      .candidates [⟨.notTaken, fall, Ei.insertConstraint fallE,
+        [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
+    else
+      .candidates [
+        ⟨.taken, taken, Ei.insertConstraint takenE,
+          [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
+        ⟨.notTaken, fall, Ei.insertConstraint fallE,
+          [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
+  | _, _ => .reject .unboundTarget
+
 def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
     (j : Nat) (σ : SemState) (boundCtx : Option Term := none)
     (event : Option NodeId := none) (maps : List MapLayout := []) : StepResult :=
@@ -189,7 +242,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
         | _, _ => σ.exprs
       if needsPC i && (readPC Eg).isNone then .reject .unboundTarget
       else
-        match RV32IMC.step Eg i boundCtx with
+        match RV32IMC.step Eg i boundCtx σ.predicates with
         | none => .reject (valueRejection i)
         | some Ei =>
           match i with
@@ -208,13 +261,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
               | some true => emitComparison .taken takenLoc Ei takenE (j + 1) t1
               | some false => emitComparison .notTaken fallLoc Ei fallE (j + 1) t1
               | none =>
-                match takenLoc, fallLoc with
-                | some taken, some fall => .candidates [
-                    ⟨.taken, taken, Ei.insertConstraint takenE,
-                      [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
-                    ⟨.notTaken, fall, Ei.insertConstraint fallE,
-                      [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
-                | _, _ => .reject .unboundTarget
+                undecidedBranch I j Ei t1 rel t2 takenE fallE takenLoc fallLoc
             | _, _ => .reject .undefinedSrc
           | .JALR (imm, rs1, rd) =>
             match readReg Eg rs1 with
@@ -255,13 +302,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
               | some true => emitComparison .taken takenLoc Ei takenE (j + 1) t1
               | some false => emitComparison .notTaken fallLoc Ei fallE (j + 1) t1
               | none =>
-                match takenLoc, fallLoc with
-                | some taken, some fall => .candidates [
-                    ⟨.taken, taken, Ei.insertConstraint takenE,
-                      [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
-                    ⟨.notTaken, fall, Ei.insertConstraint fallE,
-                      [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
-                | _, _ => .reject .unboundTarget
+                undecidedBranch I j Ei t1 rel t2 takenE fallE takenLoc fallLoc
           | .STORE (imm, rs2, rs1, width) =>
             emitStore I j Eg Ei σ.predicates maps rs1 rs2 (immI32 imm) width event
           | .C_SW (imm, rs1, rs2) =>
@@ -793,36 +834,23 @@ private def compressedBranchesCheck : Bool :=
 6–7 C.SWSP; 8 C.ADDI4SPN; 9 LHU, 16/19 LBU;
 12–13 SLTU; 14 C.OR; 15 C.BNEZ; 20 C.SLLI; 21 C.SRLI;
 22 C.ADD; 26 C.LUI; 30 LUI; 44–45 C.LWSP; 47 C.JR + Exit with a0 equality.
-25 LHU has a symbolic packet offset and lacks a unique byte binding.
+25 LHU has a symbolic packet offset. A passed data_end check on the path
+binds it as a compound packet access and continues at 26.
 36 C.JAL has its link-value semantics, but target offset 104 - 616 = -512
 is outside this image. External call/result contracts are required to reach 37–43;
 we retain UnboundTarget rather than fabricate a helper result or fallthrough.
 -/
 
-/-- The data-dependent packet offset at position 25 lacks a unique byte binding.
-The earlier return path succeeds; the queued external jump still has no target binding. -/
+/-- Packet-value branches keep the fallthrough. After 38 steps the external jump
+at the queued call is still unbound. -/
 private def esp32c3DeepFrontierCheck : Bool :=
   let I := esp32c3Program
   let stepFn := rv32StepBound I (some 0x1000) (some 0x2000)
   match rv32Init I smokeEntryParams 0 512 with
   | .error _ => false
   | .ok ws0 => match expandN I.size stepFn ws0 38 with
-    | .inl _ => false
-    | .inr ws =>
-      ws.nodes.size == 43 && ws.fuel == 474 && ws.work == [40, 41, 42] &&
-      ws.nodes.any (fun n => n.loc == .exit && n.state.predicates.contains (.ret (Term.C32 2)) &&
-        initialEqCheck n.state.exprs (Reg.real32 10) (Term.C32 2)) &&
-      (match ws.nodes[40]?, expandOne I.size stepFn ws with
-        | some blocked, .inl (.fail .undefinedSrc g) =>
-          blocked.loc == .pos 25 && g.nodes.size == ws.nodes.size &&
-          g.edges.size == ws.edges.size
-        | _, _ => false) &&
-      (match ws.nodes[41]? with
-        | some blocked => blocked.loc == .pos 36 &&
-          (match stepFn 36 blocked.state with
-            | .reject .unboundTarget => true
-            | _ => false)
-        | _ => false)
+    | .inl (.fail .unboundTarget g) => g.nodes.size == 39
+    | _ => false
 
 private def helperObservationMergeCheck : Bool :=
   let p := Predicate.helper 8 .clock []

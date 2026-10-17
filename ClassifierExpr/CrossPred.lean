@@ -623,6 +623,9 @@ def PacketOffset.toCross : PacketOffset → CrossTerm
   | .id a => a.toCross
   | .zext q v a => .app (.zext q v) [a.toCross]
   | .sext q v a => .app (.sext q v) [a.toCross]
+  | .or a b => .app .or [a.toCross, b.toCross]
+  | .mask a n => .app .and [a.toCross, .c (Int.ofNat n)]
+  | .lshr a n => .app .lshr [a.toCross, .c (Int.ofNat n)]
 
 def CompoundPacketReg.toCross (p : CompoundPacketReg) : CrossTerm :=
   .app (.packetReg p.bytes) [.c p.κ, p.offset.toCross, .reg .context p.endCtx,
@@ -639,6 +642,9 @@ def PacketOffset.value (leaf : Nat → Nat) : PacketOffset → Nat
   | .id a => a.value leaf
   | .zext q _ a => MNat 32 (MNat q (a.value leaf))
   | .sext q _ a => M 32 (s q (a.value leaf))
+  | .or a b => Nat.lor (a.value leaf) (b.value leaf)
+  | .mask a n => Nat.land (a.value leaf) n
+  | .lshr a n => Nat.shiftRight (a.value leaf) n
 
 theorem CompoundPacketReg.bounds (p : CompoundPacketReg) (leaf : Nat → Nat)
     (base ending : Nat)

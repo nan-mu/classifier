@@ -22,6 +22,9 @@ inductive PacketOffset where
   | id (arg : PacketOffset)
   | zext (bits input : Nat) (arg : PacketOffset)
   | sext (bits input : Nat) (arg : PacketOffset)
+  | or (lhs rhs : PacketOffset)
+  | mask (arg : PacketOffset) (constant : Nat)
+  | lshr (arg : PacketOffset) (constant : Nat)
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 def PacketOffset.orderKey : PacketOffset → List Nat
@@ -34,6 +37,9 @@ def PacketOffset.orderKey : PacketOffset → List Nat
   | .id a => [6] ++ a.orderKey
   | .zext q v a => [7, q, v] ++ a.orderKey
   | .sext q v a => [8, q, v] ++ a.orderKey
+  | .or a b => [9, a.orderKey.length] ++ a.orderKey ++ b.orderKey
+  | .mask a n => [10, n] ++ a.orderKey
+  | .lshr a n => [11, n] ++ a.orderKey
 
 def PacketOffset.code : PacketOffset → List Nat
   | .c n => [0, n]
@@ -45,6 +51,9 @@ def PacketOffset.code : PacketOffset → List Nat
   | .id a => [6] ++ a.code
   | .zext q v a => [7, q, v] ++ a.code
   | .sext q v a => [8, q, v] ++ a.code
+  | .or a b => [9] ++ a.code ++ b.code
+  | .mask a n => [10, n] ++ a.code
+  | .lshr a n => [11, n] ++ a.code
 
 def PacketOffset.decode : Nat → List Nat → Option (PacketOffset × List Nat)
   | 0, _ => none
@@ -74,12 +83,22 @@ def PacketOffset.decode : Nat → List Nat → Option (PacketOffset × List Nat)
     | 8 :: q :: v :: rest => do
       let (a, rest) ← decode fuel rest
       pure (.sext q v a, rest)
+    | 9 :: rest => do
+      let (a, rest) ← decode fuel rest
+      let (b, rest) ← decode fuel rest
+      pure (.or a b, rest)
+    | 10 :: n :: rest => do
+      let (a, rest) ← decode fuel rest
+      pure (.mask a n, rest)
+    | 11 :: n :: rest => do
+      let (a, rest) ← decode fuel rest
+      pure (.lshr a n, rest)
     | _ => none
 
 /- A finite prefix round-trip fixture covers every constructor and input width. -/
 #guard
-  let t : PacketOffset := .id (.sext 8 64 (.zext 4 32
-    (.sub (.add (.packet 7) (.shl (.low 4 (.packet 9)) (.c 2))) 3)))
+  let t : PacketOffset := .lshr (.mask (.or (.id (.sext 8 64 (.zext 4 32
+    (.sub (.add (.packet 7) (.shl (.low 4 (.packet 9)) (.c 2))) 3)))) (.c 1)) 255) 1
   PacketOffset.decode t.code.length (t.code ++ [91, 92]) == some (t, [91, 92])
 
 /-- The passed inequality is data + checkedEnd ≤ data_end (strict when
