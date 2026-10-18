@@ -6,18 +6,24 @@ on:
       - "tooling/**"
       - "lakefile.lean"
       - "lean-toolchain"
-      - "CommonMath/**"
-      - "RV32IMC/**"
+      - "Core/**"
+      - "Node/**"
+      - "RV32/**"
       - "EBPF/**"
+      - "CrossArch/**"
+      - "SemanticCheck.lean"
       - ".github/workflows/rust.yml"
   pull_request:
     paths:
       - "tooling/**"
       - "lakefile.lean"
       - "lean-toolchain"
-      - "CommonMath/**"
-      - "RV32IMC/**"
+      - "Core/**"
+      - "Node/**"
+      - "RV32/**"
       - "EBPF/**"
+      - "CrossArch/**"
+      - "SemanticCheck.lean"
       - ".github/workflows/rust.yml"
 
 permissions:
