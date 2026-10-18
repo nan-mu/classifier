@@ -54,7 +54,10 @@ fn snapshot_maps(words: &[u32], steps: u32, maps: &[MapLayout]) -> Value {
     let ids: Vec<u32> = maps.iter().map(|m| m.map_id).collect();
     let keys: Vec<u32> = maps.iter().map(|m| m.key_size).collect();
     let vals: Vec<u32> = maps.iter().map(|m| m.value_size).collect();
-    let root: Value = serde_json::from_str(&rv32::expand_create(0x400, 0x100, 0x2000, &ids, &keys, &vals)).unwrap();
+    let root: Value = serde_json::from_str(&rv32::expand_create(
+        0x400, 0x100, 0x2000, &ids, &keys, &vals,
+    ))
+    .unwrap();
     let node = &root["nodes"][0];
     serde_json::from_str(&rv32::expand_bound_words_snapshot(
         words,
@@ -342,7 +345,8 @@ fn bound_ffi_rejects_colliding_or_invalid_metadata() {
         (0x400, 0x400),
     ] {
         let s: Value =
-            serde_json::from_str(&rv32::expand_create(base, helper, 0x2000, &[], &[], &[])).unwrap();
+            serde_json::from_str(&rv32::expand_create(base, helper, 0x2000, &[], &[], &[]))
+                .unwrap();
         assert_eq!(s["reason"], "InvalidEntry");
         assert!(s["nodes"].as_array().unwrap().is_empty());
     }

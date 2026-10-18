@@ -5,7 +5,7 @@ mod flash_layout;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
 /// Fixed wire layout over an already-loaded SRAM slice (`from_bytes` + getters).
 ///

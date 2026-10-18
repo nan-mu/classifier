@@ -6,7 +6,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{Error, Ident, LitInt, Result, Token, Visibility, braced, parse_macro_input};
+use syn::{braced, parse_macro_input, Error, Ident, LitInt, Result, Token, Visibility};
 
 enum FieldKind {
     U8,

@@ -87,7 +87,8 @@ pub struct ExpandSession {
 
 impl ExpandSession {
     fn from_isa(isa: IsaState, created: String, budget: u32) -> Self {
-        let mut snapshot: Value = serde_json::from_str(&created).expect("Lean create snapshot JSON");
+        let mut snapshot: Value =
+            serde_json::from_str(&created).expect("Lean create snapshot JSON");
         if snapshot["status"] == "running" {
             snapshot["fuel"] = json!(budget);
         }
@@ -126,7 +127,13 @@ impl ExpandSession {
             &key_sizes,
             &value_sizes,
         );
-        Self::from_isa(IsaState::Rv32 { insns: insns.to_vec() }, created, budget)
+        Self::from_isa(
+            IsaState::Rv32 {
+                insns: insns.to_vec(),
+            },
+            created,
+            budget,
+        )
     }
 
     pub fn create_ebpf(
@@ -159,7 +166,13 @@ impl ExpandSession {
             key_sizes,
             value_sizes,
         );
-        Self::from_isa(IsaState::Ebpf { insns: insns.to_vec() }, created, budget)
+        Self::from_isa(
+            IsaState::Ebpf {
+                insns: insns.to_vec(),
+            },
+            created,
+            budget,
+        )
     }
 
     fn sync_work(&mut self) {
@@ -516,9 +529,7 @@ mod tests {
     #[tokio::test]
     async fn run_many_to_completion_overlaps_independent_sessions() {
         let words = [0x00700513, 0x00150513, 0x00008067];
-        let jobs = (0..4)
-            .map(|_| (words.to_vec(), 3u32))
-            .collect::<Vec<_>>();
+        let jobs = (0..4).map(|_| (words.to_vec(), 3u32)).collect::<Vec<_>>();
         let results = run_many_to_completion(&InferencePool::new(), jobs)
             .await
             .expect("pool");

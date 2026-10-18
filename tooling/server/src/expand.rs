@@ -739,10 +739,7 @@ mod tests {
         .unwrap();
         let exprs = root["nodes"][0]["exprs"].as_array().unwrap();
         let term = |reg: &str| {
-            exprs
-                .iter()
-                .find(|e| e["reg"] == reg)
-                .unwrap()["term"]
+            exprs.iter().find(|e| e["reg"] == reg).unwrap()["term"]
                 .as_str()
                 .unwrap()
                 .to_string()

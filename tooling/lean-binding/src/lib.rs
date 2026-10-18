@@ -311,8 +311,7 @@ pub mod rv32 {
             let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
             let exprs = lean_string(&exprs_json);
             let preds = lean_string(&preds_json);
-            let obj =
-                ffi::lean_rv32_expand_bound_words_snapshot(arr, exprs, preds, steps, budget);
+            let obj = ffi::lean_rv32_expand_bound_words_snapshot(arr, exprs, preds, steps, budget);
             take_string(obj)
         })
     }

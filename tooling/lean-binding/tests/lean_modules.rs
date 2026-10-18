@@ -189,7 +189,8 @@ mod stateless_head_ffi {
     fn symbolic_branch_returns_states_with_complementary_expr_constraints() {
         let words = [0x00051263, 0x00700513, 0x00008067];
         let root: Value =
-            serde_json::from_str(&rv32::expand_create(0x400, 0x100, 0x2000, &[], &[], &[])).unwrap();
+            serde_json::from_str(&rv32::expand_create(0x400, 0x100, 0x2000, &[], &[], &[]))
+                .unwrap();
         let node = &root["nodes"][0];
         let empty = json!([]);
         let result = step(&words, 0, &node["exprs"].to_string(), &empty.to_string());

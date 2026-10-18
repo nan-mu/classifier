@@ -3,7 +3,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::{MAX_LAYOUT, MAX_MAPS, MAX_NAME, align4};
+use crate::{align4, MAX_LAYOUT, MAX_MAPS, MAX_NAME};
 
 /// Complete file size limit (ESP32-C3 profile).
 pub const MAX_CONTAINER_SIZE: usize = 4096;
@@ -365,7 +365,7 @@ fn extend_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ScanOutcome, scan_at};
+    use crate::{scan_at, ScanOutcome};
 
     fn name(s: &str) -> heapless::String<{ MAX_NAME + 1 }> {
         heapless::String::try_from(s).unwrap()

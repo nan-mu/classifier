@@ -17,10 +17,10 @@ mod compact;
 mod mem_map;
 
 pub use compact::{
-    EncodeError, ImageMetadataV0, MAX_CONTAINER_SIZE, MAX_ENTRIES, MAX_META_SIZE, MapDescriptorV0,
-    SECTION_NAMES, build_container,
+    build_container, EncodeError, ImageMetadataV0, MapDescriptorV0, MAX_CONTAINER_SIZE,
+    MAX_ENTRIES, MAX_META_SIZE, SECTION_NAMES,
 };
-pub use mem_map::{MAGIC, MemMapError, MemMapV0, SECTION_NAME, WIRE_SIZE, decode, encode};
+pub use mem_map::{decode, encode, MemMapError, MemMapV0, MAGIC, SECTION_NAME, WIRE_SIZE};
 
 use sha2::{Digest, Sha256};
 

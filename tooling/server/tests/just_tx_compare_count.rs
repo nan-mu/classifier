@@ -45,13 +45,7 @@ fn just_drop_lookup_compare_fail_count() {
     let elf = rv32_image::parse_xdp_elf(JUST_DROP_ELF).unwrap();
     let slots = bpf_image::map_lddw_slots(JUST_DROP_BPF).unwrap();
     let bound = zip_ebpf_maps(&slots, &elf.maps).unwrap();
-    let mut rv = Session::new(
-        "rv",
-        1024,
-        Arch::Rv32imc,
-        "just_drop.elf".into(),
-        elf,
-    );
+    let mut rv = Session::new("rv", 1024, Arch::Rv32imc, "just_drop.elf".into(), elf);
     rv.run_all();
     let bpf = bpf_image::extract_insn_words(JUST_DROP_BPF).unwrap();
     let mut eb = Session::new_ebpf("eb", 1024, "just_drop.bpf.o".into(), bpf, bound);
