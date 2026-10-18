@@ -1148,7 +1148,10 @@ mod tests {
             vec![edge(0, 1, "taken"), edge(0, 2, "not_taken")],
         );
         let report = build_compare_tree(&left, &right);
-        assert!(report.nodes.iter().all(|n| n.match_status == MatchStatus::Pass));
+        assert!(report
+            .nodes
+            .iter()
+            .all(|n| n.match_status == MatchStatus::Pass));
         let taken = report
             .nodes
             .iter()
