@@ -1,8 +1,9 @@
 //! Compare tree of expand segments.
 //!
 //! Each node lists the ordered local predicate arrivals (P_i) along one segment.
-//! `matchStatus` is `pass` only when both sides exist, exit flags match, every
-//! arrival is normalized, and `lean_cross_pred_unify` reports `ok` and `pass`.
+//! `matchStatus` is `pass` when both sides exist, exit flags and fork shape
+//! match, and predicate kinds have the same counts. Branch condition
+//! expressions are a best-effort check recorded in `exprStatus`.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,15 @@ pub enum MatchStatus {
     Fail,
 }
 
+/// Branch condition expressions. `incomplete` does not change `matchStatus`
+/// or successor wiring.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExprStatus {
+    Complete,
+    Incomplete,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Node {
     pub id: u32,
@@ -39,6 +49,8 @@ pub struct Node {
     pub right: Vec<ListEntry>,
     #[serde(rename = "matchStatus")]
     pub match_status: MatchStatus,
+    #[serde(rename = "exprStatus")]
+    pub expr_status: ExprStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -116,7 +128,7 @@ struct Segment {
     ends_exit: bool,
 }
 
-const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus is not behavioral equivalence; fork wiring is EQ or EQR by arm-condition unify";
+const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus compares predicate kind counts between forks; branch expressions are best-effort and do not change wiring";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let maps = discover_env_maps(&[left, right]);
@@ -724,7 +736,14 @@ fn arms_unify(
     )
 }
 
-/// EQ or EQR, only when exactly one wiring's arm conditions unify.
+fn arms_agree(left: &Segment, right: &Segment) -> bool {
+    match_status(Some(left), Some(right)) == MatchStatus::Pass
+}
+
+/// EQ or EQR when exactly one wiring's arm conditions unify.
+/// When expressions do not decide, use the wiring whose children already
+/// agree on fork shape, exit, and kind counts. Ambiguous or disagreeing
+/// counts stay same-direction.
 fn choose_wire(
     left: &HashMap<u32, Segment>,
     right: &HashMap<u32, Segment>,
@@ -746,7 +765,15 @@ fn choose_wire(
     match (eq, eqr) {
         (true, false) => Some(Wire::Same),
         (false, true) => Some(Wire::Cross),
-        _ => None,
+        _ => {
+            let same = arms_agree(lt, rt) && arms_agree(ln, rn);
+            let cross = arms_agree(lt, rn) && arms_agree(ln, rt);
+            match (same, cross) {
+                (true, false) => Some(Wire::Same),
+                (false, true) => Some(Wire::Cross),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -789,7 +816,8 @@ fn align_trees(
             start,
             left: build_list(lseg),
             right: build_list(rseg),
-            match_status: match_status(lseg, rseg, edge_dir),
+            match_status: match_status(lseg, rseg),
+            expr_status: expr_status(lseg, rseg, edge_dir),
         });
         if let Some((from, dir)) = parent_edge {
             edges.push(Edge { from, to: id, dir });
@@ -800,7 +828,9 @@ fn align_trees(
         let ln = lseg.and_then(|s| s.not_taken);
         let rn = rseg.and_then(|s| s.not_taken);
         let wire = match (lseg, rseg) {
-            (Some(l), Some(r)) if is_fork(l) && is_fork(r) => choose_wire(left, right, l, r),
+            (Some(l), Some(r)) if is_fork(l) && is_fork(r) => {
+                Some(choose_wire(left, right, l, r).unwrap_or(Wire::Same))
+            }
             _ => None,
         };
         match wire {
@@ -883,68 +913,61 @@ fn branch_step(left: &str, right: &str, edge_dir: Option<&str>) -> bool {
     equal != dual
 }
 
-fn match_status(
-    left: Option<&Segment>,
-    right: Option<&Segment>,
-    edge_dir: Option<&'static str>,
-) -> MatchStatus {
+fn kind_counts(seg: &Segment) -> BTreeMap<&str, usize> {
+    let mut counts = BTreeMap::new();
+    for pred in &seg.preds {
+        *counts.entry(pred.atom.kind.as_str()).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn match_status(left: Option<&Segment>, right: Option<&Segment>) -> MatchStatus {
     let (Some(left), Some(right)) = (left, right) else {
         return MatchStatus::Fail;
     };
     if is_fork(left) != is_fork(right) || left.ends_exit != right.ends_exit {
         return MatchStatus::Fail;
     }
-    if segment_match(left, right, edge_dir) {
+    if kind_counts(left) == kind_counts(right) {
         MatchStatus::Pass
     } else {
         MatchStatus::Fail
     }
 }
 
-/// Walk branch observations in order. A later branch may be the complement of
-/// the other side; that does not cross the segment's graph successors.
-/// The remaining helper, return, and write observations unify as one list.
-fn segment_match(left: &Segment, right: &Segment, edge_dir: Option<&str>) -> bool {
-    let mut i = 0;
-    let mut j = 0;
-    while i < left.preds.len() && j < right.preds.len() {
-        let lb = left.preds[i].atom.kind == "branch";
-        let rb = right.preds[j].atom.kind == "branch";
-        if !lb || !rb {
-            break;
-        }
-        let (Some(lj), Some(rj)) = (branch_json(&left.preds[i]), branch_json(&right.preds[j]))
-        else {
-            return false;
-        };
-        if !branch_step(lj, rj, edge_dir) {
-            return false;
-        }
-        i += 1;
-        j += 1;
-    }
-    if i == left.preds.len() && j == right.preds.len() {
-        return true;
-    }
-    let Some(request) = unify_request_slice(&left.preds[i..], &right.preds[j..], edge_dir) else {
-        return false;
+fn expr_status(
+    left: Option<&Segment>,
+    right: Option<&Segment>,
+    edge_dir: Option<&str>,
+) -> ExprStatus {
+    let (Some(left), Some(right)) = (left, right) else {
+        return ExprStatus::Incomplete;
     };
-    matches!(
-        lean_binding::cross_pred::unify(&request),
-        Some(result) if result.ok && result.pass
-    )
+    let left_branches = branch_jsons(left);
+    let right_branches = branch_jsons(right);
+    if left_branches.len() != right_branches.len() {
+        return ExprStatus::Incomplete;
+    }
+    if left_branches
+        .iter()
+        .zip(right_branches.iter())
+        .all(|(l, r)| match (l, r) {
+            (Some(l), Some(r)) => branch_step(l, r, edge_dir),
+            _ => false,
+        })
+    {
+        ExprStatus::Complete
+    } else {
+        ExprStatus::Incomplete
+    }
 }
 
-fn unify_request_slice(
-    left: &[Arrival],
-    right: &[Arrival],
-    edge_dir: Option<&str>,
-) -> Option<String> {
-    Some(format!(
-        r#"{{"left":[{}],"right":[{}]}}"#,
-        normalized_body(left, edge_dir)?,
-        normalized_body(right, edge_dir)?,
-    ))
+fn branch_jsons(seg: &Segment) -> Vec<Option<&str>> {
+    seg.preds
+        .iter()
+        .filter(|p| p.atom.kind == "branch")
+        .map(branch_json)
+        .collect()
 }
 
 /// Map compare-tree edge dir onto CrossPred branch `dir` after polarity swap.
@@ -964,67 +987,6 @@ fn rewrite_branch_dir(json: &str, dir: &str) -> String {
         v["dir"] = Value::String(dir.to_string());
     }
     v.to_string()
-}
-
-fn write_sort_key(json: &str) -> (u8, String) {
-    let Ok(v) = serde_json::from_str::<Value>(json) else {
-        return (2, json.to_string());
-    };
-    let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-    let rank = match kind {
-        "mapWrite" => 0,
-        "packetWrite" => 1,
-        _ => 2,
-    };
-    let offset = v
-        .pointer("/observation/offset")
-        .or_else(|| v.pointer("/offset"))
-        .map(|o| o.to_string())
-        .unwrap_or_default();
-    (rank, offset)
-}
-
-/// Sort consecutive mapWrite/packetWrite runs by offset so bag order matches.
-fn order_normalized_parts(parts: Vec<&str>) -> Vec<String> {
-    let mut out = Vec::with_capacity(parts.len());
-    let mut i = 0;
-    while i < parts.len() {
-        let is_write = parts[i].contains("\"mapWrite\"") || parts[i].contains("\"packetWrite\"");
-        if !is_write {
-            out.push(parts[i].to_string());
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < parts.len()
-            && (parts[i].contains("\"mapWrite\"") || parts[i].contains("\"packetWrite\""))
-        {
-            i += 1;
-        }
-        let mut run: Vec<&str> = parts[start..i].to_vec();
-        run.sort_by_key(|p| write_sort_key(p));
-        out.extend(run.into_iter().map(|s| s.to_string()));
-    }
-    out
-}
-
-fn normalized_body(arrivals: &[Arrival], edge_dir: Option<&str>) -> Option<String> {
-    let force_dir = cross_dir_for_edge(edge_dir);
-    let mut owned = Vec::with_capacity(arrivals.len());
-    for arrival in arrivals {
-        match &arrival.key {
-            LocalKey::Normalized(json) => {
-                let s = match force_dir {
-                    Some(d) => rewrite_branch_dir(json, d),
-                    None => json.clone(),
-                };
-                owned.push(s);
-            }
-            LocalKey::Unparsed => return None,
-        }
-    }
-    let parts: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
-    Some(order_normalized_parts(parts).join(","))
 }
 
 #[cfg(test)]
@@ -1128,29 +1090,75 @@ mod tests {
         assert_eq!(report.behavioral_equivalence, "notEstablished");
         assert_eq!(report.phase, "local_increment");
         assert_eq!(report.note, NOTE);
-        // Unparsed arm conditions do not unify, so the fork stays unpaired.
-        assert_eq!(report.nodes.len(), 5);
-        assert_eq!(report.edges.len(), 4);
+        // Unparsed arm conditions do not decide EQ/EQR, so the fork stays same-direction.
+        assert_eq!(report.nodes.len(), 3);
+        assert_eq!(report.edges.len(), 2);
         let create = &report.nodes[0];
         assert_eq!(create.start, StartKind::Create);
         assert_eq!(create.match_status, MatchStatus::Pass);
+        assert_eq!(create.expr_status, ExprStatus::Complete);
         assert_eq!(pred_kinds(&create.left), Vec::<&str>::new());
         let taken = report
             .nodes
             .iter()
-            .find(|n| n.start == StartKind::Taken && !n.left.is_empty())
+            .find(|n| n.start == StartKind::Taken)
             .expect("taken node");
         assert_eq!(pred_kinds(&taken.left), vec!["branch", "ret"]);
-        assert!(taken.right.is_empty());
+        assert_eq!(pred_kinds(&taken.right), vec!["branch", "ret"]);
         assert_eq!(pred_fingerprint(&taken.left, "branch"), "unparsed:0",);
         assert_ne!(
             pred_fingerprint(&taken.left, "branch"),
             "branch|at=3|dir=taken"
         );
-        assert_eq!(taken.match_status, MatchStatus::Fail);
+        assert_eq!(taken.match_status, MatchStatus::Pass);
+        assert_eq!(taken.expr_status, ExprStatus::Incomplete);
         let wire = serde_json::to_value(taken).unwrap();
         assert!(wire.get("tipScore").is_none());
-        assert_eq!(wire["matchStatus"], "fail");
+        assert_eq!(wire["matchStatus"], "pass");
+        assert_eq!(wire["exprStatus"], "incomplete");
+    }
+
+    #[test]
+    fn swapped_kinds_cross_when_conditions_do_not_unify() {
+        let branch = |dir: &str| pred("branch", json!({"dir": dir, "at": "swap"}));
+        let body = |dir: &str| {
+            vec![
+                branch(dir),
+                pred("packetWrite", json!({"offset": 8})),
+                pred("ret", json!({"term": "2"})),
+            ]
+        };
+        let abort = |dir: &str| vec![branch(dir), pred("ret", json!({"term": "0"}))];
+        let left = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![]),
+                enode(1, "1", body("taken")),
+                enode(2, "2", abort("notTaken")),
+            ],
+            vec![edge(0, 1, "taken"), edge(0, 2, "not_taken")],
+        );
+        let right = run(
+            "ebpf",
+            vec![
+                enode(0, "0", vec![]),
+                enode(1, "1", abort("taken")),
+                enode(2, "2", body("notTaken")),
+            ],
+            vec![edge(0, 1, "taken"), edge(0, 2, "not_taken")],
+        );
+        let report = build_compare_tree(&left, &right);
+        assert!(report.nodes.iter().all(|n| n.match_status == MatchStatus::Pass));
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken");
+        assert_eq!(
+            pred_kinds(&taken.left),
+            vec!["branch", "packetWrite", "ret"]
+        );
+        assert_eq!(pred_kinds(&taken.right), pred_kinds(&taken.left));
     }
 
     #[test]
@@ -1194,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_kind_stays_on_the_list_and_fails() {
+    fn unknown_kind_stays_on_the_list_and_counts_pass() {
         let snap = run(
             "rv32imc",
             vec![enode(0, "0", vec![pred("mapLookup", json!({"addr": "1"}))])],
@@ -1210,7 +1218,8 @@ mod tests {
             pred_fingerprint(&report.nodes[0].right, "mapLookup"),
             "unparsed:1"
         );
-        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+        assert_eq!(report.nodes[0].expr_status, ExprStatus::Complete);
     }
 
     #[test]
@@ -1270,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn null_normalize_does_not_match_its_clone() {
+    fn null_normalize_counts_pass_and_expr_stays_incomplete() {
         let snap = run(
             "rv32imc",
             vec![enode(
@@ -1289,7 +1298,8 @@ mod tests {
             pred_fingerprint(&report.nodes[0].right, "branch"),
             "unparsed:1"
         );
-        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+        assert_eq!(report.nodes[0].expr_status, ExprStatus::Incomplete);
     }
 
     #[test]
@@ -1641,10 +1651,7 @@ mod tests {
             left.preds[1].atom.fingerprint,
             right.preds[1].atom.fingerprint
         );
-        assert_eq!(
-            match_status(Some(&left), Some(&right), None),
-            MatchStatus::Pass
-        );
+        assert_eq!(match_status(Some(&left), Some(&right)), MatchStatus::Pass);
         assert_eq!(pred_kinds(&build_list(Some(&left))), vec!["ret", "ret"]);
         assert_eq!(pred_kinds(&build_list(Some(&right))), vec!["ret", "ret"]);
     }
@@ -1733,13 +1740,13 @@ mod tests {
             ],
         );
         let report = build_compare_tree(&snap, &snap);
-        // The fork node's branch does not normalize, so successors stay unpaired.
-        assert_eq!(report.nodes.len(), 5);
-        assert_eq!(report.edges.len(), 4);
+        // The fork node's branch does not normalize, so successors stay same-direction.
+        assert_eq!(report.nodes.len(), 3);
+        assert_eq!(report.edges.len(), 2);
         assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);
         assert_eq!(
             report.edges.iter().map(|e| e.dir).collect::<Vec<_>>(),
-            vec!["taken", "taken", "not_taken", "not_taken"]
+            vec!["taken", "not_taken"]
         );
     }
 }

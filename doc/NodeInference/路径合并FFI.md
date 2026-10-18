@@ -180,12 +180,12 @@ Expr 行沿用共享解析与渲染格式，例如：
 {"reg":"real32:10","rel":"eq","term":"v32:1"}
 ```
 
-`reg`、`rel`、`term` 均为字符串，分别按 `parseReg`、`parseRel`、`parseTerm` 解析。缺少 `role` 时，完整 `eq` 行进入值绑定分量，其余关系进入约束分量。约束行可以显式给出 `"role":"constraint"`，其中包括 `eq` 约束；值绑定与 `eq` 约束保留不同角色，不能混同。其他显式 `role` 值拒绝。
+`reg`、`rel`、`term` 均为字符串，分别按 `parseReg`、`parseRel`、`parseTerm` 解析。状态只存一个 Expr 列表：缺少 `role` 的完整 `eq` 行排在前面（解析时拼成值绑定前缀），带 `"role":"constraint"` 的行排在后面。运行时角色由列表顺序推导——每个寄存器的第一条 `eq` 是值，其后各行（包括另一条 `eq`）是比较。其他显式 `role` 值拒绝。
 
 共同状态检查包括：
 
-- 共享寄存器表示须有效，位宽只支持 32 与 64；Packet 寄存器当前只支持 32 位。寄存器与右侧项的位宽须相同，值绑定须使用完整 `eq`。
-- 值绑定键必须唯一，约束分量不得含结构重复项。重复值键或重复约束行是无效输入，不通过去重修复。
+- 共享寄存器表示须有效，位宽只支持 32 与 64；Packet 寄存器当前只支持 32 位。寄存器与右侧项的位宽须相同。
+- 列表按结构去重；重复行是无效输入，不通过去重修复。
 - 关系的低位宽度参数须大于零且不超过寄存器位宽。项检查递归覆盖全部子项：常元在位宽范围内，寄存器变元引用有效的真实寄存器，应用项满足运算符的参数个数、位宽和固定参数范围。
 
 共同 merge 不施加入口寄存器赋值策略或 x0 求零检查，也不限制为某一目标架构的状态。共享 AST 的 `externalResult` 应用允许 32 位或 64 位结果，要求至少一个参数且全部参数与结果同宽；`inputByte` 的结果仍限 32 位。这些表示条件由共同项检查保留，不构成目标指令的调用或内存语义验证。
@@ -241,7 +241,7 @@ eBPF 的局部候选由 [EBPF/Step.lean](../../EBPF/Step.lean)生成，内存写
   Context 的逐字节冻结只投影两个已有 Context32 单元；普通地址解析仍仅允许这两个单元的完整四字节读取，没有因此增加普通 Context 访问权限。
   每个字节的资源解析须唯一，并以 `BufferOrigin` 要求整段保持同一 Stack、Context、Map 或 Packet 身份，跨资源拼接不冻结完整尾。
 
-- Branch 覆盖 JEQ、JNE、JGT、JGE、JLT、JLE、JSGT、JSGE、JSLT、JSLE、JSET 的 JMP 与 JMP32 形式。两端从同一执行前状态取得完整 64 位源项，立即数按 32 位补码扩展；JMP 使用完整关系，JMP32 使用相应的显式 32 位关系，JSET 分别使用 `bitsnz 64`、`bitsnz 32`，NotTaken 使用补关系。Branch 的 `cond` 保留完整 `lhs`、`rhs`；约束通过共享 [ExprSet.insertConstraint](../../Core/Expr.lean) 插入。数值 `decideWith` 决定保留一侧或两侧，每个保留方向均生成约束和 Branch，`position` 为原始槽位下标加一。保留目标须通过范围与 continuation 检查。
+- Branch 覆盖 JEQ、JNE、JGT、JGE、JLT、JLE、JSGT、JSGE、JSLT、JSLE、JSET 的 JMP 与 JMP32 形式。两端从同一执行前状态取得完整 64 位源项，立即数按 32 位补码扩展；JMP 使用完整关系，JMP32 使用相应的显式 32 位关系，JSET 分别使用 `bitsnz 64`、`bitsnz 32`，NotTaken 使用补关系。Branch 的 `cond` 保留完整 `lhs`、`rhs`；约束通过共享 [`List.insertConstraint`](../../Core/Expr.lean) 插入。数值 `decideWith` 决定保留一侧或两侧，每个保留方向均生成约束和 Branch，`position` 为原始槽位下标加一。保留目标须通过范围与 continuation 检查。
 - Return 覆盖作为最外层返回的 EXIT：读取执行前 \(r_0\) 完整 64 位等式右侧项，生成 `.ret t` 并到达 Exit。缺失完整项拒绝；数组末尾没有隐式 Return。
 - PacketWrite 覆盖普通 ST 立即数、STX 及 STORE_REL 的 1、2、4、8 字节存储，要求 [EBPF.Memory.resolveAccess](../../EBPF/Memory.lean) 唯一选择 Packet 且同次实际数值写入成功。观察保存事件、包身份、偏移、访问位宽及执行前完整源项；一次存储生成一个事件。Context、Stack 存储不生成 PacketWrite，原子数值规则也不生成该观察。
 
@@ -257,7 +257,7 @@ Packet 与 Map 的源项载体宽度和访问位宽 \(q\) 分别保存；wire �
 
 ## 比较规则
 
-通过全部请求与配置有效性检查后，按 `notTaken` 的数组次序寻找首个与 `taken` 相等的配置。`Node.ExactMerge.sameConfig` 比较位置、Expr 值绑定集合、Expr 约束集合和五类混合观察集合；运行时节点引用不参与配置相等。互补的比较 Expr 仍参与约束集合比较，当前状态的更新遵守[赋值覆盖全部旧关系](../Expr/Expr.md#赋值覆盖全部旧关系)。
+通过全部请求与配置有效性检查后，按 `notTaken` 的数组次序寻找首个与 `taken` 相等的配置。`Node.ExactMerge.sameConfig` 比较位置、完整 Expr 列表（按集合相等）、派生比较行和五类混合观察列表；运行时节点引用不参与配置相等。互补的比较 Expr 仍参与比较，当前状态的更新遵守[赋值覆盖全部旧关系](../Expr/Expr.md#赋值覆盖全部旧关系)。
 
 项 AST 的相等由返回等式证明或不等式证明的 `DecidableEq` 判定，Expr、Cond 与五类 Predicate 沿用该结构相等。各集合通过双向成员检查比较，不比较 JSON 字符串或渲染文本。集合排列与 Predicate 重复成员不影响结果；约束的重复拒绝规则仍适用。
 
@@ -317,13 +317,13 @@ Architecture-Agnostic 仍是研究假设。共享对象、结构比较与共同�
 | `lake build Core Node RV32 EBPF` | 通过（退出码 0） |
 | `lake exe semanticCheck` | 12 组全 PASS |
 | `lake env lean --run MergeCheck.lean` | 37 项全 PASS（含 malformed 与 ExactConfig 复用） |
-| `lake env lean --run CrossArchCheck.lean` | 成功；eBPF `just_tx` complete/`ret3`；RV32 夹具 fail/`UnboundTarget`/`loc34`；`claim=structural`、`behavioralEquivalence=notEstablished`、`coverageDiffers` |
+| `lake env lean --run CrossArchCheck.lean` | 成功；eBPF `just_tx` complete/`ret3`；RV32 夹具 complete（146 个节点，不再停在槽位 34 的 `UnboundTarget`）；`claim=structural`、`behavioralEquivalence=notEstablished`、`coverageDiffers` |
 
 实现覆盖摘要：
 
 - 共享数值层增加 `UDIV`、`UREM`、`SDIV`、`SREM`、`MULH`、`MULHU`、`MULHSU`、`SELECTEQ`，除法算子保留 `zeroResult`，值域与边界条件见[真实寄存器数值规则](../Expr/寄存器/真实寄存器.md)。
 - eBPF 使用 `BinaryOp` 和 `Insn.binary` 表示 ADD、SUB、MUL、DIV、MOD、SDIV、SMOD、AND、OR、XOR、LSH、RSH、ARSH，MOV 保持独立取源。ALU32 先将操作数投影为 32 位，再执行共享算子，结果零扩展至真实 64 位目标。另有 NEG、MOVSX、大小端转换及 BSWAP。
-- `ExternalInterpretation` 仅为 `externalResult` 和 `inputByte` 提供部分值函数，`interpretTerm ν θ t : Option Nat` 和 `interpretExpr ρ ν θ e : Option Bool` 显式接收它。未知外部值或坏签名保持无定义。在 `θ.Total` 与良构前提下，`solve_interpret` / `normalizeAlgebra_interpret` 已机检完整 R1–R6 解释保持；部分环境上的无条件等式仍排除。见[Term](../Expr/Term/Term.md#未解释运算的解释补全)及[solve](../Expr/Term/solve.md#解释保持性)。
+- `ExternalInterpretation` 仅为 `externalResult` 和 `inputByte` 提供部分值函数，`interpretTerm ν θ t : Option Nat` 和 `interpretExpr ρ ν θ e : Option Bool` 显式接收它。未知外部值或坏签名保持无定义。在 `θ.Total` 与良构前提下，`solve_interpret` 已机检完整 R1–R6 与 R8、R9 解释保持，`normalizeAlgebra_interpret` 覆盖其中 R2–R6；部分环境上的无条件等式仍排除。见[Term](../Expr/Term/Term.md#未解释运算的解释补全)及[solve](../Expr/Term/solve.md#解释保持性)。
 - eBPF 内存扩充 ST 立即数、MEMSX、LOAD_ACQ、STORE_REL，以及 Stack/Map 上的 W/DW 顺序原子数值更新。原子规则不额外生成普通 MapWrite 或原子观察，不证明并发或内存顺序。
 - RV32 M 运算使用共享符号算子，保留开放源项。MapWrite 观察要求指针 Map 与冻结键观察 Map 一致（`map != mapTerm → none`），与 eBPF 对齐；匹配/不匹配由 `RV32/Expand.lean` 的 `#guard` 永久回归覆盖。
 - 一般结构证明范围见[形式化证据普查](跨架构比较.md#形式化证据普查)。外部解释真实性、资源权限、成功 helper 契约、并发、完整 History、循环与跨架构行为等价仍为独立义务。

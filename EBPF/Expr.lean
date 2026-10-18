@@ -3,12 +3,12 @@ import EBPF.Insn
 namespace EBPF
 open Core
 
-private def readReg (E : ExprSet) (r : Nat) : Option Term := do
+private def readReg (E : List Expr) (r : Nat) : Option Term := do
   if r > 10 then none else do
     let t ← E.lookupEq (Reg.real64 r)
     if t.width == .w64 then some t else none
 
-private def sourceTerm (E : ExprSet) : Source → Option Term
+private def sourceTerm (E : List Expr) : Source → Option Term
   | .imm bits => some (Term.C64 (M 64 (s 32 bits.toNat)))
   | .reg r => readReg E r
 
@@ -41,14 +41,14 @@ def BinaryOp.toOp (w : Width) : BinaryOp → Op
 
 /-- Every ALU source is obtained from the same executing input E.
 The model and decoder use little-endian eBPF byte order. -/
-def expr (E : ExprSet) (i : Insn) : Option ExprSet := do
+def expr (E : List Expr) (i : Insn) : Option (List Expr) := do
   if !E.keysUnique || !E.wellTyped then none else
   match i with
   | .mov w dst src =>
     if dst ≥ 10 then none else do
       let t ← sourceTerm E src
       let value := idStar w (aluOperand w t)
-      some (ExprSet.empty.insertEq (Reg.real64 dst) (aluResult w value))
+      some (Expr.nil.insertEq (Reg.real64 dst) (aluResult w value))
   | .binary w op dst src =>
     if dst ≥ 10 then none else do
       if let .imm bits := src then
@@ -57,17 +57,17 @@ def expr (E : ExprSet) (i : Insn) : Option ExprSet := do
       let a ← readReg E dst
       let b ← sourceTerm E src
       let value := star w (op.toOp w) [aluOperand w a, aluOperand w b]
-      some (ExprSet.empty.insertEq (Reg.real64 dst) (aluResult w value))
+      some (Expr.nil.insertEq (Reg.real64 dst) (aluResult w value))
   | .neg w dst =>
     if dst ≥ 10 then none else do
       let a ← readReg E dst
-      some (ExprSet.empty.insertEq (Reg.real64 dst)
+      some (Expr.nil.insertEq (Reg.real64 dst)
         (aluResult w (negStar w (aluOperand w a))))
   | .movsx w bits dst src =>
     if dst ≥ 10 || !([8, 16].contains bits || (w == .w64 && bits == 32)) then none
     else do
       let a ← readReg E src
-      some (ExprSet.empty.insertEq (Reg.real64 dst)
+      some (Expr.nil.insertEq (Reg.real64 dst)
         (aluResult w (sStar bits w 64 a)))
   | .endian op bits dst =>
     if dst ≥ 10 || ![16, 32, 64].contains bits then none else do
@@ -75,11 +75,11 @@ def expr (E : ExprSet) (i : Insn) : Option ExprSet := do
       let value := match op with
         | .little => star .w64 (.low bits 64) [a]
         | .big | .swap => star .w64 (.bswap bits 64) [a]
-      some (ExprSet.empty.insertEq (Reg.real64 dst) value)
+      some (Expr.nil.insertEq (Reg.real64 dst) value)
   | _ => none
 
 private def alu32FamilyCheck : Bool :=
-  let E := ExprSet.empty.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
+  let E := Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
     |>.insertEq (Reg.real64 2) (Term.C64 2)
   let cases : List (BinaryOp × Nat) :=
     [(.add, 17), (.sub, 13), (.mul, 30), (.div, 7), (.mod, 1),
@@ -88,11 +88,11 @@ private def alu32FamilyCheck : Bool :=
   cases.all fun (op, expected) =>
     match expr E (.binary .w32 op 1 (.reg 2)) with
     | some updates => updates.lookupEq (Reg.real64 1) == some (Term.C64 expected) &&
-        updates.entries.length == 1
+        updates.length == 1
     | none => false
 
 private def unaryAndDivisionCheck : Bool :=
-  let E := ExprSet.empty.insertEq (Reg.real64 1) (Term.C64 0x100000001)
+  let E := Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x100000001)
     |>.insertEq (Reg.real64 2) (Term.C64 0x80000080)
   let cases : List (Insn × Nat) :=
     [(.neg .w32 1, 0xffffffff),
@@ -112,13 +112,13 @@ private def unaryAndDivisionCheck : Bool :=
 
 #guard alu32FamilyCheck
 #guard unaryAndDivisionCheck
-#guard match expr (ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 9)
+#guard match expr (Expr.nil.insertEq (Reg.real64 1) (Term.V64 9)
     |>.insertEq (Reg.real64 2) (Term.V64 10)) (.binary .w32 .sdiv 1 (.reg 2)) with
   | some updates => updates.lookupEq (Reg.real64 1) ==
       some (zStar 32 .w64 32 (star .w32 (.sdiv .w32 0)
         [zStar 32 .w32 64 (Term.V64 9), zStar 32 .w32 64 (Term.V64 10)]))
   | none => false
-#guard (expr (ExprSet.empty.insertEq (Reg.real64 1) (Term.C64 1))
+#guard (expr (Expr.nil.insertEq (Reg.real64 1) (Term.C64 1))
   (.binary .w32 .lsh 1 (.imm 32))).isNone
 
 end EBPF

@@ -43,7 +43,7 @@ private def parseRun (label : String) (j : Json) : Except String Run := do
     let predicates ← arrayField row "predicates" path
     let some state := parseSemStateJson (Json.arr exprs).compress (Json.arr predicates).compress
       | throw ("InvalidSnapshot:" ++ path)
-    if !state.exprs.toList.all (fun e => ExactMerge.validRel e.reg.width e.rel && ExactMerge.validTerm e.term) then
+    if !state.exprs.all (fun e => ExactMerge.validRel e.reg.width e.rel && ExactMerge.validTerm e.term) then
       throw ("InvalidSnapshot:" ++ path)
     nodes := (id, ⟨loc, state⟩) :: nodes
   let mut edges := []
@@ -100,10 +100,10 @@ private def predicateClass : Predicate → String
   | .mapWrite .. => "mapWrite" | .packetWrite .. => "packetWrite"
 
 private def classes (left right : List Node) : List (Json × Bool) :=
-  let values (ns : List Node) := ns.flatMap (fun n => n.state.exprs.entries)
+  let values (ns : List Node) := ns.flatMap (fun n => n.state.exprs.bindings)
   let constraints (ns : List Node) := ns.flatMap (fun n => n.state.exprs.constraints)
   let predicates (ns : List Node) := ns.flatMap (fun n => n.state.predicates)
-  let constraintRenderer (e : Expr) := renderExprSetJson { entries := [], constraints := [e] }
+  let constraintRenderer (e : Expr) := renderConstraintExprJson e
   [classReport "valueBindings" (values left) (values right) renderExprJson,
    classReport "constraints" (constraints left) (constraints right) constraintRenderer] ++
     ["helper", "branch", "ret", "mapWrite", "packetWrite"].map (fun name =>

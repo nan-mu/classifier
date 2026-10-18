@@ -12,7 +12,7 @@ structure HelperCall where
   args : List Term
   deriving Repr
 
-def parseHelperCall (Eg : ExprSet) : Except RejectReason HelperCall := do
+def parseHelperCall (Eg : List Expr) : Except RejectReason HelperCall := do
   if !guardEg Eg then throw .localReject
   let some idTerm := Eg.lookupEq (Reg.real32 10) | throw .undefinedSrc
   if idTerm.width != .w32 then throw .undefinedSrc
@@ -37,7 +37,7 @@ private def frozenTailOk (tail : List Term) : Bool :=
       | _ => true
 
 /-- Resolve layout and every required buffer before appending any frozen bytes. -/
-private def freezeMapTail (Eg : ExprSet) (maps : List MapLayout)
+private def freezeMapTail (Eg : List Expr) (maps : List MapLayout)
     (boundCtx : Option Term) (kind : HelperKind) (args : List Term) :
     Option (List Term) := do
   let map ← args.head?
@@ -53,7 +53,7 @@ private def freezeMapTail (Eg : ExprSet) (maps : List MapLayout)
   | _, _ => none
 
 /-- ABI observation survives an undefined complete-buffer refinement unchanged. -/
-def helperPredicate (event : NodeId) (Eg : ExprSet) (maps : List MapLayout := [])
+def helperPredicate (event : NodeId) (Eg : List Expr) (maps : List MapLayout := [])
     (boundCtx : Option Term := none) : Except RejectReason Predicate := do
   let call ← parseHelperCall Eg
   let args := match freezeMapTail Eg maps boundCtx call.kind call.args with
@@ -83,17 +83,17 @@ private def callReturnTerm (p : Predicate) : Except RejectReason Term := do
   pure result
 
 /-- Lookup introduces the first Map word, [0,4), related to this call's return register. -/
-def helperMapExpr (p : Predicate) : Except RejectReason ExprSet := do
+def helperMapExpr (p : Predicate) : Except RejectReason (List Expr) := do
   let (event, call) ← helperCallOfPredicate p
   pure (if call.kind == .lookup then
-    ExprSet.empty.insertEq (Reg.mapWord event 0) (.regVar event (Reg.real32 10))
-    else ExprSet.empty)
+    Expr.nil.insertEq (Reg.mapWord event 0) (.regVar event (Reg.real32 10))
+    else Expr.nil)
 
 /-- The helper value projection writes a0; a lookup also introduces its Map relation. -/
-def helperExpr (p : Predicate) : Except RejectReason ExprSet := do
+def helperExpr (p : Predicate) : Except RejectReason (List Expr) := do
   let result ← callReturnTerm p
   let map ← helperMapExpr p
-  pure (updateExpr (ExprSet.empty.insertEq (Reg.real32 10) result) map)
+  pure (updateExpr (Expr.nil.insertEq (Reg.real32 10) result) map)
 
 #guard [1, 2, 3, 5, 6, 28, 65].map (fun id => helperArity (helperKind id)) == [2, 4, 2, 0, 5, 5, 2]
 #guard helperArity (helperKind 999) == 0
@@ -108,7 +108,7 @@ private def completeMapBuffersCheck : Bool := Id.run do
   let key := addStar .w32 (Term.V32 0) (Term.C32 3)
   let value := addStar .w32 (Term.V32 4) (Term.C32 1)
   let maps : List MapLayout := [{ mapId := 42, keySize := 3, valueSize := 2 }]
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 11) (Term.C32 42)
     |>.insertEq (Reg.real32 12) key
@@ -142,14 +142,12 @@ private def completeMapBuffersCheck : Bool := Id.run do
   let update := E.insertEq (Reg.real32 10) (Term.C32 2)
   let abiPrefix := [Term.C32 42, key, value, Term.C32 0]
   -- Stack key still refuses when a required stack word is absent.
-  let missingStack := { update with
-    entries := update.entries.filter (fun e => e.reg != Reg.sw ((1 <<< 33) + 4)) }
+  let missingStack := update.filter (fun e => e.reg != Reg.sw ((1 <<< 33) + 4))
   let .ok incompletePredicate := helperPredicate 70 missingStack maps | return false
   let .ok ambiguous := helperPredicate 70 update (maps ++ maps) | return false
   -- Packet value bytes materialize inputByte when Reg.packet equalities are absent.
-  let openPacket := { update with
-    entries := update.entries.filter (fun e =>
-      !(e.reg == Reg.packet 0 1 || e.reg == Reg.packet 0 2)) }
+  let openPacket := update.filter (fun e =>
+      !(e.reg == Reg.packet 0 1 || e.reg == Reg.packet 0 2))
   let .ok openPredicate := helperPredicate 70 openPacket maps | return false
   let some openTail := readBufferBytes openPacket value 2 maps | return false
   return incompletePredicate == .helper 70 .update abiPrefix &&
@@ -168,7 +166,7 @@ private def mapBufferBoundsCheck : Bool := Id.run do
   let target : MapLayout := { mapId := 42, keySize := 3, valueSize := 3 }
   let source : MapLayout := { mapId := 17, keySize := 8, valueSize := 6 }
   let maps := [target, source]
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 2) key
     |>.insertEq (Reg.real32 11) (Term.C32 42)
     |>.insertEq (Reg.real32 14) (Term.C32 0)

@@ -92,12 +92,12 @@ Map 三个构造的全部分量及字节数组顺序也参与结构相等。
 
 ## 生成条件
 
-\(E_g\) 为执行前的有效 [Expr 关系](../Expr/Expr.md#表达式分量)，其完整值绑定分量为 \(\mathcal V_g\)。\(P_g\) 为执行前的[观察集合](谓词定义.md#类型与结构相等)。调用约定确定载体宽度 \(w\)、参数标记 \(a_j\) 与返回标记 \(r_{\mathrm{ret}}\)，见[类型定义](#类型定义)。
+\(E_g\) 为执行前的有效 [Expr 列表](../Expr/Expr.md#表达式分量)。\(P_g\) 为执行前的[观察列表](谓词定义.md#类型与结构相等)。调用约定确定载体宽度 \(w\)、参数标记 \(a_j\) 与返回标记 \(r_{\mathrm{ret}}\)，见[类型定义](#类型定义)。
 
-RV32 分派编号要求 \(\mathcal V_g\) 中存在唯一的完整等式 \(a_0=u_0\)，且其右侧项经求值确定编号：
+RV32 分派编号要求 \(\operatorname{bindings}(E_g)\) 中存在唯一的完整等式 \(a_0=u_0\)，且其右侧项经求值确定编号：
 
 \[
-(a_0=u_0)\in\mathcal V_g,\qquad u_0\in\mathrm{Term}_{32},
+(a_0=u_0)\in\operatorname{bindings}(E_g),\qquad u_0\in\mathrm{Term}_{32},
 \qquad k=D_{32}(\operatorname{solve}(u_0))\in\mathbb B_{32}.
 \]
 
@@ -107,7 +107,7 @@ RV32 分派编号要求 \(\mathcal V_g\) 中存在唯一的完整等式 \(a_0=u_
 
 \[
 \forall j\in\{1,\ldots,n(h)\},\quad
-(a_j=u_j)\in\mathcal V_g,\qquad u_j\in\mathrm{Term}_{w},
+(a_j=u_j)\in\operatorname{bindings}(E_g),\qquad u_j\in\mathrm{Term}_{w},
 \qquad t_j=\operatorname{solve}(u_j)\in\mathrm{Term}_{w}.
 \]
 

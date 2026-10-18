@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alignListEntries, matchStatusOf, summarizeTreeNode } from "./compareNodeSummary";
+import { alignListEntries, cardTier, matchStatusOf, summarizeTreeNode } from "./compareNodeSummary";
 import type { ListEntry, TreeNode } from "./types";
 
 function pred(fp: string, kind = "helper"): ListEntry {
@@ -98,5 +98,28 @@ describe("summarizeTreeNode", () => {
     expect(matchStatusOf(exitMismatch)).toBe("fail");
     expect(matchStatusOf({ ...coverage, matchStatus: "pass" })).toBe("pass");
     expect(matchStatusOf({ ...same, matchStatus: "fail" })).toBe("fail");
+  });
+});
+
+describe("cardTier", () => {
+  const node: TreeNode = {
+    id: 1,
+    start: "create",
+    left: [pred("a", "branch")],
+    right: [pred("a", "branch")],
+    matchStatus: "pass",
+  };
+
+  it("treats a passing node as fully agreed when expressions are complete or omitted", () => {
+    expect(cardTier(node)).toBe("agree");
+    expect(cardTier({ ...node, exprStatus: "complete" })).toBe("agree");
+  });
+
+  it("keeps a kind-count pass with incomplete expressions out of the mismatch tier", () => {
+    expect(cardTier({ ...node, exprStatus: "incomplete" })).toBe("expr");
+  });
+
+  it("marks a kind-count failure even when expressions are complete", () => {
+    expect(cardTier({ ...node, matchStatus: "fail", exprStatus: "complete" })).toBe("mismatch");
   });
 });

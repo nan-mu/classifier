@@ -312,9 +312,9 @@ private def budgetCheck : Bool :=
   | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep (decodeProgram justTxProgram) justTxContext 57 57
-    ⟨ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
+    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
   | .candidates [c] => c.dir == .ok && c.loc == .exit &&
-      c.E_k == ExprSet.empty && c.P_k == [.ret (Term.C64 1)]
+      c.E_k == Expr.nil && c.P_k == [.ret (Term.C64 1)]
   | _ => false
 #guard createCheck
 #guard statelessStepCheck
@@ -346,12 +346,12 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
     let response := exportEbpfExpandStep #[word, 0x95] unmarkedMetaJson 11 0
       s!"[{exprs}]" s!"[{preds}]"
     let state : SemState :=
-      ⟨E.override (ExprSet.empty.insertEq reg (Term.C reg.width expected)), []⟩
+      ⟨E.override (Expr.nil.insertEq reg (Term.C reg.width expected)), []⟩
     if response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
       return false
   let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95]
     unmarkedMetaJson 11 0 s!"[{exprs}]" "[]"
-  let delta := ExprSet.empty.insertEq (stackUnitReg 0 0) (Term.C32 0x11223401)
+  let delta := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223401)
     |>.insertEq (Reg.real64 2) (Term.C64 0x11223380)
   let state : SemState := ⟨E.override delta, []⟩
   return response ==

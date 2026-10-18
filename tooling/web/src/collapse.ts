@@ -4,12 +4,15 @@ export type TypeFold = {
   hidden: Set<number>;
   foldedCount: Map<number, number>;
   redirect: Map<number, number>;
+  /** Representative id → every id in that run, including the representative. */
+  members: Map<number, number[]>;
 };
 
 const EMPTY_FOLD: TypeFold = {
   hidden: new Set(),
   foldedCount: new Map(),
   redirect: new Map(),
+  members: new Map(),
 };
 
 function structuralEdges(edges: GraphEdge[]): GraphEdge[] {
@@ -17,8 +20,9 @@ function structuralEdges(edges: GraphEdge[]): GraphEdge[] {
 }
 
 /**
- * Compress degree-2 runs whose **节点类型** (first-line tag key) is identical.
- * Always on; protected ids are never hidden.
+ * Compress degree-2 runs whose fold key is identical.
+ * The key is the visible title plus role. A taken or not_taken edge keeps
+ * both ends visible: a one-sided branch is not a straight step.
  */
 export function foldSameTypeChains(
   nodes: GraphNode[],
@@ -35,14 +39,19 @@ export function foldSameTypeChains(
     succ.set(n.id, []);
     pred.set(n.id, []);
   }
+  const branched = new Set<number>();
   for (const e of structuralEdges(edges)) {
     if (!byId.has(e.from) || !byId.has(e.to)) continue;
     succ.get(e.from)!.push(e.to);
     pred.get(e.to)!.push(e.from);
+    if (e.dir === "taken" || e.dir === "not_taken") {
+      branched.add(e.from);
+      branched.add(e.to);
+    }
   }
 
   const foldable = (id: number): boolean => {
-    if (protectedIds.has(id)) return false;
+    if (protectedIds.has(id) || branched.has(id)) return false;
     const n = byId.get(id);
     if (!n || n.id === 0 || n.loc === "exit") return false;
     const t = nodeTypeOf(id);
@@ -55,6 +64,7 @@ export function foldSameTypeChains(
   const hidden = new Set<number>();
   const foldedCount = new Map<number, number>();
   const redirect = new Map<number, number>();
+  const members = new Map<number, number[]>();
   const seen = new Set<number>();
 
   for (const n of nodes) {
@@ -87,13 +97,14 @@ export function foldSameTypeChains(
     if (run.length < 2) continue;
     const rep = run[run.length - 1]!;
     foldedCount.set(rep, run.length);
+    members.set(rep, run);
     for (const id of run) {
       redirect.set(id, rep);
       if (id !== rep) hidden.add(id);
     }
   }
 
-  return { hidden, foldedCount, redirect };
+  return { hidden, foldedCount, redirect, members };
 }
 
 export function resolveFoldedId(id: number, fold: TypeFold): number {

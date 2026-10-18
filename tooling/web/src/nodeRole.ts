@@ -6,9 +6,8 @@ import { diffPredicates } from "./viewer";
  * Visual role for CSS accent. Priority: control/predicates → insn class →
  * access target (reg kind) → plain.
  *
- * First-line chips (`tags`) are **arrival** predicates P_i only (delta vs parent),
- * plus structural markers (入口/出口/拒绝). Path history, P_g, and insn class do
- * not appear in the title.
+ * First-line chips (`tags`) are arrival predicates P_i, else the E_i register
+ * class, else the opcode class. Accumulated P_g and E_g are not the title.
  */
 export type NodeRole =
   | "failed"
@@ -221,6 +220,18 @@ export function arrivalPredicates(node: GraphNode, nodes: GraphNode[]): PredRow[
   return diffPredicates(parent.predicates, node.predicates).added;
 }
 
+function exprKey(row: ExprRow): string {
+  return `${row.reg}|${row.rel}|${row.term}|${row.role ?? ""}`;
+}
+
+/** Expr rows that arrive on this node (E_i), not the accumulated E_g. */
+export function arrivalExprs(node: GraphNode, nodes: GraphNode[]): ExprRow[] {
+  const parent = nodes.find((n) => node.preds.includes(n.id));
+  if (!parent) return node.exprs;
+  const before = new Set(parent.exprs.map(exprKey));
+  return node.exprs.filter((row) => !before.has(exprKey(row)));
+}
+
 export function classifyNodeRole(input: {
   node: GraphNode;
   nodes?: GraphNode[];
@@ -273,7 +284,10 @@ export function classifyNodeRole(input: {
 
   const outTaken = outbound.some((e) => e.dir === "taken");
   const outNotTaken = outbound.some((e) => e.dir === "not_taken");
-  if (outTaken && outNotTaken) roles.push("branch");
+  if (outTaken && outNotTaken) {
+    roles.push("branch");
+    pushTag(ROLE_LABEL.branch);
+  }
 
   const inTaken = inbound.some((e) => e.dir === "taken");
   const inNotTaken = inbound.some((e) => e.dir === "not_taken");
@@ -297,6 +311,23 @@ export function classifyNodeRole(input: {
 
   if (work?.includes(node.id)) roles.push("ready");
 
+  // Empty P_i is not a step. A branch edge, then the E_i register class, then the opcode.
+  if (tags.length === 0 && (outTaken || outNotTaken)) {
+    pushTag(ROLE_LABEL.branch);
+  }
+  if (tags.length === 0) {
+    const eiRole = dominantRegRole(arrivalExprs(node, nodes));
+    if (eiRole) {
+      roles.push(eiRole);
+      pushTag(ROLE_LABEL[eiRole]);
+    }
+  }
+  if (tags.length === 0) {
+    if (isMemoryMnemonic(mnemonic)) pushTag(ROLE_LABEL[dominantRegRole(node.exprs) ?? "reg_real"]);
+    else if (isJumpMnemonic(mnemonic)) pushTag(ROLE_LABEL.jump);
+    else if (isBranchMnemonic(mnemonic)) pushTag(ROLE_LABEL.branch);
+    else if (isAluMnemonic(mnemonic)) pushTag(ROLE_LABEL.alu);
+  }
   if (tags.length === 0) {
     roles.push("plain");
     pushTag(ROLE_LABEL.plain);
@@ -312,6 +343,11 @@ export function classifyNodeRole(input: {
     nodeType,
     accessFamily,
   };
+}
+
+/** Fold key: first-line title and color role. Same "步进" text is not one class. */
+export function foldKey(info: NodeRoleInfo): string {
+  return `${info.nodeType}\n${info.role}`;
 }
 
 export function insnMnemonic(text: string | undefined): string {

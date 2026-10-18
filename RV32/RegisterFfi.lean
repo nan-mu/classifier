@@ -5,15 +5,15 @@ import Core.Render
 namespace RV32
 open Core
 
-private def bindingEntry : ExprSet :=
+private def bindingEntry : List Expr :=
   let fields := [Term.V32 4, addStar .w32 (Term.V32 4) (Term.C32 64),
     Term.C32 0, Term.C32 0, Term.C32 0, Term.C32 0]
-  let E := fields.zipIdx.foldl (fun E (t, j) => E.insertEq (Reg.ctx32 j) t) ExprSet.empty
+  let E := fields.zipIdx.foldl (fun E (t, j) => E.insertEq (Reg.ctx32 j) t) Expr.nil
   E.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 10) (Term.V32 1)
 
 private def effectJson (effect : ExprEffect) : String :=
-  s!"\{\"inputs\":[{renderExprSetJson effect.inputs}],\"updates\":[{renderExprSetJson effect.updates}]}"
+  s!"\{\"inputs\":[{renderExprsJson effect.inputs}],\"updates\":[{renderExprsJson effect.updates}]}"
 
 private def packetOverlap (value : Nat) : Option String := do
   let E := bindingEntry.insertEq (Reg.real32 12)
@@ -35,7 +35,7 @@ private def packetOverlap (value : Nat) : Option String := do
   let cStore ← stepEffects compressed (.C_SW (0#5, .Cregidx 0#3, .Cregidx 1#3))
   let cRead ← stepEffects (compressed.override cStore.delta)
     (.C_LW (0#5, .Cregidx 0#3, .Cregidx 1#3))
-  some s!"\{\"first\":{effectJson first},\"store\":{effectJson store},\"reload\":{effectJson reload},\"byte\":{effectJson byte},\"compressedStore\":{effectJson cStore},\"compressedRead\":{effectJson cRead},\"state\":[{renderExprSetJson E}]}"
+  some s!"\{\"first\":{effectJson first},\"store\":{effectJson store},\"reload\":{effectJson reload},\"byte\":{effectJson byte},\"compressedStore\":{effectJson cStore},\"compressedRead\":{effectJson cRead},\"state\":[{renderExprsJson E}]}"
 
 private def stackFields (value : Nat) : Option String := do
   let E := bindingEntry.insertEq (Reg.real32 13) (Term.C32 0x11223344)
@@ -72,20 +72,20 @@ private def rejectionChecks : String :=
     ("packet64", (stepEffects badWidth (.C_NOP 0#6)).isNone),
     ("bounds", (stepEffects E (.LOAD (63#12, .Regidx 12#5, zreg, true, 2))).isNone),
     ("invalidSize", (stepEffects E (.LOAD (0#12, .Regidx 12#5, zreg, true, 3))).isNone),
-    ("partialWithoutOld", (emptyCell.write .empty (Term.C32 1)).isNone),
-    ("readWithoutInput", (noInput.read .empty .w32 true).isNone),
+    ("partialWithoutOld", (emptyCell.write Expr.nil (Term.C32 1)).isNone),
+    ("readWithoutInput", (noInput.read Expr.nil .w32 true).isNone),
     ("concretePacket", match concreteRead with
-      | some effect => effect.inputs.entries.length == 4 && effect.updates.entries.length == 1
+      | some effect => effect.inputs.length == 4 && effect.updates.length == 1
       | none => false),
     ("unknownConcreteStore", (stepEffects
       (concrete.insertEq (Reg.real32 12) (Term.C32 0x5000))
       (.STORE (0#12, zreg, .Regidx 12#5, 4))).isNone),
-    ("independentInputs", match independentInput.read .empty .w32 true,
-        otherInput.read .empty .w32 true with
+    ("independentInputs", match independentInput.read Expr.nil .w32 true,
+        otherInput.read Expr.nil .w32 true with
       | some a, some b => a.value != b.value && (eval a.value).isNone
       | _, _ => false),
     ("discardedDestination", match discarded with
-      | some effect => effect.updates.entries.isEmpty && effect.inputs.entries.length == 1
+      | some effect => effect.updates.isEmpty && effect.inputs.length == 1
       | none => false)]
   let fields := String.intercalate "," (checks.map fun (name, passed) => s!"\"{name}\":{passed}")
   s!"\{{fields}}"

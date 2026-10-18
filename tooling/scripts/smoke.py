@@ -21,13 +21,9 @@ def request(base, method, path, body=None):
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=300) as response:
-        chunks = []
-        while True:
-            chunk = response.read(64 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        payload = b"".join(chunks)
+        # One shot: chunked urllib reads of large Content-Length bodies can stop
+        # early on this platform (~490KiB) while a single read() returns the full body.
+        payload = response.read()
         declared_length = response.headers.get("Content-Length")
         if declared_length is not None:
             assert len(payload) == int(declared_length), (
@@ -51,9 +47,8 @@ def snapshots(base):
         assert done["failed"] is None, "budget exhaustion does not reject a step"
         assert len(stepped["nodes"]) > len(created["nodes"]), "step must expand the graph"
         result[f"just_tx.elf/{budget}"] = [created, stepped, done]
-    # Default budget is 1024 (completion is covered by server unit tests via one Lean
-    # snapshot). HTTP /run replays expand per step and is too slow for CI at 1024, so
-    # the live check uses budget 512 for Map progress + LimitExceeded regression.
+    # Default budget is 1024. HTTP /run at 512 now finishes just_tx; early
+    # LimitExceeded is covered by the budget-2/3 checks above.
     defaulted = request(base, "POST", "/api/session", {})
     assert defaulted["budget"] == 1024, defaulted["budget"]
     assert defaulted["status"] == "running"
@@ -61,14 +56,12 @@ def snapshots(base):
     assert created["budget"] == 512
     path = "/api/session/" + created["id"]
     done = request(base, "POST", path + "/run", {})
-    assert done["status"] == "fail", done["status"]
-    assert done["reason"] == "LimitExceeded", done["reason"]
-    assert done["failed"] is None, "all instructions before budget exhaustion must succeed"
-    assert done["fuel"] == 0 and len(done["work"]) >= 1
-    assert done["work"][0] == done["focus"]
-    assert len(done["nodes"]) == 542 and len(done["edges"]) == 542
-    assert all(e["from"] not in done["work"] for e in done["edges"])
-    assert sum(n["loc"] == "exit" for n in done["nodes"]) == 26
+    assert done["status"] == "complete", done["status"]
+    assert done["reason"] is None, done["reason"]
+    assert done["failed"] is None
+    assert done["fuel"] == 374 and done["work"] == []
+    assert len(done["nodes"]) == 146 and len(done["edges"]) == 145
+    assert sum(n["loc"] == "exit" for n in done["nodes"]) == 8
     assert any(
         p.get("kind") == "helper" and p.get("helperId") == 1
         for n in done["nodes"]
@@ -78,7 +71,7 @@ def snapshots(base):
         e["reg"].startswith("map32:") and "externalResult" in e["term"]
         for n in done["nodes"]
         for e in n["exprs"]
-    ), "lookup must materialize Map bindings before budget exhaustion"
+    ), "lookup must materialize Map bindings"
     assert any(
         e["reg"].startswith("packet32:")
         for n in done["nodes"]

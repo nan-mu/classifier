@@ -30,8 +30,10 @@ import {
 import { insnIndexForNode, splitExprs } from "./exprs";
 import { formatExprMath, formatPredChip } from "./formatExpr";
 import { foldSameTypeChains, resolveFoldedId } from "./collapse";
+import { NODE_H } from "./layout";
 import {
   classifyNodeRole,
+  foldKey,
   insnMnemonic,
   insnTextForNode,
   NODE_ROLE_LEGEND,
@@ -289,6 +291,9 @@ function DebugScreen() {
     detailSide: "left" | "right";
   }>({ nodeId: null, detailSide: "left" });
   const [compareFitRequest, setCompareFitRequest] = useState(0);
+  const [openLayer, setOpenLayer] = useState<{ rep: number; members: number[] } | null>(
+    null,
+  );
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -392,6 +397,7 @@ function DebugScreen() {
 
   useEffect(() => {
     if (firmwareBytes) return;
+    if (tabRef.current === "compare") return;
     const label = archTab === "ebpf" ? `${programName}/bpf.o` : `${programName}.elf`;
     void boot(archTab ?? "rv32imc", budget, label, null, programName);
   }, [boot, programName]);
@@ -414,6 +420,15 @@ function DebugScreen() {
     () => (snap ? insnIndexForNode(focusedNode, snap.nodes) : null),
     [focusedNode, snap],
   );
+
+  useEffect(() => {
+    setOpenLayer(null);
+  }, [snap?.id]);
+
+  useEffect(() => {
+    if (!openLayer) return;
+    if (!openLayer.members.includes(sel.focus)) setOpenLayer(null);
+  }, [openLayer, sel.focus]);
 
   useEffect(() => {
     if (streaming || comparing) return;
@@ -443,7 +458,7 @@ function DebugScreen() {
         work: snap.work,
         failedId,
       });
-      map.set(node.id, info.nodeType);
+      map.set(node.id, foldKey(info));
     }
     return map;
   }, [snap]);
@@ -452,7 +467,7 @@ function DebugScreen() {
     if (!snap) {
       return foldSameTypeChains([], [], () => "", new Set());
     }
-    const protectedIds = new Set<number>([sel.focus, ...snap.work]);
+    const protectedIds = new Set<number>(snap.work);
     if (sel.compare != null) protectedIds.add(sel.compare);
     if (snap.status === "fail" && snap.failed != null) protectedIds.add(snap.failed);
     return foldSameTypeChains(
@@ -461,7 +476,7 @@ function DebugScreen() {
       (id) => nodeTypeById.get(id) ?? "",
       protectedIds,
     );
-  }, [snap, visible, sel.focus, sel.compare, nodeTypeById]);
+  }, [snap, visible, sel.compare, nodeTypeById]);
 
   const displayNodes = useMemo(
     () =>
@@ -612,7 +627,6 @@ function DebugScreen() {
     setRunRate(null);
 
     try {
-      // Always expand default just_tx fixtures at current budget (ignore snap cache).
       setCompareUi({
         tag: "expanding",
         left: { ...emptySlot("rv32imc"), label: `${programName}.elf` },
@@ -667,7 +681,7 @@ function DebugScreen() {
       if (compareAbortRef.current === ac) compareAbortRef.current = null;
       setBusy(false);
     }
-  }, [apply, budget]);
+  }, [apply, budget, programName]);
 
   const onSelectTab = useCallback(
     (next: TabId) => {
@@ -684,7 +698,9 @@ function DebugScreen() {
       setTab(next);
       fitOnceRef.current = true;
       const existing = snapsRef.current[next];
-      if (existing) {
+      const want =
+        next === "ebpf" ? `${programName}/bpf.o` : `${programName}.elf`;
+      if (existing && (firmwareBytes || existing.program === want)) {
         setSel((s) => ({
           ...s,
           focus: existing.focus,
@@ -703,11 +719,18 @@ function DebugScreen() {
         setFirmwareName(defaultName(next));
       }
     },
-    [boot, budget, busy, firmwareBytes, firmwareName, streaming],
+    [boot, budget, busy, firmwareBytes, firmwareName, programName, streaming],
   );
+
+  const foldRef = useRef(typeFold);
+  foldRef.current = typeFold;
 
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
     const id = Number(node.id);
+    const run = foldRef.current.members.get(id);
+    if (run && run.length > 1) {
+      setOpenLayer({ rep: id, members: run });
+    }
     if (event.shiftKey) {
       setSel((s) => ({
         ...s,
@@ -769,8 +792,52 @@ function DebugScreen() {
         draggable: false,
       });
     }
+    if (openLayer) {
+      const repPos = positions[String(openLayer.rep)];
+      if (repPos) {
+        openLayer.members.forEach((memberId, index) => {
+          if (out.some((item) => item.id === String(memberId))) return;
+          const node = snap.nodes.find((item) => item.id === memberId);
+          if (!node) return;
+          const insnText = insnTextForNode(node, snap.insns);
+          const { role, tags, accessFamily } = classifyNodeRole({
+            node,
+            nodes: snap.nodes,
+            edges: snap.edges,
+            insnText,
+            work: snap.work,
+            failedId,
+          });
+          out.push({
+            id: String(memberId),
+            type: "state",
+            zIndex: 20,
+            position: {
+              x: repPos.x,
+              y: repPos.y - (openLayer.members.length - index) * (NODE_H + 18),
+            },
+            data: {
+              nodeId: node.id,
+              loc: node.loc,
+              egCount: node.exprs.length,
+              predCount: node.predicates.length,
+              focused: node.id === sel.focus,
+              compare: node.id === sel.compare,
+              head: node.id === headId,
+              processed: done.has(node.id),
+              role,
+              tags,
+              insnHint: insnMnemonic(insnText) || undefined,
+              accessFamily,
+              layer: true,
+            },
+            draggable: false,
+          });
+        });
+      }
+    }
     return out.length === 0 ? EMPTY_FLOW_NODES : out;
-  }, [done, displayNodes, typeFold, positions, sel.compare, sel.focus, snap]);
+  }, [done, displayNodes, typeFold, positions, sel.compare, sel.focus, snap, openLayer]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     if (!snap || flowNodes.length === 0) return EMPTY_FLOW_EDGES;
@@ -786,8 +853,8 @@ function DebugScreen() {
           source: String(edge.from),
           target: String(edge.to),
           sourceHandle: "r",
-          targetHandle: "l",
-          type: reuse ? "straight" : "default",
+          targetHandle: reuse ? "t" : "l",
+          type: "default",
           label: edge.dir === "only" ? undefined : edge.dir,
           className: `flow-edge${branch ? " flow-edge--branch" : ""}${reuse ? " flow-edge--reuse" : ""}${
             sel.edgeKey === id ? " flow-edge--sel" : ""
@@ -795,8 +862,29 @@ function DebugScreen() {
           labelStyle: { fill: "#c9bfb0", fontSize: 10 },
         };
       });
+    if (openLayer) {
+      const ids = new Set(openLayer.members.map(String));
+      const seen = new Set(next.map((edge) => edge.id));
+      for (const edge of snap.edges) {
+        if (!ids.has(String(edge.from)) || !ids.has(String(edge.to))) continue;
+        const id = edgeKey(edge);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        next.push({
+          id,
+          source: String(edge.from),
+          target: String(edge.to),
+          sourceHandle: "r",
+          targetHandle: "l",
+          type: "default",
+          label: edge.dir === "only" ? undefined : edge.dir,
+          className: "flow-edge flow-edge--layer",
+          labelStyle: { fill: "#c9bfb0", fontSize: 10 },
+        });
+      }
+    }
     return next.length === 0 ? EMPTY_FLOW_EDGES : next;
-  }, [flowNodes, displayEdges, sel.edgeKey, snap]);
+  }, [flowNodes, displayEdges, sel.edgeKey, snap, openLayer]);
 
   const dualTakenNotTaken = useMemo(() => {
     if (!snap || !focusedNode) return null;
@@ -843,24 +931,26 @@ function DebugScreen() {
           ))}
         </div>
 
+        <Text className="muted">程序</Text>
+        <select
+          className="toolbar__input mono"
+          aria-label="程序"
+          value={programName}
+          disabled={busy || programs.length === 0}
+          onChange={(ev) => {
+            setFirmwareBytes(null);
+            setProgramName(ev.target.value);
+          }}
+        >
+          {(programs.length > 0 ? programs : [programName]).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+
         {!comparing ? (
           <>
-            <Text className="muted">程序</Text>
-            <select
-              className="toolbar__input mono"
-              value={programName}
-              disabled={busy || programs.length === 0}
-              onChange={(ev) => {
-                setFirmwareBytes(null);
-                setProgramName(ev.target.value);
-              }}
-            >
-              {(programs.length > 0 ? programs : [programName]).map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
             <Text className="muted">XDP ELF</Text>
             <label className="toolbar__file">
               <input
@@ -956,9 +1046,12 @@ function DebugScreen() {
           </Button>
         ) : null}
 
-        {comparing && compareUi.tag === "ready" && compareUi.left.budget !== budget ? (
+        {comparing &&
+        compareUi.tag === "ready" &&
+        (compareUi.left.budget !== budget ||
+          compareUi.left.program !== `${programName}.elf`) ? (
           <Text className="mono muted" fontSize={11}>
-            结果 budget={compareUi.left.budget}（已过期）
+            结果 {compareUi.left.program} budget={compareUi.left.budget}（已过期）
           </Text>
         ) : null}
 
@@ -1002,7 +1095,7 @@ function DebugScreen() {
                   ? "并行展开 rv32imc / ebpf…"
                   : compareUi.stopped
                     ? "已停止。点击重新对比。"
-                    : "点击重新对比以展开默认 just_tx 并比较树。"}
+                    : `点击重新对比以展开 ${programName} 并比较树。`}
               </Text>
             </Flex>
           ) : null}
@@ -1088,6 +1181,7 @@ function DebugScreen() {
               nodeTypes={nodeTypes}
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
+              onPaneClick={() => setOpenLayer(null)}
               nodesDraggable={false}
               nodesFocusable={false}
               elementsSelectable={false}

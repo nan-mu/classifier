@@ -26,7 +26,7 @@ private def leaf (w : Width) : Term → Bool
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if !leaf .w64 p.tCtx || !leaf .w64 p.tSp || !leaf .w32 p.tData ||
       p.packetBytes ≥ (1 <<< 32) then throw .invalidEntry
-  pure ⟨ExprSet.empty.insertEq (Reg.real64 1) p.tCtx
+  pure ⟨Expr.nil.insertEq (Reg.real64 1) p.tCtx
     |>.insertEq (Reg.real64 10) p.tSp
     |>.insertEq (Reg.ctx32 p.αCtx) p.tData
     |>.insertEq (Reg.ctx32 (p.αCtx + 1))

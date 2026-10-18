@@ -125,16 +125,16 @@ inductive Location where
 
 /-- Semantic state \(\sigma=(\mathcal E,\mathcal P)\). -/
 structure SemState where
-  exprs      : ExprSet
+  exprs      : List Expr
   predicates : List Predicate
   deriving Repr, Inhabited
 
-def SemState.empty : SemState := ⟨ExprSet.empty, []⟩
+def SemState.empty : SemState := ⟨Expr.nil, []⟩
 
-theorem savedMapKey_expr_update (p : Predicate) (E updates : ExprSet) :
+theorem savedMapKey_expr_update (p : Predicate) (E updates : List Expr) :
     (SemState.mk (E.override updates) [p]).predicates = [p] := rfl
 
-theorem lookupKeyAt_expr_update (E updates : ExprSet) (Pg : List Predicate)
+theorem lookupKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
     lookupKeyAt (SemState.mk (E.override updates) Pg).predicates event =
       lookupKeyAt Pg event := rfl

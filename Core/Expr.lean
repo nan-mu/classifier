@@ -98,86 +98,74 @@ def interpretExpr (ρ : Reg → Nat) (ν : Var → Nat) (θ : ExternalInterpreta
     let value ← interpretTerm ν θ e.term
     pure (interpretRel e.reg.width.bits e.rel (ρ e.reg) value)
 
-/-! ## Value bindings and comparison constraints -/
+/-! ## Expr lists
 
-/-- Value bindings are unique per register; constraints are structurally unique. -/
-structure ExprSet where
-  entries : List Expr
-  constraints : List Expr := []
-  deriving BEq, Repr, Inhabited
+A state holds `List Expr`, the same shape as `List Predicate`. Each row is
+`(Reg, Rel, Term)`. The first `eq` of a register is its value. Later rows,
+including another `eq`, are comparisons and do not replace that value.
+Assignment prepends and deletes every older row of that register. -/
 
-def ExprSet.empty : ExprSet := { entries := [] }
-
-def ExprSet.toList (E : ExprSet) : List Expr := E.entries ++ E.constraints
-
-def ExprSet.wellTyped (E : ExprSet) : Bool :=
-  E.entries.all (fun e => e.rel == .eq) &&
-    E.toList.all (fun e => e.reg.valid && e.reg.width == e.term.width)
-
-def ExprSet.keysUnique (E : ExprSet) : Bool :=
-  Id.run do
-    let mut seen : List (Reg × Rel) := []
-    for e in E.entries do
-      if seen.elem e.key then return false
-      seen := e.key :: seen
-    pure (E.constraints.eraseDups == E.constraints)
-
-def ExprSet.find? (E : ExprSet) (k : Reg × Rel) : Option Expr :=
-  E.entries.find? (fun e => e.key == k)
-
-def ExprSet.lookup (E : ExprSet) (r : Reg) (rel : Rel) : Option Term :=
-  match E.find? (r, rel) with
-  | some e => some e.term
-  | none => none
-
-def ExprSet.lookupEq (E : ExprSet) (r : Reg) : Option Term :=
-  E.lookup r .eq
-
-/-- Add a comparison without replacing the register's value binding. -/
-def ExprSet.insertConstraint (E : ExprSet) (e : Expr) : ExprSet :=
-  let e := solveExpr e
-  { E with constraints := if E.constraints.contains e then E.constraints else E.constraints ++ [e] }
-
-/-- Insert an equality as an assignment; other relations only add constraints. -/
-def ExprSet.insert (E : ExprSet) (e : Expr) : ExprSet :=
-  if e.rel != .eq then E.insertConstraint e else
-    let e := solveExpr e
-    { entries := e :: E.entries.filter (fun x => x.reg != e.reg)
-      constraints := E.constraints.filter (fun x => x.reg != e.reg) }
-
-def ExprSet.insertEq (E : ExprSet) (r : Reg) (t : Term) : ExprSet :=
-  E.insert (Expr.mkEq r t)
-
-/-- Equalities become value bindings; other relations become constraints. -/
-def ExprSet.ofList? (es : List Expr) : Option ExprSet :=
-  let es := es.map solveExpr
-  let E : ExprSet := {
-    entries := es.filter (fun e => e.rel == .eq)
-    constraints := es.filter (fun e => e.rel != .eq) }
-  if E.keysUnique && E.wellTyped then some E else none
-
-def ExprSet.ofList! (es : List Expr) : ExprSet :=
-  match ExprSet.ofList? es with
-  | some E => E
-  | none => { entries := [] }
-
-/-- Override \(E_g\times E_i\) (`doc/Expr/待处理.md#关系集合按键覆写`). -/
-def ExprSet.override (Eg Ei : ExprSet) : ExprSet :=
-  let untouched (e : Expr) := !(Ei.entries.any (fun ei => ei.reg == e.reg))
-  let base : ExprSet := {
-    entries := Eg.entries.filter untouched ++ Ei.entries
-    constraints := Eg.constraints.filter untouched }
-  Ei.constraints.foldl ExprSet.insertConstraint base
-
-def ExprSet.mapTerms (E : ExprSet) (f : Term → Term) : ExprSet :=
-  { entries := E.entries.map fun e => { e with term := f e.term }
-    constraints := (E.constraints.map fun e => { e with term := f e.term }).eraseDups }
-
-def ExprSet.solveAll (E : ExprSet) : ExprSet :=
-  E.mapTerms solve
-
-/-- Filter to a single register's relations. -/
-def ExprSet.forReg (E : ExprSet) (r : Reg) : List Expr :=
-  E.toList.filter (fun e => e.reg == r)
+def Expr.nil : List Expr := []
 
 end Core
+
+namespace List
+
+open Core
+
+/-- The value rows: the first equality of each register, in list order. -/
+def bindings (E : List Expr) : List Expr :=
+  E.foldl (fun acc e =>
+    if e.rel == .eq && !(acc.any (fun v => v.reg == e.reg)) then acc ++ [e] else acc) []
+
+/-- Every row that is not the value equality of its register. -/
+def constraints (E : List Expr) : List Expr :=
+  E.filter fun e => !(E.bindings.contains e)
+
+def wellTyped (E : List Expr) : Bool :=
+  E.all fun e => e.reg.valid && e.reg.width == e.term.width
+
+/-- Rows are structurally unique. Several relations may share one register. -/
+def keysUnique (E : List Expr) : Bool :=
+  E.eraseDups == E
+
+/-- Source lookup reads the first equality. Other relations read comparisons. -/
+def lookupRel (E : List Expr) (r : Reg) (rel : Rel) : Option Term :=
+  let rows := if rel == .eq then E.bindings else E.constraints
+  (rows.find? (fun e => e.reg == r && e.rel == rel)).map (·.term)
+
+def lookupEq (E : List Expr) (r : Reg) : Option Term :=
+  E.lookupRel r .eq
+
+/-- Append a comparison. An equality here does not replace the register's value. -/
+def insertConstraint (E : List Expr) (e : Expr) : List Expr :=
+  let e := solveExpr e
+  if E.contains e then E else E ++ [e]
+
+/-- Insert an equality as an assignment; any other relation is only a comparison. -/
+def insertExpr (E : List Expr) (e : Expr) : List Expr :=
+  if e.rel != .eq then E.insertConstraint e else
+    let e := solveExpr e
+    e :: E.filter (fun x => x.reg != e.reg)
+
+def insertEq (E : List Expr) (r : Reg) (t : Term) : List Expr :=
+  E.insertExpr (Expr.mkEq r t)
+
+/-- Override \(E_g\times E_i\). Equality rows in \(E_i\) are assignments.
+A comparison equality is not an assignment; `applyLocal` appends those from the
+branch predicate instead of passing them through this write set. -/
+def override (Eg Ei : List Expr) : List Expr :=
+  let writes := Ei.bindings
+  let keep (e : Expr) := !(writes.any (fun w => w.reg == e.reg))
+  Ei.constraints.foldl insertConstraint ((Eg.filter keep) ++ writes)
+
+def mapTerms (E : List Expr) (f : Term → Term) : List Expr :=
+  (E.map fun e => { e with term := f e.term }).eraseDups
+
+def solveAll (E : List Expr) : List Expr :=
+  E.mapTerms solve
+
+def forReg (E : List Expr) (r : Reg) : List Expr :=
+  E.filter (fun e => e.reg == r)
+
+end List

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { arrivalPredicates, classifyNodeRole, predChip } from "./nodeRole";
+import {
+  arrivalExprs,
+  arrivalPredicates,
+  classifyNodeRole,
+  foldKey,
+  predChip,
+} from "./nodeRole";
 import type { GraphEdge, GraphNode, PredRow } from "./types";
 
 const n = (
@@ -94,35 +100,45 @@ describe("classifyNodeRole", () => {
       edges: [e(0, 3, "only")],
       insnText: "0006 ADDI a0,a0,1",
     });
-    expect(info.tags).toEqual(["步进"]);
+    expect(info.tags).toEqual(["ALU"]);
     expect(info.tags).not.toContain("Helper");
     expect(info.tags).not.toContain("PacketWrite");
     expect(info.tags).not.toContain("Taken");
-    expect(info.tags).not.toContain("ALU");
+    expect(info.tags).not.toContain("步进");
     expect(info.role).toBe("alu");
   });
 
-  it("ALU colors the node but is not a title chip without P_i", () => {
+  it("names an ALU step from the opcode when E_i is empty", () => {
     const info = classifyNodeRole({
       node: n(4, "12"),
       edges: [],
       insnText: "0010 ADDI x10, x10, 1",
     });
-    expect(info.tags).toEqual(["步进"]);
+    expect(info.tags).toEqual(["ALU"]);
     expect(info.role).toBe("alu");
     expect(info.accessFamily).toBe(false);
   });
 
-  it("memory still sets accessFamily role without inventing 访存 tag", () => {
+  it("names a load from the E_i register class", () => {
+    const parent = n(0, "0", { exprs: [{ reg: "real32:1", rel: "eq", term: "1" }] });
+    const child = n(4, "12", {
+      preds: [0],
+      exprs: [
+        { reg: "real32:1", rel: "eq", term: "1" },
+        { reg: "packet32:0", rel: "eq", term: "2" },
+      ],
+    });
+    expect(arrivalExprs(child, [parent, child])).toEqual([
+      { reg: "packet32:0", rel: "eq", term: "2" },
+    ]);
     const info = classifyNodeRole({
-      node: n(4, "12", {
-        exprs: [{ reg: "packet32:0", rel: "eq", term: "1" }],
-      }),
-      edges: [],
+      node: child,
+      nodes: [parent, child],
+      edges: [e(0, 4, "only")],
       insnText: "0020 LW x10, 0(x11)",
     });
-    expect(info.tags).toEqual(["步进"]);
-    expect(info.tags).not.toContain("访存");
+    expect(info.tags).toEqual(["Packet"]);
+    expect(info.tags).not.toContain("步进");
     expect(info.accessFamily).toBe(true);
     expect(info.role).toBe("reg_packet");
   });
@@ -139,7 +155,7 @@ describe("classifyNodeRole", () => {
       predicates: [{ kind: "branch", dir: "not_taken" }],
     });
     expect(classifyNodeRole({ node: fork, nodes: [fork, taken, fall], edges }).tags).toEqual([
-      "步进",
+      "Branch",
     ]);
     expect(classifyNodeRole({ node: fork, nodes: [fork, taken, fall], edges }).role).toBe(
       "branch",
@@ -150,5 +166,21 @@ describe("classifyNodeRole", () => {
     expect(
       classifyNodeRole({ node: fall, nodes: [fork, taken, fall], edges }).tags,
     ).toContain("NotTaken");
+  });
+
+  it("does not give a branch and an ALU step the same fold key", () => {
+    const step = classifyNodeRole({
+      node: n(1, "2"),
+      edges: [],
+      insnText: "0004 ADDI a0, a0, 1",
+    });
+    const branch = classifyNodeRole({
+      node: n(2, "4"),
+      edges: [e(2, 3, "taken"), e(2, 4, "not_taken")],
+      insnText: "0008 BEQ a0, a1, 8",
+    });
+    expect(step.tags).toEqual(["ALU"]);
+    expect(branch.tags).toEqual(["Branch"]);
+    expect(foldKey(step)).not.toBe(foldKey(branch));
   });
 });

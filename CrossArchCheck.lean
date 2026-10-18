@@ -93,18 +93,18 @@ private def checks : Except String (List String) := do
   if !terminalReturns.any (·.contains (Core.Term.C64 3)) then
     throw "eBPF fixture missing concrete TX return 3"
   let ebpf ← snapshotRun "ebpf" ebpfResponse
-  let rv32Response := RV32.exportRv32BoundWordsSnapshot rv32Words rv32Meta 60 60
+  let rv32Response := RV32.exportRv32BoundWordsSnapshot rv32Words rv32Meta 400 400
   let rv32Snapshot ← Json.parse rv32Response
   let rv32Status ← fieldString rv32Snapshot "status"
-  let rv32Reason ← fieldString rv32Snapshot "reason"
-  let rv32Failed ← (← rv32Snapshot.getObjVal? "failed").getNat?
+  let rv32Reason ← rv32Snapshot.getObjVal? "reason"
   let rv32Nodes ← fieldArray rv32Snapshot "nodes"
   let rv32Edges ← fieldArray rv32Snapshot "edges"
-  if rv32Status != "fail" || rv32Reason != "UnboundTarget" then
-    throw "RV32 fixture did not reach the observed bound-wrapper frontier"
-  if !rv32Nodes.any (fun n => ((n.getObjVal? "id") >>= Json.getNat?).toOption == some rv32Failed &&
-      (fieldString n "loc").toOption == some "34") then
-    throw "RV32 fixture missing failed target slot 34"
+  if rv32Status != "complete" then
+    throw s!"RV32 fixture status={rv32Status} reason={rv32Reason.compress}"
+  if rv32Nodes.size != 146 then
+    throw s!"RV32 fixture nodeCount={rv32Nodes.size}"
+  if rv32Nodes.any (fun n => (fieldString n "loc").toOption == some "34") then
+    throw "RV32 fixture reached the old unbound branch at slot 34"
   let rv32 ← snapshotRun "rv32imc" rv32Response
   let self ← report ebpf ebpf
   let cross ← report rv32 ebpf
@@ -116,7 +116,7 @@ private def checks : Except String (List String) := do
   if !ps.any (fun p => (fieldString p "verdict").toOption == some "OnlyLeft") then
     throw "dropped entry position did not produce OnlyLeft"
   pure [s!"ebpf-terminal: status={ebpfStatus} nodeCount={ebpfNodes.size} edgeCount={ebpfEdges.size} loc=exit",
-    s!"rv32imc-frontier: status={rv32Status} reason={rv32Reason} failed={rv32Failed} nodeCount={rv32Nodes.size} edgeCount={rv32Edges.size} loc=34",
+    s!"rv32imc-frontier: status={rv32Status} reason={rv32Reason.compress} nodeCount={rv32Nodes.size} edgeCount={rv32Edges.size}",
     ← summary "identical-ebpf" self, ← summary "rv32imc-vs-ebpf" cross,
     cross.compress, ← summary "dropped-ebpf-node" dropped]
 

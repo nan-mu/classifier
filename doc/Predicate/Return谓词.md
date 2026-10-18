@@ -63,12 +63,12 @@ eBPF 的 `EXIT` 指令在已识别为最外层程序正常返回时，触发 Ret
 
 ## 生成条件
 
-\(E_g=(\mathcal V_g,\mathcal C_g)\) 为当前返回指令执行前的有效 [Expr 关系](../Expr/Expr.md#表达式分量)，\(\mathcal V_g\) 为有限完整值绑定集合，\(\mathcal C_g\) 为有限比较关系集合；\(P_g\) 为执行前的有限谓词集合。完整返回值取自 \(\mathcal V_g\)，不从 \(\mathcal C_g\) 的比较约束补出。
+\(E_g\) 为当前返回指令执行前的有效 [Expr 列表](../Expr/Expr.md#表达式分量)；\(P_g\) 为执行前的有限谓词列表。完整返回值取自 \(\operatorname{bindings}(E_g)\)，不从比较行补出。
 
 令 \(b\in\{\mathrm{true},\mathrm{false}\}\) 表示本次返回指令是否已被判定为最外层正常返回。构造的输入是架构 \(A\)、该识别结果 \(b\) 及当前关系 \(E_g\)。其定义域要求 \(b=\mathrm{true}\)、\(E_g\) 有效，并且存在唯一的完整等式：
 
 \[
-\bigl(r_{\mathrm{ret}}(A)=t\bigr)\in\mathcal V_g,
+\bigl(r_{\mathrm{ret}}(A)=t\bigr)\in\operatorname{bindings}(E_g),
 \qquad t\in\mathrm{Term}_{w_{\mathrm{ret}}(A)}.
 \]
 
@@ -96,7 +96,7 @@ P_i:=\{\operatorname{return}(t)\}.
 - 程序内部函数返回：未满足最外层触发条件，按既定调用返回配对继续内部后继。
 - 未解析的间接跳转：最外层正常返回尚未识别，采用[既有拒绝处理](../NodeInference/step.md#失败情形)。
 - 推理失败：不以拒绝结果代替正常返回，采用[step 输出](../NodeInference/step.md#两种结果)。
-- 已识别最外层正常返回，但 \(E_g\) 无效，返回寄存器完整等式缺失或不唯一，或项位宽非法：构造无定义，拒绝整个步骤，不返回部分候选。只有低位关系、不等式或比较分量中的同名等式，均不满足完整返回值条件。
+- 已识别最外层正常返回，但 \(E_g\) 无效，返回寄存器完整等式缺失或不唯一，或项位宽非法：构造无定义，拒绝整个步骤，不返回部分候选。只有低位关系、不等式或比较行中的同名等式，均不满足完整返回值条件。
 
 ## 数学性质
 
@@ -120,7 +120,7 @@ P_i:=\{\operatorname{return}(t)\}.
 ## 相关文档
 
 - [统一谓词类型与结构相等](谓词定义.md#类型与结构相等)
-- [Expr 完整值绑定与比较分量](../Expr/Expr.md#表达式分量)
+- [Expr 列表与值绑定](../Expr/Expr.md#表达式分量)
 - [Expr 项解释](../Expr/Term/Term.md#项的解释)
 - [后继位置绑定](../NodeInference/step.md#绑定后继位置)
 - [后继状态准备](../NodeInference/step.md#准备全部后继状态)

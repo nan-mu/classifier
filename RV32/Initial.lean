@@ -42,8 +42,8 @@ def savedRegs : List Reg :=
   [8, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27].map Reg.real32
 
 /-- The seven intentional real-register entry bindings, before the entry overwrite. -/
-def buildEBase (p : EntryParams) : ExprSet :=
-  ExprSet.empty
+def buildEBase (p : EntryParams) : List Expr :=
+  Expr.nil
     |>.insertEq (Reg.real32 0) (Term.C32 0)
     |>.insertEq (Reg.real32 1) p.tReturn
     |>.insertEq (Reg.real32 2) p.tSp
@@ -53,12 +53,12 @@ def buildEBase (p : EntryParams) : ExprSet :=
     |>.insertEq (Reg.real32 10) p.tCtx
 
 /-- The call overwrites ra with tReturn; other entry registers retain tEntry. -/
-def buildEReal0 (p : EntryParams) : ExprSet :=
+def buildEReal0 (p : EntryParams) : List Expr :=
   p.rEntries.foldl (fun E r =>
     if r == Reg.real32 1 then E else E.insertEq r p.tEntry) (buildEBase p)
 
 /-- Validate the real-register input contract. Concrete entry=0 and misaligned SP fail. -/
-def buildRealE0 (p : EntryParams) : Except RejectReason ExprSet := do
+def buildRealE0 (p : EntryParams) : Except RejectReason (List Expr) := do
   if !p.rEntries.all validEntryReg ||
       p.rEntries.eraseDups.length != p.rEntries.length then throw .invalidEntry
   if ![p.tEntry, p.tReturn, p.tFrame, p.tSp, p.tCtx].all leaf32 then
@@ -74,18 +74,18 @@ def buildRealE0 (p : EntryParams) : Except RejectReason ExprSet := do
   pure Ereal
 
 /-- Values of the six bound xdp_md Context cells; no access Predicates are invented. -/
-def buildECtx0 (p : EntryParams) : ExprSet :=
+def buildECtx0 (p : EntryParams) : List Expr :=
   let tEnd := addStar .w32 p.tData p.tLen
   let fields := [p.tData, tEnd, Term.C32 0, Term.C32 p.ιWifi, Term.C32 0, Term.C32 0]
   ((List.range 6).zip fields).foldl
-    (fun E jt => E.insertEq (Reg.ctx32 (p.αCtx + jt.1)) jt.2) ExprSet.empty
+    (fun E jt => E.insertEq (Reg.ctx32 (p.αCtx + jt.1)) jt.2) Expr.nil
 
 /-- E0 is the disjoint union of real-register and Context-cell Exprs; P0 is empty. -/
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if ![p.tData, p.tLen].all leaf32 || p.ιWifi ≥ (1 <<< 32) then throw .invalidEntry
   let Ereal ← buildRealE0 p
   let Ectx := buildECtx0 p
-  let E0 : ExprSet := { entries := Ereal.entries ++ Ectx.entries }
+  let E0 : List Expr := Ereal ++ Ectx
   if !E0.keysUnique then throw .invalidEntry
   pure ⟨E0, []⟩
 

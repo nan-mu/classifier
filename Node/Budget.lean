@@ -132,9 +132,9 @@ partial def expand (progLen : Nat) (step : Nat → SemState → StepResult) (ws 
 private def loopVisitCheck : Bool :=
   let step (_j : Nat) (_σ : SemState) : StepResult :=
     .candidates [
-      ⟨.taken, .pos 0, ExprSet.empty, []⟩,
-      ⟨.notTaken, .exit, ExprSet.empty, [.ret (Term.C32 1)]⟩]
-  match expandInit 1 0 ⟨.empty, []⟩ 100 with
+      ⟨.taken, .pos 0, Expr.nil, []⟩,
+      ⟨.notTaken, .exit, Expr.nil, [.ret (Term.C32 1)]⟩]
+  match expandInit 1 0 ⟨Expr.nil, []⟩ 100 with
   | .error _ => false
   | .ok ws =>
     match expand 1 step ws with

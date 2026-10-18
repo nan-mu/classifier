@@ -12,21 +12,14 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { cardChips, type CardChip } from "./aggregateWriteChips";
-import { matchStatusOf, type MatchStatus } from "./compareNodeSummary";
+import { cardTier, type CardTier } from "./compareNodeSummary";
 import { layoutCompareTree } from "./compareTreeLayout";
-import { formatPredChip } from "./formatExpr";
-import {
-  atomToPred,
-  type ListEntry,
-  type StartKind,
-  type TreeReport,
-} from "./types";
-import { formatPred } from "./viewer";
+import type { ListEntry, StartKind, TreeReport } from "./types";
 
 const MATCH_LEGEND = [
-  { status: "pass", label: "谓词一致" },
-  { status: "fail", label: "谓词不一致" },
+  { tier: "agree", label: "完全一致" },
+  { tier: "expr", label: "表达式不一致" },
+  { tier: "mismatch", label: "完全不一致" },
 ] as const;
 
 const NODE_W = 300;
@@ -43,52 +36,58 @@ type TreeFlowData = {
   right: ListEntry[];
   leftArch: string;
   rightArch: string;
-  match: MatchStatus;
+  tier: CardTier;
   selected: boolean;
   onSelect: (id: number) => void;
 };
 
 type TreeFlowNode = Node<TreeFlowData, "tree">;
 
-function EntryChip({ entry }: { entry: ListEntry }) {
-  if (entry.tag === "exit") {
-    return <span className="capsule capsule--meta">exit</span>;
+type KindChip = { kind: string; count: number };
+
+/** Consecutive predicates of one kind, without condition or field text. */
+export function kindRuns(entries: ListEntry[]): KindChip[] {
+  const out: KindChip[] = [];
+  for (const entry of entries) {
+    const kind = entry.tag === "exit" ? "exit" : entry.atom.kind;
+    const last = out[out.length - 1];
+    if (last && last.kind === kind) last.count += 1;
+    else out.push({ kind, count: 1 });
   }
-  const row = atomToPred(entry.atom);
+  return out;
+}
+
+function KindChipView({ chip }: { chip: KindChip }) {
   return (
-    <span className="capsule" title={formatPred(row)}>
-      {formatPredChip(row)}
+    <span className="capsule capsule--kind">
+      {chip.kind}
+      {chip.count > 1 ? (
+        <>
+          {" "}
+          <span className="capsule__times">×</span>
+          {chip.count}
+        </>
+      ) : null}
     </span>
   );
 }
 
-function ChipView({ chip }: { chip: CardChip }) {
-  if (chip.tag === "writes") {
-    return (
-      <span className="capsule">
-        {chip.kind} <span className="capsule__times">×</span>{chip.count}
-      </span>
-    );
-  }
-  return <EntryChip entry={chip.entry} />;
-}
-
-function PreviewCol({
+function KindCol({
   label,
   entries,
 }: {
-  label: string;
+  label: string | null;
   entries: ListEntry[];
 }) {
-  const chips = cardChips(entries);
+  const chips = kindRuns(entries);
   const shown = chips.slice(0, PREVIEW_MAX);
   const overflow = chips.length - shown.length;
   return (
     <div className="compare-tree-node__col">
-      <span className="mono muted compare-tree-node__side">{label}</span>
+      {label ? <span className="mono muted compare-tree-node__side">{label}</span> : null}
       <div className="compare-tree-node__chips">
         {shown.map((chip, i) => (
-          <ChipView key={`${label}-${i}`} chip={chip} />
+          <KindChipView key={`${label ?? "same"}-${i}`} chip={chip} />
         ))}
         {overflow > 0 ? (
           <span className="mono muted compare-tree-node__more">+{overflow}</span>
@@ -103,7 +102,7 @@ const handleStyle = { opacity: 0, width: 8, height: 8 };
 function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
   return (
     <div
-      className={`state-node compare-tree-node compare-tree-node--${data.match}${
+      className={`state-node compare-tree-node compare-tree-node--${data.tier}${
         data.selected ? " compare-tree-node--selected" : ""
       }`}
       style={{ width: NODE_W, height: NODE_H }}
@@ -128,10 +127,16 @@ function TreeNodeView({ data }: NodeProps<TreeFlowNode>) {
       >
         #{data.id}
       </button>
-      <div className="compare-tree-node__cols">
-        <PreviewCol label={`L · ${data.leftArch}`} entries={data.left} />
-        <PreviewCol label={`R · ${data.rightArch}`} entries={data.right} />
-      </div>
+      {data.tier === "mismatch" ? (
+        <div className="compare-tree-node__cols">
+          <KindCol label={`L · ${data.leftArch}`} entries={data.left} />
+          <KindCol label={`R · ${data.rightArch}`} entries={data.right} />
+        </div>
+      ) : (
+        <div className="compare-tree-node__cols compare-tree-node__cols--one">
+          <KindCol label={null} entries={data.left} />
+        </div>
+      )}
       <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
     </div>
   );
@@ -186,7 +191,7 @@ export function CompareTreeView({
           right: n.right,
           leftArch,
           rightArch,
-          match: matchStatusOf(n),
+          tier: cardTier(n),
           selected: false,
           onSelect: onSelectStable,
         },
@@ -316,8 +321,8 @@ export function CompareTreeView({
         </ReactFlow>
         <div className="node-legend" aria-label="谓词比较图例">
           {MATCH_LEGEND.map((row) => (
-            <div key={row.status} className="node-legend__row">
-              <span className={`node-legend__swatch compare-tree-node--${row.status}`} />
+            <div key={row.tier} className="node-legend__row">
+              <span className={`node-legend__swatch compare-tree-node--${row.tier}`} />
               <span>{row.label}</span>
             </div>
           ))}

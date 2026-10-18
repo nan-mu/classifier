@@ -179,4 +179,74 @@ theorem SUB_eq_ADD_NEG (w : Width) (a b : Nat) :
     SREM w (1 <<< (w.bits - 1)) w.mask = 0 := by
   cases w <;> decide
 
+theorem kShift_lt (w : Width) (k : Nat) : kShift w k < w.bits :=
+  Nat.mod_lt k (by cases w <;> decide)
+
+theorem shift_pow_lt (w : Width) (k : Nat) : 1 <<< kShift w k < 2 ^ w.bits := by
+  rw [Nat.shiftLeft_eq, Nat.one_mul]
+  exact Nat.pow_lt_pow_of_lt (by decide) (kShift_lt w k)
+
+theorem shift_pow_ne_zero (w : Width) (k : Nat) : 1 <<< kShift w k ≠ 0 := by
+  rw [Nat.shiftLeft_eq, Nat.one_mul]
+  exact Nat.ne_of_gt (Nat.two_pow_pos _)
+
+/-- A concrete left shift is multiplication by the same power of two. -/
+theorem SHL_eq_MULLO (w : Width) (a k : Nat) (ha : a < 2 ^ w.bits) :
+    SHL w a k = MULLO w a (1 <<< kShift w k) := by
+  unfold SHL MULLO
+  rw [MNat_of_lt ha]
+
+/-- A concrete logical right shift is unsigned division by the same power of two. -/
+theorem LSHR_eq_UDIV (w : Width) (a k : Nat) (ha : a < 2 ^ w.bits) :
+    LSHR w a k = UDIV w 0 a (1 <<< kShift w k) := by
+  unfold LSHR UDIV
+  have hpow : 1 <<< kShift w k < 2 ^ w.bits := shift_pow_lt w k
+  have hne : 1 <<< kShift w k ≠ 0 := shift_pow_ne_zero w k
+  have hfalse : ((1 <<< kShift w k) == 0) = false :=
+    beq_eq_false_iff_ne.mpr hne
+  rw [MNat_of_lt ha, MNat_of_lt hpow]
+  simp [hfalse]
+
+/-- Low bits below `2^n` and a multiple of `2^n` do not overlap, so addition is bitwise or. -/
+theorem add_eq_lor_of_split (a b n : Nat) (ha : a < 2 ^ n) (hb : b % 2 ^ n = 0) :
+    a + b = a ||| b := by
+  have hd : 2 ^ n ∣ b := Nat.dvd_of_mod_eq_zero hb
+  let q := b / 2 ^ n
+  have hdiv : b = 2 ^ n * q := by
+    rw [Nat.mul_comm]
+    exact (Nat.div_mul_cancel hd).symm
+  calc
+    a + b = a + 2 ^ n * q := by rw [hdiv]
+    _ = 2 ^ n * q + a := Nat.add_comm _ _
+    _ = 2 ^ n * q ||| a := Nat.two_pow_add_eq_or_of_lt ha q
+    _ = a ||| (2 ^ n * q) := Nat.or_comm _ _
+    _ = a ||| b := by rw [← hdiv]
+
+theorem OR_eq_ADD_of_split (w : Width) (q a b n : Nat)
+    (hq : q ≤ w.bits) (ha : a < 2 ^ q) (hb : b < 2 ^ q)
+    (hs : a < 2 ^ n ∧ b % 2 ^ n = 0) :
+    OR q a b = ADD w a b := by
+  have hsum : a + b = a ||| b := add_eq_lor_of_split a b n hs.1 hs.2
+  have hlt : a + b < 2 ^ q := by
+    rw [hsum]
+    exact Nat.or_lt_two_pow ha hb
+  have hw : a + b < 2 ^ w.bits :=
+    Nat.lt_of_lt_of_le hlt (Nat.pow_le_pow_right (by decide) hq)
+  have hor : a ||| b < 2 ^ q := by rwa [← hsum]
+  unfold OR ADD
+  rw [MNat_of_lt hor, MNat_of_lt hw]
+  exact hsum.symm
+
+theorem LSHR_lt (w : Width) (a k : Nat) : LSHR w a k < 2 ^ w.bits := by
+  unfold LSHR
+  exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) (MNat_lt _ _)
+
+theorem OR_lt (q a b : Nat) : OR q a b < 2 ^ q := by
+  unfold OR
+  exact MNat_lt _ _
+
+theorem SHL_lt (w : Width) (a k : Nat) : SHL w a k < 2 ^ w.bits := by
+  unfold SHL
+  exact MNat_lt _ _
+
 end Core

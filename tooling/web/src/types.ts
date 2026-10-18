@@ -251,6 +251,8 @@ export type TreeNode = {
   right: ListEntry[];
   /** Server pass/fail; preferred over client LCS when present. */
   matchStatus?: "pass" | "fail";
+  /** Branch expressions. Absent treats a passing node as fully agreed. */
+  exprStatus?: "complete" | "incomplete";
   tipScore?: SoftScore;
 };
 

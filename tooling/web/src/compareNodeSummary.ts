@@ -8,6 +8,9 @@ export type AlignRow =
 
 export type MatchStatus = "pass" | "fail";
 
+/** Card face: kind counts agree, expressions differ, or kind counts differ. */
+export type CardTier = "agree" | "expr" | "mismatch";
+
 export type NodeDiffSummary = {
   id: number;
   start: TreeNode["start"];
@@ -98,6 +101,13 @@ export function matchStatusOf(node: TreeNode): MatchStatus {
     return node.matchStatus;
   }
   return summarizeTreeNode(node).verdict === "same" ? "pass" : "fail";
+}
+
+/** Passing nodes with incomplete branch expressions stay `expr`, not a kind mismatch. */
+export function cardTier(node: TreeNode): CardTier {
+  if (matchStatusOf(node) === "fail") return "mismatch";
+  if (node.exprStatus === "incomplete") return "expr";
+  return "agree";
 }
 
 export function formatEntryLine(entry: ListEntry): string {

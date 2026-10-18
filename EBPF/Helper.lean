@@ -10,7 +10,7 @@ structure HelperCall where
   args : List Term
   deriving Repr
 
-def parseHelperCall (E : ExprSet) (id : Nat) : Except RejectReason HelperCall := do
+def parseHelperCall (E : List Expr) (id : Nat) : Except RejectReason HelperCall := do
   if !E.keysUnique || !E.wellTyped then throw .localReject
   let kind := helperKind id
   let mut args := []
@@ -26,7 +26,7 @@ def parseHelperCall (E : ExprSet) (id : Nat) : Except RejectReason HelperCall :=
 /-- Freeze complete current key/value buffers from one pre-call snapshot.
 An unavailable layout or byte keeps the ABI prefix, including for update where
 neither tail is appended unless both complete buffers are available. -/
-def freezeHelperArgs (p : EntryParams) (E : ExprSet) (maps : List MapLayout)
+def freezeHelperArgs (p : EntryParams) (E : List Expr) (maps : List MapLayout)
     (call : HelperCall) : List Term :=
   let frozen : Option (List Term) := do
     match call.kind, call.args with
@@ -52,27 +52,27 @@ def callReturnTerm (event : NodeId) (call : HelperCall) : Term :=
   | _ => external
 
 /-- Lookup anchors Map word zero in its event namespace to the return register. -/
-def helperExpr (event : NodeId) (call : HelperCall) : ExprSet :=
-  let result := ExprSet.empty.insertEq (Reg.real64 0) (callReturnTerm event call)
+def helperExpr (event : NodeId) (call : HelperCall) : List Expr :=
+  let result := Expr.nil.insertEq (Reg.real64 0) (callReturnTerm event call)
   let map := if call.kind == .lookup then
-    ExprSet.empty.insertEq (Reg.mapDword event 0) (Term.regVar event (Reg.real64 0))
-    else ExprSet.empty
+    Expr.nil.insertEq (Reg.mapDword event 0) (Term.regVar event (Reg.real64 0))
+    else Expr.nil
   updateExpr result map
 
-#guard match parseHelperCall ExprSet.empty 1 with
+#guard match parseHelperCall Expr.nil 1 with
   | .error .undefinedSrc => true
   | _ => false
-#guard match parseHelperCall ExprSet.empty 999 with
+#guard match parseHelperCall Expr.nil 999 with
   | .ok call => call.kind == .unsupported 999 && call.args.isEmpty &&
       callReturnTerm 7 call == Term.C64 18446744073709551615
   | _ => false
 #guard match parseHelperCall
-    (ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 1)
+    (Expr.nil.insertEq (Reg.real64 1) (Term.V64 1)
       |>.insertEq (Reg.real64 2) (Term.C64 10)) 6 with
   | .ok call => call.kind == .printk && call.args == [Term.V64 1, Term.C64 10]
   | _ => false
 #guard match parseHelperCall
-    (ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 3)
+    (Expr.nil.insertEq (Reg.real64 1) (Term.V64 3)
       |>.insertEq (Reg.real64 2) (Term.V64 4)) 1 with
   | .ok call => call.args == [Term.V64 3, Term.V64 4] &&
       (helperExpr 7 call).lookupEq (Reg.mapDword 7 0) ==
@@ -83,11 +83,11 @@ def helperExpr (event : NodeId) (call : HelperCall) : ExprSet :=
   let keyPtr := addStar .w64 p.tSp (Term.C64 (M 64 (-4)))
   let call : HelperCall := ⟨.lookup, 1, [Term.C64 42, keyPtr]⟩
   let maps : List MapLayout := [⟨42, 4, 8⟩]
-  let E := ExprSet.empty.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)
+  let E := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)
   let args := freezeHelperArgs p E maps call
   return args == call.args ++ [Term.C64 0x44, Term.C64 0x33, Term.C64 0x22, Term.C64 0x11] &&
     args.all (fun t => t.width == .w64) &&
-    freezeHelperArgs p ExprSet.empty maps call == call.args &&
+    freezeHelperArgs p Expr.nil maps call == call.args &&
     freezeHelperArgs p E [] call == call.args
 
 private def helperMutationFreezeCheck : Bool := Id.run do
@@ -97,13 +97,13 @@ private def helperMutationFreezeCheck : Bool := Id.run do
   let maps : List MapLayout := [⟨42, 4, 8⟩]
   let update : HelperCall := ⟨.update, 2, [Term.C64 42, keyPtr, valuePtr, Term.C64 0]⟩
   let delete : HelperCall := ⟨.delete, 3, [Term.C64 42, keyPtr]⟩
-  let E := ExprSet.empty.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
+  let E := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
     |>.insertEq (stackUnitReg 0 2) (Term.C32 0x08070605)
     |>.insertEq (stackUnitReg 0 1) (Term.C32 0x0c0b0a09)
   let key := [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
   let value := [Term.C64 5, Term.C64 6, Term.C64 7, Term.C64 8,
     Term.C64 9, Term.C64 10, Term.C64 11, Term.C64 12]
-  let missing := ExprSet.empty.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
+  let missing := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
   return freezeHelperArgs p E maps update == update.args ++ key ++ value &&
     freezeHelperArgs p E maps delete == delete.args ++ key &&
     freezeHelperArgs p missing maps update == update.args &&

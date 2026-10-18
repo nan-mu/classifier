@@ -519,8 +519,19 @@ body {
 }
 
 .flow-edge--reuse {
-  stroke: #d4a05a !important;
-  stroke-dasharray: 6 4;
+  stroke: #e0b15a !important;
+  stroke-dasharray: 7 4;
+  stroke-width: 2.25 !important;
+}
+
+.flow-edge--layer {
+  stroke: #e0b15a !important;
+}
+
+.state-node--layer {
+  z-index: 20;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+  outline: 1px solid #e0b15a;
 }
 
 .flow-edge--sel .react-flow__edge-path {
@@ -546,10 +557,10 @@ body {
   top: 10px;
   z-index: 2;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 3px 10px;
+  grid-template-columns: 1fr;
+  gap: 3px;
   padding: 8px 10px;
-  max-width: 220px;
+  max-width: 148px;
   background: rgba(22, 20, 17, 0.78);
   border: 1px solid rgba(120, 108, 90, 0.4);
   border-radius: 10px;
@@ -639,14 +650,21 @@ body {
   min-height: 0;
 }
 
-.compare-tree-node--pass {
+.compare-tree-node--agree {
   --role-accent: #6ec8b0;
   --role-tint: rgba(24, 52, 46, 0.94);
 }
 
-.compare-tree-node--fail {
-  --role-accent: #e08a78;
-  --role-tint: rgba(58, 30, 26, 0.95);
+.compare-tree-node--expr {
+  --role-accent: #e2b15a;
+  --role-tint: rgba(62, 46, 18, 0.95);
+}
+
+.compare-tree-node--mismatch {
+  --role-accent: #c484d4;
+  --role-tint: rgba(46, 28, 52, 0.96);
+  border-style: dashed;
+  border-left-style: solid;
 }
 
 .compare-tree-node--selected {

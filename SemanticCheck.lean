@@ -36,11 +36,11 @@ private def entry : EBPF.EntryParams :=
 
 private def context : EBPF.StepContext := { entry := entry }
 
-private def ebpf (words : Array UInt64) (E : ExprSet) (ctx : EBPF.StepContext := context)
+private def ebpf (words : Array UInt64) (E : List Expr) (ctx : EBPF.StepContext := context)
     (j : Nat := 0) : StepResult :=
   EBPF.ebpfStep (EBPF.decodeProgram words) ctx 70 j ⟨E, []⟩
 
-private def ebpfValue (name : String) (word : UInt64) (E : ExprSet)
+private def ebpfValue (name : String) (word : UInt64) (E : List Expr)
     (r expected : Nat) : Except String Unit := do
   let c ← one name (ebpf #[word, 0x95] E)
   let σ ← liftResult name (applyLocal ⟨E, []⟩ c.E_k c.P_k)
@@ -58,7 +58,7 @@ private def aluChecks : Except String Unit := do
     ("SDIV", 3, 1, 17, 3, 5), ("SREM", 9, 1, 17, 3, 2)]
   for cls in [4, 7] do
     for (name, code, off, a, b, expected) in rows do
-      let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 a)
+      let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 a)
         |>.insertEq (Reg.real64 1) (Term.C64 b)
       ebpfValue s!"ALU{cls}/{name}/reg" (raw (16 * code + 8 + cls) 0 1 off) E 0 expected
       ebpfValue s!"ALU{cls}/{name}/imm" (raw (16 * code + cls) 0 0 off b) E 0 expected
@@ -76,41 +76,41 @@ private def aluChecks : Except String Unit := do
         ("SREM-overflow", 9, 1, min, max, 0),
         ("SDIV-negative", 3, 1, negThree, 2, max),
         ("SREM-negative", 9, 1, negThree, 2, max)] do
-      let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 a)
+      let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 a)
         |>.insertEq (Reg.real64 1) (Term.C64 b)
       ebpfValue s!"ALU{cls}/{name}" (raw (16 * code + 8 + cls) 0 1 off) E 0 expected
     ebpfValue s!"ALU{cls}/NEG" (raw (0x80 + cls) 0 0)
-      (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1)) 0 max
-    ebpfValue s!"ALU{cls}/MOV-no-old-dst" (raw (0xb0 + cls) 0 0 0 7) .empty 0 7
+      (Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)) 0 max
+    ebpfValue s!"ALU{cls}/MOV-no-old-dst" (raw (0xb0 + cls) 0 0 0 7) Expr.nil 0 7
   ebpfValue "ALU32-clears-high-half" (raw 0x04 0 0 0 1)
-    (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 4294967295)) 0 0
+    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 4294967295)) 0 0
   ebpfValue "ALU32-shift-count-masked" (raw 0x6c 0 1)
-    (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1)
+    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)
       |>.insertEq (Reg.real64 1) (Term.C64 33)) 0 2
   ebpfValue "ALU64-shift-count-masked" (raw 0x6f 0 1)
-    (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1)
+    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)
       |>.insertEq (Reg.real64 1) (Term.C64 65)) 0 2
   ebpfValue "ALU32 projects both operands before division" (raw 0x3c 0 1)
-    (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 0x10000000f)
+    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 0x10000000f)
       |>.insertEq (Reg.real64 1) (Term.C64 0x100000003)) 0 5
   ebpfValue "MOV32 projects source without old destination" (raw 0xbc 0 1)
-    (ExprSet.empty.insertEq (Reg.real64 1) (Term.C64 0x100000001)) 0 1
+    (Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x100000001)) 0 1
   ebpfValue "MOV64 sign extends immediate" (raw 0xb7 0 0 0 0xffffffff)
-    .empty 0 18446744073709551615
+    Expr.nil 0 18446744073709551615
   ebpfValue "MOV32 zero extends immediate" (raw 0xb4 0 0 0 0xffffffff)
-    .empty 0 4294967295
+    Expr.nil 0 4294967295
   for (cls, bits, source, expected) in [
       (4, 8, 128, 4294967168), (4, 16, 32769, 4294934529),
       (7, 8, 128, 18446744073709551488), (7, 16, 32769, 18446744073709518849),
       (7, 32, 2147483649, 18446744071562067969)] do
     ebpfValue s!"MOVSX/{cls}/{bits}" (raw (0xb8 + cls) 0 1 (Int.ofNat bits))
-      (ExprSet.empty.insertEq (Reg.real64 1) (Term.C64 source)) 0 expected
+      (Expr.nil.insertEq (Reg.real64 1) (Term.C64 source)) 0 expected
   for (opcode, bits, expected) in [
       (0xd4, 16, 30600), (0xd4, 32, 1432778632), (0xd4, 64, 1234605616436508552),
       (0xdc, 16, 34935), (0xdc, 32, 2289526357), (0xdc, 64, 9833440827789222417),
       (0xd7, 16, 34935), (0xd7, 32, 2289526357), (0xd7, 64, 9833440827789222417)] do
     ebpfValue s!"END/{opcode}/{bits}" (raw opcode 0 0 0 bits)
-      (ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 0x1122334455667788)) 0 expected
+      (Expr.nil.insertEq (Reg.real64 0) (Term.C64 0x1122334455667788)) 0 expected
 
 private def jumpChecks : Except String Unit := do
   let rows : List (String × Nat × Rel × Rel × Bool × Bool) := [
@@ -131,7 +131,7 @@ private def jumpChecks : Except String Unit := do
           (3, 5, [4, 5, 10, 11, 12, 13].contains code)] do
         for registerSource in [false, true] do
           let opcode := 16 * code + cls + if registerSource then 8 else 0
-          let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 a)
+          let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 a)
             |>.insertEq (Reg.real64 1) (Term.C64 b)
           let word := raw opcode 0 (if registerSource then 1 else 0) 1
             (if registerSource then 0 else b)
@@ -143,20 +143,20 @@ private def jumpChecks : Except String Unit := do
             (if taken then .taken else .notTaken, .pos (if taken then 2 else 1),
               [.branch 1 (if taken then .taken else .notTaken) ⟨Term.C64 a, rel, Term.C64 b⟩])
     for (code, taken) in [(6, false), (7, false), (12, true), (13, true)] do
-      let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 18446744073709551615)
+      let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 18446744073709551615)
       let c ← one "signed-negative-jump" (ebpf #[raw (16 * code + cls) 0 0 1 1, 0x95, 0x95] E)
       expect s!"signed-negative-jump/{cls}/{code}" (c.dir, c.loc)
         (if taken then .taken else .notTaken, .pos (if taken then 2 else 1))
-  let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 4294967297)
+  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 4294967297)
   let c ← one "JMP32-low-view" (ebpf #[raw 0x16 0 0 1 1, 0x95, 0x95] E)
   expect "JMP32-low-view" c.dir .taken
   let c ← one "JMP64-high-view" (ebpf #[raw 0x15 0 0 1 1, 0x95, 0x95] E)
   expect "JMP64-high-view" c.dir .notTaken
-  let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 18446744073709551615)
+  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 18446744073709551615)
   let c ← one "JMP64 sign extends immediate"
     (ebpf #[raw 0x15 0 0 1 0xffffffff, 0x95, 0x95] E)
   expect "JMP64 sign extends immediate" (c.dir, c.loc) (.taken, .pos 2)
-  let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.V64 8)
+  let E := Expr.nil.insertEq (Reg.real64 0) (Term.V64 8)
     |>.insertEq (Reg.real64 1) (Term.C64 5)
   match ebpf #[raw 0x1d 0 1 1, 0x95, 0x95] E with
   | .reject reason => throw s!"symbolic JEQ rejected {reprStr reason}"
@@ -170,10 +170,10 @@ private def jumpChecks : Except String Unit := do
       let σ ← liftResult "symbolic JEQ compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
       expect "symbolic JEQ preserves full lhs binding" (σ.exprs.lookupEq (Reg.real64 0)) (some (Term.V64 8))
       expect "symbolic JEQ adds comparison constraint" σ.exprs.constraints [⟨Reg.real64 0, rel, Term.C64 5⟩]
-  let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 1)
+  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)
   let c ← one "known false prunes invalid taken target" (ebpf #[raw 0x15 0 0 99 7, 0x95] E)
   expect "known false prunes invalid taken target" (c.dir, c.loc) (.notTaken, .pos 1)
-  let E := ExprSet.empty.insertEq (Reg.real64 0) (Term.C64 7)
+  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 7)
   let c ← one "known true prunes invalid fallthrough"
     (ebpf #[0x95, raw 0x15 0 0 (-2) 7] E context 1)
   expect "known true prunes invalid fallthrough" (c.dir, c.loc) (.taken, .pos 0)
@@ -259,7 +259,7 @@ private def atomicChecks : Except String Unit := do
     (c.E_k.lookupEq (Reg.sw 0), c.E_k.lookupEq (Reg.real64 0))
     (some (Term.C32 10), some (Term.C64 10))
   let concreteContext : EBPF.StepContext := { entry := { entry with tSp := Term.C64 4096 } }
-  let E := ExprSet.empty.insertEq (Reg.real64 2) (Term.C64 4092)
+  let E := Expr.nil.insertEq (Reg.real64 2) (Term.C64 4092)
     |>.insertEq (Reg.sw 0) (Term.C32 10)
   let c ← one "XCHG base/source alias"
     (ebpf #[raw 0xc3 2 2 0 0xe1, 0x95] E concreteContext)
@@ -281,7 +281,7 @@ private def atomicChecks : Except String Unit := do
 private def rvWord (funct : Nat) : UInt32 :=
   UInt32.ofNat (0x02000033 + 9 * 1048576 + 8 * 32768 + funct * 4096 + 10 * 128)
 
-private def rv (words : Array UInt32) (E : ExprSet)
+private def rv (words : Array UInt32) (E : List Expr)
     (ctx : RV32.StepContext := {}) : StepResult :=
   RV32.inferStep (RV32.decodeProgram words) ctx 70 0 ⟨E, []⟩
 
@@ -292,11 +292,11 @@ private def rvMChecks : Except String Unit := do
     (4, .sdiv .w32 4294967295, 0), (5, .udiv .w32 4294967295, 1431655765),
     (6, .srem .w32, 4294967295), (7, .urem .w32, 0)]
   for (funct, op, expected) in rows do
-    let E := ExprSet.empty.insertEq (Reg.real32 8) (Term.C32 4294967295)
+    let E := Expr.nil.insertEq (Reg.real32 8) (Term.C32 4294967295)
       |>.insertEq (Reg.real32 9) (Term.C32 3)
     let c ← one s!"RV32-M/{funct}" (rv #[rvWord funct, 0x0001] E)
     expect s!"RV32-M/{funct}" (c.E_k.lookupEq (Reg.real32 10)) (some (Term.C32 expected))
-    let E := ExprSet.empty.insertEq (Reg.real32 8) (Term.V32 41)
+    let E := Expr.nil.insertEq (Reg.real32 8) (Term.V32 41)
       |>.insertEq (Reg.real32 9) (Term.V32 42)
     let c ← one s!"RV32-open-M/{funct}" (rv #[rvWord funct, 0x0001] E)
     expect s!"RV32-open-M/{funct}" (c.E_k.lookupEq (Reg.real32 10))
@@ -307,13 +307,13 @@ private def rvMChecks : Except String Unit := do
       (4, 2147483648, 4294967295, 2147483648),
       (6, 2147483648, 4294967295, 0),
       (4, 4294967293, 2, 4294967295), (6, 4294967293, 2, 4294967295)] do
-    let E := ExprSet.empty.insertEq (Reg.real32 8) (Term.C32 a)
+    let E := Expr.nil.insertEq (Reg.real32 8) (Term.C32 a)
       |>.insertEq (Reg.real32 9) (Term.C32 b)
     let c ← one "RV32-M boundary" (rv #[rvWord funct, 0x0001] E)
     expect s!"RV32-M boundary/{funct}/{a}/{b}" (c.E_k.lookupEq (Reg.real32 10))
       (some (Term.C32 expected))
-  reject "RV32-M missing source" (rv #[rvWord 0, 0x0001] .empty) .undefinedSrc
-  reject "RV32 privileged encoding" (rv #[0x30200073, 0x0001] .empty) .unsupported
+  reject "RV32-M missing source" (rv #[rvWord 0, 0x0001] Expr.nil) .undefinedSrc
+  reject "RV32 privileged encoding" (rv #[0x30200073, 0x0001] Expr.nil) .unsupported
 
 private def helperChecks : Except String Unit := do
   let root ← liftResult "helper entry" (EBPF.buildE0 entry)
@@ -344,8 +344,8 @@ private def helperChecks : Except String Unit := do
     expect "eBPF helper old observation frozen" c.P_k [.helper 70 kind (abi ++ tail)]
   let prefix64 := [Term.C64 42, key64, value64, Term.C64 0]
   for incomplete in [
-      { E with entries := E.entries.filter (fun e => e.reg != Reg.sw 0) },
-      { E with entries := E.entries.filter (fun e => e.reg != Reg.sw 1) }] do
+      E.filter (fun e => e.reg != Reg.sw 0),
+      E.filter (fun e => e.reg != Reg.sw 1)] do
     let c ← one "eBPF update incomplete"
       (ebpf #[raw 0x85 0 0 0 2, 0x95] incomplete { context with maps := maps })
     expect "eBPF update no half tail" c.P_k [.helper 70 .update prefix64]
@@ -353,12 +353,12 @@ private def helperChecks : Except String Unit := do
     (ebpf #[raw 0x85 0 0 0 2, 0x95] E { context with maps := maps ++ maps })
   expect "eBPF ambiguous layout prefix" c.P_k [.helper 70 .update prefix64]
   let c ← one "eBPF delete missing key" (ebpf #[raw 0x85 0 0 0 3, 0x95]
-    { E with entries := E.entries.filter (fun e => e.reg != Reg.sw 1) }
+    (E.filter (fun e => e.reg != Reg.sw 1))
     { context with maps := maps })
   expect "eBPF delete missing key prefix" c.P_k [.helper 70 .delete [Term.C64 42, key64]]
   let key32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 3]
   let value32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 4]
-  let E := ExprSet.empty.insertEq (Reg.real32 2) (Term.V32 0)
+  let E := Expr.nil.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 11) (Term.C32 42)
     |>.insertEq (Reg.real32 12) key32
     |>.insertEq (Reg.real32 13) value32
@@ -377,7 +377,7 @@ private def helperChecks : Except String Unit := do
     expect s!"RV helper full tail/{id}" c.P_k [.helper 70 kind (abi ++ tail)]
     expect s!"RV helper return ABI-only/{id}" (c.E_k.lookupEq (Reg.real32 10))
       (some (.app .w32 (.externalResult 70 0) (Term.C32 id :: abi)))
-    let missing := { state with entries := state.entries.filter (fun e => e.reg != Reg.sw 8589934596) }
+    let missing := state.filter (fun e => e.reg != Reg.sw 8589934596)
     let c ← one "RV helper incomplete" (rv #[0x100000ef, 0x0001] missing ctx)
     expect "RV helper no partial tail" c.P_k [.helper 70 kind abi]
   let missingValue : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 7]
@@ -411,7 +411,19 @@ private def solverChecks : Except String Unit := do
     ("R6-mul", .app .w32 (.mullo .w32) [x, Term.C32 1], x, 9),
     ("R6-shl", .app .w32 (.shl .w32) [x, Term.C32 0], x, 9),
     ("R6-lshr", .app .w32 (.lshr .w32) [x, Term.C32 0], x, 9),
-    ("R6-ashr", .app .w32 (.ashr .w32) [x, Term.C32 0], x, 9)]
+    ("R6-ashr", .app .w32 (.ashr .w32) [x, Term.C32 0], x, 9),
+    ("R8-shl", .app .w32 (.shl .w32) [x, Term.C32 2],
+      .app .w32 (.mullo .w32) [x, Term.C32 4], 36),
+    ("R8-lshr", .app .w32 (.lshr .w32) [x, Term.C32 1],
+      .app .w32 (.udiv .w32 0) [x, Term.C32 2], 4),
+    ("R8-shl-width", .app .w32 (.shl .w32) [x, Term.C32 32], x, 9),
+    ("R9-disjoint-or", .app .w32 (.or 32) [
+        .app .w32 (.and 32) [x, Term.C32 255],
+        .app .w32 (.shl .w32) [.app .w32 (.and 32) [y, Term.C32 255], Term.C32 8]],
+      .app .w32 (.add .w32) [
+        .app .w32 (.mullo .w32) [
+          .app .w32 (.and 32) [y, Term.C32 255], Term.C32 256],
+        .app .w32 (.and 32) [x, Term.C32 255]], 3337)]
   let ν : Var → Nat := fun v => if v.name == 1 then 9 else 13
   let total : ExternalInterpretation := {
     externalResult := fun _ _ _ _ => some 99, inputByte := fun _ _ _ => some 171 }
@@ -429,6 +441,10 @@ private def solverChecks : Except String Unit := do
   let untouched : List (String × Term) := [
     ("no-open-subtree-fold", .app .w32 (.mullo .w32)
       [x, .app .w32 (.add .w32) [Term.C32 2, Term.C32 3]]),
+    ("no-symbolic-shl", .app .w32 (.shl .w32) [x, y]),
+    ("no-overlapping-or", .app .w32 (.or 32) [
+      .app .w32 (.and 32) [x, Term.C32 255],
+      .app .w32 (.and 32) [y, Term.C32 255]]),
     ("no-distributivity", .app .w32 (.mullo .w32)
       [x, .app .w32 (.add .w32) [y, Term.C32 1]]),
     ("no-partial-or-unit", .app .w32 (.or 8) [x, Term.C32 0]),
@@ -577,7 +593,7 @@ private def expectStep (name response location : String) (bindings : List (Reg �
   let preds ← field successor "predicates"
   let some state := parseSemStateJson exprs.compress preds.compress
     | throw s!"{name}: invalid successor state"
-  expect (name ++ "/binding domain") state.exprs.entries.length bindings.length
+  expect (name ++ "/binding domain") state.exprs.bindings.length bindings.length
   for (reg, term) in bindings do
     expect (name ++ s!"/{reprStr reg}") (state.exprs.lookupEq reg) (some term)
   expect (name ++ "/constraints") state.exprs.constraints []
@@ -617,8 +633,12 @@ private def ffiChecks : Except String Unit := do
   for (name, words, j, E, reason) in failures do
     expectFailure ("String FFI reject/" ++ name) (call words 70 j E "[]") reason
   let E := "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"1\"},{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"2\"}]"
-  expectFailure "String FFI malformed state rejected" (call #[raw 0xb7 0 0 0 7, 0x95] 70 0 E "[]")
-    "LocalReject"
+  let some dual := parseSemStateJson E "[]" | throw "String FFI dual eq: parse failed"
+  expect "String FFI dual eq value" (dual.exprs.lookupEq (Reg.real64 0)) (some (Term.C64 1))
+  expect "String FFI dual eq constraint" dual.exprs.constraints
+    [⟨Reg.real64 0, .eq, Term.C64 2⟩]
+  expectStep "String FFI MOV after dual eq" (call #[raw 0xb7 0 0 0 7, 0x95] 70 0 E "[]")
+    "1" [(Reg.real64 0, Term.C64 7)] []
   let E := "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"7\"}]"
   expectStep "String FFI EXIT frozen return" (call #[0x95] 70 0 E "[]")
     "exit" [(Reg.real64 0, Term.C64 7)] [.ret (Term.C64 7)]
@@ -682,16 +702,13 @@ private def regressionChecks : Except String Unit := do
       pure (some rs)
   expect "just_tx eBPF concrete TX return" (terminalReturns.any (·.contains (Term.C64 3))) true
   let r ← Json.parse (RV32.exportRv32BoundWordsSnapshot rvFixture
-    "{\"base\":1077412352,\"helperAddress\":1077411840,\"returnAddress\":8192,\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}" 60 60)
-  expect "just_tx RV frontier status" (← strField r "status") "fail"
-  expect "just_tx RV frontier reason" (← strField r "reason") "UnboundTarget"
-  let failedRef ← (← field r "failed").getNat?
-  let nodes ← arrField r "nodes"
-  let failed ← nodes.toList.findM? fun n => do
-    pure ((← (← field n "id").getNat?) == failedRef)
-  match failed with
-  | none => throw s!"just_tx RV frontier: failed reference {failedRef} absent at raw slot 34"
-  | some n => expect "just_tx RV frontier slot" (← strField n "loc") "34"
+    "{\"base\":1077412352,\"helperAddress\":1077411840,\"returnAddress\":8192,\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}" 400 400)
+  expect "just_tx RV status" (← strField r "status") "complete"
+  expectJson "just_tx RV reason" (← field r "reason") Json.null
+  let rvNodes ← arrField r "nodes"
+  expect "just_tx RV node count" rvNodes.size 146
+  let reached34 ← rvNodes.toList.anyM fun n => do pure ((← strField n "loc") == "34")
+  expect "just_tx RV skips the old unbound branch" reached34 false
 
 def run : IO UInt32 := do
   let groups : List (String × (Unit → Except String Unit)) := [
@@ -701,7 +718,7 @@ def run : IO UInt32 := do
     ("atomic old-state RMW, DW carry, rejection domains", fun _ => atomicChecks),
     ("RV32 open/closed M and ISA division policies", fun _ => rvMChecks),
     ("both helper ABIs complete tails and prefix fallback", fun _ => helperChecks),
-    ("solve R1-R6, invalid rewrites, explicit/partial theta", fun _ => solverChecks),
+    ("solve R1-R6 and R8-R9, invalid rewrites, explicit/partial theta", fun _ => solverChecks),
     ("raw/canonical operator parameters and numeric results", fun _ => operatorChecks),
     ("alignment collision, ambiguity, complements, swap", fun _ => alignmentChecks),
     ("String FFI semantic states and all-or-nothing rejection", fun _ => ffiChecks),

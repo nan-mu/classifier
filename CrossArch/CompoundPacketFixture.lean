@@ -18,20 +18,20 @@ private def ihl (w : Width) : Term :=
     (shlStar w (zStar 4 w 32 reduced) (Term.C w 2))
 
 private def rvAddress : Term := addStar .w32 data (ihl .w32)
-private def rvBase : ExprSet :=
+private def rvBase : List Expr :=
   let fields := [data, ending, Term.C32 0, Term.C32 0, Term.C32 0, Term.C32 0]
-  let E := fields.zipIdx.foldl (fun E (t, j) => E.insertEq (Reg.ctx32 j) t) ExprSet.empty
+  let E := fields.zipIdx.foldl (fun E (t, j) => E.insertEq (Reg.ctx32 j) t) Expr.nil
   E.insertEq (Reg.packet 0 0) byte
     |>.insertEq (Reg.real32 12) rvAddress
     |>.insertEq (Reg.real32 13) (addStar .w32 rvAddress (Term.C32 1))
 
-private def rvChecked : ExprSet :=
+private def rvChecked : List Expr :=
   rvBase.insertConstraint ⟨Reg.real32 13, .leu, ending⟩
 
 private def params : EntryParams :=
   ⟨Term.V64 1, Term.V64 0, data, 128, 0, 0, 0⟩
 
-private def ebBase : Option (ExprSet × Term × Term) := do
+private def ebBase : Option (List Expr × Term × Term) := do
   let initial ← (buildE0 params).toOption
   let E := initial.exprs.insertEq (Reg.packet 0 0) byte
   let root ← packetRoot params E
@@ -40,7 +40,7 @@ private def ebBase : Option (ExprSet × Term × Term) := do
   pure (E.insertEq (Reg.real64 2) address
     |>.insertEq (Reg.real64 3) (addStar .w64 address (Term.C64 1)), address, endTerm)
 
-private def accesses : Option (PacketAccess × PacketAccess × ExprSet) := do
+private def accesses : Option (PacketAccess × PacketAccess × List Expr) := do
   let r ← RV32.packetBindingAt rvChecked rvAddress 0 1
   let (base, address, endTerm) ← ebBase
   let E := base.insertConstraint ⟨Reg.real64 3, .leu, endTerm⟩

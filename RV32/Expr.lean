@@ -23,13 +23,13 @@ def cAddi4spnImm (nzimm : BitVec 8) : Nat := nzimm.toNat
 def cAddi16spImm (imm : BitVec 6) : Nat := sextBits 10 (imm.toNat <<< 4)
 def cLuiU (imm : BitVec 6) : Nat := M 32 (s 6 imm.toNat * Int.ofNat (1 <<< 12))
 
-def readReg (Eg : ExprSet) (r : regidx) : Option Term :=
+def readReg (Eg : List Expr) (r : regidx) : Option Term :=
   if isX0 r then some (Term.C32 0)
   else Eg.lookupEq (xReg r)
 
-def readPC (Eg : ExprSet) : Option Term := Eg.lookupEq pcReg
+def readPC (Eg : List Expr) : Option Term := Eg.lookupEq pcReg
 
-def checkX0 (Eg : ExprSet) : Bool :=
+def checkX0 (Eg : List Expr) : Bool :=
   match Eg.lookupEq (xReg zreg) with
   | none => true
   | some t =>
@@ -37,14 +37,14 @@ def checkX0 (Eg : ExprSet) : Bool :=
       | some 0 => true
       | _ => false
 
-def assign (rd : regidx) (t : Term) : ExprSet :=
-  if isX0 rd then ExprSet.empty
-  else ExprSet.empty.insertEq (xReg rd) (solve t)
+def assign (rd : regidx) (t : Term) : List Expr :=
+  if isX0 rd then Expr.nil
+  else Expr.nil.insertEq (xReg rd) (solve t)
 
-def guardEg (Eg : ExprSet) : Bool :=
+def guardEg (Eg : List Expr) : Bool :=
   Eg.keysUnique && Eg.wellTyped && checkX0 Eg
 
-def exprUTYPE (Eg : ExprSet) (imm : BitVec 20) (rd : regidx) (op : uop) : Option ExprSet :=
+def exprUTYPE (Eg : List Expr) (imm : BitVec 20) (rd : regidx) (op : uop) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     let U := uimmU32 imm
@@ -55,7 +55,7 @@ def exprUTYPE (Eg : ExprSet) (imm : BitVec 20) (rd : regidx) (op : uop) : Option
         | none => none
         | some tπ => some (assign rd (addStar .w32 tπ (Term.C32 U)))
 
-def exprITYPE (Eg : ExprSet) (imm : BitVec 12) (rs1 rd : regidx) (op : iop) : Option ExprSet :=
+def exprITYPE (Eg : List Expr) (imm : BitVec 12) (rs1 rd : regidx) (op : iop) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1 with
@@ -72,7 +72,7 @@ def exprITYPE (Eg : ExprSet) (imm : BitVec 12) (rs1 rd : regidx) (op : iop) : Op
           | .XORI => xorStar 32 .w32 ta I
         some (assign rd t)
 
-def exprSHIFTIOP (Eg : ExprSet) (shamt : BitVec 6) (rs1 rd : regidx) (op : sop) : Option ExprSet :=
+def exprSHIFTIOP (Eg : List Expr) (shamt : BitVec 6) (rs1 rd : regidx) (op : sop) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1 with
@@ -86,7 +86,7 @@ def exprSHIFTIOP (Eg : ExprSet) (shamt : BitVec 6) (rs1 rd : regidx) (op : sop) 
           | .SRAI => ashrStar .w32 ta k
         some (assign rd t)
 
-def exprRTYPE (Eg : ExprSet) (rs2 rs1 rd : regidx) (op : rop) : Option ExprSet :=
+def exprRTYPE (Eg : List Expr) (rs2 rs1 rd : regidx) (op : rop) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1, readReg Eg rs2 with
@@ -106,7 +106,7 @@ def exprRTYPE (Eg : ExprSet) (rs2 rs1 rd : regidx) (op : rop) : Option ExprSet :
         some (assign rd t)
     | _, _ => none
 
-def exprMUL (Eg : ExprSet) (rs2 rs1 rd : regidx) (mop : mul_op) : Option ExprSet :=
+def exprMUL (Eg : List Expr) (rs2 rs1 rd : regidx) (mop : mul_op) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1, readReg Eg rs2 with
@@ -121,7 +121,7 @@ def exprMUL (Eg : ExprSet) (rs2 rs1 rd : regidx) (mop : mul_op) : Option ExprSet
         some (assign rd t)
     | _, _ => none
 
-def exprDIV (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option ExprSet :=
+def exprDIV (Eg : List Expr) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1, readReg Eg rs2 with
@@ -131,7 +131,7 @@ def exprDIV (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option Ex
         some (assign rd (star .w32 op [ta, tb]))
     | _, _ => none
 
-def exprREM (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option ExprSet :=
+def exprREM (Eg : List Expr) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1, readReg Eg rs2 with
@@ -140,21 +140,21 @@ def exprREM (Eg : ExprSet) (rs2 rs1 rd : regidx) (isUnsigned : Bool) : Option Ex
         some (assign rd (star .w32 op [ta, tb]))
     | _, _ => none
 
-def exprJAL (Eg : ExprSet) (rd : regidx) : Option ExprSet :=
+def exprJAL (Eg : List Expr) (rd : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
-  else if isX0 rd then some ExprSet.empty
+  else if isX0 rd then some Expr.nil
   else
     match readPC Eg with
     | none => none
     | some tπ => some (assign rd (addStar .w32 tπ (Term.C32 4)))
 
-def exprJALR (Eg : ExprSet) (rs1 rd : regidx) : Option ExprSet :=
+def exprJALR (Eg : List Expr) (rs1 rd : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readReg Eg rs1 with
     | none => none
     | some _ =>
-        if isX0 rd then some ExprSet.empty
+        if isX0 rd then some Expr.nil
         else
           match readPC Eg with
           | none => none
@@ -162,9 +162,9 @@ def exprJALR (Eg : ExprSet) (rs1 rd : regidx) : Option ExprSet :=
 
 /-- Context binding is the lowest start of six consecutive Context32 equalities.
 Address-to-slot Predicates and other resource access rules remain undefined. -/
-private def ctxBaseAlpha (Eg : ExprSet) : Option Nat := Id.run do
+private def ctxBaseAlpha (Eg : List Expr) : Option Nat := Id.run do
   let mut base : Option Nat := none
-  for e in Eg.entries do
+  for e in Eg do
     if e.reg.kind == .context && e.reg.width == .w32 && e.rel == .eq then
       let α := e.reg.alpha
       let complete := (List.range 6).all fun j =>
@@ -214,8 +214,8 @@ private def affineAddress : Term → Option (Option Nat × Nat)
   some (some 4, 1)
 
 /-- Word-only context load. Resolve the access before discarding an x0 destination. -/
-def exprLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
-    (boundCtx : Option Term := none) : Option ExprSet := do
+def exprLOAD (Eg : List Expr) (rs1 rd : regidx) (offset : Nat)
+    (boundCtx : Option Term := none) : Option (List Expr) := do
   if !guardEg Eg || offset % 4 != 0 || offset ≥ 24 then none
   else
     let source ← readReg Eg rs1
@@ -230,7 +230,7 @@ def exprLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
 
 /-- SP and its affine aliases bind aligned word slots. Symbolic alignment is an
 entry-contract premise; concrete addresses are checked. No heap is inferred. -/
-private def stackSlotAt (Eg : ExprSet) (base : Term) (offset : Nat) : Option Reg := do
+private def stackSlotAt (Eg : List Expr) (base : Term) (offset : Nat) : Option Reg := do
   let tsp ← readReg Eg sp
   let (root, off) ← affineAddress base
   let (spRoot, spOff) ← affineAddress tsp
@@ -244,25 +244,25 @@ private def stackSlotAt (Eg : ExprSet) (base : Term) (offset : Nat) : Option Reg
       if root.isNone && affineAddress base != affineAddress tsp && (Eg.lookupEq slot).isNone then none
       else some slot
 
-def stackSlot (Eg : ExprSet) (rs1 : regidx) (offset : Nat) : Option Reg := do
+def stackSlot (Eg : List Expr) (rs1 : regidx) (offset : Nat) : Option Reg := do
   let base ← readReg Eg rs1
   stackSlotAt Eg base offset
 
-def exprStackLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat) : Option ExprSet := do
+def exprStackLOAD (Eg : List Expr) (rs1 rd : regidx) (offset : Nat) : Option (List Expr) := do
   if !guardEg Eg then none
   else
     let slot ← stackSlot Eg rs1 offset
     let t ← Eg.lookupEq slot
     if t.width != .w32 then none else some (assign rd t)
 
-def exprWordLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset : Nat)
-    (boundCtx : Option Term := none) : Option ExprSet :=
+def exprWordLOAD (Eg : List Expr) (rs1 rd : regidx) (offset : Nat)
+    (boundCtx : Option Term := none) : Option (List Expr) :=
   match exprStackLOAD Eg rs1 rd offset with
   | some Ei => some Ei
   | none => exprLOAD Eg rs1 rd offset boundCtx
 
 /-- Legacy constant displacement binding, preserving its existing entry interval domain. -/
-private def constantPacketBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat) :
+private def constantPacketBindingAt (Eg : List Expr) (source : Term) (offset width : Nat) :
     Option PacketAccess := do
   let α ← ctxBaseAlpha Eg
   let data ← Eg.lookupEq (Reg.ctx32 α)
@@ -284,7 +284,7 @@ private def constantPacketBindingAt (Eg : ExprSet) (source : Term) (offset width
         if root.isNone then none else some ⟨α, o, width, .little, some data, none⟩
 
 /-- Symbolic offsets require a packet-only format and a passed data_end constraint. -/
-def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat)
+def packetBindingAt (Eg : List Expr) (source : Term) (offset width : Nat)
     (preds : List Predicate := []) : Option PacketAccess :=
   (constantPacketBindingAt Eg source offset width).orElse fun _ => do
     if !Eg.keysUnique || !Eg.wellTyped || ![1, 2, 4, 8].contains width then none else
@@ -298,13 +298,13 @@ def packetBindingAt (Eg : ExprSet) (source : Term) (offset width : Nat)
         ⟨α, displacement.plus (.c offset), width, α + 1, strict, 0, checkedEnd⟩
       pure ⟨α, 0, width, .little, some data, some compound⟩
 
-def packetBinding (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+def packetBinding (Eg : List Expr) (rs1 : regidx) (offset width : Nat)
     (preds : List Predicate := []) : Option PacketAccess := do
   let source ← readReg Eg rs1
   packetBindingAt Eg source offset width preds
 
-def exprPacketLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
-    (isUnsigned : Bool) (preds : List Predicate := []) : Option ExprSet := do
+def exprPacketLOAD (Eg : List Expr) (rs1 rd : regidx) (offset width : Nat)
+    (isUnsigned : Bool) (preds : List Predicate := []) : Option (List Expr) := do
   if !guardEg Eg then none
   else
     let access ← packetBinding Eg rs1 offset width preds
@@ -312,7 +312,7 @@ def exprPacketLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
     some (assign rd result.value)
 
 /-- Resolve a subfield against the same canonical word used by aligned spills. -/
-private def stackAccessAt (Eg : ExprSet) (base : Term) (offset width : Nat) : Option CellAccess := do
+private def stackAccessAt (Eg : List Expr) (base : Term) (offset width : Nat) : Option CellAccess := do
   let (_, off) ← affineAddress base
   let within := MNat 32 (off + offset) % 4
   if within + width > 4 then none
@@ -320,12 +320,12 @@ private def stackAccessAt (Eg : ExprSet) (base : Term) (offset width : Nat) : Op
     let slot ← stackSlotAt Eg base (MNat 32 (offset + (1 <<< 32) - within))
     some ⟨slot, 8 * within, 8 * width⟩
 
-def stackAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option CellAccess := do
+def stackAccess (Eg : List Expr) (rs1 : regidx) (offset width : Nat) : Option CellAccess := do
   let base ← readReg Eg rs1
   stackAccessAt Eg base offset width
 
 /-- Fixed context fields use the entry context binding, independently of mutable a0. -/
-private def contextAccessAt (Eg : ExprSet) (source : Term) (offset width : Nat)
+private def contextAccessAt (Eg : List Expr) (source : Term) (offset width : Nat)
     (boundCtx : Option Term) : Option CellAccess := do
   let ctx ← boundCtx.orElse (fun _ => Eg.lookupEq (Reg.real32 10))
   let (root, off) ← affineAddress source
@@ -337,7 +337,7 @@ private def contextAccessAt (Eg : ExprSet) (source : Term) (offset width : Nat)
     let α ← ctxBaseAlpha Eg
     some ⟨Reg.ctx32 (α + relative / 4), 8 * within, 8 * width⟩
 
-def contextAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+def contextAccess (Eg : List Expr) (rs1 : regidx) (offset width : Nat)
     (boundCtx : Option Term := none) : Option CellAccess := do
   let source ← readReg Eg rs1
   contextAccessAt Eg source offset width boundCtx
@@ -377,8 +377,8 @@ theorem lookupAddress_ne_zero (source : Term) (event offset : Nat) (map : Term)
 /-- Resolve one event-local Map word. Word zero must retain its helper introduction.
 Later untouched words use externalResult event (1 + wordBase / 4) [C32 1]; these
 closed content terms remain opaque under eval. No ELF value size is inferred. -/
-private def mapAccessInputsAt (Eg : ExprSet) (source : Term) (offset width : Nat)
-    (needsOld : Bool) : Option (CellAccess × ExprSet) := do
+private def mapAccessInputsAt (Eg : List Expr) (source : Term) (offset width : Nat)
+    (needsOld : Bool) : Option (CellAccess × List Expr) := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
   else
     let (event, displacement, _) ← lookupAddress (solve source)
@@ -393,24 +393,24 @@ private def mapAccessInputsAt (Eg : ExprSet) (source : Term) (offset width : Nat
         let reg := Reg.mapWord event wordBase
         let access : CellAccess := ⟨reg, 8 * within, 8 * width⟩
         match Eg.lookupEq reg with
-        | some old => if old.width != .w32 then none else some (access, .empty)
+        | some old => if old.width != .w32 then none else some (access, Expr.nil)
         | none =>
-          if !needsOld then some (access, .empty)
+          if !needsOld then some (access, Expr.nil)
           else if wordBase == 0 || !(Eg.forReg reg).isEmpty then none
           else
             let content := star .w32 (.externalResult event (1 + wordBase / 4)) [Term.C32 1]
-            some (access, ExprSet.empty.insertEq reg content)
+            some (access, Expr.nil.insertEq reg content)
 
-private def mapAccessInputs (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
-    (needsOld : Bool) : Option (CellAccess × ExprSet) := do
+private def mapAccessInputs (Eg : List Expr) (rs1 : regidx) (offset width : Nat)
+    (needsOld : Bool) : Option (CellAccess × List Expr) := do
   let source ← readReg Eg rs1
   mapAccessInputsAt Eg source offset width needsOld
 
 /-- Address resolution alone does not materialize missing content. -/
-def mapAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) : Option CellAccess :=
+def mapAccess (Eg : List Expr) (rs1 : regidx) (offset width : Nat) : Option CellAccess :=
   (mapAccessInputs Eg rs1 offset width false).map Prod.fst
 
-def exprSizedLOADEffects (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
+def exprSizedLOADEffects (Eg : List Expr) (rs1 rd : regidx) (offset width : Nat)
     (isUnsigned : Bool) (boundCtx : Option Term := none)
     (preds : List Predicate := []) : Option ExprEffect := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
@@ -420,7 +420,7 @@ def exprSizedLOADEffects (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
     match cell with
     | some a =>
       let value ← a.read Eg .w32 isUnsigned
-      some ⟨.empty, assign rd value⟩
+      some ⟨Expr.nil, assign rd value⟩
     | none =>
       match mapAccessInputs Eg rs1 offset width true with
       | some (access, inputs) =>
@@ -431,8 +431,8 @@ def exprSizedLOADEffects (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
         let read ← access.read Eg .w32 isUnsigned
         some ⟨read.inputs, assign rd read.value⟩
 
-def exprSizedLOAD (Eg : ExprSet) (rs1 rd : regidx) (offset width : Nat)
-    (isUnsigned : Bool) (boundCtx : Option Term := none) : Option ExprSet := do
+def exprSizedLOAD (Eg : List Expr) (rs1 rd : regidx) (offset width : Nat)
+    (isUnsigned : Bool) (boundCtx : Option Term := none) : Option (List Expr) := do
   let effect ← exprSizedLOADEffects Eg rs1 rd offset width isUnsigned boundCtx
   some effect.updates
 
@@ -445,7 +445,7 @@ private inductive BufferByte where
   | cell (access : CellAccess)
   | packet (access : PacketAccess)
 
-private def bufferByteAt (Eg : ExprSet) (addr : Term) (offset : Nat)
+private def bufferByteAt (Eg : List Expr) (addr : Term) (offset : Nat)
     (boundCtx : Option Term) : BufferOrigin → Option BufferByte
   | .stack => (stackAccessAt Eg addr offset 1).map BufferByte.cell
   | .context => do
@@ -458,14 +458,14 @@ private def bufferByteAt (Eg : ExprSet) (addr : Term) (offset : Nat)
   | .packet => (packetBindingAt Eg addr offset 1).map BufferByte.packet
 
 /-- The cell-byte branch used by complete-buffer freezing. -/
-def freezeCellByte (access : CellAccess) (Eg : ExprSet) : Option Term :=
+def freezeCellByte (access : CellAccess) (Eg : List Expr) : Option Term :=
   (access.read Eg .w32 true).map solve
 
 /-- The packet-byte branch uses the same read materialization as ordinary loads. -/
-def freezePacketByte (access : PacketAccess) (Eg : ExprSet) : Option Term :=
+def freezePacketByte (access : PacketAccess) (Eg : List Expr) : Option Term :=
   (access.read Eg .w32 true).map (fun result => solve result.value)
 
-theorem freezeCellByte_low8 (access : CellAccess) (Eg : ExprSet) (byte : Term)
+theorem freezeCellByte_low8 (access : CellAccess) (Eg : List Expr) (byte : Term)
     (hb : access.bits = 8) (h : freezeCellByte access Eg = some byte) :
     ∃ stored, Eg.lookupEq access.reg = some stored ∧
       byte = solve (zStar 8 .w32 access.reg.width.bits
@@ -477,7 +477,7 @@ theorem freezeCellByte_low8 (access : CellAccess) (Eg : ExprSet) (byte : Term)
     simp only [freezeCellByte, hr, Option.map_some, Option.some.injEq] at h
     exact ⟨stored, hs, h ▸ congrArg solve hv⟩
 
-theorem freezePacketByte_low8 (access : PacketAccess) (Eg : ExprSet) (byte : Term)
+theorem freezePacketByte_low8 (access : PacketAccess) (Eg : List Expr) (byte : Term)
     (hb : access.bytes = 1) (h : freezePacketByte access Eg = some byte) :
     ∃ stored, byte = solve
       (orStar 32 .w32 (Term.C32 0)
@@ -489,7 +489,7 @@ theorem freezePacketByte_low8 (access : PacketAccess) (Eg : ExprSet) (byte : Ter
     simp only [freezePacketByte, hr, Option.map_some, Option.some.injEq] at h
     exact ⟨stored, h ▸ congrArg solve hs⟩
 
-private def BufferByte.read (byte : BufferByte) (Eg : ExprSet) : Option Term :=
+private def BufferByte.read (byte : BufferByte) (Eg : List Expr) : Option Term :=
   match byte with
   | .cell access => freezeCellByte access Eg
   | .packet access => freezePacketByte access Eg
@@ -498,7 +498,7 @@ private def BufferByte.read (byte : BufferByte) (Eg : ExprSet) : Option Term :=
 Map buffers require their lookup's unique layout and a nonwrapping value range.
 Context requires the explicit entry binding. Packet bytes may materialize
 `inputByte` terms via `PacketAccess.read` when `inputBase` is bound. -/
-def readBufferBytes (Eg : ExprSet) (addr : Term) (n : Nat) (maps : List MapLayout)
+def readBufferBytes (Eg : List Expr) (addr : Term) (n : Nat) (maps : List MapLayout)
     (boundCtx : Option Term := none) : Option (List Term) := do
   if !guardEg Eg || addr.width != .w32 then none
   else
@@ -527,7 +527,7 @@ def readBufferBytes (Eg : ExprSet) (addr : Term) (n : Nat) (maps : List MapLayou
 #guard
   (let spTerm : Term := Term.V32 0
    let slot := Reg.sw ((1 <<< 32) + (1 <<< 32) + M 32 (-16))
-   let E := ExprSet.empty
+   let E := Expr.nil
      |>.insertEq (Reg.real32 2) spTerm
      |>.insertEq slot (Term.C32 0x01020304)
    let addr : Term := .app .w32 (.id .w32)
@@ -538,14 +538,14 @@ def readBufferBytes (Eg : ExprSet) (addr : Term) (n : Nat) (maps : List MapLayou
 for a sized store/load. The Map term is the third component of `lookupAddress`
 (provenance of the pointer); callers that emit MapWrite must reject when it
 disagrees with the frozen-key observation Map. -/
-def mapElementAccess (Eg : ExprSet) (rs1 : regidx) (offset width : Nat) :
+def mapElementAccess (Eg : List Expr) (rs1 : regidx) (offset width : Nat) :
     Option (NodeId × Nat × Term × CellAccess) := do
   let (access, _) ← mapAccessInputs Eg rs1 offset width false
   let source ← readReg Eg rs1
   let (event, displacement, mapTerm) ← lookupAddress (solve source)
   some (event, MNat 32 (displacement + offset), mapTerm, access)
 
-theorem mapElementAccess_preimage (Eg : ExprSet) (rs1 : regidx) (offset width : Nat)
+theorem mapElementAccess_preimage (Eg : List Expr) (rs1 : regidx) (offset width : Nat)
     (event elementOff : Nat) (map : Term) (access : CellAccess)
     (h : mapElementAccess Eg rs1 offset width = some (event, elementOff, map, access)) :
     ∃ source displacement, readReg Eg rs1 = some source ∧
@@ -557,7 +557,7 @@ theorem mapElementAccess_preimage (Eg : ExprSet) (rs1 : regidx) (offset width : 
 
 /-- Local value effects alone do not authorize a resource observation. Map resolution
 retains lookup identity; frozen key bytes are Predicate-owned when Meta supplies layout. -/
-def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
+def exprSTOREEffects (Eg : List Expr) (rs1 rs2 : regidx) (offset width : Nat)
     (preds : List Predicate := []) : Option ExprEffect := do
   if !guardEg Eg || !(width == 1 || width == 2 || width == 4) then none
   else
@@ -566,7 +566,7 @@ def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
     else match stackAccess Eg rs1 offset width with
     | some a =>
       let updates ← a.write Eg value
-      some ⟨.empty, updates⟩
+      some ⟨Expr.nil, updates⟩
     | none =>
       match mapAccessInputs Eg rs1 offset width (width != 4) with
       | some (access, inputs) =>
@@ -575,16 +575,16 @@ def exprSTOREEffects (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat)
       | none =>
         let access ← packetBinding Eg rs1 offset width preds
         let updates ← access.write Eg value
-        some ⟨.empty, updates⟩
+        some ⟨Expr.nil, updates⟩
 
-def exprSTORE (Eg : ExprSet) (rs1 rs2 : regidx) (offset width : Nat) : Option ExprSet := do
+def exprSTORE (Eg : List Expr) (rs1 rs2 : regidx) (offset width : Nat) : Option (List Expr) := do
   let effect ← exprSTOREEffects Eg rs1 rs2 offset width
   some effect.updates
 
-def exprEmpty (Eg : ExprSet) : Option ExprSet := if guardEg Eg then some ExprSet.empty else none
-def exprReject : Option ExprSet := none
+def exprEmpty (Eg : List Expr) : Option (List Expr) := if guardEg Eg then some Expr.nil else none
+def exprReject : Option (List Expr) := none
 
-def exprC_ADDI4SPN (Eg : ExprSet) (rdc : cregidx) (nzimm : BitVec 8) : Option ExprSet :=
+def exprC_ADDI4SPN (Eg : List Expr) (rdc : cregidx) (nzimm : BitVec 8) : Option (List Expr) :=
   if !guardEg Eg then none
   else if nzimm.toNat == 0 then none
   else
@@ -593,19 +593,19 @@ def exprC_ADDI4SPN (Eg : ExprSet) (rdc : cregidx) (nzimm : BitVec 8) : Option Ex
     | some tsp =>
         some (assign (creg2reg_idx rdc) (addStar .w32 tsp (Term.C32 (cAddi4spnImm nzimm))))
 
-def exprC_ADDI (Eg : ExprSet) (imm : BitVec 6) (rsd : regidx) : Option ExprSet :=
+def exprC_ADDI (Eg : List Expr) (imm : BitVec 6) (rsd : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
-  else if isX0 rsd then some ExprSet.empty
+  else if isX0 rsd then some Expr.nil
   else
     match readReg Eg rsd with
     | none => none
     | some td => some (assign rsd (addStar .w32 td (Term.C32 (cImm6 imm))))
 
-def exprC_LI (Eg : ExprSet) (imm : BitVec 6) (rd : regidx) : Option ExprSet :=
+def exprC_LI (Eg : List Expr) (imm : BitVec 6) (rd : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
   else some (assign rd (Term.C32 (cImm6 imm)))
 
-def exprC_ADDI16SP (Eg : ExprSet) (imm : BitVec 6) : Option ExprSet :=
+def exprC_ADDI16SP (Eg : List Expr) (imm : BitVec 6) : Option (List Expr) :=
   if !guardEg Eg then none
   else if imm.toNat == 0 then none
   else
@@ -613,26 +613,26 @@ def exprC_ADDI16SP (Eg : ExprSet) (imm : BitVec 6) : Option ExprSet :=
     | none => none
     | some tsp => some (assign sp (addStar .w32 tsp (Term.C32 (cAddi16spImm imm))))
 
-def exprC_LUI (Eg : ExprSet) (imm : BitVec 6) (rd : regidx) : Option ExprSet :=
+def exprC_LUI (Eg : List Expr) (imm : BitVec 6) (rd : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
   else if isX0 rd || rd.toNat == 2 then none
   else if imm.toNat == 0 then none
   else some (assign rd (Term.C32 (cLuiU imm)))
 
-def exprC_shift (Eg : ExprSet) (shamt : BitVec 6) (rsd : cregidx) (op : sop) : Option ExprSet :=
+def exprC_shift (Eg : List Expr) (shamt : BitVec 6) (rsd : cregidx) (op : sop) : Option (List Expr) :=
   if !guardEg Eg then none
   else if shamt.toNat == 0 then none
   else
     let r := creg2reg_idx rsd
     exprSHIFTIOP Eg shamt r r op
 
-def exprC_SLLI (Eg : ExprSet) (shamt : BitVec 6) (rsd : regidx) : Option ExprSet :=
+def exprC_SLLI (Eg : List Expr) (shamt : BitVec 6) (rsd : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
-  else if isX0 rsd then some ExprSet.empty
-  else if shamt.toNat == 0 then some ExprSet.empty
+  else if isX0 rsd then some Expr.nil
+  else if shamt.toNat == 0 then some Expr.nil
   else exprSHIFTIOP Eg shamt rsd rsd .SLLI
 
-def exprC_ANDI (Eg : ExprSet) (imm : BitVec 6) (rsd : cregidx) : Option ExprSet :=
+def exprC_ANDI (Eg : List Expr) (imm : BitVec 6) (rsd : cregidx) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     let r := creg2reg_idx rsd
@@ -640,31 +640,31 @@ def exprC_ANDI (Eg : ExprSet) (imm : BitVec 6) (rsd : cregidx) : Option ExprSet 
     | none => none
     | some td => some (assign r (andStar 32 .w32 td (Term.C32 (cImm6 imm))))
 
-def exprC_binary (Eg : ExprSet) (rsd rs2 : cregidx) (op : rop) : Option ExprSet :=
+def exprC_binary (Eg : List Expr) (rsd rs2 : cregidx) (op : rop) : Option (List Expr) :=
   exprRTYPE Eg (creg2reg_idx rs2) (creg2reg_idx rsd) (creg2reg_idx rsd) op
 
-def exprC_MV (Eg : ExprSet) (rd rs2 : regidx) : Option ExprSet :=
+def exprC_MV (Eg : List Expr) (rd rs2 : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
-  else if isX0 rd then some ExprSet.empty
+  else if isX0 rd then some Expr.nil
   else if isX0 rs2 then some (assign rd (Term.C32 0))
   else
     match readReg Eg rs2 with
     | none => none
     | some tb => some (assign rd (idStar .w32 tb))
 
-def exprC_ADD (Eg : ExprSet) (rsd rs2 : regidx) : Option ExprSet :=
+def exprC_ADD (Eg : List Expr) (rsd rs2 : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
-  else if isX0 rsd then some ExprSet.empty
+  else if isX0 rsd then some Expr.nil
   else exprRTYPE Eg rs2 rsd rsd .ADD
 
-def exprC_JAL (Eg : ExprSet) : Option ExprSet :=
+def exprC_JAL (Eg : List Expr) : Option (List Expr) :=
   if !guardEg Eg then none
   else
     match readPC Eg with
     | none => none
     | some tπ => some (assign ra (addStar .w32 tπ (Term.C32 2)))
 
-def exprC_JALR (Eg : ExprSet) (rs1 : regidx) : Option ExprSet :=
+def exprC_JALR (Eg : List Expr) (rs1 : regidx) : Option (List Expr) :=
   if !guardEg Eg then none
   else if isX0 rs1 then none
   else
@@ -675,7 +675,7 @@ def exprC_JALR (Eg : ExprSet) (rs1 : regidx) : Option ExprSet :=
         | none => none
         | some tπ => some (assign ra (addStar .w32 tπ (Term.C32 2)))
 
-def expr (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option ExprSet :=
+def expr (Eg : List Expr) (i : Insn) (boundCtx : Option Term := none) : Option (List Expr) :=
   match i with
   | .UTYPE (imm, rd, op) => exprUTYPE Eg imm rd op
   | .ITYPE (imm, rs1, rd, op) => exprITYPE Eg imm rs1 rd op
@@ -727,7 +727,7 @@ def expr (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none) : Option Exp
   | .C_EBREAK _ => exprReject
 
 /-- Classify input observations separately from the instruction's actual writes. -/
-def stepEffects (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none)
+def stepEffects (Eg : List Expr) (i : Insn) (boundCtx : Option Term := none)
     (preds : List Predicate := []) : Option ExprEffect := do
   let effect ← match i with
     | .LOAD (imm, rs1, rd, unsigned, width) =>
@@ -741,24 +741,24 @@ def stepEffects (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none)
     | .C_SWSP (imm, rs2) => exprSTOREEffects Eg sp rs2 (imm.toNat <<< 2) 4 preds
     | _ => do
       let updates ← expr Eg i boundCtx
-      some (ExprEffect.mk .empty updates)
+      some (ExprEffect.mk Expr.nil updates)
   if effect.validFor Eg then some effect else none
 
 /-- Expansion transports both fresh input relations and local writes in one delta.
 `expr` and `stepEffects.updates` retain the instruction-only assignment interface. -/
-def step (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none)
-    (preds : List Predicate := []) : Option ExprSet := do
+def step (Eg : List Expr) (i : Insn) (boundCtx : Option Term := none)
+    (preds : List Predicate := []) : Option (List Expr) := do
   let effect ← stepEffects Eg i boundCtx preds
   some effect.delta
 
 -- ADDI replaces x1 locally; the unrelated x2 must not appear in the result.
 #guard
-  (let Eg := ExprSet.empty
+  (let Eg := Expr.nil
       |>.insertEq (Reg.real32 1) (Term.C32 10)
       |>.insertEq (Reg.real32 2) (Term.C32 20)
    match step Eg (.ITYPE (1#12, .Regidx 1#5, .Regidx 1#5, .ADDI)) with
    | some Ei =>
-       match Ei.entries with
+       match Ei with
        | [⟨r, rel, .const w c⟩] =>
            r == Reg.real32 1 && rel == .eq && w == .w32 && c == 11
        | _ => false
@@ -766,13 +766,13 @@ def step (Eg : ExprSet) (i : Insn) (boundCtx : Option Term := none)
 
 -- A successful empty local result stays empty even when Eg is nonempty.
 #guard
-  (match step (ExprSet.empty.insertEq (Reg.real32 2) (Term.C32 20)) (.C_NOP 0#6) with
-   | some Ei => Ei.entries.isEmpty
+  (match step (Expr.nil.insertEq (Reg.real32 2) (Term.C32 20)) (.C_NOP 0#6) with
+   | some Ei => Ei.isEmpty
    | none => false)
 
 /-- Spill/reload uses the address, not the changing SP expression or register name. -/
 private def stackRoundTripCheck : Bool :=
-  let entry := ExprSet.empty
+  let entry := Expr.nil
     |>.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 8) (Term.V32 40)
     |>.insertEq (Reg.sw 0) (Term.C32 99)
@@ -803,7 +803,7 @@ private def stackRoundTripCheck : Bool :=
 
 /-- Signed/unsigned subword loads retain the byte position and RV32 extension. -/
 private def narrowStackLoadsCheck : Bool :=
-  let E := ExprSet.empty.insertEq (Reg.real32 2) (Term.C32 0x3000)
+  let E := Expr.nil.insertEq (Reg.real32 2) (Term.C32 0x3000)
   match exprSTORE E sp (.Regidx 8#5) 0 4 with
   | some _ => false -- Missing source must reject even before a later read.
   | none =>
@@ -826,7 +826,7 @@ private def narrowStackLoadsCheck : Bool :=
 private def mapFieldsCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let reg := Reg.mapWord 9 0
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 8) (idStar .w32 pointer)
     |>.insertEq (Reg.real32 10) (Term.C32 5)
     |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd)
@@ -836,12 +836,12 @@ private def mapFieldsCheck : Bool := Id.run do
     (2, 2, true, 0x80ff), (2, 2, false, 0xffff80ff), (0, 4, true, 0x80ff7f01)]
   if !cases.all (fun (off, width, u, expected) =>
       match exprSizedLOADEffects E (.Regidx 8#5) (.Regidx 12#5) off width u with
-      | some effect => effect.inputs.entries.isEmpty && effect.updates.entries.length == 1 &&
+      | some effect => effect.inputs.isEmpty && effect.updates.length == 1 &&
           effect.updates.lookupEq (Reg.real32 12) == some (Term.C32 expected)
       | none => false) then return false
   for (off, width, expected) in [(1, 1, 0x80ffdd01), (2, 2, 0xccdd7f01), (0, 4, 0xaabbccdd)] do
     let some writes := exprSTORE E (.Regidx 8#5) (.Regidx 11#5) off width | return false
-    if writes.entries.length != 1 || writes.lookupEq reg != some (Term.C32 expected) then
+    if writes.length != 1 || writes.lookupEq reg != some (Term.C32 expected) then
       return false
     let saved := updateExpr E writes
     if !guardEg saved || saved.lookupEq (Reg.real32 10) != some (Term.C32 5) then return false
@@ -859,14 +859,14 @@ private def mapLaterWordsCheck : Bool := Id.run do
   let first := Term.regVar 9 (Reg.real32 10)
   let second := star .w32 (.externalResult 9 2) [Term.C32 1]
   let reg := Reg.mapWord 9 4
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 8) pointer
     |>.insertEq (Reg.real32 11) (Term.C32 0x80)
     |>.insertEq (Reg.mapWord 9 0) first
   let some read := stepEffects E (.LOAD (4#12, .Regidx 8#5, .Regidx 12#5, true, 4))
     | return false
   if !read.validFor E || read.inputs.lookupEq reg != some second ||
-      read.inputs.entries.length != 1 || read.updates.entries.length != 1 ||
+      read.inputs.length != 1 || read.updates.length != 1 ||
       read.updates.lookupEq (Reg.real32 12) != some second ||
       (eval second).isSome || solve second != second then return false
   let loaded := updateExpr E read.delta
@@ -874,37 +874,37 @@ private def mapLaterWordsCheck : Bool := Id.run do
     (subStar .w32 (addStar .w32 pointer (Term.C32 8)) (Term.C32 4))
   let some again := exprSizedLOADEffects alias (.Regidx 8#5) (.Regidx 13#5) 0 4 true
     | return false
-  if !again.inputs.entries.isEmpty || again.updates.lookupEq (Reg.real32 13) != some second
+  if !again.inputs.isEmpty || again.updates.lookupEq (Reg.real32 13) != some second
     then return false
   let some byte := stepEffects E (.STORE (7#12, .Regidx 11#5, .Regidx 8#5, 1))
     | return false
   if !byte.validFor E || byte.inputs.lookupEq reg != some second ||
-      byte.updates.entries.length != 1 then return false
+      byte.updates.length != 1 then return false
   let written := updateExpr E byte.delta
   let some signed := exprSizedLOADEffects written (.Regidx 8#5) (.Regidx 14#5) 7 1 false
     | return false
-  if !signed.inputs.entries.isEmpty || signed.updates.entries.length != 1 ||
+  if !signed.inputs.isEmpty || signed.updates.length != 1 ||
       (signed.updates.lookupEq (Reg.real32 14)).bind eval != none then return false
   let expected := orStar 32 .w32
     (andStar 32 .w32 second (Term.C32 0x00ffffff)) (Term.C32 0x80000000)
   if written.lookupEq reg != some expected then return false
   let some full := exprSTOREEffects E (.Regidx 8#5) (.Regidx 11#5) 8 4 | return false
-  if !full.inputs.entries.isEmpty || full.updates.lookupEq (Reg.mapWord 9 8) !=
+  if !full.inputs.isEmpty || full.updates.lookupEq (Reg.mapWord 9 8) !=
       some (Term.C32 0x80) then return false
   let some zero := exprSizedLOADEffects E (.Regidx 8#5) zreg 4 4 true | return false
-  if zero.inputs.lookupEq reg != some second || !zero.updates.entries.isEmpty then return false
-  let constrained := E.insert ⟨reg, .ne, Term.C32 0⟩
+  if zero.inputs.lookupEq reg != some second || !zero.updates.isEmpty then return false
+  let constrained := E.insertExpr ⟨reg, .ne, Term.C32 0⟩
   return written.lookupEq (Reg.mapWord 9 0) == some first &&
     (exprSizedLOADEffects constrained (.Regidx 8#5) zreg 4 4 true).isNone &&
     (exprSTOREEffects constrained (.Regidx 8#5) (.Regidx 11#5) 5 1).isNone &&
-    (exprSizedLOADEffects { entries := E.entries.filter (fun e => e.reg != Reg.mapWord 9 0) }
+    (exprSizedLOADEffects (E.filter (fun e => e.reg != Reg.mapWord 9 0))
       (.Regidx 8#5) zreg 4 4 true).isNone
 
 #guard mapLaterWordsCheck
 
 private def mapRejectsCheck : Bool :=
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 8) pointer
     |>.insertEq (Reg.real32 11) (Term.C32 1)
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 2)
@@ -920,17 +920,17 @@ private def mapRejectsCheck : Bool :=
     [(3, 2), (1, 4), (7, 2), (5, 4), (0xffffffff, 2), (4, 3)].all (fun (off, width) =>
       (exprSizedLOAD E (.Regidx 8#5) zreg off width true).isNone &&
       (exprSTORE E (.Regidx 8#5) (.Regidx 11#5) off width).isNone) &&
-    (exprSTORE (ExprSet.empty.insertEq (Reg.real32 8) pointer)
+    (exprSTORE (Expr.nil.insertEq (Reg.real32 8) pointer)
       (.Regidx 8#5) zreg 0 4).isNone &&
-    (mapAccess { entries := E.entries ++ E.entries } (.Regidx 8#5) 0 4).isNone
+    (mapAccess (E ++ E) (.Regidx 8#5) 0 4).isNone
 
 #guard mapRejectsCheck
 
-private def egEq (r : regidx) (v : Nat) : ExprSet :=
-  if r.toNat == 0 then ExprSet.empty
-  else ExprSet.empty.insertEq (xReg r) (Term.C32 v)
+private def egEq (r : regidx) (v : Nat) : List Expr :=
+  if r.toNat == 0 then Expr.nil
+  else Expr.nil.insertEq (xReg r) (Term.C32 v)
 
-private def resultRd (Ei : ExprSet) (rd : regidx) : UInt32 :=
+private def resultRd (Ei : List Expr) (rd : regidx) : UInt32 :=
   if isX0 rd then 0
   else
     match Ei.lookupEq (xReg rd) with
@@ -954,7 +954,7 @@ def exportExprAdd (rs1Val rs2Val rs1 rs2 rd : UInt32) : UInt32 :=
   let r1 : regidx := .Regidx (BitVec.ofNat 5 (rs1.toNat &&& 31))
   let r2 : regidx := .Regidx (BitVec.ofNat 5 (rs2.toNat &&& 31))
   let rdi : regidx := .Regidx (BitVec.ofNat 5 (rd.toNat &&& 31))
-  let Eg := ExprSet.override (egEq r1 rs1Val.toNat) (egEq r2 rs2Val.toNat)
+  let Eg := (egEq r1 rs1Val.toNat).override (egEq r2 rs2Val.toNat)
   let i : Insn := .RTYPE (r2, r1, rdi, .ADD)
   match expr Eg i with
   | none => 0xffffffff
@@ -963,7 +963,7 @@ def exportExprAdd (rs1Val rs2Val rs1 rs2 rd : UInt32) : UInt32 :=
 @[export lean_rv32_value_auipc]
 def exportExprAuipc (pcVal uimm20 rd : UInt32) : UInt32 :=
   let rdi : regidx := .Regidx (BitVec.ofNat 5 (rd.toNat &&& 31))
-  let Eg := ExprSet.empty.insertEq pcReg (Term.C32 pcVal.toNat)
+  let Eg := Expr.nil.insertEq pcReg (Term.C32 pcVal.toNat)
   let i : Insn := .UTYPE (BitVec.ofNat 20 (uimm20.toNat &&& 0xfffff), rdi, .AUIPC)
   match expr Eg i with
   | none => 0xffffffff
@@ -973,7 +973,7 @@ def exportExprAuipc (pcVal uimm20 rd : UInt32) : UInt32 :=
 def exportExprLui (uimm20 rd : UInt32) : UInt32 :=
   let rdi : regidx := .Regidx (BitVec.ofNat 5 (rd.toNat &&& 31))
   let i : Insn := .UTYPE (BitVec.ofNat 20 (uimm20.toNat &&& 0xfffff), rdi, .LUI)
-  match expr ExprSet.empty i with
+  match expr Expr.nil i with
   | none => 0xffffffff
   | some Ei => resultRd Ei rdi
 
@@ -982,25 +982,25 @@ def exportExprDiv (rs1Val rs2Val : UInt32) : UInt32 :=
   let r1 : regidx := .Regidx 1#5
   let r2 : regidx := .Regidx 2#5
   let rd : regidx := .Regidx 3#5
-  let Eg := ExprSet.override (egEq r1 rs1Val.toNat) (egEq r2 rs2Val.toNat)
+  let Eg := (egEq r1 rs1Val.toNat).override (egEq r2 rs2Val.toNat)
   match expr Eg (.DIV (r2, r1, rd, false)) with
   | none => 0xffffffff
   | some Ei => resultRd Ei rd
 
 @[export lean_rv32_value_ecall_rejects]
 def exportEcallRejects (_unused : UInt32) : UInt32 :=
-  match expr ExprSet.empty (.ECALL ()) with
+  match expr Expr.nil (.ECALL ()) with
   | none => 1
   | some _ => 0
 
 @[export lean_rv32_expr_override_keeps]
 def exportOverrideKeeps (_unused : UInt32) : UInt32 :=
   let Eg :=
-    ExprSet.empty
+    Expr.nil
       |>.insertEq (Reg.real32 1) (Term.C32 10)
       |>.insertEq (Reg.real32 2) (Term.C32 20)
-  let Ei := ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 11)
-  let E := ExprSet.override Eg Ei
+  let Ei := Expr.nil.insertEq (Reg.real32 1) (Term.C32 11)
+  let E := Eg.override Ei
   match E.lookupEq (Reg.real32 1), E.lookupEq (Reg.real32 2) with
   | some t1, some t2 =>
       match eval t1, eval t2 with
@@ -1010,7 +1010,7 @@ def exportOverrideKeeps (_unused : UInt32) : UInt32 :=
 
 private def frozenResourceBuffersCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 7]
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 10) (Term.C32 3)
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 0x04030201)
@@ -1028,8 +1028,7 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
   if readBufferBytes E contextPtr 3 maps (some (Term.V32 1)) != expected ||
       (readBufferBytes E contextPtr 3 maps).isSome ||
       (readBufferBytes E (Term.C32 3) 1 maps).isSome then return false
-  let missing := { E with
-    entries := E.entries.filter (fun e => e.reg != Reg.mapWord 9 4) }
+  let missing := E.filter (fun e => e.reg != Reg.mapWord 9 4)
   if (readBufferBytes missing (addStar .w32 pointer (Term.C32 3)) 3 maps).isSome then return false
   let overlap := E.insertEq (Reg.real32 2) (Term.V32 4)
     |>.insertEq (Reg.sw ((1 <<< 32) + 5 * (1 <<< 32))) (Term.C32 0x01020304)
@@ -1059,7 +1058,7 @@ private def mNumericBoundariesCheck : Bool :=
     (true, false, 0xfffffff9, 0, 0xfffffff9),
     (true, true, 0xfffffff9, 0, 0xfffffff9)]
   cases.all fun (remainder, unsigned, a, b, expected) =>
-    let E := ExprSet.empty
+    let E := Expr.nil
       |>.insertEq (Reg.real32 8) (Term.C32 a)
       |>.insertEq (Reg.real32 9) (Term.C32 b)
     let result := if remainder then exprREM E r2 r1 rd unsigned

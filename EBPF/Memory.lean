@@ -104,7 +104,7 @@ private def stackParts (p : EntryParams) (d : Int) (bytes : Nat) : Option Resolv
 
 /-- Packet first reads return newly materialized equalities separately. Cell
 reads need current contents and never invent uninitialized stack values. -/
-def readAccess (E : ExprSet) (a : ResolvedAccess) : Except RejectReason (ExprSet × Term) := do
+def readAccess (E : List Expr) (a : ResolvedAccess) : Except RejectReason (List Expr × Term) := do
   match a with
   | .packet access =>
     let some result := access.read E .w64 true | throw .undefinedSrc
@@ -115,18 +115,18 @@ def readAccess (E : ExprSet) (a : ResolvedAccess) : Except RejectReason (ExprSet
     if let [part] := parts then
       if part.bitOffset == 0 then
         let some value := part.read E .w64 true | throw .undefinedSrc
-        return (.empty, value)
+        return (Expr.nil, value)
     let mut value := Term.C64 0
     let mut shift := 0
     for part in parts do
       let some field := part.read E .w64 true | throw .undefinedSrc
       value := orStar 64 .w64 value (shlStar .w64 field (Term.C64 shift))
       shift := shift + part.bits
-    pure (.empty, value)
+    pure (Expr.nil, value)
 
 /-- Frozen little-endian stack bytes. Cell reads widen each extracted 32-bit
 stack field with zStar 8 .w64 32; unavailable bytes are never materialized. -/
-def stackBytes (p : EntryParams) (E : ExprSet) (addr : Term) (n : Nat) :
+def stackBytes (p : EntryParams) (E : List Expr) (addr : Term) (n : Nat) :
     Option (List Term) := do
   let displacement ← relativeOffset p.tSp addr
   (List.range n).mapM fun j => do
@@ -137,7 +137,7 @@ def stackBytes (p : EntryParams) (E : ExprSet) (addr : Term) (n : Nat) :
 /-- The packet base is exactly the widened context data cell yielded by LDX W.
 Using the same read path prevents drift between classification and loaded aliases.
 Missing context data contents authorize no packet candidate. -/
-def packetRoot (p : EntryParams) (E : ExprSet) : Option Term := do
+def packetRoot (p : EntryParams) (E : List Expr) : Option Term := do
   let (_, value) ← (readAccess E (.cells [⟨Reg.ctx32 p.αCtx, 0, 32⟩])).toOption
   pure value
 
@@ -145,7 +145,7 @@ def packetRoot (p : EntryParams) (E : ExprSet) : Option Term := do
 entry-register name. Content availability is checked by readAccess/writeAccess.
 Lookup anchors word zero; other Map words have no implicit content relation
 and accesses reject undefinedSrc until such a relation is explicitly available. -/
-def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : Int)
+def resolveAddress (p : EntryParams) (E : List Expr) (address : Term) (offset : Int)
     (bytes : Nat) (maps : List MapLayout := []) (contextByteView : Bool := false)
     (preds : List Predicate := []) :
     Except RejectReason ResolvedAccess := do
@@ -185,7 +185,7 @@ def resolveAddress (p : EntryParams) (E : ExprSet) (address : Term) (offset : In
   | [a] => pure a
   | _ => throw .undefinedSrc
 
-def resolveAccess (p : EntryParams) (E : ExprSet) (base : Nat) (offset : Int)
+def resolveAccess (p : EntryParams) (E : List Expr) (base : Nat) (offset : Int)
     (bytes : Nat) (isWrite : Bool) (maps : List MapLayout := [])
     (preds : List Predicate := []) :
     Except RejectReason ResolvedAccess := do
@@ -218,7 +218,7 @@ private def bufferOrigin (p : EntryParams) (address : Term) :
 Packet bytes may materialize `inputByte` terms via `PacketAccess.read` when
 `inputBase` is bound. Stack, map, and context still require current equalities.
 Context bytes are views of the two existing canonical context words. -/
-def availableBufferBytes (p : EntryParams) (E : ExprSet) (address : Term)
+def availableBufferBytes (p : EntryParams) (E : List Expr) (address : Term)
     (n : Nat) (maps : List MapLayout := []) : Option (List Term) := do
   if !E.keysUnique || !E.wellTyped || address.width != .w64 then none else do
     let mut origin : Option BufferOrigin := none
@@ -233,14 +233,14 @@ def availableBufferBytes (p : EntryParams) (E : ExprSet) (address : Term)
       let allowInputs := match access with
         | .packet _ => true
         | .cells _ => false
-      if !allowInputs && !inputs.entries.isEmpty then none
+      if !allowInputs && !inputs.isEmpty then none
       bytes := value :: bytes
     some bytes.reverse
 
 /-- All partial fields read the old snapshot. Whole Stack units, including both
 halves of a DW store, require no old equality. Map writes require an existing
 content relation; layout bounds alone never materialize another Map word. -/
-def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except RejectReason ExprSet := do
+def writeAccess (E : List Expr) (a : ResolvedAccess) (source : Term) : Except RejectReason (List Expr) := do
   if source.width != .w64 then throw .undefinedSrc
   match a with
   | .packet access =>
@@ -249,7 +249,7 @@ def writeAccess (E : ExprSet) (a : ResolvedAccess) (source : Term) : Except Reje
   | .cells parts =>
     if parts.isEmpty || parts.foldl (fun n part => n + part.bits) 0 > 64 then
       throw .undefinedSrc
-    let mut updates := ExprSet.empty
+    let mut updates := Expr.nil
     let mut shift := 0
     for part in parts do
       if (updates.lookupEq part.reg).isSome then throw .undefinedSrc
@@ -306,7 +306,7 @@ theorem mapWriteKeyByte_open (byte result : Term)
     · simp at h
 
 /-- Map writes reuse the lookup's frozen key, never the current key buffer. -/
-def mapWriteObservation (E : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
+def mapWriteObservation (E : List Expr) (Pg : List Predicate) (maps : List MapLayout)
     (base : Nat) (offset : Int) (bytes : Nat) : Option (Term × List Term × Nat) := do
   let address ← E.lookupEq (Reg.real64 base)
   let (lookupEvent, displacement, mapTerm) ← lookupAddress64 address
@@ -325,7 +325,7 @@ def mapWriteKeyAt (Pg : List Predicate) (event : NodeId) : Option (List Term) :=
   let (_, frozen) ← lookupKeyAt Pg event
   frozen.mapM mapWriteKeyByte
 
-theorem mapWriteObservation_frozen (E : ExprSet) (Pg : List Predicate)
+theorem mapWriteObservation_frozen (E : List Expr) (Pg : List Predicate)
     (maps : List MapLayout) (base : Nat) (offset : Int) (bytes : Nat)
     (map : Term) (key : List Term) (elementOff : Nat)
     (h : mapWriteObservation E Pg maps base offset bytes = some (map, key, elementOff)) :
@@ -355,7 +355,7 @@ theorem mapWriteObservation_frozen (E : ExprSet) (Pg : List Predicate)
       exact ⟨event, address, displacement, frozen, ha, hm ▸ hl,
         lookupKeyAt_tie Pg event map frozen hk, hk, hc, by simp [mapWriteKeyAt, hk, hc]⟩
 
-theorem mapWriteKeyAt_expr_update (E updates : ExprSet) (Pg : List Predicate)
+theorem mapWriteKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
     mapWriteKeyAt (SemState.mk (updateExpr E updates) Pg).predicates event =
       mapWriteKeyAt Pg event := rfl
@@ -387,7 +387,7 @@ theorem mapWriteObservations_saved_key (event : NodeId) (map : Term)
     subst p
     rfl
 
-private def storeEffect (p : EntryParams) (event : NodeId) (E : ExprSet)
+private def storeEffect (p : EntryParams) (event : NodeId) (E : List Expr)
     (maps : List MapLayout) (Pg : List Predicate) (bytes base : Nat)
     (offset : Int) (source : Term) : Except RejectReason (ExprEffect × List Predicate) := do
   let access ← resolveAccess p E base offset bytes true maps Pg
@@ -400,9 +400,9 @@ private def storeEffect (p : EntryParams) (event : NodeId) (E : ExprSet)
           | throw .undefinedSrc
         pure (mapWriteObservations event map frozen elementOff bytes source)
       else pure []
-  pure (⟨.empty, updates⟩, predicates)
+  pure (⟨Expr.nil, updates⟩, predicates)
 
-private def memoryReg (E : ExprSet) (r : Nat) : Except RejectReason Term := do
+private def memoryReg (E : List Expr) (r : Nat) : Except RejectReason Term := do
   if r > 10 then throw .undefinedSrc
   let some value := E.lookupEq (Reg.real64 r) | throw .undefinedSrc
   if value.width != .w64 then throw .undefinedSrc
@@ -411,7 +411,7 @@ private def memoryReg (E : ExprSet) (r : Nat) : Except RejectReason Term := do
 /-- Sequential numeric RMW on canonical stack or Map cells.
 DW stack memory is assembled once from the two old SW32 cells, updated once at
 64 bits, then split into simultaneous assignments. No concurrency observation is added. -/
-private def atomicEffect (p : EntryParams) (E : ExprSet) (maps : List MapLayout)
+private def atomicEffect (p : EntryParams) (E : List Expr) (maps : List MapLayout)
     (w : Width) (op : AtomicOp) (base src : Nat) (offset : Int) :
     Except RejectReason (ExprEffect × List Predicate) := do
   if op.returnsSource && src ≥ 10 then throw .undefinedSrc
@@ -444,7 +444,7 @@ private def atomicEffect (p : EntryParams) (E : ExprSet) (maps : List MapLayout)
 
 /-- Value effects read their sources and partial-field old values from E.
 Control flow and helper calls belong to Step. -/
-def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn)
+def exprEffects (p : EntryParams) (event : NodeId) (E : List Expr) (i : Insn)
     (maps : List MapLayout := []) (Pg : List Predicate := []) :
     Except RejectReason (ExprEffect × List Predicate) := do
   if !E.keysUnique || !E.wellTyped then throw .undefinedSrc
@@ -453,12 +453,12 @@ def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn)
     if dst > 9 then throw .undefinedSrc
     let access ← resolveAccess p E base offset bytes false maps Pg
     let (inputs, value) ← readAccess E access
-    pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst) value⟩, [])
+    pure (⟨inputs, Expr.nil.insertEq (Reg.real64 dst) value⟩, [])
   | .memsx bytes dst base offset =>
     if dst > 9 || ![1, 2, 4].contains bytes then throw .undefinedSrc
     let access ← resolveAccess p E base offset bytes false maps Pg
     let (inputs, value) ← readAccess E access
-    pure (⟨inputs, ExprSet.empty.insertEq (Reg.real64 dst)
+    pure (⟨inputs, Expr.nil.insertEq (Reg.real64 dst)
       (sStar (8 * bytes) .w64 64 value)⟩, [])
   | .stx bytes base src offset | .storeRel bytes base src offset =>
     let source ← memoryReg E src
@@ -468,8 +468,8 @@ def exprEffects (p : EntryParams) (event : NodeId) (E : ExprSet) (i : Insn)
   | .atomic w op base src offset => atomicEffect p E maps w op base src offset
   | .mov _ _ _ | .binary _ _ _ _ | .neg _ _ | .movsx _ _ _ _ | .endian _ _ _ =>
     let some updates := expr E i | throw .undefinedSrc
-    pure (⟨.empty, updates⟩, [])
-  | .exit => pure (⟨.empty, .empty⟩, [])
+    pure (⟨Expr.nil, updates⟩, [])
+  | .exit => pure (⟨Expr.nil, Expr.nil⟩, [])
   | .illegal _ => throw .localReject
   | _ => throw .localReject
 
@@ -503,8 +503,8 @@ private def stackRoundTripCheck : Bool := Id.run do
   let next := E.override stored.delta
   let .ok (loaded, []) := exprEffects memoryEntry 0 next (.ldx 8 2 10 (-8)) | return false
   let .error .undefinedSrc := exprEffects memoryEntry 0 E (.stx 1 10 0 (-4)) | return false
-  return stored.inputs.entries.isEmpty && stored.updates.entries.length == 2 &&
-    loaded.inputs.entries.isEmpty &&
+  return stored.inputs.isEmpty && stored.updates.length == 2 &&
+    loaded.inputs.isEmpty &&
     loaded.updates.lookupEq (Reg.real64 2) == some (Term.C64 0x1122334455667788)
 
 #guard stackRoundTripCheck
@@ -516,8 +516,8 @@ private def packetMaterializationCheck : Bool := Id.run do
   let .ok (first, []) := exprEffects memoryEntry 0 E (.ldx 4 0 2 0) | return false
   let .ok (second, []) := exprEffects memoryEntry 0 (E.override first.delta) (.ldx 4 0 2 0)
     | return false
-  return first.inputs.entries.length == 4 && first.updates.entries.length == 1 &&
-    second.inputs.entries.isEmpty && first.validFor E
+  return first.inputs.length == 4 && first.updates.length == 1 &&
+    second.inputs.isEmpty && first.validFor E
 
 #guard packetMaterializationCheck
 
@@ -541,7 +541,7 @@ private def partialStackCheck : Bool := Id.run do
   let .ok (stored, []) := exprEffects memoryEntry 0 E (.stx 1 3 0 1) | return false
   let .ok (loaded, []) := exprEffects memoryEntry 0 (E.override stored.delta) (.ldx 4 2 10 (-4))
     | return false
-  return stored.inputs.entries.isEmpty &&
+  return stored.inputs.isEmpty &&
     loaded.updates.lookupEq (Reg.real64 2) == some (Term.C64 0x1122aa44)
 
 #guard partialStackCheck
@@ -576,8 +576,8 @@ private def lookupMemoryCheck : Bool := Id.run do
 #guard lookupMemoryCheck
 
 /-- The key pointer is not a current stack alias: only Pg supplies the frozen key. -/
-private def mapStoreExprs : ExprSet :=
-  ExprSet.empty.insertEq (Reg.real64 0)
+private def mapStoreExprs : List Expr :=
+  Expr.nil.insertEq (Reg.real64 0)
     (star .w64 (.externalResult 7 0)
       [Term.C64 1, Term.C64 1077412584, Term.V64 9])
     |>.insertEq (Reg.real64 1) (idStar .w64 (Term.V64 11))
@@ -612,7 +612,7 @@ private def mapStoreObservationsCheck : Bool := Id.run do
         (star .w32 (.extract 32 32 64) [source])] &&
     partialPredicates ==
       [.mapWrite (ev + 1) (Term.C64 1077412584) mapStoreKey 4 32 source] &&
-    effect.inputs == ExprSet.empty &&
+    effect.inputs == Expr.nil &&
     effect.updates.lookupEq (Reg.mapDword 7 0) == some source &&
     effect.validFor E
 
@@ -635,8 +635,8 @@ private def symbolicMapStoreFrozenKeyCheck : Bool := Id.run do
   let next := E.override effect.delta
   let some stored := next.lookupEq (Reg.mapDword 7 0) | return false
   let some liveKey := stackBytes memoryEntry next keyPtr 4 | return false
-  if !effect.validFor E || !effect.inputs.entries.isEmpty ||
-      effect.updates.entries.length != 1 ||
+  if !effect.validFor E || !effect.inputs.isEmpty ||
+      effect.updates.length != 1 ||
       !frozen.all (fun t => t.width == .w64) ||
       !(keyLo ++ keyHi).all (fun t => t.width == .w32) ||
       valueLo.width != .w32 || valueHi.width != .w32 then return false
@@ -766,7 +766,7 @@ private def atomicMapFieldCheck : Bool := Id.run do
     (.atomic .w32 (.add false) 0 2 1) mapStoreLayouts | return false
   return effect.updates.lookupEq (Reg.mapDword 7 0) == some (Term.C64 0x1122334400000000) &&
     effect.updates.lookupEq (Reg.real64 2) == some (Term.C64 0xffffffff) &&
-    effect.updates.entries.length == 2 && effect.validFor E
+    effect.updates.length == 2 && effect.validFor E
 
 private def immediateAndSignedMemoryCheck : Bool := Id.run do
   let .ok σ := buildE0 memoryEntry | return false

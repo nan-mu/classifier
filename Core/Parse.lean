@@ -319,9 +319,9 @@ def parseSemStateJson (exprsJson predsJson : String) : Option SemState := do
       | .ok role => do
         if (← role.getStr?.toOption) == "constraint" then some true else none
     pure (expr, role)
-  let E : ExprSet := {
-    entries := (rows.filter fun row => !row.2).map Prod.fst
-    constraints := (rows.filter fun row => row.2).map Prod.fst }
+  let bindings := (rows.filter fun row => !row.2).map Prod.fst
+  let constraints := (rows.filter fun row => row.2).map Prod.fst
+  let E : List Expr := bindings ++ constraints
   if !E.keysUnique || !E.wellTyped then none else
     pure ⟨E, ← preds.toList.mapM parsePredicateJson⟩
 
@@ -388,10 +388,10 @@ private def crossCarrierRoundTripCheck : Bool :=
 #guard crossCarrierRoundTripCheck
 
 private def constraintRoundTripCheck : Bool :=
-  let E := ExprSet.empty.insertEq (Reg.real64 1) (Term.V64 1)
+  let E := Expr.nil.insertEq (Reg.real64 1) (Term.V64 1)
     |>.insertConstraint (Expr.mkRel (Reg.real64 1) .eq (Term.C64 10))
     |>.insertConstraint (Expr.mkRel (Reg.real64 1) (.ltuN 32) (Term.C64 20))
-  match parseSemStateJson ("[" ++ renderExprSetJson E ++ "]") "[]" with
+  match parseSemStateJson ("[" ++ renderExprsJson E ++ "]") "[]" with
   | some state => state.exprs == E && state.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1)
   | none => false
 

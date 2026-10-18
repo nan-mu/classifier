@@ -45,13 +45,13 @@ private def directTarget (offsets : Array Nat) (j : Nat) (delta : Int) : Option 
 private def nextPosition (I : Array Insn) (j : Nat) : Option Location :=
   if j + 1 < I.size then some (.pos (j + 1)) else none
 
-private def emit (dir : Direction) (loc : Option Location) (Ei : ExprSet) : StepResult :=
+private def emit (dir : Direction) (loc : Option Location) (Ei : List Expr) : StepResult :=
   match loc with
   | some k => .candidates [⟨dir, k, Ei, []⟩]
   | none => .reject .unboundTarget
 
 /-- Capture a0's complete pre-return term only after the wrapper Exit is recognized. -/
-private def emitIndirect (loc : Option Location) (Eg Ei : ExprSet) : StepResult :=
+private def emitIndirect (loc : Option Location) (Eg Ei : List Expr) : StepResult :=
   match loc with
   | some .exit =>
     match Eg.lookupEq (Reg.real32 10) with
@@ -67,7 +67,7 @@ private def branchRel : bop → Rel
   | .BLTU => .ltu
   | .BGEU => .geu
 
-private def emitComparison (dir : BranchDirection) (loc : Option Location) (Ei : ExprSet)
+private def emitComparison (dir : BranchDirection) (loc : Option Location) (Ei : List Expr)
     (e : Expr) (position : Nat) (lhs : Term) : StepResult :=
   let direction := match dir with | .taken => Direction.taken | .notTaken => .notTaken
   match loc with
@@ -101,7 +101,7 @@ private def valueRejection : Insn → RejectReason
 /-- Recover map term + frozen key from Pg for the lookup that owns this Map address.
 Reject when the pointer's Map provenance disagrees with the frozen-key observation Map
 (aligned with eBPF `mapWriteObservation`). -/
-def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : List MapLayout)
+def mapWriteObservation (Eg : List Expr) (Pg : List Predicate) (maps : List MapLayout)
     (rs1 rs2 : regidx) (offset width : Nat) :
     Option (Term × List Term × Nat × Term) := do
   let (lookupEvent, elementOff, mapTerm, _) ← mapElementAccess Eg rs1 offset width
@@ -115,7 +115,7 @@ def mapWriteObservation (Eg : ExprSet) (Pg : List Predicate) (maps : List MapLay
       if frozen.length != layout.keySize || elementOff + width > layout.valueSize then none
       else some (map, frozen, elementOff, solve source)
 
-theorem mapWriteObservation_frozen (Eg : ExprSet) (Pg : List Predicate)
+theorem mapWriteObservation_frozen (Eg : List Expr) (Pg : List Predicate)
     (maps : List MapLayout) (rs1 rs2 : regidx) (offset width : Nat)
     (map : Term) (key : List Term) (elementOff : Nat) (value : Term)
     (h : mapWriteObservation Eg Pg maps rs1 rs2 offset width =
@@ -150,10 +150,10 @@ theorem mapWriteObservation_frozen (Eg : ExprSet) (Pg : List Predicate)
 
 /-- Each successful store delta touches one resource category, selected by the value step.
 MapWrite needs frozen lookup keys + Meta layout; PacketWrite needs a dynamic event. -/
-private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : ExprSet) (Pg : List Predicate)
+private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : List Expr) (Pg : List Predicate)
     (maps : List MapLayout) (rs1 rs2 : regidx) (offset width : Nat)
     (event : Option NodeId) : StepResult :=
-  match Ei.entries.head? with
+  match Ei.head? with
   | some e =>
     match e.reg.kind with
     | RegKind.map =>
@@ -191,14 +191,39 @@ private def isZeroing : Insn → Bool
   | .C_LI (imm, _) => imm.toNat == 0
   | _ => false
 
+/-- Stack restore, `li a0, n`, or `addi sp, sp, n` in front of a shared `ret`. -/
+private def epilogueInsn : Insn → Bool
+  | .C_LWSP _ | .C_ADDI16SP _ | .C_LW _ => true
+  | .C_LI (_, rd) => rd.toNat == 10
+  | .C_ADDI (_, rd) => rd.toNat == 2 || rd.toNat == 10
+  | .ITYPE (_, rs1, rd, .ADDI) =>
+    (rd.toNat == 10 && rs1.toNat == 0) || (rd.toNat == 2 && rs1.toNat == 2)
+  | _ => false
+
+/-- Forward `c.j` / `jal x0` into that epilogue. A backward jump is a loop. -/
+private def forwardJump (I : Array Insn) (j : Nat) (i : Insn) : Option Nat :=
+  let offsets := programOffsets I
+  let delta := match i with
+    | .C_J imm | .C_JAL imm => some (2 * s 11 imm.toNat)
+    | .JAL (imm, rd) => if rd.toNat == 0 then some (s 21 imm.toNat) else none
+    | _ => none
+  match delta with
+  | none => none
+  | some d =>
+    match directTarget offsets j d with
+    | some (.pos k) => if k > j then some k else none
+    | _ => none
+
 private def straightAbort (I : Array Insn) (j : Nat) : Bool :=
   let rec go (j n : Nat) : Bool :=
-    if n ≥ 4 then false
+    if n ≥ 8 then false
     else match I[j]? with
       | some i =>
         if isReturnInsn i then true
-        else if isZeroing i then go (j + 1) (n + 1)
-        else false
+        else if isZeroing i || epilogueInsn i then go (j + 1) (n + 1)
+        else match forwardJump I j i with
+          | some k => go k (n + 1)
+          | none => false
       | none => false
   go j 0
 
@@ -207,16 +232,27 @@ private def abortLoc (I : Array Insn) : Option Location → Bool
   | some (.pos j) => straightAbort I j
   | none => false
 
-private def undecidedBranch (I : Array Insn) (j : Nat) (Ei : ExprSet) (t1 : Term)
+private def undecidedBranch (I : Array Insn) (j : Nat) (Ei : List Expr) (t1 : Term)
     (rel : Rel) (t2 : Term) (takenE fallE : Expr) (takenLoc fallLoc : Option Location) :
     StepResult :=
   let fallOnly := containsInputByte t1 || containsInputByte t2
   let keepTaken := fallOnly && abortLoc I fallLoc && !abortLoc I takenLoc
+  -- A pruned abort arm is still a successor: it joins the shared exit.
+  -- Omitting it leaves a branch with only `taken` or only `not_taken`.
+  let abortExit (dir : Direction) (bdir : BranchDirection) (e : Expr) : Candidate :=
+    ⟨dir, .exit, Ei.insertConstraint e, [.branch (j + 1) bdir ⟨t1, e.rel, e.term⟩]⟩
   match takenLoc, fallLoc with
   | some taken, some fall =>
     if keepTaken then
-      .candidates [⟨.taken, taken, Ei.insertConstraint takenE,
-        [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩]
+      .candidates [
+        ⟨.taken, taken, Ei.insertConstraint takenE,
+          [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
+        abortExit .notTaken .notTaken fallE]
+    else if fallOnly && abortLoc I takenLoc then
+      .candidates [
+        abortExit .taken .taken takenE,
+        ⟨.notTaken, fall, Ei.insertConstraint fallE,
+          [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
     else if fallOnly then
       .candidates [⟨.notTaken, fall, Ei.insertConstraint fallE,
         [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
@@ -376,7 +412,7 @@ def smokeEntryParams : EntryParams := {
 /-- addi a0,zero,7; addi a0,a0,1; jalr zero,ra,0. -/
 def smokeProgram : Array Insn := decodeProgram #[0x00700513, 0x00150513, 0x00008067]
 
-private def initialEqCheck (E : ExprSet) (r : Reg) (expected : Term) : Bool :=
+private def initialEqCheck (E : List Expr) (r : Reg) (expected : Term) : Bool :=
   match E.lookupEq r with
   | some actual => reprStr actual == reprStr (solve expected)
   | none => false
@@ -386,9 +422,9 @@ private def smokeE0RealCheck : Bool :=
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    σ.exprs.keysUnique && σ.predicates.isEmpty && σ.exprs.entries.length == 14 &&
-      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 8 &&
-      (buildEBase p).entries.length == 7 &&
+    σ.exprs.keysUnique && σ.predicates.isEmpty && σ.exprs.length == 14 &&
+      (σ.exprs.filter (fun e => e.reg.kind == .real)).length == 8 &&
+      (buildEBase p).length == 7 &&
       initialEqCheck σ.exprs (Reg.real32 0) (Term.C32 0) &&
       initialEqCheck σ.exprs (Reg.real32 2) p.tSp &&
       initialEqCheck σ.exprs (Reg.real32 5) p.tSp &&
@@ -405,8 +441,8 @@ private def smokeE0CtxCheck : Bool :=
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    (buildECtx0 p).entries.length == 6 &&
-      (σ.exprs.entries.filter (fun e => e.reg.kind == .context)).length == 6 &&
+    (buildECtx0 p).length == 6 &&
+      (σ.exprs.filter (fun e => e.reg.kind == .context)).length == 6 &&
       initialEqCheck σ.exprs (Reg.ctx32 p.αCtx) p.tData &&
       initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 1)) (addStar .w32 p.tData p.tLen) &&
       initialEqCheck σ.exprs (Reg.ctx32 (p.αCtx + 2)) (Term.C32 0) &&
@@ -419,9 +455,9 @@ private def smokeEntryFreshKeyCheck : Bool :=
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    σ.exprs.keysUnique && σ.exprs.entries.length == 14 &&
+    σ.exprs.keysUnique && σ.exprs.length == 14 &&
       initialEqCheck σ.exprs (Reg.real32 9) p.tEntry &&
-      (buildEBase p).entries.length == 7 &&
+      (buildEBase p).length == 7 &&
       (σ.exprs.lookupEq (Reg.real32 8)).isNone
 
 private def smokeMultipleEntriesCheck : Bool :=
@@ -429,16 +465,16 @@ private def smokeMultipleEntriesCheck : Bool :=
   match buildE0 p with
   | .error _ => false
   | .ok σ =>
-    σ.exprs.keysUnique && σ.exprs.entries.length == 15 &&
-      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 9 &&
+    σ.exprs.keysUnique && σ.exprs.length == 15 &&
+      (σ.exprs.filter (fun e => e.reg.kind == .real)).length == 9 &&
       p.rEntries.all (fun r => initialEqCheck σ.exprs r p.tEntry) &&
-      (buildEBase p).entries.length == 7
+      (buildEBase p).length == 7
 
 private def smokeRaEntryCheck : Bool :=
   let p := { smokeEntryParams with rEntries := [Reg.real32 1] }
   match buildE0 p with
   | .error _ => false
-  | .ok σ => σ.exprs.entries.length == 13 &&
+  | .ok σ => σ.exprs.length == 13 &&
       p.rEntries.all (fun r => initialEqCheck σ.exprs r p.tReturn) &&
       initialEqCheck σ.exprs (Reg.real32 6) p.tReturn
 
@@ -446,15 +482,15 @@ private def smokeEmptyEntriesCheck : Bool :=
   let p := { smokeEntryParams with rEntries := [] }
   match buildE0 p with
   | .error _ => false
-  | .ok σ => σ.exprs.keysUnique && σ.exprs.entries.length == 13 &&
-      (σ.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 7 &&
+  | .ok σ => σ.exprs.keysUnique && σ.exprs.length == 13 &&
+      (σ.exprs.filter (fun e => e.reg.kind == .real)).length == 7 &&
       initialEqCheck σ.exprs (Reg.real32 1) p.tReturn
 
 private def smokeMixedRaEntriesCheck : Bool :=
   let p := { smokeEntryParams with rEntries := [Reg.real32 1, Reg.real32 8, Reg.real32 9] }
   match buildE0 p with
   | .error _ => false
-  | .ok σ => σ.exprs.keysUnique && σ.exprs.entries.length == 15 &&
+  | .ok σ => σ.exprs.keysUnique && σ.exprs.length == 15 &&
       p.rEntries.all (fun r => initialEqCheck σ.exprs r
         (if r == Reg.real32 1 then p.tReturn else p.tEntry))
 
@@ -473,7 +509,7 @@ private def smokeInitialRootCheck : Bool :=
     match ws.nodes[0]? with
     | none => false
     | some root => root.loc == .pos 0 && ws.nodes.size == 1 && ws.edges.isEmpty &&
-        ws.work == [0] && ws.fuel == 3 && root.state.exprs.entries.length == 14 &&
+        ws.work == [0] && ws.fuel == 3 && root.state.exprs.length == 14 &&
         initialEqCheck root.state.exprs (Reg.ctx32 smokeEntryParams.αCtx) smokeEntryParams.tData
 
 private def smokeInvalidEntryCheck : Bool :=
@@ -525,7 +561,7 @@ private def smokeEmptyPredicateMergeCheck : Bool :=
   match buildE0 smokeEntryParams with
   | .error _ => false
   | .ok σ =>
-    match mergePredicate σ.predicates [], Node.applyLocal σ ExprSet.empty [] with
+    match mergePredicate σ.predicates [], Node.applyLocal σ Expr.nil [] with
     | .ok predicates, .ok unchanged =>
       predicates.isEmpty && unchanged.predicates.isEmpty &&
         reprStr unchanged.exprs == reprStr σ.exprs
@@ -556,7 +592,7 @@ private def esp32c3FirstLoadCheck : Bool :=
   match buildE0 smokeEntryParams, esp32c3Program[0]? with
   | .ok σ, some i =>
     match RV32.step σ.exprs i with
-    | some Ei => Ei.keysUnique && Ei.entries.length == 1 &&
+    | some Ei => Ei.keysUnique && Ei.length == 1 &&
         initialEqCheck Ei (Reg.real32 12) smokeEntryParams.tData
     | none => false
   | _, _ => false
@@ -570,15 +606,15 @@ private def contextWordLoadsCheck : Bool :=
   | .ok σ => ((List.range 6).zip values).all fun jt =>
       let i := Insn.LOAD (BitVec.ofNat 12 (4 * jt.1), .Regidx 10#5, .Regidx 12#5, false, 4)
       match RV32.step σ.exprs i with
-      | some Ei => Ei.entries.length == 1 && initialEqCheck Ei (Reg.real32 12) jt.2
+      | some Ei => Ei.length == 1 && initialEqCheck Ei (Reg.real32 12) jt.2
       | none => false
 
 private def contextLoadRejectionCheck : Bool :=
   match buildE0 smokeEntryParams with
   | .error _ => false
   | .ok σ =>
-    let incomplete : ExprSet := { entries := (σ.exprs.entries.filter
-      (fun e => e.reg != Reg.ctx32 (smokeEntryParams.αCtx + 5))) }
+    let incomplete : List Expr := σ.exprs.filter
+      (fun e => e.reg != Reg.ctx32 (smokeEntryParams.αCtx + 5))
     let bad := [
       Insn.LOAD (2#12, .Regidx 10#5, .Regidx 12#5, false, 4),
       .LOAD (24#12, .Regidx 10#5, .Regidx 12#5, false, 4),
@@ -589,7 +625,7 @@ private def contextLoadRejectionCheck : Bool :=
     bad.all (fun i => (RV32.step σ.exprs i).isNone) &&
       (exprLOAD incomplete (.Regidx 10#5) zreg 0).isNone &&
       match exprLOAD σ.exprs (.Regidx 10#5) zreg 0 with
-      | some Ei => Ei.entries.isEmpty
+      | some Ei => Ei.isEmpty
       | none => false
 
 private def contextShiftedBaseCheck : Bool :=
@@ -601,7 +637,7 @@ private def contextShiftedBaseCheck : Bool :=
     let Eg := σ.exprs.insertEq (Reg.ctx32 1) (Term.C32 99)
       |>.insertEq (Reg.real32 15) p.tCtx
     match exprLOAD Eg (.Regidx 15#5) (.Regidx 12#5) 4 with
-    | some Ei => Ei.entries.length == 1 &&
+    | some Ei => Ei.length == 1 &&
         initialEqCheck Ei (Reg.real32 12) (addStar .w32 p.tData p.tLen)
     | none => false
 
@@ -617,20 +653,19 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
   let I := decodeProgram #[0x0020e463, 0x00100513, 0x00008067]
   let lhs := Term.V32 101
   let rhs := Term.V32 102
-  let E := ExprSet.empty.insertEq (Reg.real32 1) lhs
+  let E := Expr.nil.insertEq (Reg.real32 1) lhs
     |>.insertEq (Reg.real32 2) rhs
   match rv32StepBound I none none 0 ⟨E, []⟩ with
   | .candidates [taken, fall] =>
     taken.dir == .taken && taken.loc == .pos 2 &&
       fall.dir == .notTaken && fall.loc == .pos 1 &&
-      taken.E_k.entries.isEmpty && fall.E_k.entries.isEmpty &&
-      taken.E_k.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
-      fall.E_k.constraints == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
+      taken.E_k == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
+      fall.E_k == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
       taken.P_k == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
       fall.P_k == [.branch 1 .notTaken ⟨lhs, .geu, rhs⟩] &&
       match Node.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
       | .ok child =>
-        match Node.applyLocal child (ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0)) [] with
+        match Node.applyLocal child (Expr.nil.insertEq (Reg.real32 1) (Term.C32 0)) [] with
         | .ok overwritten => overwritten.exprs.constraints.isEmpty &&
             child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
             child.exprs.lookupEq (Reg.real32 1) == some lhs &&
@@ -644,7 +679,7 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
 private def symbolicBtypeRelationsCheck : Bool :=
   let lhs := Term.V32 101
   let rhs := Term.V32 102
-  let E := ExprSet.empty.insertEq (Reg.real32 1) lhs
+  let E := Expr.nil.insertEq (Reg.real32 1) lhs
     |>.insertEq (Reg.real32 2) rhs
   let cases : List (bop × Rel) := [(.BEQ, .eq), (.BNE, .ne),
     (.BLT, .lts), (.BGE, .ges), (.BLTU, .ltu), (.BGEU, .geu)]
@@ -653,8 +688,8 @@ private def symbolicBtypeRelationsCheck : Bool :=
       decodeInsnWord 0x00100513, decodeInsnWord 0x00008067]
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [taken, fall] => taken.dir == .taken && fall.dir == .notTaken &&
-        taken.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel rhs] &&
-        fall.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
+        taken.E_k == [Expr.mkRel (Reg.real32 1) rel rhs] &&
+        fall.E_k == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
         taken.P_k == [.branch 1 .taken ⟨lhs, rel, rhs⟩] &&
         fall.P_k == [.branch 1 .notTaken ⟨lhs, rel.compl, rhs⟩] &&
         match Node.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
@@ -668,11 +703,11 @@ private def concreteBltuFeasibleSideCheck : Bool :=
   [(1, 2, Direction.taken, Location.pos 2, Rel.ltu),
    (2, 1, Direction.notTaken, Location.pos 1, Rel.geu),
    (2, 2, Direction.notTaken, Location.pos 1, Rel.geu)].all fun (a, b, dir, loc, rel) =>
-    let E := ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 a)
+    let E := Expr.nil.insertEq (Reg.real32 1) (Term.C32 a)
       |>.insertEq (Reg.real32 2) (Term.C32 b)
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [c] => c.dir == dir && c.loc == loc &&
-        c.E_k.constraints == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] &&
+        c.E_k == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] &&
         c.P_k == [.branch 1 (if dir == .taken then .taken else .notTaken)
           ⟨Term.C32 a, rel, Term.C32 b⟩]
     | _ => false
@@ -681,7 +716,7 @@ private def concreteBltuFeasibleSideCheck : Bool :=
 private def symbolicBltuUnboundTargetCheck : Bool :=
   let I := #[Insn.BTYPE (2#13, .Regidx 2#5, .Regidx 1#5, .BLTU),
     decodeInsnWord 0x00008067]
-  let E := ExprSet.empty.insertEq (Reg.real32 1) (Term.V32 101)
+  let E := Expr.nil.insertEq (Reg.real32 1) (Term.V32 101)
     |>.insertEq (Reg.real32 2) (Term.V32 102)
   match rv32StepBound I none none 0 ⟨E, []⟩ with
   | .reject .unboundTarget => true
@@ -704,7 +739,7 @@ private def esp32c3OpeningCheck : Bool :=
     | .inr ws =>
       match ws.nodes[0]?, ws.nodes[4]?, ws.nodes[5]?, ws.nodes[6]?, ws.nodes[7]? with
       | some root, some branch, some taken, some fall, some returned =>
-        root.state.exprs.entries.length == 14 &&
+        root.state.exprs.length == 14 &&
         initialEqCheck root.state.exprs (Reg.real32 10) p.tCtx &&
         branch.loc == .pos 4 &&
         initialEqCheck branch.state.exprs (Reg.real32 12) p.tData &&
@@ -778,7 +813,7 @@ private def esp32c3BltuContinuationsCheck : Bool :=
 private def symbolicBranchesCheck : Bool :=
   let ta := Term.V32 1
   let tb := Term.V32 2
-  let σ : SemState := ⟨ExprSet.empty.insertEq (Reg.real32 11) ta
+  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real32 11) ta
     |>.insertEq (Reg.real32 13) tb, []⟩
   [bop.BEQ, .BNE, .BLT, .BGE, .BLTU, .BGEU].all fun op =>
     let I := #[Insn.BTYPE (8#13, .Regidx 13#5, .Regidx 11#5, op),
@@ -787,29 +822,50 @@ private def symbolicBranchesCheck : Bool :=
     | .candidates [a, b] =>
       a.dir == .taken && b.dir == .notTaken &&
       a.loc == .pos 2 && b.loc == .pos 1 &&
-      a.E_k.entries.isEmpty && b.E_k.entries.isEmpty &&
-      a.E_k.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op) tb] &&
-      b.E_k.constraints == [Expr.mkRel (Reg.real32 11) (branchRel op).compl tb] &&
+      a.E_k == [Expr.mkRel (Reg.real32 11) (branchRel op) tb] &&
+      b.E_k == [Expr.mkRel (Reg.real32 11) (branchRel op).compl tb] &&
       a.P_k == [.branch 1 .taken ⟨ta, branchRel op, tb⟩] &&
       b.P_k == [.branch 1 .notTaken ⟨ta, (branchRel op).compl, tb⟩]
     | _ => false
 
 private def compressedBranchesCheck : Bool :=
-  let σ : SemState := ⟨ExprSet.empty.insertEq (Reg.real32 8) (Term.V32 3), []⟩
+  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real32 8) (Term.V32 3), []⟩
   [0xc011, 0xe011].all fun word =>
     let I := decodeProgram #[UInt32.ofNat word, 0x0001, 0x0001]
     match rv32Step I 0 σ with
     | .candidates [a, b] => a.dir == .taken && b.dir == .notTaken &&
       a.loc == .pos 2 && b.loc == .pos 1 &&
       let rel := if word == 0xc011 then Rel.eq else Rel.ne
-      a.E_k.constraints == [Expr.mkRel (Reg.real32 8) rel (Term.C32 0)] &&
-      b.E_k.constraints == [Expr.mkRel (Reg.real32 8) rel.compl (Term.C32 0)] &&
+      a.E_k == [Expr.mkRel (Reg.real32 8) rel (Term.C32 0)] &&
+      b.E_k == [Expr.mkRel (Reg.real32 8) rel.compl (Term.C32 0)] &&
       a.P_k == [.branch 1 .taken ⟨Term.V32 3, rel, Term.C32 0⟩] &&
       b.P_k == [.branch 1 .notTaken ⟨Term.V32 3, rel.compl, Term.C32 0⟩]
     | _ => false
 
 #guard symbolicBranchesCheck
 #guard compressedBranchesCheck
+
+/-- A packet compare whose fallthrough is `c.j` into `li a0, 1; ret` keeps the body. -/
+private def sharedReturnKeepsBody : Bool :=
+  let pkt := Term.app .w32 (.inputByte 0) [Term.C32 0, Term.C32 12]
+  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real32 12) pkt
+      |>.insertEq (Reg.real32 14) (Term.C32 8), []⟩
+  let jump := match encodeCompressed 0xa011#16 with
+    | .C_J imm => Insn.C_J imm
+    | other => other
+  let I := #[
+    Insn.BTYPE (6#13, .Regidx 14#5, .Regidx 12#5, .BEQ),
+    jump,
+    Insn.C_NOP 0#6,
+    decodeInsnWord 0x00100513,
+    decodeInsnWord 0x00008067]
+  match rv32Step I 0 σ with
+  | .candidates [body, exitArm] =>
+    body.dir == .taken && body.loc == .pos 2 &&
+      exitArm.dir == .notTaken && exitArm.loc == .exit
+  | _ => false
+
+#guard sharedReturnKeepsBody
 #guard match encodeCompressed 0xa011#16 with
   | .C_J imm => 2 * s 11 imm.toNat == 4
   | _ => false
@@ -841,15 +897,15 @@ is outside this image. External call/result contracts are required to reach 37�
 we retain UnboundTarget rather than fabricate a helper result or fallthrough.
 -/
 
-/-- Packet-value branches keep the fallthrough. After 38 steps the external jump
-at the queued call is still unbound. -/
+/-- Packet-value branches keep the fallthrough and record the abort arm as Exit.
+After 38 steps the external jump at the queued call is still unbound. -/
 private def esp32c3DeepFrontierCheck : Bool :=
   let I := esp32c3Program
   let stepFn := rv32StepBound I (some 0x1000) (some 0x2000)
   match rv32Init I smokeEntryParams 0 512 with
   | .error _ => false
   | .ok ws0 => match expandN I.size stepFn ws0 38 with
-    | .inl (.fail .unboundTarget g) => g.nodes.size == 39
+    | .inl (.fail .unboundTarget g) => g.nodes.size == 41
     | _ => false
 
 private def helperObservationMergeCheck : Bool :=
@@ -862,7 +918,7 @@ private def helperObservationMergeCheck : Bool :=
 
 /-- C.JR and full JALR freeze the complete symbolic pre-return a0 on wrapper Exit. -/
 private def boundReturnExprCheck : Bool :=
-  let E := ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000)
+  let E := Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x2000)
     |>.insertEq (Reg.real32 10) (Term.V32 123)
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
     match rv32StepBound I (some 0x1000) (some 0x2000) 0 ⟨E, []⟩ with
@@ -871,7 +927,7 @@ private def boundReturnExprCheck : Bool :=
     | _ => false) &&
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
     match rv32StepBound I (some 0x1000) (some 0x2000) 0
-        ⟨ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000), []⟩ with
+        ⟨Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x2000), []⟩ with
     | .reject .undefinedSrc => true
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067]) (some 0x1000) (some 0x2002)
@@ -880,14 +936,15 @@ private def boundReturnExprCheck : Bool :=
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067, 0x0001])
       (some 0x1000) (some 0x2000) 0
-      ⟨ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x1004), []⟩ with
+      ⟨Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x1004), []⟩ with
     | .candidates [c] => c.loc == .pos 1 && c.P_k.isEmpty
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067])
       (some 0x1000) (some 0x2000) 0
-      ⟨ExprSet.empty.insertEq (Reg.real32 1) (Term.C32 0x2000)
+      ⟨Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x2000)
+        |>.insertEq (Reg.real32 10) (Term.V32 7)
         |>.insertConstraint (Expr.mkRel (Reg.real32 10) .eq (Term.V32 123)), []⟩ with
-    | .reject .undefinedSrc => true
+    | .candidates [c] => c.loc == .exit && c.P_k == [.ret (Term.V32 7)]
     | _ => false)
 
 /-- Packet loads are repeatable symbolic Terms; unrelated/unbound bases reject. -/
@@ -900,7 +957,7 @@ private def packetLoadsCheck : Bool :=
       [false, true].all fun unsigned =>
         let i := Insn.LOAD (12#12, .Regidx 12#5, .Regidx 14#5, unsigned, width)
         match step E i, step E i with
-        | some a, some b => a.entries.length == width + 1 && a.keysUnique &&
+        | some a, some b => a.length == width + 1 && a.keysUnique &&
           a.lookupEq (Reg.real32 14) == b.lookupEq (Reg.real32 14) &&
           (match a.lookupEq (Reg.real32 14) with
             | some t => (eval t).isNone
@@ -910,7 +967,7 @@ private def packetLoadsCheck : Bool :=
     (exprPacketLOAD E (.Regidx 28#5) zreg 0 1 true).isNone &&
     (exprPacketLOAD E (.Regidx 12#5) zreg 0 3 true).isNone &&
     (match exprPacketLOAD E (.Regidx 12#5) zreg 0 1 true with
-      | some Ei => Ei.entries.isEmpty
+      | some Ei => Ei.isEmpty
       | none => false) &&
     (eval (star .w32 (.inputByte 0) [Term.C32 4096, Term.C32 4108])).isNone
 
@@ -929,7 +986,7 @@ def exportRv32Snapshot (steps budget : UInt32) : String :=
 def exportRv32WordsSnapshot (insns : Array UInt32) (steps budget : UInt32) : String :=
   rv32Snapshot (decodeProgram insns) smokeEntryParams 0 steps.toNat budget.toNat
 
-private def helperTarget (i : Insn) (pc : Nat) (Eg : ExprSet) : Option Nat :=
+private def helperTarget (i : Insn) (pc : Nat) (Eg : List Expr) : Option Nat :=
   match i with
   | .JAL (imm, rd) =>
     if rd.toNat != 1 then none
@@ -1000,8 +1057,8 @@ private def packetStoreObservationsCheck : Bool := Id.run do
     let I := #[i, decodeInsnWord 0x0001]
     let .candidates [c] := inferStep I {} 77 0 ⟨E, []⟩ | return false
     if c.P_k != [.packetWrite 77 p.αCtx offset (8 * bytes) value] ||
-        c.E_k.entries.length != bytes || c.loc != .pos 1 ||
-        !c.E_k.entries.all (fun e => e.reg.kind == .packet) then return false
+        c.E_k.length != bytes || c.loc != .pos 1 ||
+        !c.E_k.all (fun e => e.reg.kind == .packet) then return false
     for j in List.range bytes do
       if c.E_k.lookupEq (Reg.packet p.αCtx (offset + j)) !=
           some (Term.C32 ((0xaabbccdd >>> (8 * j)) &&& 0xff)) then return false
@@ -1022,7 +1079,7 @@ private def packetStoreObservationsCheck : Bool := Id.run do
         some (star .w32 (.extract 8 8 32) [symbolic]) then return false
   let .ok child := Node.applyLocal ⟨symbolicE, []⟩ c.E_k c.P_k | return false
   let .ok overwritten := Node.applyLocal child
-    (ExprSet.empty.insertEq (Reg.real32 11) (Term.C32 0)) [] | return false
+    (Expr.nil.insertEq (Reg.real32 11) (Term.C32 0)) [] | return false
   if overwritten.predicates != [.packetWrite 77 p.αCtx 2 16 symbolic] then return false
   let zeroI := #[Insn.STORE (0#12, zreg, .Regidx 12#5, 1), decodeInsnWord 0x0001]
   let .candidates [zero] := inferStep zeroI {} 79 0 ⟨E, []⟩ | return false
@@ -1035,7 +1092,7 @@ private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
     |>.insertEq (Reg.real32 11) (Term.C32 7)
   let store := Insn.STORE (0#12, .Regidx 11#5, .Regidx 12#5, 4)
   let I := #[store, decodeInsnWord 0x0001]
-  let missing : ExprSet := { entries := E.entries.filter (fun e => e.reg != Reg.real32 11) }
+  let missing : List Expr := E.filter (fun e => e.reg != Reg.real32 11)
   let results := [rv32StepBound I none none 0 ⟨E, []⟩,
     inferStep I {} 77 0 ⟨missing, []⟩,
     inferStep #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 28#5, 4),
@@ -1046,7 +1103,7 @@ private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
 /-- Without frozen keys / Meta layout, Map stores still reject after local Expr succeeds. -/
 private def mapStoreObservationGapCheck : Bool :=
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
-  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+  let E := Expr.nil.insertEq (Reg.real32 8) pointer
     |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd)
     |>.insertEq (Reg.real32 2) pointer
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
@@ -1064,7 +1121,7 @@ private def mapStoreObservationsCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
   let lookup : Predicate := .helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)
-  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+  let E := Expr.nil.insertEq (Reg.real32 8) pointer
     |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd)
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
   let maps : List MapLayout := [{ mapId := 42, keySize := 4, valueSize := 16 }]
@@ -1107,7 +1164,7 @@ private def mapWriteProvenanceMatchCheck : Bool :=
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
   let lookup : Predicate := .helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)
-  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+  let E := Expr.nil.insertEq (Reg.real32 8) pointer
     |>.insertEq (Reg.real32 11) (Term.C32 123)
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
   let maps : List MapLayout := [{ mapId := 42, keySize := 4, valueSize := 16 }]
@@ -1124,7 +1181,7 @@ private def mapWriteProvenanceMismatchCheck : Bool :=
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 7]
   let key := [Term.C32 1]
   let lookup : Predicate := .helper 9 .lookup ([Term.C32 17, Term.V32 7] ++ key)
-  let E := ExprSet.empty.insertEq (Reg.real32 8) pointer
+  let E := Expr.nil.insertEq (Reg.real32 8) pointer
     |>.insertEq (Reg.real32 11) (Term.C32 123)
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 0)
   let mapsOnly17 : List MapLayout := [{ mapId := 17, keySize := 1, valueSize := 8 }]
@@ -1295,8 +1352,8 @@ private def statelessStepCheck : Bool :=
        | _ => false) &&
       p.rEntries == savedRegs &&
       (entryParamsOf { base := 0x400, helperAddress := 0x100 }).rEntries == savedRegs &&
-      state.exprs.keysUnique && state.exprs.entries.length == 25 &&
-      (state.exprs.entries.filter (fun e => e.reg.kind == .real)).length == 19 &&
+      state.exprs.keysUnique && state.exprs.length == 25 &&
+      (state.exprs.filter (fun e => e.reg.kind == .real)).length == 19 &&
       savedRegs.all (fun r => initialEqCheck state.exprs r p.tEntry) &&
       exportRv32ExpandStep #[] metaJson 0 0 "[]" "[]" ==
         headFailJson .invalidEntry &&
@@ -1307,7 +1364,7 @@ private def statelessStepCheck : Bool :=
 #guard statelessStepCheck
 
 private def encodedOpenMCheck : Bool :=
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 8) (Term.V32 41)
     |>.insertEq (Reg.real32 9) (Term.V32 42)
   let fixtures : List (UInt32 × Op) := [
@@ -1318,7 +1375,7 @@ private def encodedOpenMCheck : Bool :=
   fixtures.all fun (word, op) =>
     let expected := star .w32 op [Term.V32 41, Term.V32 42]
     let json := exportRv32ExpandStep #[word, 0x00008067]
-      (testMeta 0x400 0x100) 80 0 s!"[{renderExprSetJson E}]" "[]"
+      (testMeta 0x400 0x100) 80 0 s!"[{renderExprsJson E}]" "[]"
     json.contains "\"status\":\"ok\"" &&
       json.contains (renderExprJson (Expr.mkEq (Reg.real32 10) expected)) &&
       parseTerm (renderTerm expected) == some expected
@@ -1326,7 +1383,7 @@ private def encodedOpenMCheck : Bool :=
 private def encodedHelperBuffersCheck : Bool := Id.run do
   let key := addStar .w32 (Term.V32 0) (Term.C32 3)
   let value := addStar .w32 (Term.V32 0) (Term.C32 4)
-  let E := ExprSet.empty
+  let E := Expr.nil
     |>.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 5) (Term.C32 0x100)
     |>.insertEq (Reg.real32 11) (Term.C32 42)
@@ -1343,7 +1400,7 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 5, Term.C32 6])] do
     let state := E.insertEq (Reg.real32 10) (Term.C32 id)
     let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] metadataJson
-      80 0 s!"[{renderExprSetJson state}]" "[]"
+      80 0 s!"[{renderExprsJson state}]" "[]"
     if !json.contains "\"status\":\"ok\"" ||
         !json.contains (renderPredicateJson (.helper 80 kind (abi ++ tail))) ||
         !json.contains (renderExprJson (Expr.mkEq (Reg.real32 10)
@@ -1352,7 +1409,7 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
   let state := E.insertEq (Reg.real32 10) (Term.C32 2)
     |>.insertEq (Reg.real32 13) missingValue
   let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] metadataJson
-    80 0 s!"[{renderExprSetJson state}]" "[]"
+    80 0 s!"[{renderExprsJson state}]" "[]"
   return json.contains "\"status\":\"ok\"" &&
     json.contains (renderPredicateJson
       (.helper 80 .update [Term.C32 42, key, missingValue, Term.C32 0]))

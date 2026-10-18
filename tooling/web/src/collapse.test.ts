@@ -35,6 +35,7 @@ describe("foldSameTypeChains", () => {
     expect(fold.hidden.has(2)).toBe(true);
     expect(fold.hidden.has(3)).toBe(false);
     expect(fold.foldedCount.get(3)).toBe(3);
+    expect(fold.members.get(3)).toEqual([1, 2, 3]);
     expect(resolveFoldedId(1, fold)).toBe(3);
   });
 
@@ -47,6 +48,21 @@ describe("foldSameTypeChains", () => {
     const fold = foldSameTypeChains(
       [node(1), node(2), node(3)],
       [e(1, 2), e(2, 3)],
+      (id) => types.get(id) ?? "",
+      new Set(),
+    );
+    expect(fold.hidden.size).toBe(0);
+  });
+
+  it("does not fold either end of a one-sided branch", () => {
+    const types = new Map([
+      [1, "ALU"],
+      [2, "ALU"],
+      [3, "ALU"],
+    ]);
+    const fold = foldSameTypeChains(
+      [node(1), node(2), node(3)],
+      [e(1, 2), { from: 2, to: 3, dir: "not_taken" }],
       (id) => types.get(id) ?? "",
       new Set(),
     );

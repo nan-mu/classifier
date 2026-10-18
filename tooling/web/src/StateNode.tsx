@@ -17,6 +17,8 @@ export type StateNodeData = {
   foldedCount?: number;
   /** Load/store family: bottom wash + reg-kind accent. */
   accessFamily: boolean;
+  /** Expanded fold, drawn above the laid-out card. */
+  layer?: boolean;
 };
 
 export type StateFlowNode = Node<StateNodeData, "state">;
@@ -46,10 +48,12 @@ export function StateNodeView({ data }: NodeProps<StateFlowNode>) {
         data.compare ? " state-node--compare" : ""
       }${data.head ? " state-node--head" : ""}${
         data.processed ? " state-node--done" : ""
-      }${data.foldedCount && data.foldedCount > 1 ? " state-node--folded" : ""}`}
+      }${data.foldedCount && data.foldedCount > 1 ? " state-node--folded" : ""}${
+        data.layer ? " state-node--layer" : ""}`}
       title={title}
     >
       <Handle id="l" type="target" position={Position.Left} style={handleStyle} />
+      <Handle id="t" type="target" position={Position.Top} style={handleStyle} />
       <Handle id="r" type="source" position={Position.Right} style={handleStyle} />
       <div className="state-node__header">
         <span className="state-node__tags">{tagLine}</span>

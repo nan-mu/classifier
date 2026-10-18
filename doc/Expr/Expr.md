@@ -30,7 +30,7 @@
 \bigl(\mathrm{Reg}_w\times\mathrm{Rel}_w\times\mathrm{Term}_w\bigr).
 }
 \]
-\(e=(r_w,\bowtie,t_w)\) 表示关系 \(r_w\bowtie t_w\)。完整值绑定与比较约束的角色由表达式分量中的归属确定。比较仅使用 Expr。
+\(e=(r_w,\bowtie,t_w)\) 表示关系 \(r_w\bowtie t_w\)。完整值绑定与比较约束的角色由列表顺序推导，不单独存成两个集合。比较仅使用 Expr。
 
 ### 左值
 
@@ -58,11 +58,21 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 表达式分量
 
-\(\mathscr F(\mathrm{Expr})\) 的元素为 \(\mathcal E=(\mathcal V,\mathcal C)\)。\(\mathcal V\) 是有限完整值绑定集合，只使用 =，且每个寄存器的绑定唯一。\(\mathcal C\) 是按结构相等去重的有限比较 Expr 集合。集合归属保留角色信息。
+语义状态的表达式分量为有限列表 \(E\in\mathrm{List}(\mathrm{Expr})\)，形状与谓词分量 \(\mathrm{List}(\mathrm{Predicate})\) 相同。每一行是 \((r_w,\bowtie,t_w)\)。列表按结构相等去重；角色不另存字段。
 
-\(\{r=t\}\) 表示 \((\{r=t\},\varnothing)\)。空表达式分量为 \((\varnothing,\varnothing)\)。
+对每个寄存器，列表中**第一条**完整等式 \(r=t\) 是该寄存器的值绑定。其后各行，包括另一条 \(r=t'\)，都是比较约束，不替换该值。记
 
-源值查询只读取 \(\mathcal V\) 的完整等式。\(\mathcal C\) 中的 \(r=10\) 不自动成为 r 的完整源值。比较约束与值绑定可以具有相同左值和关系符。
+\[
+\operatorname{bindings}(E)
+=\text{各寄存器首次出现的完整等式，按列表顺序},
+\qquad
+\operatorname{constraints}(E)
+=E\setminus\operatorname{bindings}(E).
+\]
+
+\(\{r=t\}\) 表示只含该赋值的一元列表。空分量为 \([]\)。
+
+源值查询只读取 \(\operatorname{bindings}(E)\)。单独出现的 \(r=10\) 若是该寄存器的第一条等式，按当前顺序就是值绑定；分支比较通过[局部更新](#赋值覆盖全部旧关系)追加，使它落在既有值绑定之后。比较约束与值绑定可以具有相同左值和关系符。
 
 ### 右侧项的求解
 
@@ -156,7 +166,7 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 值关系与比较约束
 
-例如，\(r_1=a\) 是值绑定，等值分支新增 \(r_1=C_{32}(10)\) 是比较约束。[表达式分量](#表达式分量)区分两种角色及源值查询。约束的并存与赋值覆写见[关系集合按键覆写](#关系集合按键覆写)。
+例如，\(r_1=a\) 在列表靠前时是值绑定，等值分支再追加 \(r_1=C_{32}(10)\) 是比较约束。[表达式分量](#表达式分量)由顺序区分两种角色及源值查询。约束的并存与赋值覆写见[关系集合按键覆写](#关系集合按键覆写)。
 
 ### 关系解释（比较关系）
 
@@ -204,42 +214,47 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 唯一性与新增比较
 
-比较约束不按 \((r,\bowtie)\) 强制右值唯一。\(r=a\) 的值绑定和 \(r=10\) 的约束可以并存。\(r<10\) 与 \(r<20\) 两个约束也可以并存。
+比较约束不按 \((r,\bowtie)\) 强制右值唯一。同一列表里 \(r=a\) 的值绑定和其后的 \(r=10\) 可以并存。\(r<10\) 与 \(r<20\) 两个约束也可以并存。
 
-结构并集不承担可满足性求解。
+结构去重不承担可满足性求解。
 
 ### 赋值覆盖全部旧关系
 
-设输入为 \(\mathcal E=(\mathcal V,\mathcal C)\)，指令的结果为 \(\sigma_i=(E_i,P_i)\)，其中 \(E_i=(\mathcal V_i,\mathcal C_i)\) 是 Expr 分量，\(P_i\) 是谓词分量。\(\mathcal V_i\) 与 \(\mathcal C_i\) 分别是新赋值与新比较约束。\(W_i=\{r:(r,=,t)\in\mathcal V_i\}\) 是本次写入的寄存器集合；\(\operatorname{lhs}(e)\) 是 Expr 左值，\(\times\) 是表达式更新操作，\(\mathcal V',\mathcal C'\) 是更新后的两个分量：
+设输入列表为 \(E\)，指令局部结果为 \(\sigma_i=(E_i,P_i)\)，其中 \(E_i\) 是 Expr 列表，\(P_i\) 是谓词列表。记 \(\operatorname{lhs}(e)\) 为左值。赋值与比较的基本操作：
+
+- \(\operatorname{insertEq}(E,r,t)\)：将求解后的 \(r=t\) 置于列表头部，并删除该寄存器的全部旧行。
+- \(\operatorname{insertConstraint}(E,e)\)：若 \(e\) 尚未出现则追加到末尾；即使 \(e\) 的关系是 =，也不删除既有值绑定。
+- \(\operatorname{override}(E,E_i)\)：以 \(\operatorname{bindings}(E_i)\) 为写入集 \(W_i\)，删除 \(E\) 中左值属于 \(W_i\) 的全部旧行，再接上这些新赋值，最后把 \(\operatorname{constraints}(E_i)\) 逐条 \(\operatorname{insertConstraint}\)。
+
+分支比较不得把单独的 \(r=10\) 当成赋值。`applyLocal` 先识别与 \(P_i\) 中 Branch 条件同关系、同右侧、且当前值绑定仍等于条件左侧的行，对这些行只做 \(\operatorname{insertConstraint}\)；其余行再经 \(\operatorname{override}\)。因此
 
 \[
-\begin{aligned}
-\mathcal V'&=\{e\in\mathcal V:\operatorname{lhs}(e)\notin W_i\}\cup\mathcal V_i,\\
-\mathcal C'&=\{e\in\mathcal C:\operatorname{lhs}(e)\notin W_i\}\cup\mathcal C_i,\\
-\operatorname{updateExpr}(\mathcal E,E_i)
-&=\mathcal E\times E_i=(\mathcal V',\mathcal C').
-\end{aligned}
+\operatorname{updateExpr}(E,E_i,P_i)
+=\operatorname{insertConstraint}^\ast\bigl(
+\operatorname{override}(E,E_i\setminus F),\,F\bigr),
 \]
+
+其中 \(F\subseteq E_i\) 是上述分支事实，\(\operatorname{insertConstraint}^\ast\) 表示依次追加。直接调用 \(\operatorname{override}\)（溢出、ALU、Map 等）仍把 \(E_i\) 的首条等式当作写入。
 
 既有完整值与比较约束都在对应左值被赋值时删除。未写入的其他寄存器关系保持不变。
 
-例如 \(\mathcal V=\{r_1=a\}\)、\(\mathcal C=\{r_1<10\}\)，执行 \(r_1=20\) 后，\(\mathcal V'=\{r_1=20\}\)、\(\mathcal C'=\varnothing\)。新状态不会继续约束当前值 20 小于 10。
+例如 \(E=[r_1=a,\,r_1<10]\)，执行赋值 \(r_1=20\) 后得到 \([r_1=20]\)。新状态不会继续约束当前值 20 小于 10。
 
 ### 结构性质
 
-**命题 9（有效性保持）。** 输入与 \(E_i\) 有限、值绑定键唯一且位宽正确时，更新结果仍满足这些条件。比较约束结构去重。
+**命题 9（有效性保持）。** 输入与 \(E_i\) 有限、行结构去重且位宽正确时，更新结果仍满足这些条件。
 
-**证明。** 写入左值的旧关系已全部过滤，新旧值绑定没有共同左值；各部分内部唯一，故并集唯一。有限集合过滤与并集仍有限。关系本身的位宽不变。约束采用结构集合，不要求同关系符右值唯一。\(\square\)
+**证明。** 赋值删除该寄存器全部旧行后再前置新等式，故每个寄存器至多保留一条作为首条等式的值绑定，其余为后置比较。有限列表过滤与追加仍有限。关系本身的位宽不变。约束按结构去重，不要求同关系符右值唯一。\(\square\)
 
-**推论 10（更新代数）。** 对上述有效分量 \(\mathcal E,F,H\)，\(\times\) 表示按键覆写，\((\varnothing,\varnothing)\) 是空效果；有空更新、重复更新与结合性质：
+**推论 10（更新代数）。** 对上述有效列表 \(E,F,H\)，\(\times\) 表示 \(\operatorname{override}\)，\([]\) 是空效果；有空更新、重复更新与结合性质：
 
 \[
-\mathcal E\times(\varnothing,\varnothing)=\mathcal E,
-\qquad (\mathcal E\times F)\times F=\mathcal E\times F,
-\qquad (\mathcal E\times F)\times H=\mathcal E\times(F\times H).
+E\times[]=E,
+\qquad (E\times F)\times F=E\times F,
+\qquad (E\times F)\times H=E\times(F\times H).
 \]
 
-**证明。** 对每个寄存器分别考察。没有赋值时保留原绑定并合并约束。有赋值时取最右侧赋值，删除它之前的绑定与约束，只保留其后新增约束。空效果、相同效果重复及括号位置均不改变这个选择。\(\square\)
+**证明。** 对每个寄存器分别考察。没有赋值时保留原行并合并约束。有赋值时取最后一次赋值，删除它之前的绑定与约束，只保留其后新增约束。空效果、相同效果重复及括号位置均不改变这个选择。\(\square\)
 
 这些结论不证明当前约束可满足。这些结论不证明指令更新可交换。末态约束不能当成整条路径的历史条件。历史条件见[比较指令处理](../NodeInference/Jump/待处理.md)。
 
@@ -270,7 +285,7 @@ E_i=\{r_j=f_j^\star(t_1,\ldots,t_n):1\le j\le m\},
 - 完整写入新规范单元，可以由源值建立完整等式，无需目标旧值。
 - 部分写入新规范单元，若其余位没有当前值依据，不能建立完整结果。
 
-输入补充只增加值绑定：按输入契约引入本次读取所需的有限个完整等式，每个左值在已有值绑定与比较约束中均未出现；比较约束全部保留。补充输入后的关系记作 \(\overline E_g\)。指令效果从该关系计算。仅有比较而缺少完整源值时，不能当成尚未记录的入口输入。未定义的真实源寄存器不适用这一补充规则。
+输入补充只增加值绑定：按输入契约引入本次读取所需的有限个完整等式，每个左值在补充前列表中尚无值绑定；既有比较行全部保留。补充输入后的关系记作 \(\overline E_g\)。指令效果从该关系计算。仅有比较而缺少完整源值时，不能当成尚未记录的入口输入。未定义的真实源寄存器不适用这一补充规则。
 
 ## 指令结果的前提
 
@@ -289,7 +304,7 @@ E_i=\{r_j=f_j^\star(t_1,\ldots,t_n):1\le j\le m\},
 
 ### 局部 Expr 的共同形状
 
-每个实际写入对象在值绑定分量产生一个完整等式，其中的右侧项是该对象的新完整值项；写入效果不含比较约束。
+每个实际写入对象在局部效果列表中产生一个完整等式，其中的右侧项是该对象的新完整值项；写入效果不含比较行。
 
 \(E_i\) 依[多目标取源规则](#多目标更新与同一来源)从[补充输入后的关系](#未记录虚拟寄存器的取源)计算；\(E_g'\) 是最终关系，\(\times\) 是[完整值按键覆写](#赋值覆盖全部旧关系)：
 
@@ -312,9 +327,9 @@ E_g'=\overline E_g\times E_i.
 设某个指令实例产生 \(\sigma_i\)。可区分：
 
 - 仅产生 Expr：寄存器赋值、算术结果或链接值。
-- Expr 仅增加比较约束、Predicate 产生 Branch：分支两侧的关系不替换完整值；每个保留候选另按[Branch 的生成条件](../Predicate/Branch谓词.md#生成条件)生成谓词。
+- Expr 仅增加比较行、Predicate 产生 Branch：分支两侧的关系不替换完整值；每个保留候选另按[Branch 的生成条件](../Predicate/Branch谓词.md#生成条件)生成谓词。
 - 同时产生二者：值关系与调用观察共同发生；Map 元素内写入按[MapWrite 生成条件](../Predicate/MapWrite谓词.md#生成条件)生成观察，包实际存储按[PacketWrite 生成条件](../Predicate/PacketWrite谓词.md#生成条件)生成观察。
-- 仅产生 Return：不带链接值的最外层正常返回，其 Expr 分量为空；正常返回仍须[检查返回寄存器的完整等式](../NodeInference/step.md)，并在已识别为最外层正常返回的步骤按[Return 的生成条件](../Predicate/Return谓词.md#生成条件)生成谓词。
+- 仅产生 Return：不带链接值的最外层正常返回，其 Expr 列表为空；正常返回仍须[检查返回寄存器的完整等式](../NodeInference/step.md)，并在已识别为最外层正常返回的步骤按[Return 的生成条件](../Predicate/Return谓词.md#生成条件)生成谓词。
 - 二者均为空：只改变后继位置的无条件跳转或观察范围外的操作。
 - 局部规则无定义：不产生成功候选。
 

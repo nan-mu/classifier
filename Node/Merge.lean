@@ -68,7 +68,7 @@ do not matter; argument/key order, event identity, widths, operators and all AST
 The parser still requires unique value keys and structurally unique constraints. -/
 def sameConfig (a b : Node) : Bool :=
   decide (a.loc = b.loc) &&
-    sameSet a.state.exprs.entries b.state.exprs.entries &&
+    sameSet a.state.exprs b.state.exprs &&
     sameSet a.state.exprs.constraints b.state.exprs.constraints &&
     sameSet a.state.predicates b.state.predicates
 
@@ -116,7 +116,7 @@ private def snapshot (label : String) (j : Lean.Json) :
     pure predicate
   let some state := parseSemStateJson (Lean.Json.arr exprs).compress "[]" |
     throw ("InvalidSnapshot:" ++ label)
-  if !state.exprs.toList.all (fun e => validRel e.reg.width e.rel && validTerm e.term) then
+  if !state.exprs.all (fun e => validRel e.reg.width e.rel && validTerm e.term) then
     throw ("InvalidTerm:" ++ label)
   pure (id, ⟨loc, ⟨state.exprs, parsedPredicates⟩⟩)
 
@@ -251,7 +251,8 @@ private def mergeStateBoundaryCheck : Bool :=
   [mergeSnapshotFixture 17 "exit" value,
     mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "5" ++ "]"),
     mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "add32(2,2)" ++ "]"),
-    mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "4" ",\"role\":\"constraint\"" ++ "]"),
+    mergeSnapshotFixture 17 "1"
+      ("[" ++ mergeExprFixture ++ "," ++ mergeExprFixture "9" ",\"role\":\"constraint\"" ++ "]"),
     mergeSnapshotFixture 17 "1" "[{\"reg\":\"real64:10\",\"rel\":\"eq\",\"term\":\"4\"}]",
     mergeSnapshotFixture 17 "1" value ("[" ++ mergePredicateFixture ++ "]")].all
     (fun candidate => mergeRejects (mergeRequestFixture taken candidate) "NoExactConfigMatch") &&
@@ -369,7 +370,7 @@ private def mergeReuses (request : String) (reuseFrom taken : Nat) : Bool :=
       Lean.Json.getNat?).toOption == some taken)
 
 private def mergeStateSnapshotFixture (id : Nat) (loc : String) (state : SemState) : String :=
-  mergeSnapshotFixture id loc ("[" ++ renderExprSetJson state.exprs ++ "]")
+  mergeSnapshotFixture id loc ("[" ++ renderExprsJson state.exprs ++ "]")
     ("[" ++ renderPredicatesJson state.predicates ++ "]")
 
 private def mergeFiveClassRequirements : String :=
@@ -383,8 +384,8 @@ private def mergeMixedPredicates : List Predicate :=
    .packetWrite 9 2 0 32 (Term.V32 5)]
 
 private def mergeMixedRequest (a b : List Predicate) (model : String := "FiveClass") : String :=
-  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨ExprSet.empty, a⟩)
-    (mergeStateSnapshotFixture 17 "1" ⟨ExprSet.empty, b⟩)
+  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨Expr.nil, a⟩)
+    (mergeStateSnapshotFixture 17 "1" ⟨Expr.nil, b⟩)
     (if model == "HelperOnly" then "[\"Helper\"]" else mergeFiveClassRequirements) model
 
 private def mergeMixedSetCheck : Bool :=
@@ -393,8 +394,8 @@ private def mergeMixedSetCheck : Bool :=
     mergeReuses (mergeMixedRequest ps ps.reverse "HelperOnly") 17 42 &&
     match mergePredicate [ps[0]!, ps[1]!] (ps.reverse ++ ps) with
     | .ok result => result == [ps[0]!, ps[1]!, ps[4]!, ps[3]!, ps[2]!] &&
-      ExactMerge.sameConfig ⟨.pos 1, ⟨ExprSet.empty, result⟩⟩
-        ⟨.pos 1, ⟨ExprSet.empty, ps⟩⟩
+      ExactMerge.sameConfig ⟨.pos 1, ⟨Expr.nil, result⟩⟩
+        ⟨.pos 1, ⟨Expr.nil, ps⟩⟩
     | .error _ => false
 
 private def mergeChangedClassFieldCheck : Bool :=
@@ -473,7 +474,7 @@ private def mergeMalformedMixedCheck : Bool :=
 -- This diagnoses oracle behavior, not runtime scheduling or full-observation reuse.
 private def mergeJustDropOverwriteCheck : Bool :=
   let a3 := Reg.real32 13
-  let common := (ExprSet.empty.insertEq (Reg.real32 27) (Term.V32 59))
+  let common := (Expr.nil.insertEq (Reg.real32 27) (Term.V32 59))
     |>.insertConstraint (Expr.mkRel (Reg.real32 10) .geu
       (addStar .w32 (Term.V32 4) (Term.C32 14)))
     |>.insertConstraint (Expr.mkRel (Reg.real32 10) .geu
@@ -481,7 +482,7 @@ private def mergeJustDropOverwriteCheck : Bool :=
   let taken : SemState := ⟨common.insertEq a3 (Term.C32 43144), []⟩
   let notTaken : SemState := ⟨common.insertEq a3 (Term.C32 129), []⟩
   -- ADDI a3,zero,18 at wire loc17 contributes this local value effect.
-  let localExprs := ExprSet.empty.insertEq a3 (Term.C32 18)
+  let localExprs := Expr.nil.insertEq a3 (Term.C32 18)
   match Node.applyLocal taken localExprs [], Node.applyLocal notTaken localExprs [] with
   | .ok takenAfter, .ok notTakenAfter =>
     let beforeRequest := mergeRequestFixture (mergeStateSnapshotFixture 27 "17" taken)
@@ -504,7 +505,7 @@ private def mergeJustDropOverwriteCheck : Bool :=
 private def mergeComplementaryOverwriteCheck : Bool :=
   let compared := Reg.real32 13
   let other := Reg.real32 27
-  let common := (ExprSet.empty.insertEq compared (Term.V32 13))
+  let common := (Expr.nil.insertEq compared (Term.V32 13))
     |>.insertEq other (Term.V32 59)
     |>.insertConstraint (Expr.mkRel other .geu (Term.C32 1))
   [Rel.eq, .ltu].all fun rel =>
@@ -514,14 +515,14 @@ private def mergeComplementaryOverwriteCheck : Bool :=
     let notTaken : SemState := ⟨common.insertConstraint complement, []⟩
     let request (a b : SemState) := mergeRequestFixture (mergeStateSnapshotFixture 42 "17" a)
       (mergeStateSnapshotFixture 17 "17" b)
-    let overwrite := ExprSet.empty.insertEq compared (Term.C32 18)
-    let unrelated := ExprSet.empty.insertEq other (Term.C32 0)
+    let overwrite := Expr.nil.insertEq compared (Term.C32 18)
+    let unrelated := Expr.nil.insertEq other (Term.C32 0)
     match Node.applyLocal taken overwrite [], Node.applyLocal notTaken overwrite [],
         Node.applyLocal taken unrelated [], Node.applyLocal notTaken unrelated [] with
     | .ok takenAfter, .ok notTakenAfter, .ok takenUnrelated, .ok notTakenUnrelated =>
       let afterRequest := mergeRequestFixture (mergeStateSnapshotFixture 43 "18" takenAfter)
         (mergeStateSnapshotFixture 18 "18" notTakenAfter)
-      taken.exprs.entries == notTaken.exprs.entries &&
+      taken.exprs.bindings == notTaken.exprs.bindings &&
         taken.predicates.isEmpty && notTaken.predicates.isEmpty &&
         mergeRejects (request taken notTaken) "NoExactConfigMatch" &&
         mergeRejects (request takenUnrelated notTakenUnrelated) "NoExactConfigMatch" &&

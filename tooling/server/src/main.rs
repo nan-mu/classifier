@@ -647,7 +647,8 @@ mod http_tests {
         assert_eq!(report["edges"].as_array().unwrap().len(), 2);
         assert_eq!(report["nodes"][0]["left"][0]["tag"], "pred");
         assert_eq!(report["nodes"][0]["left"][0]["atom"]["kind"], "branch");
-        assert_eq!(report["nodes"][0]["matchStatus"], "fail");
+        // Same fork shape and kind counts (branch + ret) on both sides.
+        assert_eq!(report["nodes"][0]["matchStatus"], "pass");
         assert!(report["nodes"][0].get("tipScore").is_none());
     }
 

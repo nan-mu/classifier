@@ -5,17 +5,17 @@ namespace Core
 
 /-- Input materialization is separate from the instruction's simultaneous assignments. -/
 structure ExprEffect where
-  inputs : ExprSet := .empty
-  updates : ExprSet := .empty
+  inputs : List Expr := []
+  updates : List Expr := []
   deriving Inhabited, Repr
 
-def ExprEffect.delta (effect : ExprEffect) : ExprSet :=
+def ExprEffect.delta (effect : ExprEffect) : List Expr :=
   effect.inputs.override effect.updates
 
-def ExprEffect.validFor (effect : ExprEffect) (Eg : ExprSet) : Bool :=
+def ExprEffect.validFor (effect : ExprEffect) (Eg : List Expr) : Bool :=
   Eg.keysUnique && Eg.wellTyped && effect.inputs.wellTyped && effect.updates.wellTyped &&
     effect.inputs.keysUnique && effect.updates.keysUnique &&
-    effect.inputs.entries.all (fun e => (Eg.find? e.key).isNone)
+    effect.inputs.all (fun e => (Eg.lookupRel e.reg e.rel).isNone)
 
 /-- A resolved field in a canonical Stack, Map or Context cell; address binding is ISA-owned. -/
 structure CellAccess where
@@ -28,7 +28,7 @@ def CellAccess.valid (a : CellAccess) (valueWidth : Width) : Bool :=
   (a.reg.kind == .stack || a.reg.kind == .map || a.reg.kind == .context) &&
     a.bits > 0 && a.bits ≤ valueWidth.bits && a.bitOffset + a.bits ≤ a.reg.width.bits
 
-def CellAccess.read (a : CellAccess) (Eg : ExprSet) (w : Width)
+def CellAccess.read (a : CellAccess) (Eg : List Expr) (w : Width)
     (isUnsigned : Bool) : Option Term := do
   if !Eg.keysUnique || !Eg.wellTyped || !a.valid w then none
   else
@@ -41,7 +41,7 @@ def CellAccess.read (a : CellAccess) (Eg : ExprSet) (w : Width)
         else sStar a.bits w a.reg.width.bits field)
 
 /-- A frozen cell byte is the low-eight-bit zero-extension of its stored field. -/
-theorem CellAccess.read_byte (a : CellAccess) (Eg : ExprSet) (w : Width)
+theorem CellAccess.read_byte (a : CellAccess) (Eg : List Expr) (w : Width)
     (value : Term) (hb : a.bits = 8) (h : a.read Eg w true = some value) :
     ∃ stored, Eg.lookupEq a.reg = some stored ∧
       value = zStar 8 w a.reg.width.bits
@@ -59,12 +59,12 @@ theorem CellAccess.read_byte (a : CellAccess) (Eg : ExprSet) (w : Width)
         exact ⟨stored, rfl, h.symm⟩
       · simp [hs, hw] at h
 
-def CellAccess.write (a : CellAccess) (Eg : ExprSet) (source : Term) : Option ExprSet := do
+def CellAccess.write (a : CellAccess) (Eg : List Expr) (source : Term) : Option (List Expr) := do
   if !Eg.keysUnique || !Eg.wellTyped || !a.valid source.width then none
   else
     let low := zStar a.bits a.reg.width source.width.bits source
     if a.bitOffset == 0 && a.bits == a.reg.width.bits then
-      some (ExprSet.empty.insertEq a.reg
+      some (Expr.nil.insertEq a.reg
         (if source.width == a.reg.width then source else low))
     else
       let old ← Eg.lookupEq a.reg
@@ -74,7 +74,7 @@ def CellAccess.write (a : CellAccess) (Eg : ExprSet) (source : Term) : Option Ex
         let kept := andStar a.reg.width.bits a.reg.width old
           (Term.C a.reg.width (a.reg.width.mask ^^^ mask))
         let inserted := shlStar a.reg.width low (Term.C a.reg.width a.bitOffset)
-        some (ExprSet.empty.insertEq a.reg (orStar a.reg.width.bits a.reg.width kept inserted))
+        some (Expr.nil.insertEq a.reg (orStar a.reg.width.bits a.reg.width kept inserted))
 
 inductive ByteOrder where
   | little | big
@@ -107,10 +107,10 @@ private def packetSext (q v : Nat) (w : Width) (a : PacketOffset) : PacketOffset
   if q == v && v == w.bits then a else .sext q v a
 
 /-- Only a current packet-byte equality can justify an open offset leaf. -/
-def packetOffsetFrom (E : ExprSet) (t : Term) : Option PacketOffset :=
+def packetOffsetFrom (E : List Expr) (t : Term) : Option PacketOffset :=
   let normalized := solve t
   let isOpen := match t with | .const _ _ => false | _ => true
-  match E.entries.find? (fun e => isOpen && e.reg.kind == .packet &&
+  match E.bindings.find? (fun e => isOpen && e.reg.kind == .packet &&
       e.reg.compound.isNone && e.rel == .eq && e.term == normalized) with
   | some e => some (.packet e.reg.alpha)
   | none => match t with
@@ -138,11 +138,26 @@ def packetOffsetFrom (E : ExprSet) (t : Term) : Option PacketOffset :=
       pure (.or (← packetOffsetFrom E a) (← packetOffsetFrom E b))
     | .app _ (.lshr _) [a, .const _ n] =>
       (fun a => .lshr a n) <$> packetOffsetFrom E a
+    | .app w (.mullo _) [a, .const wc c]
+    | .app w (.mullo _) [.const wc c, a] =>
+      match natPow2Shift? c with
+      | some k =>
+        if k != 0 && decide (k < w.bits) && wc == w then
+          (fun a => .shl a (.c k)) <$> packetOffsetFrom E a
+        else none
+      | none => none
+    | .app w (.udiv _ z) [a, .const wc c] =>
+      match natPow2Shift? c with
+      | some k =>
+        if z == 0 && k != 0 && decide (k < w.bits) && wc == w then
+          (fun a => .lshr a k) <$> packetOffsetFrom E a
+        else none
+      | none => none
     | _ => none
 termination_by sizeOf t
 
 /-- A single entry data root plus an offset in the packet-only grammar. -/
-def packetDisplacement (E : ExprSet) (root address : Term) : Option PacketOffset :=
+def packetDisplacement (E : List Expr) (root address : Term) : Option PacketOffset :=
   if address == root then some (.c 0) else
   match address with
   | .app _ (.id _) [a] => packetDisplacement E root a
@@ -158,7 +173,7 @@ def packetDisplacement (E : ExprSet) (root address : Term) : Option PacketOffset
   | _ => none
 termination_by sizeOf address
 
-def PacketOffset.toTerm (E : ExprSet) (w : Width) : PacketOffset → Option Term
+def PacketOffset.toTerm (E : List Expr) (w : Width) : PacketOffset → Option Term
   | .c n => some (Term.C w n)
   | .packet alpha => do
     let byte ← E.lookupEq ⟨.packet, .w32, alpha, none⟩
@@ -190,7 +205,7 @@ partial def termContains (needle hay : Term) : Bool :=
 /-- A passed check mentions this packet's end pointer. The access still has to be
 one data root plus an offset in the packet grammar. The checked end recorded for
 that access is the access itself: later length arithmetic is not re-proved. -/
-private def endMentioned (E : ExprSet) (preds : List Predicate) (ending : Term) : Bool :=
+private def endMentioned (E : List Expr) (preds : List Predicate) (ending : Term) : Bool :=
   let endTerm := solve ending
   let inTerm (t : Term) := termContains endTerm (solve t)
   preds.any (fun (p : Predicate) => match p with
@@ -201,7 +216,7 @@ private def endMentioned (E : ExprSet) (preds : List Predicate) (ending : Term) 
         | some lhs => inTerm lhs
         | none => false
 
-private def unsignedEnd (E : ExprSet) (ending : Term) (e : Expr) :
+private def unsignedEnd (E : List Expr) (ending : Term) (e : Expr) :
     Option (Term × Bool) := do
   let lhs ← E.lookupEq e.reg
   if (e.rel == .leu || e.rel == .ltu) && solve e.term == solve ending then
@@ -210,7 +225,7 @@ private def unsignedEnd (E : ExprSet) (ending : Term) (e : Expr) :
     some (e.term, e.rel == .gtu)
   else none
 
-def packetBoundWitness (E : ExprSet) (base address ending : Term) (bytes : Nat)
+def packetBoundWitness (E : List Expr) (base address ending : Term) (bytes : Nat)
     (preds : List Predicate := []) : Option (Bool × PacketOffset) :=
   let actual := additiveSpine address.width (solve address)
   let bounds := E.constraints.filterMap fun e => do
@@ -287,15 +302,15 @@ private def bytePosition (a : PacketAccess) (j : Nat) : Nat :=
   if a.order == .little then j else a.bytes - 1 - j
 
 structure PacketRead where
-  inputs : ExprSet
+  inputs : List Expr
   value : Term
   deriving Inhabited, Repr
 
-def PacketAccess.read (a : PacketAccess) (Eg : ExprSet) (w : Width)
+def PacketAccess.read (a : PacketAccess) (Eg : List Expr) (w : Width)
     (isUnsigned : Bool) : Option PacketRead := do
   if !Eg.keysUnique || !Eg.wellTyped || !a.valid w then none
   else
-    let mut inputs := ExprSet.empty
+    let mut inputs := Expr.nil
     let mut raw := Term.C w 0
     for j in List.range a.bytes do
       let reg := a.byteReg j
@@ -326,7 +341,7 @@ def PacketAccess.read (a : PacketAccess) (Eg : ExprSet) (w : Width)
 
 /-- A one-byte packet freeze zero-extends the saved or materialized byte.
 The surrounding OR/shift is the read assembler's zero-offset identity wrapper. -/
-theorem PacketAccess.read_byte (a : PacketAccess) (Eg : ExprSet) (w : Width)
+theorem PacketAccess.read_byte (a : PacketAccess) (Eg : List Expr) (w : Width)
     (result : PacketRead) (hb : a.bytes = 1)
     (h : a.read Eg w true = some result) :
     ∃ stored, result.value =
@@ -368,10 +383,10 @@ theorem PacketAccess.read_byte (a : PacketAccess) (Eg : ExprSet) (w : Width)
             exact ⟨_, rfl⟩
     · simp [PacketAccess.read, hb, List.range_succ, bytePosition, he, hempty] at h
 
-def PacketAccess.write (a : PacketAccess) (Eg : ExprSet) (source : Term) : Option ExprSet := do
+def PacketAccess.write (a : PacketAccess) (Eg : List Expr) (source : Term) : Option (List Expr) := do
   if !Eg.keysUnique || !Eg.wellTyped || !a.valid source.width then none
   else
-    let mut updates := ExprSet.empty
+    let mut updates := Expr.nil
     for j in List.range a.bytes do
       let byte := star .w32 (.extract (8 * bytePosition a j) 8 source.width.bits) [source]
       updates := updates.insertEq (a.byteReg j) byte

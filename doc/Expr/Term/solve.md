@@ -52,16 +52,20 @@ FV(f(t_1,\ldots,t_n))=\bigcup_{j=1}^{n}FV(t_j).
 
 ## 化简规则
 
-设 \(t\in\mathrm{Term}_w\)。令 \(\operatorname{norm}_w\) 按 R2 至 R6 处理当前根及这些规则暴露的加法脊，其他子树保持原项；先消去遇到的 R5、R6 形状，再收集加项并按 R4 重建。化简先对输入作 R1，规范化后再对整个结果作一次 R1：
+设 \(t\in\mathrm{Term}_w\)。令 \(\operatorname{norm}_w\) 按 R2 至 R6 处理当前根及这些规则暴露的加法脊，其他子树保持原项；先消去遇到的 R5、R6 形状，再收集加项并按 R4 重建。\(\operatorname{lift}_w\) 只在具体移位和按位或的根上做 R8、R9，并递归到这两个头的子项。化简先对输入作 R1；良构项再做整数域改写和规范化，最后再作一次 R1。非良构输入原样保留：
 
 \[
 \operatorname{solve}_w(t):=
-\operatorname{foldClosed}_w\bigl(\operatorname{norm}_w(\operatorname{foldClosed}_w(t))\bigr).
+\begin{cases}
+\operatorname{foldClosed}_w\bigl(\operatorname{norm}_w(\operatorname{lift}_w(\operatorname{foldClosed}_w(t)))\bigr),
+& t\text{ 良构},\\
+t,& \text{否则}.
+\end{cases}
 \]
 
 最后一次整项折叠可以求值由零化或单位元消去后暴露出的闭结果，仍不在开放树内任意递归折叠闭子项。规则内的常数属于 \(\mathbb B_w\)，\(D_w\) 见[部分求值与未解释运算](#部分求值与未解释运算)。
 
-**R1 闭项折叠。** 中间函数 \(\operatorname{foldClosed}_w:\mathrm{Term}_w\to\mathrm{Term}_w\) 只检查整项。含变元时保持整项，随后仍可应用 R2 至 R6；其中的闭子项不单独折叠。
+**R1 闭项折叠。** 中间函数 \(\operatorname{foldClosed}_w:\mathrm{Term}_w\to\mathrm{Term}_w\) 只检查整项。含变元时保持整项，随后仍可应用 R2 至 R6 与 R8、R9；其中的闭子项不单独折叠。
 \[
 \boxed{
 \operatorname{foldClosed}_w(t):=
@@ -103,9 +107,13 @@ t,&FV(t)\ne\varnothing\ \lor\ D_w(t)=\bot.
 \end{aligned}
 \]
 
-**R7 满域投影消去。** 位域取整段、低位视图宽度与项位宽相同、零扩展或符号扩展的输入输出位宽相同时，投影可消去。该条为可选规则。
+**R7 满域投影消去。** 位域取整段、低位视图宽度与项位宽相同、零扩展或符号扩展的输入输出位宽相同时，投影可消去。该条为可选规则，不在已证规则内，`solve` 不执行它。
 
-未列出形状的应用项保留原样，包括未解释运算（包输入与外部调用结果）与含变元的位运算，例如 \(\mathrm{AND}(V_{32}(\xi),C_{32}(2^{32}-16))\) 保持形式。化简不使用分配律，不合并不同变元的项，不做掩码合并，也不使用位级恒等式。多目标取源与应用顺序见[多目标更新与同一执行前关系](../Expr.md#多目标更新与同一来源)。
+**R8 具体移位进入整数运算。** 设 \(s=k\bmod w\)。\(\mathrm{SHL}(t,C_w(k))\) 在 \(s=0\) 时得到 \(t\)（移位量等于位宽也落在这里）；\(t\) 本身是常元时折成 \(\mathrm{SHL}\) 的常元，否则写成 \(\mathrm{MULLO}(t,C_w(2^s))\)。\(\mathrm{LSHR}(t,C_w(k))\) 同样处理，除数侧使用 \(\mathrm{UDIV}\)，除零结果为 \(0\)。算术右移、以及移位量不是常元的情况保持原项。这一步只改写移位根，不折叠开放乘法下面的闭加法。
+
+**R9 位段不相交的或改为加。** \(\mathrm{OR}_q\) 仅当两侧静态位段都不超出 \(q\)、并且两段不相交时写成同宽 \(\mathrm{ADD}\)。满位宽的 \(\mathrm{OR}(t,C_w(0))\) 与 \(\mathrm{OR}(C_w(0),t)\) 消去零侧，这是 R6 的两侧形式。两侧都是常元时按数值 \(\mathrm{OR}\) 折叠，不改成 \(\mathrm{ADD}\)。位段未知或重叠时保持 \(\mathrm{OR}\)。
+
+未列出形状的应用项保留原样，包括未解释运算（包输入与外部调用结果）与含变元的位运算，例如 \(\mathrm{AND}(V_{32}(\xi),C_{32}(2^{32}-16))\) 保持形式。化简不使用分配律，不合并不同变元的系数，不做一般掩码合并。DnD 里无条件把 \(\mathrm{OR}\) 改成加法、以及丢掉 `Extract` 高位掩码的改写没有采用；`ZeroExt` 继续保留。多目标取源与应用顺序见[多目标更新与同一执行前关系](../Expr.md#多目标更新与同一来源)。
 
 ## 项的全序
 
@@ -147,7 +155,7 @@ R1 以 \(D_w\) 为判据：只有闭项且 \(D_w(t)\) 取得数值时才折为�
 \operatorname{solve}_w(\operatorname{solve}_w(t))
 =\operatorname{solve}_w(t).
 \]
-**证明。** 加法脊内常数已合并并置于末位，非恒等项的次序与结合方向固定，规则暴露范围内的相消项和单位元项已消去。若规范化结果闭合且可求值，最后一次整项 R1 将其折成规范常元；否则第二次 R1 仍取得相同的未定结果。未暴露的子树保持原项，第二次规范化只会再次收集同一有序加项及同一模常数，再次重建得到原结果。故第二次 solve 不变。若启用可选 R7，还须证明投影消去后的结果满足同一规范形条件。\(\square\)
+**证明。** 加法脊内常数已合并并置于末位，非恒等项的次序与结合方向固定，规则暴露范围内的相消项和单位元项已消去。R8 的结果是底数、常元、\(\mathrm{MULLO}\) 或 \(\mathrm{UDIV}\)，不再是具体移位；R9 的结果是另一侧操作数、数值 \(\mathrm{OR}\) 常元或 \(\mathrm{ADD}\)，不再是可改写的 \(\mathrm{OR}\)。第二次 \(\operatorname{lift}_w\) 因此不再改写这些根。若规范化结果闭合且可求值，最后一次整项 R1 将其折成规范常元；否则第二次 R1 仍取得相同的未定结果。未暴露的子树保持原项，第二次规范化只会再次收集同一有序加项及同一模常数，再次重建得到原结果。故第二次 solve 不变。若启用可选 R7，还须证明投影消去后的结果满足同一规范形条件。\(\square\)
 
 Lean 的 `Core.solve_idempotent` 对任意原始 `Term` 证明命题 5，`Core.solve_width` 证明位宽保持，`Core.solve_support` 证明输出变元属于输入变元集合。这三个定理不要求输入良构；坏签名输入由 `solve` 原样保留。良构输入的良构保持由 `foldClosed_wellFormed`、`normalizeAlgebra_wellFormed` 和末次 `foldClosed_wellFormed` 组合得到，`normalizeAlgebra_idempotent` 的前提为输入 `wellFormed=true`。这些定理位于 [Term.lean](../../../Core/Term.lean)，均已通过 Lean kernel。
 
@@ -162,11 +170,11 @@ Lean 的 `Core.solve_idempotent` 对任意原始 `Term` 证明命题 5，`Core.s
 \left[\!\left[\operatorname{solve}_w(t)\right]\!\right]_{\nu,\theta}
 =\left[\!\left[ t\right]\!\right]_{\nu,\theta}.
 \]
-**证明。** R1 由[闭项求值](#闭项求值)与常元解释得到，未取得数值时该步骤保持原项。R2 与 R4 由 \(\mathrm{ADD}\) 在 \(\mathbb B_w\) 上的交换律与结合律、以及 \(M_w\) 的幂等性得到。R3 由 \(M_w(a-c)=M_w(a+M_w(2^w-c))\) 得到。R5 的两个相同子项在完整补全下均有同一个值 \(a\)，再由 \(\mathrm{SUB}(a,a)=0\) 与 \(\mathrm{XOR}(a,a)=0\) 得到。R6 由各自的数值定义得到。未列出形状的应用项保持原项。\(\square\)
+**证明。** R1 由[闭项求值](#闭项求值)与常元解释得到，未取得数值时该步骤保持原项。R2 与 R4 由 \(\mathrm{ADD}\) 在 \(\mathbb B_w\) 上的交换律与结合律、以及 \(M_w\) 的幂等性得到。R3 由 \(M_w(a-c)=M_w(a+M_w(2^w-c))\) 得到。R5 的两个相同子项在完整补全下均有同一个值 \(a\)，再由 \(\mathrm{SUB}(a,a)=0\) 与 \(\mathrm{XOR}(a,a)=0\) 得到。R6 由各自的数值定义得到。R8 由 \(s=0\) 时移位等于底数，以及具体 \(\mathrm{SHL}\) 等于乘以 \(2^s\)、具体 \(\mathrm{LSHR}\) 等于除以 \(2^s\)（除零结果取 \(0\)）得到。R9 由满位宽与零的 \(\mathrm{OR}\) 等于另一侧，以及两侧位段不相交且都落在 \(q\) 内时 \(\mathrm{OR}_q(a,b)=\mathrm{ADD}(a,b)\) 得到；该等式使用两侧都小于 \(2^q\)，因而和不会越过模 \(2^w\)。未列出形状的应用项保持原项。\(\square\)
 
 若外部解释允许缺失值，命题 7 的等式一般不成立。令 \(e\) 为缺少 \(\theta\) 解释的外部结果项，则严格部分解释对 \(\mathrm{SUB}(e,e)\) 返回 `none`，R5 化简后 \(C_w(0)\) 的解释为 `some 0`。因此，完整补全上的数值等式与任意部分 `Option` 求值结果相等是两个不同命题。
 
-命题 7 的 Lean 对应为 [SolvePreservation.lean](../../../Core/SolvePreservation.lean) 导出的 `Core.solve_interpret`：对任意 `ν : Var → Nat`、`θ : ExternalInterpretation` 和 `t : Term`，在 `θ.Total` 与 `t.wellFormed=true` 下，`interpretTerm ν θ (solve t) = interpretTerm ν θ t`。它覆盖开放项及完整 R1 至 R6，已通过 Lean kernel。R2 至 R6 的一般保持定理为同一文件中的 `Core.normalizeAlgebra_interpret`，使用相同前提；R1 的 `Core.foldClosed_interpret` 对任意部分环境已成立。文件内 `SolvePreservation` 命名空间维护辅助证明，两个保持定理实际导出在 `Core` 命名空间。
+命题 7 的 Lean 对应为 [SolvePreservation.lean](../../../Core/SolvePreservation.lean) 导出的 `Core.solve_interpret`：对任意 `ν : Var → Nat`、`θ : ExternalInterpretation` 和 `t : Term`，在 `θ.Total` 与 `t.wellFormed=true` 下，`interpretTerm ν θ (solve t) = interpretTerm ν θ t`。它覆盖开放项及完整 R1 至 R6 与 R8、R9，已通过 Lean kernel。R2 至 R6 的一般保持定理为同一文件中的 `Core.normalizeAlgebra_interpret`，使用相同前提；R8、R9 的保持在同文件的 `liftInteger_interpret`。R1 的 `Core.foldClosed_interpret` 对任意部分环境已成立。文件内 `SolvePreservation` 命名空间维护辅助证明，保持定理实际导出在 `Core` 命名空间。
 
-Lean 的 `θ.Total` 只要求外部函数处处返回某个自然数，节点解释再按载体取模；它比数学完整补全的字节值域条件弱，见 [Term 的解释补全](Term.md#未解释运算的解释补全)。数值代数引理见 [NumericProofs.lean](../../../Core/NumericProofs.lean) 的 `ADD_assoc`、`ADD_comm`、`SUB_eq_ADD_NEG`、`SUB_self`、`XOR_self` 及相应单位元定理。可选 R7 不在上述已证规则范围内。化简不声称完备：语义等价而规范形不同的项仍视为不同项。
+Lean 的 `θ.Total` 只要求外部函数处处返回某个自然数，节点解释再按载体取模；它比数学完整补全的字节值域条件弱，见 [Term 的解释补全](Term.md#未解释运算的解释补全)。数值代数引理见 [NumericProofs.lean](../../../Core/NumericProofs.lean) 的 `ADD_assoc`、`ADD_comm`、`SUB_eq_ADD_NEG`、`SUB_self`、`XOR_self`、`SHL_eq_MULLO`、`LSHR_eq_UDIV`、`OR_eq_ADD_of_split` 及相应单位元定理。可选 R7 不在上述已证规则范围内。化简不声称完备：语义等价而规范形不同的项仍视为不同项。
 

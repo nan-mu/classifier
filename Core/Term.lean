@@ -176,7 +176,7 @@ end
 
 def Term.rawLE (a b : Term) : Bool := (compare a.orderKey b.orderKey).isLE
 
-private def termZero : Term → Bool
+def termZero : Term → Bool
   | .const _ 0 => true
   | _ => false
 
@@ -233,11 +233,144 @@ def foldClosed (t : Term) : Term :=
     | none => t
   else t
 
-/-- R1 is whole-term folding. Open trees are traversed only along the permitted spine. -/
+/-- Trailing zeros of `n`. Zero reports none. -/
+def ctz : Nat → Nat
+  | 0 => 0
+  | n + 1 => if (n + 1) % 2 = 0 then ctz ((n + 1) / 2) + 1 else 0
+termination_by n => n
+decreasing_by
+  simp_wf
+  exact Nat.div_lt_self (Nat.succ_pos n) (by decide)
+
+/-- Bits needed to hold `n`. Zero uses none. -/
+def bitLen (n : Nat) : Nat :=
+  if n == 0 then 0 else Nat.log2 n + 1
+
+/-- Shift amount when `c = 2^k`, otherwise none. `1` yields `some 0`. -/
+def natPow2Shift? (c : Nat) : Option Nat :=
+  if c != 0 && c &&& (c - 1) == 0 then some (Nat.log2 c) else none
+
+/-- Inclusive-exclusive bit interval. `lo ≥ hi` means the only value is zero. -/
+structure BitSpan where
+  lo : Nat
+  hi : Nat
+  deriving DecidableEq, Repr
+
+namespace BitSpan
+
+def empty : BitSpan := ⟨0, 0⟩
+
+def isEmpty (s : BitSpan) : Bool := decide (s.lo ≥ s.hi)
+
+def disjoint (a b : BitSpan) : Bool :=
+  a.isEmpty || b.isEmpty || a.hi ≤ b.lo || b.hi ≤ a.lo
+
+def join (a b : BitSpan) : Option BitSpan :=
+  if a.isEmpty then some b
+  else if b.isEmpty then some a
+  else if a.hi ≤ b.lo then some ⟨a.lo, b.hi⟩
+  else if b.hi ≤ a.lo then some ⟨b.lo, a.hi⟩
+  else none
+
+end BitSpan
+
+/-- Static bound on the bits a term can occupy. Unknown terms yield none. -/
+def bitRange (w : Width) (t : Term) : Option BitSpan :=
+  match t with
+  | .const _ c =>
+    some (if c == 0 then .empty else ⟨ctz c, bitLen c⟩)
+  | .app tw op args =>
+    if tw != w then none else
+    match op, args with
+    | .and q, [_, .const _ m] | .and q, [.const _ m, _] =>
+      if q == 0 || w.bits < q then none else
+        let m := m &&& ((1 <<< q) - 1)
+        some (if m == 0 then .empty else ⟨ctz m, bitLen m⟩)
+    | .zext q _ _, [_] =>
+      if 0 < q && q ≤ w.bits then some ⟨0, q⟩ else none
+    | .low q _, [_] =>
+      if 0 < q && q ≤ w.bits then some ⟨0, q⟩ else none
+    | .extract 0 ℓ _, [_] =>
+      if 0 < ℓ && ℓ ≤ w.bits then some ⟨0, ℓ⟩ else none
+    | .id _, [a] => bitRange w a
+    | .mullo _, [a, .const _ c] | .mullo _, [.const _ c, a] =>
+      match natPow2Shift? c with
+      | some k =>
+        match bitRange w a with
+        | some s =>
+          if s.isEmpty then some .empty
+          else if s.hi + k ≤ w.bits then some ⟨s.lo + k, s.hi + k⟩ else none
+        | none => none
+      | none => none
+    | .add _, [a, b] =>
+      match bitRange w a, bitRange w b with
+      | some sa, some sb => BitSpan.join sa sb
+      | _, _ => none
+    | .udiv _ z, [a, .const _ c] =>
+      if z != 0 then none else
+      match natPow2Shift? c with
+      | some k =>
+        if w.bits ≤ k then none else
+        match bitRange w a with
+        | some s =>
+          some (if s.isEmpty || s.hi ≤ k then .empty else
+            ⟨if s.lo ≤ k then 0 else s.lo - k, s.hi - k⟩)
+        | none => some ⟨0, w.bits - k⟩
+      | none => none
+    | _, _ => none
+  | _ => none
+termination_by sizeOf t
+
+/-- One bottom-up step. Concrete shifts become products or quotients; bitwise
+or becomes addition only when the two sides occupy disjoint bits. -/
+def rewriteHead (w : Width) (op : Op) (args : List Term) : Term :=
+  match op, args with
+  | .shl _, [.const wa av, .const wc k] =>
+    if wa == w && wc == w then .const w (SHL w av k) else .app w op args
+  | .shl _, [a, .const wc k] =>
+    if wc == w && a.width == w then
+      if k % w.bits == 0 then a
+      else .app w (.mullo w) [a, .const w (1 <<< (k % w.bits))]
+    else .app w op args
+  | .lshr _, [.const wa av, .const wc k] =>
+    if wa == w && wc == w then .const w (LSHR w av k) else .app w op args
+  | .lshr _, [a, .const wc k] =>
+    if wc == w && a.width == w then
+      if k % w.bits == 0 then a
+      else .app w (.udiv w 0) [a, .const w (1 <<< (k % w.bits))]
+    else .app w op args
+  | .or q, [a, b] =>
+    if q == w.bits && termZero a && a.width == w && b.width == w then b
+    else if q == w.bits && termZero b && a.width == w && b.width == w then a
+    else
+      match a, b with
+      | .const wa av, .const wb bv =>
+        if wa == w && wb == w && 0 < q && q ≤ w.bits then
+          .const w (MNat w.bits (OR q av bv))
+        else .app w op args
+      | _, _ =>
+        match bitRange w a, bitRange w b with
+        | some sa, some sb =>
+          if 0 < q && q ≤ w.bits && sa.hi ≤ q && sb.hi ≤ q && sa.disjoint sb then
+            .app w (.add w) [a, b]
+          else .app w op args
+        | _, _ => .app w op args
+  | _, _ => .app w op args
+
+/-- DnD's integer-domain conversion, restricted to rewrites that preserve `2^w`. -/
+def liftInteger : Term → Term
+  | .const w c => .const w c
+  | .var w n => .var w n
+  | .regVar e r => .regVar e r
+  | .app w op args => rewriteHead w op (args.map liftInteger)
+termination_by t => sizeOf t
+
+/-- R1 folds a closed root. Open trees are rewritten on bit idioms, then only
+along the permitted algebraic spine. -/
 def solve (t : Term) : Term :=
   if t.wellFormed then
     let folded := foldClosed t
-    foldClosed (normalizeAlgebra folded)
+    foldClosed (normalizeAlgebra (liftInteger folded))
   else t
 
 private def SpineAtom (w : Width) (a : Term) : Prop :=
@@ -389,28 +522,586 @@ private theorem foldClosed_algebra_fixed (t : Term)
     · exact h
   · exact h
 
+theorem rewriteHead_width (w : Width) (op : Op) (args : List Term) :
+    (rewriteHead w op args).width = w := by
+  unfold rewriteHead
+  repeat (any_goals split)
+  all_goals simp_all [Term.width, Bool.and_eq_true, beq_iff_eq]
+
+theorem liftInteger_width (t : Term) : (liftInteger t).width = t.width := by
+  cases t with
+  | const _ _ | var _ _ | regVar _ _ => simp [liftInteger]
+  | app w op args =>
+    simp only [liftInteger]
+    exact rewriteHead_width w op (args.map liftInteger)
+
+private theorem terms_member_wf (args : List Term) (a : Term)
+    (ha : a ∈ args) (h : termsWellFormed args = true) : a.wellFormed = true := by
+  induction args with
+  | nil => cases ha
+  | cons b args ih =>
+    simp only [termsWellFormed, Bool.and_eq_true] at h
+    cases ha with
+    | head => exact h.1
+    | tail _ ht => exact ih ht h.2
+
+private theorem terms_map_wf (args : List Term)
+    (h : ∀ a ∈ args, (liftInteger a).wellFormed = true) :
+    termsWellFormed (args.map liftInteger) = true := by
+  induction args with
+  | nil => simp [termsWellFormed]
+  | cons a args ih =>
+    simp [termsWellFormed, h a (by simp), ih (fun x hx => h x (by simp [hx]))]
+
+theorem rewriteHead_wellFormed (w : Width) (op : Op) (args : List Term)
+    (hs : op.validSignature w (args.map Term.width) = true)
+    (hf : termsWellFormed args = true) :
+    (rewriteHead w op args).wellFormed = true := by
+  unfold rewriteHead
+  repeat (any_goals split)
+  all_goals try simp_all [Term.wellFormed, termsWellFormed, Op.validSignature,
+    Bool.and_eq_true, beq_iff_eq, decide_eq_true_eq, SHL_lt, LSHR_lt, MNat_lt]
+  all_goals
+    first
+    | (refine ⟨rfl, ?_⟩; simpa [kShift] using shift_pow_lt _ _)
+    | (apply Nat.lt_of_lt_of_le (OR_lt _ _ _); apply Nat.pow_le_pow_right (by decide); omega)
+    | exact MNat_lt _ _
+    | done
+
+theorem liftInteger_wellFormed (t : Term) (h : t.wellFormed = true) :
+    (liftInteger t).wellFormed = true := by
+  match t with
+  | .const .. => simpa [liftInteger] using h
+  | .var .. => simp [liftInteger, Term.wellFormed]
+  | .regVar .. => simpa [liftInteger] using h
+  | .app w op args =>
+    have hs : op.validSignature w (args.map Term.width) = true ∧
+        termsWellFormed args = true := by
+      simpa [Term.wellFormed, Bool.and_eq_true] using h
+    simp only [liftInteger]
+    refine rewriteHead_wellFormed w op (args.map liftInteger) ?_ ?_
+    · have hw : (args.map liftInteger).map Term.width = args.map Term.width := by
+        induction args with
+        | nil => rfl
+        | cons a as ih => simp [liftInteger_width]
+      simpa [hw] using hs.1
+    · exact terms_map_wf args (fun a ha =>
+        liftInteger_wellFormed a (terms_member_wf args a ha hs.2))
+termination_by sizeOf t
+
+private theorem mem_foldl_FV (args : List Term) (acc : List Var) (v : Var)
+    (h : v ∈ args.foldl (fun acc t => acc ++ FV t) acc) :
+    v ∈ acc ∨ ∃ a ∈ args, v ∈ FV a := by
+  induction args generalizing acc with
+  | nil => exact Or.inl h
+  | cons a args ih =>
+    rw [List.foldl_cons] at h
+    rcases ih (acc ++ FV a) h with h | ⟨b, hb, hv⟩
+    · rw [List.mem_append] at h
+      rcases h with h | h
+      · exact Or.inl h
+      · exact Or.inr ⟨a, by simp, h⟩
+    · exact Or.inr ⟨b, by simp [hb], hv⟩
+
+private theorem mem_acc_FV (args : List Term) (acc : List Var) (v : Var)
+    (h : v ∈ acc) : v ∈ args.foldl (fun acc t => acc ++ FV t) acc := by
+  induction args generalizing acc with
+  | nil => exact h
+  | cons a args ih =>
+    rw [List.foldl_cons]
+    exact ih (acc ++ FV a) (by simp [h])
+
+private theorem mem_FV_child (args : List Term) (acc : List Var) (b : Term) (v : Var)
+    (hb : b ∈ args) (hv : v ∈ FV b) :
+    v ∈ args.foldl (fun acc t => acc ++ FV t) acc := by
+  induction args generalizing acc with
+  | nil => cases hb
+  | cons hd rest ih =>
+    rw [List.foldl_cons]
+    rcases (List.mem_cons).mp hb with rfl | hb
+    · exact mem_acc_FV rest (acc ++ FV b) v (by simp [hv])
+    · exact ih _ hb
+
+theorem rewriteHead_support (w : Width) (op : Op) (args : List Term) (v : Var)
+    (h : v ∈ FV (rewriteHead w op args)) : ∃ a ∈ args, v ∈ FV a := by
+  unfold rewriteHead at h
+  repeat (any_goals split at h)
+  all_goals try simp_all [FV]
+  all_goals
+    first
+    | done
+    | (obtain ⟨l, ⟨a, ha, rfl⟩, hv⟩ := ‹∃ l, (∃ a, a ∈ args ∧ FV a = l) ∧ v ∈ l›
+       exact ⟨a, ha, hv⟩)
+
+theorem liftInteger_support (t : Term) (v : Var) (h : v ∈ FV (liftInteger t)) : v ∈ FV t := by
+  match t with
+  | .const .. => simp [liftInteger, FV] at h
+  | .var .. => simpa [liftInteger, FV] using h
+  | .regVar .. => simpa [liftInteger, FV] using h
+  | .app w op args =>
+    simp only [liftInteger] at h
+    obtain ⟨a, ha, hv⟩ := rewriteHead_support w op (args.map liftInteger) v h
+    obtain ⟨b, hb, rfl⟩ := List.mem_map.mp ha
+    simpa [FV] using mem_FV_child args [] b v hb (liftInteger_support b v hv)
+termination_by sizeOf t
+
+private theorem bool_contra {b : Bool} (h1 : b = true) (h2 : b = false) : False := by
+  cases h2
+  cases h1
+
+private theorem map_fixed (args : List Term) (h : ∀ a ∈ args, liftInteger a = a) :
+    args.map liftInteger = args := by
+  induction args with
+  | nil => rfl
+  | cons a args ih =>
+    simp [h a (by simp), ih (fun x hx => h x (by simp [hx]))]
+
+private theorem rewriteHead_fixed (w : Width) (op : Op) (args : List Term)
+    (h : ∀ a ∈ args, liftInteger a = a) :
+    liftInteger (rewriteHead w op args) = rewriteHead w op args := by
+  cases op with
+  | shl ow =>
+    cases args with
+    | nil => simp [rewriteHead, liftInteger]
+    | cons a rest =>
+      cases rest with
+      | nil => simp [rewriteHead, liftInteger, h a (by simp)]
+      | cons b rest2 =>
+        cases rest2 with
+        | cons _ _ => simp [rewriteHead, liftInteger, map_fixed _ h]
+        | nil =>
+          have ha : liftInteger a = a := h a (by simp)
+          have hb : liftInteger b = b := h b (by simp)
+          cases b with
+          | const wc k =>
+            cases a with
+            | const wa av =>
+              cases hf : (wa == w && wc == w) <;>
+                simp [rewriteHead, hf, liftInteger, List.map_cons, List.map_nil]
+            | var ww nn =>
+              cases hf : (wc == w && (Term.var ww nn).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;>
+                  simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;>
+                  simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
+            | app ww op as =>
+              cases hf : (wc == w && (Term.app ww op as).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;>
+                  simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
+          | var _ _ | regVar _ _ | app _ _ _ =>
+            simp [rewriteHead, liftInteger, ha, hb, List.map_cons, List.map_nil]
+  | lshr ow =>
+    cases args with
+    | nil => simp [rewriteHead, liftInteger]
+    | cons a rest =>
+      cases rest with
+      | nil => simp [rewriteHead, liftInteger, h a (by simp)]
+      | cons b rest2 =>
+        cases rest2 with
+        | cons _ _ => simp [rewriteHead, liftInteger, map_fixed _ h]
+        | nil =>
+          have ha : liftInteger a = a := h a (by simp)
+          have hb : liftInteger b = b := h b (by simp)
+          cases b with
+          | const wc k =>
+            cases a with
+            | const wa av =>
+              cases hf : (wa == w && wc == w) <;>
+                simp [rewriteHead, hf, liftInteger, List.map_cons, List.map_nil]
+            | var ww nn =>
+              cases hf : (wc == w && (Term.var ww nn).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;>
+                  simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;>
+                  simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
+            | app ww op as =>
+              cases hf : (wc == w && (Term.app ww op as).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;>
+                  simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
+          | var _ _ | regVar _ _ | app _ _ _ =>
+            simp [rewriteHead, liftInteger, ha, hb, List.map_cons, List.map_nil]
+  | or q =>
+    cases args with
+    | nil => simp [rewriteHead, liftInteger]
+    | cons a rest =>
+      cases rest with
+      | nil => simp [rewriteHead, liftInteger, h a (by simp)]
+      | cons b rest2 =>
+        cases rest2 with
+        | cons _ _ => simp [rewriteHead, liftInteger, map_fixed _ h]
+        | nil =>
+          have ha : liftInteger a = a := h a (by simp)
+          have hb : liftInteger b = b := h b (by simp)
+          simp only [rewriteHead]
+          split
+          · exact hb
+          · rename_i hza
+            split
+            · exact ha
+            · rename_i hzb
+              split
+              · split
+                · simp [liftInteger]
+                · rename_i hfold
+                  simp only [liftInteger, ha, hb, List.map_cons, List.map_nil, rewriteHead,
+                    if_neg hza, if_neg hzb, if_neg hfold]
+              · rename_i _ _ xnot
+                split
+                · split
+                  · simp only [liftInteger, rewriteHead, ha, hb, List.map_cons, List.map_nil]
+                  · rename_i _ _ sa sb hra hrb hdisj
+                    simp only [liftInteger, ha, hb, List.map_cons, List.map_nil, rewriteHead,
+                      if_neg hza, if_neg hzb, hra, hrb, if_neg hdisj]
+                · rename_i _ _ xrange
+                  simp only [liftInteger, ha, hb, List.map_cons, List.map_nil, rewriteHead,
+                    if_neg hza, if_neg hzb]
+  | add w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | sub w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | mullo w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | udiv w' _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | urem w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | sdiv w' _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | srem w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | mulh w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | mulhu w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | mulhsu w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | selectEq w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | neg w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | id w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | and _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | xor _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | ashr w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | ltu w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | lts w' => simp [rewriteHead, liftInteger, map_fixed args h]
+  | low _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | extract _ _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | zext _ _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | sext _ _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | bswap _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | externalResult _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | inputByte _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | mergeLow _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | packetRead _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
+
+theorem liftInteger_idempotent (t : Term) : liftInteger (liftInteger t) = liftInteger t := by
+  match t with
+  | .const _ _ | .var _ _ | .regVar _ _ => simp [liftInteger]
+  | .app w op args =>
+    simp only [liftInteger]
+    apply rewriteHead_fixed
+    intro a ha
+    obtain ⟨b, hb, rfl⟩ := List.mem_map.mp ha
+    exact liftInteger_idempotent b
+termination_by sizeOf t
+
+mutual
+private def termDepth : Term → Nat
+  | .const _ _ | .var _ _ | .regVar _ _ => 0
+  | .app _ _ args => termDepths args + 1
+private def termDepths : List Term → Nat
+  | [] => 0
+  | a :: as => max (termDepth a) (termDepths as)
+end
+
+private theorem termDepth_mem (a : Term) (args : List Term) (h : a ∈ args) :
+    termDepth a ≤ termDepths args := by
+  induction args with
+  | nil => cases h
+  | cons b bs ih =>
+    rcases List.mem_cons.mp h with rfl | h
+    · exact Nat.le_max_left _ _
+    · exact Nat.le_trans (ih h) (Nat.le_max_right _ _)
+
+private theorem termDepths_map (args : List Term)
+    (h : ∀ a ∈ args, termDepth (liftInteger a) ≤ termDepth a) :
+    termDepths (args.map liftInteger) ≤ termDepths args := by
+  induction args with
+  | nil => simp [termDepths]
+  | cons a as ih =>
+    simp only [List.map_cons, termDepths]
+    have h1 := h a (by simp)
+    have h2 := ih (fun x hx => h x (by simp [hx]))
+    omega
+
+private theorem termDepth_rewrite (w : Width) (op : Op) (args : List Term) :
+    termDepth (rewriteHead w op args) ≤ termDepth (.app w op args) := by
+  unfold rewriteHead
+  repeat (any_goals split)
+  all_goals simp_all [termDepth, termDepths] <;> omega
+
+private theorem termDepth_lift (t : Term) : termDepth (liftInteger t) ≤ termDepth t := by
+  match t with
+  | .const _ _ | .var _ _ | .regVar _ _ => simp [liftInteger, termDepth]
+  | .app w op args =>
+    simp only [liftInteger, termDepth]
+    exact Nat.le_trans (termDepth_rewrite w op (args.map liftInteger))
+      (Nat.succ_le_succ (termDepths_map args (fun a _ => termDepth_lift a)))
+termination_by sizeOf t
+
+private theorem termDepth_arg (w : Width) (op : Op) (args : List Term) (a : Term)
+    (h : a ∈ args) : termDepth a < termDepth (.app w op args) := by
+  simp only [termDepth]
+  exact Nat.lt_succ_of_le (termDepth_mem a args h)
+
+private theorem map_mem_fixed (args : List Term) (hmap : args.map liftInteger = args)
+    (a : Term) (ha : a ∈ args) : liftInteger a = a := by
+  induction args with
+  | nil => cases ha
+  | cons b bs ih =>
+    simp only [List.map_cons, List.cons.injEq] at hmap
+    rcases hmap with ⟨hb, hbs⟩
+    rcases List.mem_cons.mp ha with rfl | ha
+    · exact hb
+    · exact ih hbs ha
+
+private theorem child_result_absurd (w : Width) (op : Op) (args : List Term) (x : Term)
+    (hx : x ∈ args.map liftInteger) (h : x = .app w op args) : False := by
+  have hlt := termDepth_arg w op (args.map liftInteger) x hx
+  rw [h] at hlt
+  have hle := termDepths_map args (fun a _ => termDepth_lift a)
+  simp only [termDepth] at hlt
+  omega
+
+private theorem app_children_fixed (w : Width) (op : Op) (args : List Term)
+    (h : liftInteger (.app w op args) = .app w op args) (a : Term) (ha : a ∈ args) :
+    liftInteger a = a := by
+  simp only [liftInteger] at h
+  cases op with
+  | shl ow =>
+    cases hmap : args.map liftInteger with
+    | nil =>
+      simp [rewriteHead, hmap] at h
+      exact map_mem_fixed args (hmap.trans h.symm) a ha
+    | cons x xs =>
+      cases xs with
+      | nil =>
+        simp [rewriteHead, hmap] at h
+        exact map_mem_fixed args (hmap.trans h) a ha
+      | cons y ys =>
+        cases ys with
+        | cons z zs =>
+          simp [rewriteHead, hmap] at h
+          exact map_mem_fixed args (hmap.trans h) a ha
+        | nil =>
+          cases y with
+          | const wc k =>
+            cases x with
+            | const wa av =>
+              cases hf : (wa == w && wc == w) <;> simp [rewriteHead, hmap, hf] at h
+              · exact map_mem_fixed args (hmap.trans h) a ha
+            | var ww nn =>
+              cases hf : (wc == w && (Term.var ww nn).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
+              · exact map_mem_fixed args (hmap.trans h) a ha
+              · exact map_mem_fixed args (hmap.trans h) a ha
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
+              · exact map_mem_fixed args (hmap.trans h) a ha
+              · exact map_mem_fixed args (hmap.trans h) a ha
+            | app ww oop as =>
+              cases hf : (wc == w && (Term.app ww oop as).width == w)
+              · cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf] at h
+                · exact map_mem_fixed args (hmap.trans h) a ha
+                · exact map_mem_fixed args (hmap.trans h) a ha
+              · cases hs : ((k % w.bits) == 0)
+                · rw [hmap] at h
+                  simp only [rewriteHead, hf, hs] at h
+                  cases h
+                · rw [hmap] at h
+                  simp only [rewriteHead, hf, hs] at h
+                  exact (child_result_absurd w (.shl ow) args
+                    (.app ww oop as) (by simp [hmap]) h).elim
+          | var _ _ | regVar _ _ | app _ _ _ =>
+            simp [rewriteHead, hmap] at h
+            exact map_mem_fixed args (hmap.trans h) a ha
+  | lshr ow =>
+    cases hmap : args.map liftInteger with
+    | nil =>
+      simp [rewriteHead, hmap] at h
+      exact map_mem_fixed args (hmap.trans h.symm) a ha
+    | cons x xs =>
+      cases xs with
+      | nil =>
+        simp [rewriteHead, hmap] at h
+        exact map_mem_fixed args (hmap.trans h) a ha
+      | cons y ys =>
+        cases ys with
+        | cons z zs =>
+          simp [rewriteHead, hmap] at h
+          exact map_mem_fixed args (hmap.trans h) a ha
+        | nil =>
+          cases y with
+          | const wc k =>
+            cases x with
+            | const wa av =>
+              cases hf : (wa == w && wc == w) <;> simp [rewriteHead, hmap, hf] at h
+              · exact map_mem_fixed args (hmap.trans h) a ha
+            | var ww nn =>
+              cases hf : (wc == w && (Term.var ww nn).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
+              · exact map_mem_fixed args (hmap.trans h) a ha
+              · exact map_mem_fixed args (hmap.trans h) a ha
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
+                cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
+              · exact map_mem_fixed args (hmap.trans h) a ha
+              · exact map_mem_fixed args (hmap.trans h) a ha
+            | app ww oop as =>
+              cases hf : (wc == w && (Term.app ww oop as).width == w)
+              · cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf] at h
+                · exact map_mem_fixed args (hmap.trans h) a ha
+                · exact map_mem_fixed args (hmap.trans h) a ha
+              · cases hs : ((k % w.bits) == 0)
+                · rw [hmap] at h
+                  simp only [rewriteHead, hf, hs] at h
+                  cases h
+                · rw [hmap] at h
+                  simp only [rewriteHead, hf, hs] at h
+                  exact (child_result_absurd w (.lshr ow) args
+                    (.app ww oop as) (by simp [hmap]) h).elim
+          | var _ _ | regVar _ _ | app _ _ _ =>
+            simp [rewriteHead, hmap] at h
+            exact map_mem_fixed args (hmap.trans h) a ha
+  | or q =>
+    cases hmap : args.map liftInteger with
+    | nil =>
+      simp [rewriteHead, hmap] at h
+      exact map_mem_fixed args (hmap.trans h.symm) a ha
+    | cons x xs =>
+      cases xs with
+      | nil =>
+        simp [rewriteHead, hmap] at h
+        exact map_mem_fixed args (hmap.trans h) a ha
+      | cons y ys =>
+        cases ys with
+        | cons z zs =>
+          simp [rewriteHead, hmap] at h
+          exact map_mem_fixed args (hmap.trans h) a ha
+        | nil =>
+          rw [hmap] at h
+          simp only [rewriteHead] at h
+          split at h
+          · exact (child_result_absurd w (.or q) args y (by simp [hmap]) h).elim
+          · split at h
+            · exact (child_result_absurd w (.or q) args x (by simp [hmap]) h).elim
+            · split at h
+              · split at h
+                · cases h
+                · injection h with _ _ heq
+                  exact map_mem_fixed args (hmap.trans heq) a ha
+              · split at h
+                · split at h
+                  · cases h
+                  · injection h with _ _ heq
+                    exact map_mem_fixed args (hmap.trans heq) a ha
+                · injection h with _ _ heq
+                  exact map_mem_fixed args (hmap.trans heq) a ha
+  | add _ | sub _ | mullo _ | udiv _ _ | urem _ | sdiv _ _ | srem _ | mulh _ | mulhu _
+    | mulhsu _ | selectEq _ | neg _ | id _ | and _ | xor _ | ashr _ | ltu _ | lts _
+    | low _ _ | extract _ _ _ | zext _ _ _ | sext _ _ _ | bswap _ _ | externalResult _ _
+    | inputByte _ | mergeLow _ _ | packetRead _ _ =>
+    simp only [rewriteHead] at h
+    injection h with _ _ heq
+    exact map_mem_fixed args heq a ha
+
+private theorem spine_atoms_fixed (w : Width) (t : Term) (h : liftInteger t = t) :
+    ∀ a ∈ (additiveSpine w t).1, liftInteger a = a := by
+  fun_induction additiveSpine w t
+  case case2 wo wi lhs rhs _ _ ihl ihr =>
+    intro a ha
+    simp only [List.mem_append] at ha
+    rcases ha with ha | ha
+    · exact ihl (app_children_fixed wo (.add wi) [lhs, rhs] h lhs (by simp)) a ha
+    · exact ihr (app_children_fixed wo (.add wi) [lhs, rhs] h rhs (by simp)) a ha
+  case case4 wo wi lhs wc c _ hne ih =>
+    exact ih (app_children_fixed wo (.sub wi) [lhs, .const wc c] h lhs (by simp))
+  case case7 wo q lhs rhs hne hz ih =>
+    exact ih (app_children_fixed wo (.xor q) [lhs, rhs] h lhs (by simp))
+  case case9 wo q lhs rhs hz ih =>
+    exact ih (app_children_fixed wo (.or q) [lhs, rhs] h lhs (by simp))
+  case case11 wo q lhs wc c hz ih =>
+    exact ih (app_children_fixed wo (.and q) [lhs, .const wc c] h lhs (by simp))
+  case case13 wo wi lhs rhs hone ih =>
+    exact ih (app_children_fixed wo (.mullo wi) [lhs, rhs] h lhs (by simp))
+  case case15 wo wi lhs rhs hz ih =>
+    exact ih (app_children_fixed wo (.shl wi) [lhs, rhs] h lhs (by simp))
+  case case17 wo wi lhs rhs hz ih =>
+    exact ih (app_children_fixed wo (.lshr wi) [lhs, rhs] h lhs (by simp))
+  case case19 wo wi lhs rhs hz ih =>
+    exact ih (app_children_fixed wo (.ashr wi) [lhs, rhs] h lhs (by simp))
+  all_goals simp_all
+
+private theorem foldl_add_fixed (w : Width) (atoms : List Term) (acc : Term)
+    (hacc : liftInteger acc = acc) (ha : ∀ a ∈ atoms, liftInteger a = a) :
+    liftInteger (atoms.foldl (fun lhs rhs => .app w (.add w) [lhs, rhs]) acc) =
+      atoms.foldl (fun lhs rhs => .app w (.add w) [lhs, rhs]) acc := by
+  induction atoms generalizing acc with
+  | nil => exact hacc
+  | cons a as ih =>
+    rw [List.foldl_cons]
+    exact ih (.app w (.add w) [acc, a])
+      (by simp only [liftInteger, rewriteHead, List.map_cons, List.map_nil, hacc,
+        ha a (by simp)])
+      (fun x hx => ha x (by simp [hx]))
+
+private theorem rebuild_fixed (w : Width) (atoms : List Term) (c : Nat)
+    (ha : ∀ a ∈ atoms, liftInteger a = a) :
+    liftInteger (rebuildSpine w atoms c) = rebuildSpine w atoms c := by
+  cases atoms with
+  | nil => simp [rebuildSpine, liftInteger]
+  | cons a as =>
+    have hsum := foldl_add_fixed w as a (ha a (by simp)) (fun x hx => ha x (by simp [hx]))
+    simp only [rebuildSpine]
+    split
+    · exact hsum
+    · simp only [liftInteger, rewriteHead, List.map_cons, List.map_nil, hsum, liftInteger]
+
+private theorem liftInteger_normalize (t : Term) (h : liftInteger t = t) :
+    liftInteger (normalizeAlgebra t) = normalizeAlgebra t := by
+  unfold normalizeAlgebra
+  refine rebuild_fixed t.width _ _ ?_
+  intro a hm
+  exact spine_atoms_fixed t.width t h a (List.mem_mergeSort.mp hm)
+
+private theorem liftInteger_fold (t : Term) (h : liftInteger t = t) :
+    liftInteger (foldClosed t) = foldClosed t := by
+  unfold foldClosed
+  split
+  · split
+    · simp [liftInteger]
+    · exact h
+  · exact h
+
 /-- Solving twice has the same result as solving once for every raw term. -/
 theorem solve_idempotent (t : Term) : solve (solve t) = solve t := by
   by_cases h : t.wellFormed = true
-  · let n := normalizeAlgebra (foldClosed t)
-    have hf := foldClosed_wellFormed t h
-    have hn := (normalizeAlgebra_wellFormed _ hf).1
-    have hfix := foldClosed_algebra_fixed n (normalizeAlgebra_idempotent _ hf)
-    have hout := foldClosed_wellFormed n hn
-    change solve (if t.wellFormed then foldClosed n else t) = _
-    simp only [h, ↓reduceIte]
-    unfold solve
-    simp only [hout, ↓reduceIte, foldClosed_idempotent, hfix]
-    simp only [h, ↓reduceIte]
-    rfl
+  · simp [solve, h]
+    let v := liftInteger (foldClosed t)
+    have hv : liftInteger v = v := liftInteger_idempotent _
+    have hl : v.wellFormed = true :=
+      liftInteger_wellFormed _ (foldClosed_wellFormed t h)
+    have hn := liftInteger_normalize v hv
+    have hfold := liftInteger_fold (normalizeAlgebra v) hn
+    have hs : (foldClosed (normalizeAlgebra v)).wellFormed = true :=
+      foldClosed_wellFormed _ (normalizeAlgebra_wellFormed v hl).1
+    have halg := foldClosed_algebra_fixed (normalizeAlgebra v)
+      (normalizeAlgebra_idempotent v hl)
+    intro _
+    rw [hfold, halg, foldClosed_idempotent]
   · simp [solve, h]
 
 theorem solve_width (t : Term) : (solve t).width = t.width := by
   unfold solve
   split
   · rename_i h
-    rw [foldClosed_width, (normalizeAlgebra_wellFormed _ (foldClosed_wellFormed t h)).2,
-      foldClosed_width]
+    rw [foldClosed_width,
+      (normalizeAlgebra_wellFormed _ (liftInteger_wellFormed _ (foldClosed_wellFormed t h))).2,
+      liftInteger_width, foldClosed_width]
   · rfl
 
 /-- \(f^\star(t_1,\ldots,t_n)=\operatorname{solve}_w(f(t_1,\ldots,t_n))\). -/
@@ -512,7 +1203,10 @@ theorem foldClosed_support (t : Term) (v : Var)
 theorem solve_support (t : Term) (v : Var) (h : v ∈ FV (solve t)) : v ∈ FV t := by
   unfold solve at h
   split at h
-  · exact foldClosed_support t v (normalizeAlgebra_support _ v (foldClosed_support _ v h))
+  · exact foldClosed_support t v
+      (liftInteger_support _ v
+        (normalizeAlgebra_support _ v
+          (foldClosed_support _ v h)))
   · exact h
 
 private theorem interpretWith_pure (θ : ExternalInterpretation) (w : Width)

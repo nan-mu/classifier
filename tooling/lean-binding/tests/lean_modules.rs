@@ -150,32 +150,30 @@ fn rv32_symbolic_packet_offset_preserves_partial_graph() {
     let snapshot = |steps| -> serde_json::Value {
         serde_json::from_str(&rv32::expand_snapshot(steps, 512)).expect("json")
     };
-    let before = snapshot(38);
-    let failed = snapshot(39);
+    // Matches `esp32c3DeepFrontierCheck`: after 38 expands the queued call is
+    // still an unbound external jump; the graph freezes with 41 nodes.
+    let before = snapshot(37);
+    let failed = snapshot(38);
     assert_eq!(before["status"], "running");
-    assert_eq!(before["work"], serde_json::json!([40, 41, 42]));
-    assert_eq!(before["fuel"], 474);
+    assert_eq!(before["work"], serde_json::json!([40]));
+    assert_eq!(before["fuel"], 475);
     assert_eq!(failed["status"], "fail");
-    assert_eq!(failed["reason"], "UndefinedSrc");
+    assert_eq!(failed["reason"], "UnboundTarget");
     assert_eq!(failed["failed"], 40);
     assert_eq!(before["failed"], serde_json::Value::Null);
-    // Includes every pre-instruction expression and predicate: BLTU forks,
-    // successful STORE effects, and the short-side return survive rejection.
+    // BLTU forks and the short-side return survive; no further nodes are added.
     assert_eq!(failed["nodes"], before["nodes"]);
     assert_eq!(failed["edges"], before["edges"]);
     let nodes = failed["nodes"].as_array().expect("nodes");
     let edges = failed["edges"].as_array().expect("edges");
-    assert_eq!(nodes.len(), 43);
-    assert_eq!(nodes[40]["loc"], "25");
-    assert_eq!(nodes[41]["id"], 41);
-    assert_eq!(nodes[41]["loc"], "36");
-    assert!(edges.iter().any(|e| e["dst"] == 41));
-    assert!(!edges.iter().any(|e| e["src"] == 41));
+    assert_eq!(nodes.len(), 41);
+    assert_eq!(nodes[40]["id"], 40);
+    assert_eq!(nodes[40]["loc"], "36");
     assert!(edges.iter().any(|e| e["dir"] == "Taken"));
     assert!(edges.iter().any(|e| e["dir"] == "NotTaken"));
     assert!(nodes.iter().any(|n| n["loc"] == "exit"));
-    assert_eq!(failed["work"], serde_json::json!([41, 42]));
-    assert_eq!(failed["fuel"], 473);
+    assert_eq!(failed["work"], serde_json::json!([]));
+    assert_eq!(failed["fuel"], 474);
     assert_eq!(snapshot(512), failed);
 }
 
@@ -291,10 +289,6 @@ mod stateless_head_ffi {
             ("[", "[]"),
             (r#"[{"reg":"real32:1","rel":"eq","term":"bad"}]"#, "[]"),
             (r#"[{"reg":"packet64:1","rel":"eq","term":"0"}]"#, "[]"),
-            (
-                r#"[{"reg":"real32:1","rel":"eq","term":"0"},{"reg":"real32:1","rel":"eq","term":"1"}]"#,
-                "[]",
-            ),
             ("[]", r#"[{"kind":"unknown"}]"#),
         ] {
             assert_eq!(
@@ -304,6 +298,29 @@ mod stateless_head_ffi {
                 })
             );
         }
+        // Two equalities on one register are value then comparison, not a reject.
+        assert_eq!(
+            step(
+                &words,
+                0,
+                r#"[{"reg":"real32:1","rel":"eq","term":"0"},{"reg":"real32:1","rel":"eq","term":"1"}]"#,
+                "[]",
+            ),
+            json!({
+                "status":"ok",
+                "reason":null,
+                "successors":[{
+                    "dir":"OK",
+                    "loc":"1",
+                    "exprs":[
+                        {"reg":"real32:1","rel":"eq","term":"0"},
+                        {"reg":"real32:10","rel":"eq","term":"7"},
+                        {"reg":"real32:1","rel":"eq","role":"constraint","term":"1"}
+                    ],
+                    "predicates":[]
+                }],
+            })
+        );
         assert_eq!(step(&[], 0, "[]", "[]")["reason"], "InvalidEntry");
         assert_eq!(
             step(&[0x000e0513, 0x00008067], 0, "[]", "[]"),

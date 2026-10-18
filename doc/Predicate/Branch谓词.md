@@ -79,7 +79,7 @@ NotTaken 使用对应补关系；`JSET` 的补关系为 \(\mathrm{BITSZ}^{[q]}\)
 
 ## 生成条件
 
-\(E_g=(\mathcal V_g,\mathcal C_g)\) 是条件局部规则实际读取的有效 Expr 关系；\(\mathcal V_g\) 提供唯一的完整源值绑定，\(\mathcal C_g\) 是比较约束集合，两者的归属见 [Expr 表达式分量](../Expr/Expr.md#表达式分量)。\(P_g\) 是执行前的谓词集合，Branch谓词构造对它无成员前提。
+\(E_g\) 是条件局部规则实际读取的有效 Expr 列表；\(\operatorname{bindings}(E_g)\) 提供唯一的完整源值绑定，\(\operatorname{constraints}(E_g)\) 是比较行，见 [Expr 表达式分量](../Expr/Expr.md#表达式分量)。\(P_g\) 是执行前的谓词列表，Branch谓词构造对它无成员前提。
 
 固定当前架构的解码与取源规则。令 \(\lambda:\mathrm{Pos}_{\mathbf I}\times\{\mathrm{Taken},\mathrm{NotTaken}\}\rightharpoonup\mathrm{Pos}_{\mathbf I}\) 为该程序的条件后继位置绑定；\(\lambda(j,d)\) 在方向 \(d\) 的目标唯一有效时有定义，无定义表示该目标未取得合法绑定。
 
@@ -108,7 +108,7 @@ R(\mathbf I,j,E_g):=
 \end{cases}
 \]
 
-其中 \(R\) 是本次条件指令保留的方向集合，\(\operatorname{decide}\) 使用旧左源项 \(u\) 判定 \(e\)，\(\bot\) 表示源项齐备但数值判定未知；\(e\)、\(u\) 均由参数 \((\mathbf I,j,E_g)\) 按上述取源规则确定。此规则不求解 \(\mathcal C_g\) 或 \(P_g\) 的累积可满足性。
+其中 \(R\) 是本次条件指令保留的方向集合，\(\operatorname{decide}\) 使用旧左源项 \(u\) 判定 \(e\)，\(\bot\) 表示源项齐备但数值判定未知；\(e\)、\(u\) 均由参数 \((\mathbf I,j,E_g)\) 按上述取源规则确定。此规则不求解 \(\operatorname{constraints}(E_g)\) 或 \(P_g\) 的累积可满足性。
 
 所有保留方向的目标均绑定成功时，合法局部分支候选集合为：
 
@@ -178,7 +178,7 @@ P_{i,d}:=
 
 - [Expr 的比较关系](../Expr/Expr.md#比较关系)：比较 Expr 的当前左值、部分判定与补关系。
 - [Expr 的关系符与符号项](../Expr/Expr.md#关系符定义)：比较位宽、符号性与按位测试；[Term](../Expr/Term/Term.md#term)维护项及解释补全。
-- [Expr 的完整值绑定](../Expr/Expr.md#表达式分量)：局部规则读取的源值与比较约束的区分。
+- [Expr 的列表与值绑定](../Expr/Expr.md#表达式分量)：局部规则读取的源值与比较行的区分。
 - [Expr 的 solve 化简与求值](../Expr/Term/solve.md#solve-的化简与求值)：solve、部分数值求值及未知结果。
 - [谓词定义](谓词定义.md)：结构相等、有限集合累积与历史顺序。
 - [Helper 各类谓词](Helper谓词.md#类型定义)：外部调用观察。

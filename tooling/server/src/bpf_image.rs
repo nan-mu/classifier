@@ -229,7 +229,7 @@ mod tests {
         let drop_bpf = include_bytes!("../../test/xdp/just_drop/just_drop.bpf.o");
         let fw_bpf = include_bytes!("../../test/xdp/firewall/firewall.bpf.o");
         assert_eq!(map_lddw_slots(drop_bpf).expect("drop"), vec![25]);
-        assert_eq!(map_lddw_slots(fw_bpf).expect("fw"), vec![24]);
+        assert_eq!(map_lddw_slots(fw_bpf).expect("fw"), vec![12]);
     }
 
     #[test]

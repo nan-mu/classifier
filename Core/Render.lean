@@ -115,14 +115,17 @@ def renderPredicateJson : Predicate → String
       | none => ""
       | some p => s!",\"compound\":\"{renderReg (Reg.compoundPacket p)}\""
     s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"packet\":{packet},\"offset\":{offset},\"width\":{bits},\"source\":\"{renderTermAt .w32 source}\"{destination}}"
-def renderExprSetJson (E : ExprSet) : String :=
-  String.intercalate "," (E.entries.map renderExprJson ++ E.constraints.map fun e =>
+def renderConstraintExprJson (e : Expr) : String :=
+  s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}"
+
+def renderExprsJson (E : List Expr) : String :=
+  String.intercalate "," (E.bindings.map renderExprJson ++ E.constraints.map fun e =>
     s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}")
 
 def renderPredicatesJson (ps : List Predicate) : String :=
   String.intercalate "," (ps.map renderPredicateJson)
 
 def renderSemStateJson (σ : SemState) : String × String :=
-  (renderExprSetJson σ.exprs, renderPredicatesJson σ.predicates)
+  (renderExprsJson σ.exprs, renderPredicatesJson σ.predicates)
 
 end Core
