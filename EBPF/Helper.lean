@@ -26,17 +26,16 @@ def parseHelperCall (E : List Expr) (id : Nat) : Except RejectReason HelperCall 
 /-- Freeze complete current key/value buffers from one pre-call snapshot.
 An unavailable layout or byte keeps the ABI prefix, including for update where
 neither tail is appended unless both complete buffers are available. -/
-def freezeHelperArgs (p : EntryParams) (E : List Expr) (maps : List MapLayout)
-    (call : HelperCall) : List Term :=
+def freezeHelperArgs (E : List Expr) (call : HelperCall) : List Term :=
   let frozen : Option (List Term) := do
     match call.kind, call.args with
     | .lookup, [map, keyPtr] | .delete, [map, keyPtr] =>
-      let layout ← uniqueMapLayout maps map
-      availableBufferBytes p E keyPtr layout.keySize maps
+      let layout ← Anchor.layout? E map
+      availableBufferBytes E keyPtr layout.keySize
     | .update, [map, keyPtr, valuePtr, _flags] =>
-      let layout ← uniqueMapLayout maps map
-      let key ← availableBufferBytes p E keyPtr layout.keySize maps
-      let value ← availableBufferBytes p E valuePtr layout.valueSize maps
+      let layout ← Anchor.layout? E map
+      let key ← availableBufferBytes E keyPtr layout.keySize
+      let value ← availableBufferBytes E valuePtr layout.valueSize
       pure (key ++ value)
     | _, _ => none
   match frozen with
@@ -83,12 +82,13 @@ def helperExpr (event : NodeId) (call : HelperCall) : List Expr :=
   let keyPtr := addStar .w64 p.tSp (Term.C64 (M 64 (-4)))
   let call : HelperCall := ⟨.lookup, 1, [Term.C64 42, keyPtr]⟩
   let maps : List MapLayout := [⟨42, 4, 8⟩]
-  let E := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)
-  let args := freezeHelperArgs p E maps call
+  let E := host p (Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344)) maps
+  let args := freezeHelperArgs E call
   return args == call.args ++ [Term.C64 0x44, Term.C64 0x33, Term.C64 0x22, Term.C64 0x11] &&
     args.all (fun t => t.width == .w64) &&
-    freezeHelperArgs p Expr.nil maps call == call.args &&
-    freezeHelperArgs p E [] call == call.args
+    freezeHelperArgs (host p Expr.nil maps) call == call.args &&
+    freezeHelperArgs (host p (Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223344))) call ==
+      call.args
 
 private def helperMutationFreezeCheck : Bool := Id.run do
   let p : EntryParams := ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 0, 0, 0⟩
@@ -97,17 +97,16 @@ private def helperMutationFreezeCheck : Bool := Id.run do
   let maps : List MapLayout := [⟨42, 4, 8⟩]
   let update : HelperCall := ⟨.update, 2, [Term.C64 42, keyPtr, valuePtr, Term.C64 0]⟩
   let delete : HelperCall := ⟨.delete, 3, [Term.C64 42, keyPtr]⟩
-  let E := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
+  let E := host p (Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
     |>.insertEq (stackUnitReg 0 2) (Term.C32 0x08070605)
-    |>.insertEq (stackUnitReg 0 1) (Term.C32 0x0c0b0a09)
+    |>.insertEq (stackUnitReg 0 1) (Term.C32 0x0c0b0a09)) maps
   let key := [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
   let value := [Term.C64 5, Term.C64 6, Term.C64 7, Term.C64 8,
     Term.C64 9, Term.C64 10, Term.C64 11, Term.C64 12]
-  let missing := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)
-  return freezeHelperArgs p E maps update == update.args ++ key ++ value &&
-    freezeHelperArgs p E maps delete == delete.args ++ key &&
-    freezeHelperArgs p missing maps update == update.args &&
-    freezeHelperArgs p E (maps ++ maps) update == update.args &&
+  let missing := host p (Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x04030201)) maps
+  return freezeHelperArgs E update == update.args ++ key ++ value &&
+    freezeHelperArgs E delete == delete.args ++ key &&
+    freezeHelperArgs missing update == update.args &&
     callReturnTerm 9 update ==
       star .w64 (.externalResult 9 0) (Term.C64 2 :: update.args)
 
@@ -115,26 +114,27 @@ private def existingBufferKindsCheck : Bool := Id.run do
   let p : EntryParams := ⟨Term.V64 1, Term.V64 0, Term.C32 0x1000, 64, 0, 0, 0⟩
   let .ok initial := buildE0 p | return false
   let mapPtr := star .w64 (.externalResult 7 0) [Term.C64 1, Term.C64 42, Term.V64 9]
-  let E := initial.exprs.insertEq (Reg.mapDword 7 0) (Term.C64 0x04030201)
+  let maps : List MapLayout := [⟨42, 4, 8⟩]
+  let E := host p (initial.exprs.insertEq (Reg.mapDword 7 0) (Term.C64 0x04030201)
     |>.insertEq (Reg.packet 0 0) (Term.C32 5)
     |>.insertEq (Reg.packet 0 1) (Term.C32 6)
     |>.insertEq (Reg.packet 0 2) (Term.C32 7)
-    |>.insertEq (Reg.packet 0 3) (Term.C32 8)
-  let maps : List MapLayout := [⟨42, 4, 8⟩]
+    |>.insertEq (Reg.packet 0 3) (Term.C32 8)) maps
+  let seeded := host p initial.exprs maps
   let mapCall : HelperCall := ⟨.delete, 3, [Term.C64 42, mapPtr]⟩
   let packetCall : HelperCall := ⟨.lookup, 1, [Term.C64 42, Term.C64 0x1000]⟩
   let contextCall : HelperCall := ⟨.delete, 3, [Term.C64 42, p.tCtx]⟩
-  let openPacket := freezeHelperArgs p initial.exprs maps packetCall
-  let some openBytes := availableBufferBytes p initial.exprs (Term.C64 0x1000) 4 maps | return false
-  return freezeHelperArgs p E maps mapCall ==
+  let openPacket := freezeHelperArgs seeded packetCall
+  let some openBytes := availableBufferBytes seeded (Term.C64 0x1000) 4 | return false
+  return freezeHelperArgs E mapCall ==
       mapCall.args ++ [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4] &&
-    freezeHelperArgs p E maps packetCall ==
+    freezeHelperArgs E packetCall ==
       packetCall.args ++ [Term.C64 5, Term.C64 6, Term.C64 7, Term.C64 8] &&
     openPacket == packetCall.args ++ openBytes &&
     openBytes.length == 4 &&
-    freezeHelperArgs p E maps contextCall ==
+    freezeHelperArgs E contextCall ==
       contextCall.args ++ [Term.C64 0, Term.C64 16, Term.C64 0, Term.C64 0] &&
-    (availableBufferBytes p E mapPtr 9 maps).isNone
+    (availableBufferBytes E mapPtr 9).isNone
 
 #guard helperMutationFreezeCheck
 #guard existingBufferKindsCheck

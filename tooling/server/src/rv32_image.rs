@@ -17,7 +17,7 @@ pub const DEFAULT_NAME: &str = "just_tx.elf";
 pub const FIREWALL_ELF: &[u8] = include_bytes!("../../fixtures/xdp.elf");
 #[cfg(test)]
 const RAW_REGRESSION: &[u8] = include_bytes!("../../fixtures/esp32c3.bin");
-const WRAPPER_RETURN: u32 = 0x2000;
+pub const WRAPPER_RETURN: u32 = 0x2000;
 /// Compact ELF ARRAY maps omit key layout; BPF array index is always 4 bytes.
 const ARRAY_KEY_BYTES: u32 = 4;
 
@@ -39,7 +39,7 @@ pub struct Rv32Program {
     pub image: InsnImage,
     pub base_address: u32,
     pub helper_address: u32,
-    /// Map VMA + key/value sizes for Lean Meta (`mapId` = AOT map address).
+    /// Map VMA + key/value sizes (`mapId` = AOT map address).
     pub maps: Vec<MapLayout>,
 }
 

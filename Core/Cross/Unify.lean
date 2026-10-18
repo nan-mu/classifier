@@ -1547,7 +1547,7 @@ def parseCrossPredJson (j : Lean.Json) : Option CrossPred := do
   | _ => none
 
 private def regClass : RegKind → Nat
-  | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4
+  | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4 | .anchor => 5
 
 private def renderNats (ns : List Nat) : String :=
   "[" ++ String.intercalate "," (ns.map toString) ++ "]"

@@ -5,6 +5,7 @@ import Core.Op
 import Core.Term
 import Core.MapLayout
 import Core.Expr
+import Core.Anchor
 import Core.Semantics
 import Core.SolvePreservation
 import Core.Virtual

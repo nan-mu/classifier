@@ -1,4 +1,4 @@
-use lean_binding::rv32::{self, MapLayout, Meta};
+use lean_binding::rv32::{self, MapLayout};
 use serde_json::Value;
 
 fn addi(rd: u32, rs: u32, imm: u32) -> u32 {
@@ -50,21 +50,33 @@ fn cj(delta: i32, link: bool) -> u32 {
         | ((n >> 5 & 1) << 2);
     bits | if link { 0x2001 } else { 0xa001 }
 }
-fn snapshot_meta(words: &[u32], steps: u32, meta: &Meta) -> Value {
-    serde_json::from_str(&rv32::expand_bound_words_snapshot(words, meta, steps, 100)).unwrap()
+fn snapshot_maps(words: &[u32], steps: u32, maps: &[MapLayout]) -> Value {
+    let ids: Vec<u32> = maps.iter().map(|m| m.map_id).collect();
+    let keys: Vec<u32> = maps.iter().map(|m| m.key_size).collect();
+    let vals: Vec<u32> = maps.iter().map(|m| m.value_size).collect();
+    let root: Value = serde_json::from_str(&rv32::expand_create(0x400, 0x100, 0x2000, &ids, &keys, &vals)).unwrap();
+    let node = &root["nodes"][0];
+    serde_json::from_str(&rv32::expand_bound_words_snapshot(
+        words,
+        &node["exprs"].to_string(),
+        &node["predicates"].to_string(),
+        steps,
+        100,
+    ))
+    .unwrap()
 }
 
 fn snapshot(words: &[u32], steps: u32) -> Value {
-    snapshot_meta(words, steps, &Meta::new(0x400, 0x100))
+    snapshot_maps(words, steps, &[])
 }
 
-/// call_program sets a1=11; Meta layout must match that Map id.
-fn lookup_map_meta() -> Meta {
-    Meta::new(0x400, 0x100).with_maps(vec![MapLayout {
+/// call_program sets a1=11; the installed layout must match that Map id.
+fn lookup_map() -> MapLayout {
+    MapLayout {
         map_id: 11,
         key_size: 4,
         value_size: 32,
-    }])
+    }
 }
 
 /// Lookup call with a 4-byte key at `[sp]` and `a2 = sp` (jal offset computed after setup).
@@ -329,13 +341,8 @@ fn bound_ffi_rejects_colliding_or_invalid_metadata() {
         (0x400, 0x2000),
         (0x400, 0x400),
     ] {
-        let s: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-            &[0x00008067],
-            &Meta::new(base, helper),
-            0,
-            10,
-        ))
-        .unwrap();
+        let s: Value =
+            serde_json::from_str(&rv32::expand_create(base, helper, 0x2000, &[], &[], &[])).unwrap();
         assert_eq!(s["reason"], "InvalidEntry");
         assert!(s["nodes"].as_array().unwrap().is_empty());
     }
@@ -447,7 +454,7 @@ fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
             load(16, 9, 0xffd, 4, true),
         ],
     );
-    let s = snapshot_meta(&words, 100, &lookup_map_meta());
+    let s = snapshot_maps(&words, 100, &[lookup_map()]);
     assert_eq!(s["status"], "complete", "{}", s["reason"]);
     assert!(has_map_write(&s), "expected MapWrite observations");
     let exit = s["nodes"]
@@ -528,7 +535,7 @@ fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
             load(18, 9, 4, 4, true),
         ],
     );
-    let s = snapshot_meta(&words, 100, &lookup_map_meta());
+    let s = snapshot_maps(&words, 100, &[lookup_map()]);
     assert_eq!(s["status"], "complete", "{}", s["reason"]);
     assert!(has_map_write(&s), "expected MapWrite observations");
     let exit = s["nodes"]
@@ -594,8 +601,7 @@ fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate(
             load(15, 10, 4, 4, true),
         ],
     );
-    let meta = lookup_map_meta();
-    let s = snapshot_meta(&words, 100, &meta);
+    let s = snapshot_maps(&words, 100, &[lookup_map()]);
     assert_eq!(s["status"], "complete", "{}", s["reason"]);
     assert!(has_map_write(&s), "expected MapWrite observations");
     let exit = s["nodes"]
@@ -610,7 +616,7 @@ fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate(
     assert_ne!(term(exit, 12), term(exit, 15));
     assert_eq!(
         s,
-        snapshot_meta(&words, 100, &meta),
+        snapshot_maps(&words, 100, &[lookup_map()]),
         "event content must replay stably"
     );
 }

@@ -14,11 +14,6 @@ private def rv32Words : Array UInt32 :=
     46504803, 6591747, 8689027, 10786307, 300675, 2397955, 4495235, 10784803, 11833635, 12882467,
     13931299, 14980131, 16028963, 17677, 16562, 17442, 17554, 321, 32898]
 
-private def ebpfMeta :=
-  EBPF.productMetaJson
-private def rv32Meta :=
-  "{\"base\":1077412352,\"helperAddress\":1077411840,\"returnAddress\":8192,\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}"
-
 private def fieldString (j : Json) (key : String) : Except String String := do
   (← j.getObjVal? key).getStr?
 
@@ -75,8 +70,18 @@ private def checkReport (j : Json) (expectedConclusion : String) : Except String
   if (← fieldString j "conclusion") != expectedConclusion then
     throw ("unexpected comparison conclusion: " ++ j.compress)
 
+private def rootJson (response : String) : Except String (String × String) := do
+  let value ← Json.parse response
+  let nodes ← fieldArray value "nodes"
+  let some node := nodes[0]? | throw "missing create root"
+  let exprs ← node.getObjVal? "exprs"
+  let preds ← node.getObjVal? "predicates"
+  pure (exprs.compress, preds.compress)
+
 private def checks : Except String (List String) := do
-  let ebpfResponse := EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram ebpfMeta 2000 1024
+  let (ebpfExprs, ebpfPreds) ← rootJson (EBPF.exportEbpfExpandCreate "v64:1" "v64:0" "v32:4" 128 0 0 0
+    #[34] #[1077412584] #[1077412584] #[4] #[8])
+  let ebpfResponse := EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram ebpfExprs ebpfPreds 2000 1024
   let ebpfSnapshot ← Json.parse ebpfResponse
   let ebpfStatus ← fieldString ebpfSnapshot "status"
   if ebpfStatus != "complete" then
@@ -93,7 +98,9 @@ private def checks : Except String (List String) := do
   if !terminalReturns.any (·.contains (Core.Term.C64 3)) then
     throw "eBPF fixture missing concrete TX return 3"
   let ebpf ← snapshotRun "ebpf" ebpfResponse
-  let rv32Response := RV32.exportRv32BoundWordsSnapshot rv32Words rv32Meta 400 400
+  let (rvExprs, rvPreds) ← rootJson (RV32.exportRv32ExpandCreate 1077412352 1077411840 8192
+    #[1077412584] #[4] #[8])
+  let rv32Response := RV32.exportRv32BoundWordsSnapshot rv32Words rvExprs rvPreds 400 400
   let rv32Snapshot ← Json.parse rv32Response
   let rv32Status ← fieldString rv32Snapshot "status"
   let rv32Reason ← rv32Snapshot.getObjVal? "reason"

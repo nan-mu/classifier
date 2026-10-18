@@ -1,106 +1,64 @@
 import EBPF.JustTxProgram
+import EBPF.Step
 import Node.Budget
 import Core.Parse
 
 namespace EBPF
 open Core Node
 
-/-- Static entry and resource bindings, outside the executing SemState. -/
-structure Meta where
-  entry : EntryParams
-  resourceLocations : List ResourceLocation := []
-  maps : List MapLayout := []
-  deriving Repr, Inhabited
-
-private def jsonNat (value : Lean.Json) (key : String) : Option Nat :=
-  (value.getObjVal? key >>= Lean.Json.getNat?).toOption
-
-private def jsonTerm (value : Lean.Json) (key : String) (width : Width) : Option Term := do
-  let text ← (value.getObjVal? key >>= Lean.Json.getStr?).toOption
+private def parseLeaf (text : String) (width : Width) : Option Term := do
   let term ← parseTerm text width
-  if term.width != width || !predicateWellFormed (.ret term) then none else some term
+  if term.width != width || !predicateWellFormed (.ret term) then none else
+    match term with
+    | .const _ _ | .var _ _ => some term
+    | _ => none
 
-private def jsonLeaf (value : Lean.Json) (key : String) (width : Width) : Option Term := do
-  match ← jsonTerm value key width with
-  | term@(.const _ _) | term@(.var _ _) => some term
-  | _ => none
-
-private def parseEntry (value : Lean.Json) : Option EntryParams := do
-  let tCtx ← jsonLeaf value "tCtx" .w64
-  let tSp ← jsonLeaf value "tSp" .w64
-  let tData ← jsonLeaf value "tData" .w32
-  let packetBytes ← jsonNat value "packetBytes"
-  if packetBytes ≥ (1 <<< 32) then none else pure ()
-  let αCtx ← jsonNat value "alphaCtx"
-  let κPacket ← jsonNat value "packetId"
-  let φStack ← jsonNat value "stackId"
-  some { tCtx, tSp, tData, packetBytes, αCtx, κPacket, φStack }
-
-private def parseResourceLocation (value : Lean.Json) : Option ResourceLocation := do
-  let slot ← jsonNat value "slot"
-  let field ← (value.getObjVal? "term").toOption
-  let term ← match field with
-    | .null => some none
-    | _ => some <$> jsonTerm value "term" .w64
-  some { slot, term }
-
-/-- Parse the eBPF Meta wire schema. Missing entry fields, malformed terms,
-non-leaf entry terms, oversized packets and duplicate resource slots reject
-without accepting a partial binding. Absent resourceLocations/maps means empty. -/
-def parseMetaJson (text : String) : Option Meta := do
-  let value ← (Lean.Json.parse text).toOption
-  let entry ← parseEntry (← (value.getObjVal? "entry").toOption)
-  let resourceLocations ← match value.getObjVal? "resourceLocations" with
-    | .error _ => some []
-    | .ok field => do
-      let rows ← field.getArr?.toOption
-      rows.toList.mapM parseResourceLocation
-  let maps ← match value.getObjVal? "maps" with
-    | .error _ => some []
-    | .ok field => do
-      let rows ← field.getArr?.toOption
-      rows.toList.mapM parseMapLayout
-  let slots := resourceLocations.map (·.slot)
-  if slots.eraseDups.length != slots.length then none
-  else some { entry, resourceLocations, maps }
-
-/-- Decode without compacting LDDW: all control locations remain raw slots.
-Resource provenance is a caller premise, not inferred from integer immediates. -/
-def boundProgram (words : Array UInt64) (m : Meta) :
-    Except RejectReason (Array Insn × StepContext) :=
-  if words.isEmpty then .error .invalidEntry
-  else .ok (decodeProgram words,
-    { entry := m.entry, resourceLocations := m.resourceLocations, maps := m.maps })
+private def lddwRows (slots : Array UInt32) (terms : Array UInt64) : List (Anchor × Term) :=
+  (slots.toList.zip terms.toList).map fun (slot, term) =>
+    (.lddw slot.toNat, if term.toNat == 0 then Anchor.unboundLddw else Term.C64 term.toNat)
 
 /-- The root contains the actual pre-instruction eBPF entry state. -/
-def ebpfInit (I : Array Insn) (p : EntryParams) (j0 budget : Nat) :
-    Except RejectReason WorkState := do
-  let σ0 ← buildE0 p
+def ebpfInit (I : Array Insn) (σ0 : SemState) (j0 budget : Nat) :
+    Except RejectReason WorkState :=
   expandInit I.size j0 σ0 budget
 
 /-- At most steps expansions, with composed states and source-node event IDs.
 Budget exhaustion uses the shared driver's LimitExceeded result. -/
-def ebpfSnapshot (I : Array Insn) (context : StepContext) (j0 steps budget : Nat) : String :=
-  match ebpfInit I context.entry j0 budget with
+def ebpfSnapshot (I : Array Insn) (σ0 : SemState) (j0 steps budget : Nat) : String :=
+  match ebpfInit I σ0 j0 budget with
   | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-  | .ok ws => snapshotAfter I.size (ebpfStep I context) ws steps
+  | .ok ws => snapshotAfter I.size (ebpfStep I) ws steps
 
 private def createFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"failed\":null,\"work\":[],\"nodes\":[],\"edges\":[]}"
 
-/-- Meta-only entry creation: no program is supplied, so successful create
-cannot verify a program or its first slot. No fuel or snapshot-only fields:
-the external runtime owns the product expansion budget. -/
+private def runningJson (σ0 : SemState) : String :=
+  let (exprs, preds) := renderSemStateJson σ0
+  s!"\{\"status\":\"running\",\"reason\":null,\"failed\":null,\"work\":[0],\"nodes\":[\{\"id\":0,\"loc\":\"0\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}],\"edges\":[]}"
+
 @[export lean_ebpf_expand_create]
-def exportEbpfExpandCreate (metaJson : String) : String :=
-  match parseMetaJson metaJson with
-  | none => createFailJson .invalidEntry
-  | some m =>
-    match buildE0 m.entry with
-    | .error reason => createFailJson reason
-    | .ok σ0 =>
-      let (exprs, preds) := renderSemStateJson σ0
-      s!"\{\"status\":\"running\",\"reason\":null,\"failed\":null,\"work\":[0],\"nodes\":[\{\"id\":0,\"loc\":\"0\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}],\"edges\":[]}"
+def exportEbpfExpandCreate
+    (tCtx tSp tData : String) (packetBytes alphaCtx packetId stackId : UInt32)
+    (slots : Array UInt32) (terms : Array UInt64)
+    (mapIds keySizes valueSizes : Array UInt32) : String :=
+  if slots.size != terms.size || mapIds.size != keySizes.size ||
+      keySizes.size != valueSizes.size then createFailJson .invalidEntry
+  else match parseLeaf tCtx .w64, parseLeaf tSp .w64, parseLeaf tData .w32 with
+    | some tCtx, some tSp, some tData =>
+      let p : EntryParams := {
+        tCtx, tSp, tData, packetBytes := packetBytes.toNat, αCtx := alphaCtx.toNat,
+        κPacket := packetId.toNat, φStack := stackId.toNat }
+      match buildE0 p with
+      | .error reason => createFailJson reason
+      | .ok σ0 =>
+        match Anchor.mapRows (mapIds.toList.map (·.toNat)) (keySizes.toList.map (·.toNat))
+            (valueSizes.toList.map (·.toNat)) with
+        | none => createFailJson .invalidEntry
+        | some maps =>
+          match Anchor.install σ0.exprs (entryRows p ++ lddwRows slots terms ++ maps) with
+          | none => createFailJson .invalidEntry
+          | some exprs => runningJson ⟨exprs, σ0.predicates⟩
+    | _, _, _ => createFailJson .invalidEntry
 
 private def headFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"successors\":[]}"
@@ -111,80 +69,74 @@ private def successorJson (row : Direction × Location × SemState) : String :=
   let (exprs, preds) := renderSemStateJson state
   s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
 
-/-- Stateless head inference. prepareAll composes every candidate with the
-pre-state before returning successors; queue and fuel remain runtime-owned. -/
 @[export lean_ebpf_expand_step]
-def exportEbpfExpandStep (insns : Array UInt64) (metaJson : String) (event j : UInt32)
+def exportEbpfExpandStep (insns : Array UInt64) (event j : UInt32)
     (exprsJson predsJson : String) : String :=
-  match parseMetaJson metaJson with
-  | none => headFailJson .invalidEntry
-  | some m =>
-    match boundProgram insns m with
-    | .error reason => headFailJson reason
-    | .ok (I, context) =>
-      match parseSemStateJson exprsJson predsJson with
-      | none => headFailJson .localReject
-      | some state =>
-        match ebpfStep I context event.toNat j.toNat state with
-        | .reject reason => headFailJson reason
-        | .candidates cs =>
-          match prepareAll state I.size cs with
-          | .error reason => headFailJson reason
-          | .ok prepared =>
-            let successors := String.intercalate "," (prepared.map successorJson)
-            s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successors}]}"
+  if insns.isEmpty then headFailJson .invalidEntry
+  else
+    let I := decodeProgram insns
+    match parseSemStateJson exprsJson predsJson with
+    | none => headFailJson .localReject
+    | some state =>
+      match ebpfStep I event.toNat j.toNat state with
+      | .reject reason => headFailJson reason
+      | .candidates cs =>
+        match prepareAll state I.size cs with
+        | .error reason => headFailJson reason
+        | .ok prepared =>
+          let successors := String.intercalate "," (prepared.map successorJson)
+          s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successors}]}"
 
 @[export lean_ebpf_expand_bound_words_snapshot]
-def exportEbpfBoundWordsSnapshot (insns : Array UInt64) (metaJson : String)
+def exportEbpfBoundWordsSnapshot (insns : Array UInt64) (exprsJson predsJson : String)
     (steps budget : UInt32) : String :=
-  match parseMetaJson metaJson with
-  | none => snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
-  | some m =>
-    match boundProgram insns m with
-    | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
-    | .ok (I, context) => ebpfSnapshot I context 0 steps.toNat budget.toNat
+  if insns.isEmpty then snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
+  else match parseSemStateJson exprsJson predsJson with
+    | none => snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
+    | some σ0 => ebpfSnapshot (decodeProgram insns) σ0 0 steps.toNat budget.toNat
 
-private def fixtureEntryJson : String :=
-  "{\"tCtx\":\"v64:1\",\"tSp\":\"v64:0\",\"tData\":\"v32:4\",\"packetBytes\":128,\"alphaCtx\":0,\"packetId\":0,\"stackId\":0}"
+private def rootOf (response : String) : Option SemState := do
+  let value ← (Lean.Json.parse response).toOption
+  let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
+  let node ← nodes[0]?
+  let exprs ← (node.getObjVal? "exprs").toOption
+  let preds ← (node.getObjVal? "predicates").toOption
+  parseSemStateJson exprs.compress preds.compress
 
-private def fixtureMetaJson : String :=
-  s!"\{\"entry\":{fixtureEntryJson},\"resourceLocations\":[\{\"slot\":34,\"term\":null}]}"
-
-private def unmarkedMetaJson : String := s!"\{\"entry\":{fixtureEntryJson}}"
-
-/-- Exact native product binding, including the shared rxcnt Map layout. -/
-def productMetaJson : String :=
-  "{\"entry\":{\"tCtx\":\"v64:1\",\"tSp\":\"v64:0\",\"tData\":\"v32:4\",\"packetBytes\":128,\"alphaCtx\":0,\"packetId\":0,\"stackId\":0},\"resourceLocations\":[{\"slot\":34,\"term\":\"1077412584\"}],\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}"
+private def fixtureCreate (slots : Array UInt32) (terms : Array UInt64)
+    (mapIds keySizes valueSizes : Array UInt32) : String :=
+  exportEbpfExpandCreate "v64:1" "v64:0" "v32:4" 128 0 0 0
+    slots terms mapIds keySizes valueSizes
 
 private def createCheck : Bool :=
-  let response := exportEbpfExpandCreate fixtureMetaJson
+  let response := fixtureCreate #[34] #[0] #[] #[] #[]
   response.contains "\"status\":\"running\"" && response.contains "\"loc\":\"0\"" &&
-    !response.contains "\"fuel\"" &&
-    exportEbpfExpandCreate "{}" == createFailJson .invalidEntry &&
-    !(exportEbpfExpandCreate "{}").contains "\"fuel\""
+    !response.contains "\"fuel\":" &&
+    exportEbpfExpandCreate "nope" "v64:0" "v32:4" 128 0 0 0 #[] #[] #[] #[] #[] ==
+      createFailJson .invalidEntry &&
+    fixtureCreate #[34] #[] #[] #[] #[] == createFailJson .invalidEntry &&
+    fixtureCreate #[34, 34] #[0, 1] #[] #[] #[] == createFailJson .invalidEntry
 
 private def statelessStepCheck : Bool := Id.run do
-  let some m := parseMetaJson fixtureMetaJson | return false
-  let .ok (I, context) := boundProgram justTxProgram m | return false
-  let .ok ws := ebpfInit I context.entry 0 200 | return false
-  let state := ws.nodes[0]!.state
-  let (exprs, preds) := renderSemStateJson state
-  let .inr next := expandOne I.size (ebpfStep I context 0) ws | return false
-  let response := exportEbpfExpandStep justTxProgram fixtureMetaJson 0 0
-    s!"[{exprs}]" s!"[{preds}]"
+  let some root := rootOf (fixtureCreate #[34] #[0] #[] #[] #[]) | return false
+  let I := decodeProgram justTxProgram
+  let .ok ws := ebpfInit I root 0 200 | return false
+  let (exprs, preds) := renderSemStateJson root
+  let .inr next := expandOne I.size (ebpfStep I 0) ws | return false
+  let response := exportEbpfExpandStep justTxProgram 0 0 s!"[{exprs}]" s!"[{preds}]"
   return next.nodes[1]!.loc == .pos 1 &&
     next.nodes[1]!.state.exprs.lookupEq (Reg.real64 0) == some (Term.C64 1) &&
     next.nodes[1]!.state.exprs.lookupEq (Reg.real64 1) == some justTxEntry.tCtx &&
+    lddwBind root.exprs 34 == .unbound &&
     response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, next.nodes[1]!.loc, next.nodes[1]!.state)}]}" &&
-    response.contains "\"dir\":\"OK\"" && response.contains "\"loc\":\"1\"" &&
-    exportEbpfExpandStep #[] fixtureMetaJson 0 0 "[]" "[]" == headFailJson .invalidEntry
+    exportEbpfExpandStep #[] 0 0 "[]" "[]" == headFailJson .invalidEntry
 
 private def failedSlotCheck (response : String) (reason : String) (slot : Nat) : Bool :=
   (do
     let value ← (Lean.Json.parse response).toOption
     let status ← (value.getObjVal? "status" >>= Lean.Json.getStr?).toOption
     let actualReason ← (value.getObjVal? "reason" >>= Lean.Json.getStr?).toOption
-    let failed ← jsonNat value "failed"
+    let failed ← (value.getObjVal? "failed" >>= Lean.Json.getNat?).toOption
     let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
     let node ← nodes[failed]?
     let loc ← (node.getObjVal? "loc" >>= Lean.Json.getStr?).toOption
@@ -192,22 +144,28 @@ private def failedSlotCheck (response : String) (reason : String) (slot : Nat) :
 
 private def laterStepsCheck : Bool := Id.run do
   let I := decodeProgram justTxProgram
-  let unmarked : StepContext := { entry := justTxEntry }
-  let plain := ebpfSnapshot I unmarked 0 200 200
-  let marked := ebpfSnapshot I justTxContext 0 200 200
+  let .ok σ := buildE0 justTxEntry | return false
+  let plainE := host justTxEntry σ.exprs
+  let some markedE := Anchor.install plainE [(.lddw 34, Anchor.unboundLddw)] | return false
+  let plain := ebpfSnapshot I ⟨plainE, []⟩ 0 200 200
+  let marked := ebpfSnapshot I ⟨markedE, []⟩ 0 200 200
+  let (pexprs, ppreds) := renderSemStateJson ⟨plainE, []⟩
+  let (mexprs, mpreds) := renderSemStateJson ⟨markedE, []⟩
   return failedSlotCheck plain "UndefinedSrc" 38 &&
     failedSlotCheck marked "UnboundTarget" 34 &&
-    exportEbpfBoundWordsSnapshot justTxProgram unmarkedMetaJson 200 200 == plain &&
-    exportEbpfBoundWordsSnapshot justTxProgram fixtureMetaJson 200 200 == marked
+    exportEbpfBoundWordsSnapshot justTxProgram s!"[{pexprs}]" s!"[{ppreds}]" 200 200 == plain &&
+    exportEbpfBoundWordsSnapshot justTxProgram s!"[{mexprs}]" s!"[{mpreds}]" 200 200 == marked
+
+private def productRoot : Option SemState :=
+  rootOf (fixtureCreate #[34] #[42] #[42] #[4] #[8])
 
 /-- Branch observations persist through EXIT. Only the Return projection is
 singleton; compilation of this finite fixture is not a general semantic proof. -/
 private def earlyExitCheck : Bool := Id.run do
   let I := decodeProgram justTxProgram
-  let some m := parseMetaJson productMetaJson | return false
-  let .ok (_, context) := boundProgram justTxProgram m | return false
-  let .ok ws := ebpfInit I context.entry 0 1024 | return false
-  let .complete graph := expand I.size (ebpfStep I context 0) ws | return false
+  let some root := productRoot | return false
+  let .ok ws := ebpfInit I root 0 1024 | return false
+  let .complete graph := expand I.size (ebpfStep I 0) ws | return false
   let some compare := graph.nodes.find? (fun node => node.loc == .pos 5) | return false
   let some lhs := compare.state.exprs.lookupEq (Reg.real64 1) | return false
   let some rhs := compare.state.exprs.lookupEq (Reg.real64 2) | return false
@@ -218,12 +176,10 @@ private def earlyExitCheck : Bool := Id.run do
     node.state.predicates.filter (fun p => match p with | .ret _ => true | _ => false) ==
       [.ret (Term.C64 1)]
 
-/-- Finite end-to-end smoke through the actual product Meta parser and snapshot. -/
 private def productSnapshotCheck : Bool := (do
-  let m ← parseMetaJson productMetaJson
-  let (_, productContext) ← (boundProgram justTxProgram m).toOption
-  let I := decodeProgram justTxProgram
-  let response := ebpfSnapshot I productContext 0 2000 1024
+  let some root := productRoot | none
+  let (exprs, preds) := renderSemStateJson root
+  let response := exportEbpfBoundWordsSnapshot justTxProgram s!"[{exprs}]" s!"[{preds}]" 2000 1024
   let value ← (Lean.Json.parse response).toOption
   let status ← (value.getObjVal? "status" >>= Lean.Json.getStr?).toOption
   let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
@@ -246,17 +202,15 @@ private def productSnapshotCheck : Bool := (do
           | some (.app .w64 (.externalResult _ 0) (Term.const .w64 1 :: _)) => true
           | _ => false))))).getD false
 
-/-- A complete-frontier node carries both frozen-key 32-bit MapWrite halves at
-offsets zero and four; each is well-formed and round-trips through shared wire. -/
 private def productMapWriteCheck : Bool := Id.run do
-  let some m := parseMetaJson productMetaJson | return false
-  let .ok (I, context) := boundProgram justTxProgram m | return false
-  let .ok ws := ebpfInit I context.entry 0 1024 | return false
-  let .complete graph := expand I.size (ebpfStep I context 0) ws | return false
+  let I := decodeProgram justTxProgram
+  let some root := productRoot | return false
+  let .ok ws := ebpfInit I root 0 1024 | return false
+  let .complete graph := expand I.size (ebpfStep I 0) ws | return false
   return graph.nodes.any fun node =>
     node.state.predicates.any fun low => match low with
       | .mapWrite event map key offset bits source =>
-        map == Term.C64 1077412584 && !key.isEmpty && offset == 0 &&
+        map == Term.C64 42 && !key.isEmpty && offset == 0 &&
         bits == 32 && source.width == .w32 && predicateWellFormed low &&
         ((Lean.Json.parse (renderPredicateJson low)).toOption >>= parsePredicateJson) ==
           some low &&
@@ -269,36 +223,13 @@ private def productMapWriteCheck : Bool := Id.run do
           | _ => false
       | _ => false
 
-private def parseRejectsCheck : Bool :=
-  let badCtx := fixtureEntryJson.replace "v64:1" "v32:1"
-  let badPacket := fixtureEntryJson.replace "128" "4294967296"
-  let duplicate := s!"\{\"entry\":{fixtureEntryJson},\"resourceLocations\":[\{\"slot\":34,\"term\":null},\{\"slot\":34,\"term\":\"v64:9\"}]}"
-  let malformed := s!"\{\"entry\":{fixtureEntryJson},\"resourceLocations\":[\{\"slot\":34,\"term\":\"add64(v32:1,0)\"}]}"
-  ["{}", s!"\{\"entry\":{badCtx}}", s!"\{\"entry\":{badPacket}}",
-    duplicate, malformed].all (fun text => (parseMetaJson text).isNone)
-
-private def resourceTermCheck : Bool :=
-  let compound := s!"\{\"entry\":{fixtureEntryJson},\"resourceLocations\":[\{\"slot\":34,\"term\":\"add64(v64:9,1)\"}]}"
-  (parseMetaJson unmarkedMetaJson).isSome && (parseMetaJson compound).isSome &&
-    ["v32:9", "add64(v64:9)", "not-a-term"].all (fun term =>
-      (parseMetaJson s!"\{\"entry\":{fixtureEntryJson},\"resourceLocations\":[\{\"slot\":34,\"term\":\"{term}\"}]}").isNone)
-
-private def mapMetaCheck : Bool := Id.run do
-  let some m := parseMetaJson productMetaJson | return false
-  let .ok (_, context) := boundProgram justTxProgram m | return false
-  let some absent := parseMetaJson unmarkedMetaJson | return false
-  return m.maps == [⟨1077412584, 4, 8⟩] && context.maps == m.maps &&
-    absent.maps.isEmpty &&
-    ["null", "{}", "[{\"mapId\":42,\"keySize\":65,\"valueSize\":8}]",
-      "[{\"mapId\":42,\"keySize\":4,\"valueSize\":0}]",
-      "[{\"mapId\":42,\"keySize\":4,\"valueSize\":4097}]"].all (fun maps =>
-        (parseMetaJson s!"\{\"entry\":{fixtureEntryJson},\"maps\":{maps}}").isNone)
-
-private def budgetCheck : Bool :=
-  let response := exportEbpfBoundWordsSnapshot justTxProgram fixtureMetaJson 1 0
-  response.contains "\"status\":\"fail\"" && response.contains "\"reason\":\"LimitExceeded\"" &&
+private def budgetCheck : Bool := Id.run do
+  let some root := rootOf (fixtureCreate #[34] #[0] #[] #[] #[]) | return false
+  let (exprs, preds) := renderSemStateJson root
+  let response := exportEbpfBoundWordsSnapshot justTxProgram s!"[{exprs}]" s!"[{preds}]" 1 0
+  return response.contains "\"status\":\"fail\"" && response.contains "\"reason\":\"LimitExceeded\"" &&
     response.contains "\"fuel\":0" &&
-    exportEbpfBoundWordsSnapshot #[] fixtureMetaJson 1 1 ==
+    exportEbpfBoundWordsSnapshot #[] "[]" "[]" 1 1 ==
       snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
 
 #guard (decodeProgram justTxProgram).size == 58
@@ -308,10 +239,11 @@ private def budgetCheck : Bool :=
 #guard (decodeProgram justTxProgram)[35]? == some .continuation
 #guard (decodeProgram justTxProgram)[36]? == some (.callHelper 1)
 #guard (decodeProgram justTxProgram)[57]? == some .exit
-#guard match ebpfStep (decodeProgram justTxProgram) justTxContext 36 36 SemState.empty with
+#guard match ebpfStep (decodeProgram justTxProgram) 36 36
+    ⟨host justTxEntry Expr.nil, []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
-#guard match ebpfStep (decodeProgram justTxProgram) justTxContext 57 57
+#guard match ebpfStep (decodeProgram justTxProgram) 57 57
     ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
   | .candidates [c] => c.dir == .ok && c.loc == .exit &&
       c.E_k == Expr.nil && c.P_k == [.ret (Term.C64 1)]
@@ -322,17 +254,13 @@ private def budgetCheck : Bool :=
 #guard earlyExitCheck
 #guard productSnapshotCheck
 #guard productMapWriteCheck
-#guard parseRejectsCheck
-#guard resourceTermCheck
 #guard budgetCheck
-#guard mapMetaCheck
 
 private def extendedInstructionFfiCheck : Bool := Id.run do
-  let some m := parseMetaJson unmarkedMetaJson | return false
-  let .ok initial := buildE0 m.entry | return false
-  let E := initial.exprs.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
+  let .ok initial := buildE0 justTxEntry | return false
+  let E := host justTxEntry (initial.exprs.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
     |>.insertEq (Reg.real64 2) (Term.C64 0x81)
-    |>.insertEq (stackUnitReg 0 0) (Term.C32 0x11223380)
+    |>.insertEq (stackUnitReg 0 0) (Term.C32 0x11223380))
   let (exprs, preds) := renderSemStateJson ⟨E, []⟩
   let cases : List (UInt64 × Reg × Nat) :=
     [(0x0000000200000114, Reg.real64 1, 13),
@@ -343,14 +271,13 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
       (0x00000100fffca3d3, Reg.real64 3, 0x80),
       (0x00000110fffc2ad3, stackUnitReg 0 0, 0x11223381)]
   for (word, reg, expected) in cases do
-    let response := exportEbpfExpandStep #[word, 0x95] unmarkedMetaJson 11 0
+    let response := exportEbpfExpandStep #[word, 0x95] 11 0
       s!"[{exprs}]" s!"[{preds}]"
     let state : SemState :=
       ⟨E.override (Expr.nil.insertEq reg (Term.C reg.width expected)), []⟩
     if response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
       return false
-  let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95]
-    unmarkedMetaJson 11 0 s!"[{exprs}]" "[]"
+  let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95] 11 0 s!"[{exprs}]" "[]"
   let delta := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223401)
     |>.insertEq (Reg.real64 2) (Term.C64 0x11223380)
   let state : SemState := ⟨E.override delta, []⟩

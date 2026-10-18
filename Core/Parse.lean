@@ -28,7 +28,8 @@ def parseReg (text : String) : Option Reg := do
   let [head, alpha] := text.splitOn ":" | none
   let alpha ← alpha.toNat?
   let (kind, width) ← ([ ("real", RegKind.real), ("stack", .stack),
-    ("map", .map), ("packet", .packet), ("context", .context) ].findSome? fun (stem, kind) => do
+    ("map", .map), ("packet", .packet), ("context", .context),
+    ("anchor", .anchor) ].findSome? fun (stem, kind) => do
       if !head.startsWith stem then none else
         pure (kind, ← parseWidth (head.drop stem.length).toString))
   let r : Reg := ⟨kind, width, alpha, none⟩

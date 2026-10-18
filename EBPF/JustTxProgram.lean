@@ -1,4 +1,4 @@
-import EBPF.Step
+import EBPF.Initial
 
 namespace EBPF
 open Core
@@ -33,13 +33,6 @@ def justTxEntry : EntryParams := {
   αCtx := 0
   κPacket := 0
   φStack := 0
-}
-
-/-- Fixture binding: slot 34 denotes a resource whose location is unbound.
-The entry terms remain symbolic fixture inputs, not real machine values. -/
-def justTxContext : StepContext := {
-  entry := justTxEntry
-  resourceLocations := [⟨34, none⟩]
 }
 
 end EBPF

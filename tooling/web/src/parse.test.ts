@@ -29,6 +29,7 @@ describe("cantorUnpair / packet regs", () => {
 
   it("rejects packet64 and unknown shapes", () => {
     expect(parseReg("packet64:0").kind).toBe("unknown");
+    expect(parseReg("anchor32:0")).toMatchObject({ kind: "anchor", width: 32, alpha: "0" });
     expect(parseReg("real32:10")).toMatchObject({
       kind: "real",
       width: 32,

@@ -179,26 +179,17 @@ fn rv32_symbolic_packet_offset_preserves_partial_graph() {
 
 mod stateless_head_ffi {
     use super::rv32;
-    use lean_binding::rv32::Meta;
     use serde_json::{json, Value};
 
     fn step(words: &[u32], j: u32, exprs: &str, preds: &str) -> Value {
-        serde_json::from_str(&rv32::expand_step(
-            words,
-            &Meta::new(0x400, 0x100),
-            42,
-            j,
-            exprs,
-            preds,
-        ))
-        .unwrap()
+        serde_json::from_str(&rv32::expand_step(words, 42, j, exprs, preds)).unwrap()
     }
 
     #[test]
     fn symbolic_branch_returns_states_with_complementary_expr_constraints() {
         let words = [0x00051263, 0x00700513, 0x00008067];
         let root: Value =
-            serde_json::from_str(&rv32::expand_create(&Meta::new(0x400, 0x100))).unwrap();
+            serde_json::from_str(&rv32::expand_create(0x400, 0x100, 0x2000, &[], &[], &[])).unwrap();
         let node = &root["nodes"][0];
         let empty = json!([]);
         let result = step(&words, 0, &node["exprs"].to_string(), &empty.to_string());
@@ -333,7 +324,6 @@ mod stateless_head_ffi {
 
 mod ebpf_expand_ffi {
     use super::{compare, ebpf};
-    use lean_binding::ebpf::Meta;
     use serde_json::{json, Value};
 
     /// BPF_ALU | BPF_MOV | BPF_K: w0 ← 1, then EXIT.
@@ -343,15 +333,27 @@ mod ebpf_expand_ffi {
     #[test]
     fn create_then_step_one_insn() {
         let words = [MOV_R0_1, EXIT];
-        let meta = Meta::just_tx_unbound_map();
-        let root: Value = serde_json::from_str(&ebpf::expand_create(&meta)).unwrap();
+        let root: Value = serde_json::from_str(&ebpf::expand_create(
+            ebpf::T_CTX,
+            ebpf::T_SP,
+            ebpf::T_DATA,
+            ebpf::PACKET_BYTES,
+            0,
+            0,
+            0,
+            &[34],
+            &[0],
+            &[],
+            &[],
+            &[],
+        ))
+        .unwrap();
         assert_eq!(root["status"], "running");
         assert!(root.get("fuel").is_none());
         assert_eq!(root["nodes"][0]["loc"], "0");
         let node = &root["nodes"][0];
         let step: Value = serde_json::from_str(&ebpf::expand_step(
             &words,
-            &meta,
             0,
             0,
             &node["exprs"].to_string(),

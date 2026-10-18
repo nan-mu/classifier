@@ -1,5 +1,5 @@
 use lean_binding::ebpf;
-use lean_binding::rv32;
+use lean_binding::rv32::MapLayout;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -89,6 +89,48 @@ pub struct BatchTick {
     pub snapshot: Snapshot,
 }
 
+/// Slots and terms from the bpf object, map arrays from the companion ELF.
+#[derive(Clone, Debug)]
+pub struct EbpfBound {
+    pub slots: Vec<u32>,
+    pub terms: Vec<u64>,
+    pub map_ids: Vec<u32>,
+    pub key_sizes: Vec<u32>,
+    pub value_sizes: Vec<u32>,
+}
+
+/// 0 slots keeps the ELF maps and an empty term list.
+/// One map binds every LDDW slot to that VMA. Equal counts zip in order.
+pub fn zip_ebpf_maps(slots: &[u32], maps: &[MapLayout]) -> Result<EbpfBound, String> {
+    if !slots.is_empty() && maps.is_empty() {
+        return Err(format!(
+            "bpf has {} map LDDW slot(s) but map_elf has no maps",
+            slots.len()
+        ));
+    }
+    if !slots.is_empty() && maps.len() != 1 && maps.len() != slots.len() {
+        return Err(format!(
+            "map LDDW slots ({}) != companion maps ({}); need 1 map or equal counts",
+            slots.len(),
+            maps.len()
+        ));
+    }
+    let terms = if slots.is_empty() {
+        Vec::new()
+    } else if maps.len() == 1 {
+        vec![maps[0].map_id as u64; slots.len()]
+    } else {
+        maps.iter().map(|m| m.map_id as u64).collect()
+    };
+    Ok(EbpfBound {
+        slots: slots.to_vec(),
+        terms,
+        map_ids: maps.iter().map(|m| m.map_id).collect(),
+        key_sizes: maps.iter().map(|m| m.key_size).collect(),
+        value_sizes: maps.iter().map(|m| m.value_size).collect(),
+    })
+}
+
 /// HTTP session metadata around the server-owned expand engine.
 /// Rust owns step/run-to-completion; each `step_once` calls Lean stateless head expansion.
 pub struct Session {
@@ -117,8 +159,10 @@ impl Session {
         let insn_len = insns.len();
         let expand = ExpandSession::create(
             &insns,
-            rv32::Meta::new(program.base_address, program.helper_address)
-                .with_maps(program.maps.clone()),
+            program.base_address,
+            program.helper_address,
+            rv32_image::WRAPPER_RETURN,
+            &program.maps,
             budget,
         );
         let image = DisplayInsns::Rv32(image);
@@ -150,11 +194,26 @@ impl Session {
         budget: u32,
         name: String,
         program: BpfProgram,
-        meta: ebpf::Meta,
+        bound: EbpfBound,
     ) -> Self {
         let words = program.words;
         let insn_len = words.len();
-        let expand = ExpandSession::create_ebpf(&words, meta, budget);
+        let expand = ExpandSession::create_ebpf(
+            &words,
+            ebpf::T_CTX,
+            ebpf::T_SP,
+            ebpf::T_DATA,
+            ebpf::PACKET_BYTES,
+            0,
+            0,
+            0,
+            &bound.slots,
+            &bound.terms,
+            &bound.map_ids,
+            &bound.key_sizes,
+            &bound.value_sizes,
+            budget,
+        );
         let image = DisplayInsns::Ebpf(words);
         let insn_outs = image.outs();
         let mut session = Self {
@@ -659,26 +718,60 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.program, "upload.elf");
         assert_eq!(snap.insns.len(), 79);
-        assert_eq!(snap.nodes[0].exprs.len(), 25);
+        assert_eq!(snap.nodes[0].exprs.len(), 30);
     }
 
     #[test]
     fn ebpf_product_maps_match_just_tx_elf() {
-        let elf = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF).expect("just_tx.elf");
-        assert_eq!(ebpf::Meta::just_tx_product().maps, elf.maps);
+        use lean_binding::rv32;
+        let program = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF).expect("just_tx.elf");
+        let ids: Vec<u32> = program.maps.iter().map(|m| m.map_id).collect();
+        let keys: Vec<u32> = program.maps.iter().map(|m| m.key_size).collect();
+        let vals: Vec<u32> = program.maps.iter().map(|m| m.value_size).collect();
+        let root: Value = serde_json::from_str(&rv32::expand_create(
+            program.base_address,
+            program.helper_address,
+            rv32_image::WRAPPER_RETURN,
+            &ids,
+            &keys,
+            &vals,
+        ))
+        .unwrap();
+        let exprs = root["nodes"][0]["exprs"].as_array().unwrap();
+        let term = |reg: &str| {
+            exprs
+                .iter()
+                .find(|e| e["reg"] == reg)
+                .unwrap()["term"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(term("anchor32:1"), program.base_address.to_string());
+        assert_eq!(term("anchor32:0"), program.helper_address.to_string());
+        assert_eq!(term("anchor32:2"), rv32_image::WRAPPER_RETURN.to_string());
+        for map in &program.maps {
+            let idx = (1u64 << 32) + map.map_id as u64;
+            let packed: u64 = term(&format!("anchor64:{idx}")).parse().unwrap();
+            assert_eq!(packed & 0xffff, map.key_size as u64);
+            assert_eq!(packed >> 16, map.value_size as u64);
+        }
     }
 
     #[test]
     fn ebpf_just_tx_create_and_one_step() {
         use crate::bpf_image;
+        let elf = rv32_image::parse_xdp_elf(rv32_image::DEFAULT_ELF).expect("just_tx.elf");
         let program = bpf_image::extract_insn_words(bpf_image::DEFAULT_BPF).expect("bpf");
         assert_eq!(program.words.len(), 58);
+        let slots = bpf_image::map_lddw_slots(bpf_image::DEFAULT_BPF).expect("slots");
+        let bound = zip_ebpf_maps(&slots, &elf.maps).expect("zip");
         let mut session = Session::new_ebpf(
             "ebpf",
             8,
             bpf_image::DEFAULT_BPF_NAME.into(),
             program,
-            ebpf::Meta::just_tx_product(),
+            bound,
         );
         let snap = session.snapshot();
         assert_eq!(snap.arch, "ebpf");

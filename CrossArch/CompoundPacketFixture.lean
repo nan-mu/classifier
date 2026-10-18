@@ -33,8 +33,8 @@ private def params : EntryParams :=
 
 private def ebBase : Option (List Expr × Term × Term) := do
   let initial ← (buildE0 params).toOption
-  let E := initial.exprs.insertEq (Reg.packet 0 0) byte
-  let root ← packetRoot params E
+  let E := host params (initial.exprs.insertEq (Reg.packet 0 0) byte)
+  let root ← packetRoot E
   let address := addStar .w64 root (ihl .w64)
   let endTerm ← (CellAccess.mk (Reg.ctx32 1) 0 32).read E .w64 true
   pure (E.insertEq (Reg.real64 2) address
@@ -44,7 +44,7 @@ private def accesses : Option (PacketAccess × PacketAccess × List Expr) := do
   let r ← RV32.packetBindingAt rvChecked rvAddress 0 1
   let (base, address, endTerm) ← ebBase
   let E := base.insertConstraint ⟨Reg.real64 3, .leu, endTerm⟩
-  let .packet e ← (resolveAddress params E address 0 1).toOption | none
+  let .packet e ← (resolveAddress E address 0 1).toOption | none
   pure (r, e, E)
 
 /- Positive binding, equal nonempty compound registers, equal normalized raw-wire
@@ -72,7 +72,7 @@ return keys, and canonical JSON parsing. These are finite fixtures, not CP-End. 
 #guard Id.run do
   if (RV32.packetBindingAt rvBase rvAddress 0 1).isSome then return false
   let some (E, address, _) := ebBase | return false
-  return (resolveAddress params E address 0 1).toOption.isNone
+  return (resolveAddress (host params E) address 0 1).toOption.isNone
 
 /- An unrelated free register is not a packet byte, even with the same check. -/
 #guard Id.run do
@@ -81,11 +81,11 @@ return keys, and canonical JSON parsing. These are finite fixtures, not CP-End. 
     |>.insertConstraint ⟨Reg.real32 13, .leu, ending⟩
   if (RV32.packetBindingAt E address 0 1).isSome then return false
   let some (base, _, endTerm) := ebBase | return false
-  let some root := packetRoot params base | return false
+  let some root := packetRoot (host params base) | return false
   let address := addStar .w64 root (addStar .w64 (Term.C64 14) (Term.V64 99))
   let E := base.insertEq (Reg.real64 3) (addStar .w64 address (Term.C64 1))
     |>.insertConstraint ⟨Reg.real64 3, .leu, endTerm⟩
-  return (resolveAddress params E address 0 1).toOption.isNone
+  return (resolveAddress (host params E) address 0 1).toOption.isNone
 
 /- A changed witness or access width changes the compare key. -/
 #guard Id.run do
@@ -102,8 +102,8 @@ updates and PacketWrite JSON, rather than misreporting it as constant offset 0. 
   let rvE := rvChecked.insertEq (Reg.real32 11) (Term.C32 123)
   let program := #[RV32.Insn.STORE (0#12, .Regidx 11#5, .Regidx 12#5, 1),
     RV32.decodeInsnWord 0x0001]
-  let .candidates [candidate] := RV32.inferStep program {} 77 0 ⟨rvE, []⟩ | return false
-  let .ok (effect, [ep]) := EBPF.exprEffects params 88 E (.st 1 2 123 0) | return false
+  let .candidates [candidate] := RV32.inferStep program 77 0 ⟨rvE, []⟩ | return false
+  let .ok (effect, [ep]) := EBPF.exprEffects 88 (host params E) (.st 1 2 123 0) | return false
   let [rp] := candidate.P_k | return false
   if candidate.E_k.lookupEq (r.byteReg 0) != effect.updates.lookupEq (e.byteReg 0) then
     return false
@@ -128,7 +128,7 @@ updates and PacketWrite JSON, rather than misreporting it as constant offset 0. 
 the address format, even with a passed check on that exact address. -/
 #guard Id.run do
   let some (base, _, endTerm) := ebBase | return false
-  let some root := packetRoot params base | return false
+  let some root := packetRoot (host params base) | return false
   for op in [Op.mullo, Op.sub] do
     let offset32 := Term.app .w32 (op .w32) [byte, star .w32 (.low 4 32) [byte]]
     let address32 := addStar .w32 data offset32
@@ -142,7 +142,7 @@ the address format, even with a passed check on that exact address. -/
     let E := base.insertEq (Reg.real64 3) (addStar .w64 address64 (Term.C64 1))
       |>.insertConstraint ⟨Reg.real64 3, .leu, endTerm⟩
     if (packetOffsetFrom base offset64).isSome then return false
-    if (resolveAddress params E address64 0 1).toOption.isSome then return false
+    if (resolveAddress (host params E) address64 0 1).toOption.isSome then return false
   return true
 
 /- Wrapper identities are erased; value-changing projections keep their input
@@ -172,11 +172,11 @@ retain that actual wider check. A one-byte check cannot authorize two bytes. -/
     |>.insertConstraint ⟨Reg.real64 3, .leu, endTerm⟩
   for bytes in [1, 2, 4, 8] do
     let some r := RV32.packetBindingAt R rvAddress 0 bytes | return false
-    let .ok (.packet e) := resolveAddress params E address 0 bytes | return false
+    let .ok (.packet e) := resolveAddress (host params E) address 0 bytes | return false
     if r.compound.isNone || r.byteReg 0 != e.byteReg 0 then return false
     if (r.byteReg 0).toCross != (e.byteReg 0).toCross then return false
   if (RV32.packetBindingAt rvChecked rvAddress 0 2).isSome then return false
   let narrow := base.insertConstraint ⟨Reg.real64 3, .leu, endTerm⟩
-  return (resolveAddress params narrow address 0 2).toOption.isNone
+  return (resolveAddress (host params narrow) address 0 2).toOption.isNone
 
 end CrossArch.CompoundPacketFixture

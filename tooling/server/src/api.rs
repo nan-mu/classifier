@@ -6,12 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use lean_binding::compare;
-use lean_binding::ebpf;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::bpf_image;
-use crate::expand::{Arch, Session, Snapshot};
+use crate::expand::{zip_ebpf_maps, Arch, Session, Snapshot};
 use crate::pred_match;
 use crate::pred_tree;
 use crate::rv32_image;
@@ -231,11 +230,11 @@ impl Kernel {
                         return Envelope::err("create", "bad_image", "invalid eBPF object");
                     }
                 };
-                let meta = match ebpf_meta(&bin, map_elf.as_ref()) {
+                let bound = match ebpf_bound(&bin, map_elf.as_ref()) {
                     Ok(m) => m,
                     Err(e) => return Envelope::err("create", &e.code, e.message),
                 };
-                Session::new_ebpf(id.clone(), budget, name, program, meta)
+                Session::new_ebpf(id.clone(), budget, name, program, bound)
             }
         };
         let snap = snap_value(session.snapshot());
@@ -292,9 +291,12 @@ fn load_image(src: &ImageSource, arch: Arch) -> Result<Vec<u8>, KernelError> {
     }
 }
 
-/// Build eBPF Meta from companion Compact ELF maps + this object's map LDDW slots.
+/// Slots and terms from this object's map LDDW relocs, layouts from the companion ELF.
 /// Does not hardcode just_tx slot 34: just_drop/firewall use other slots; merge_try has none.
-fn ebpf_meta(bpf_bytes: &[u8], map_elf: Option<&ImageSource>) -> Result<ebpf::Meta, KernelError> {
+fn ebpf_bound(
+    bpf_bytes: &[u8],
+    map_elf: Option<&ImageSource>,
+) -> Result<crate::expand::EbpfBound, KernelError> {
     let elf_bytes = match map_elf {
         None => rv32_image::DEFAULT_ELF.to_vec(),
         Some(src) => load_image(src, Arch::Rv32imc)?,
@@ -309,54 +311,10 @@ fn ebpf_meta(bpf_bytes: &[u8], map_elf: Option<&ImageSource>) -> Result<ebpf::Me
         code: "bad_image".into(),
         message: "invalid eBPF object (map LDDW reloc)".into(),
     })?;
-    let resource_locations = bind_map_lddw(&slots, &maps)?;
-    Ok(ebpf::Meta {
-        entry: ebpf::Entry::just_tx(),
-        resource_locations,
-        maps,
+    zip_ebpf_maps(&slots, &maps).map_err(|message| KernelError {
+        code: "bad_image".into(),
+        message,
     })
-}
-
-/// Bind each map LDDW slot to a companion-ELF map VMA (decimal C64 term).
-/// One map → every reloc slot uses that VMA. N maps + N slots → zip in reloc order.
-fn bind_map_lddw(
-    slots: &[u32],
-    maps: &[ebpf::MapLayout],
-) -> Result<Vec<ebpf::ResourceLocation>, KernelError> {
-    if slots.is_empty() {
-        return Ok(vec![]);
-    }
-    if maps.is_empty() {
-        return Err(KernelError {
-            code: "bad_image".into(),
-            message: format!(
-                "bpf has {} map LDDW slot(s) but map_elf has no maps",
-                slots.len()
-            ),
-        });
-    }
-    let terms: Vec<&ebpf::MapLayout> = if maps.len() == 1 {
-        std::iter::repeat_n(&maps[0], slots.len()).collect()
-    } else if maps.len() == slots.len() {
-        maps.iter().collect()
-    } else {
-        return Err(KernelError {
-            code: "bad_image".into(),
-            message: format!(
-                "map LDDW slots ({}) != companion maps ({}); need 1 map or equal counts",
-                slots.len(),
-                maps.len()
-            ),
-        });
-    };
-    Ok(slots
-        .iter()
-        .zip(terms)
-        .map(|(&slot, map)| ebpf::ResourceLocation {
-            slot,
-            term: Some(map.map_id.to_string()),
-        })
-        .collect())
 }
 
 fn snap_value(snap: Snapshot) -> Value {

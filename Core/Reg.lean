@@ -8,6 +8,8 @@ inductive RegKind where
   | map
   | packet
   | context
+  /-- Create-time machine binding. An ISA destination cannot name this kind. -/
+  | anchor
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr, Inhabited
 
 /-- Byte offsets admitted by packet address binding. Packet leaves name existing

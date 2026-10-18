@@ -1,3 +1,4 @@
+import Core.Anchor
 import Core.Virtual
 import Core.MapLayout
 import RV32.Insn
@@ -498,14 +499,13 @@ private def BufferByte.read (byte : BufferByte) (Eg : List Expr) : Option Term :
 Map buffers require their lookup's unique layout and a nonwrapping value range.
 Context requires the explicit entry binding. Packet bytes may materialize
 `inputByte` terms via `PacketAccess.read` when `inputBase` is bound. -/
-def readBufferBytes (Eg : List Expr) (addr : Term) (n : Nat) (maps : List MapLayout)
+def readBufferBytes (Eg : List Expr) (addr : Term) (n : Nat)
     (boundCtx : Option Term := none) : Option (List Term) := do
   if !guardEg Eg || addr.width != .w32 then none
   else
     let source := solve addr
     if let some (_, displacement, map) := lookupAddress source then
-      let id ← eval (solve map)
-      let [layout] := maps.filter (fun layout => layout.mapId == id) | none
+      let layout ← Anchor.layout? Eg map
       if displacement + n > layout.valueSize || displacement + n > (1 <<< 32) then none
     if n == 0 then return []
     let origins : List BufferOrigin := [.stack, .context, .map, .packet]
@@ -532,7 +532,7 @@ def readBufferBytes (Eg : List Expr) (addr : Term) (n : Nat) (maps : List MapLay
      |>.insertEq slot (Term.C32 0x01020304)
    let addr : Term := .app .w32 (.id .w32)
      [.app .w32 (.add .w32) [spTerm, Term.C32 (M 32 (-16))]]
-   readBufferBytes E addr 4 [] == some [Term.C32 4, Term.C32 3, Term.C32 2, Term.C32 1])
+   readBufferBytes E addr 4 == some [Term.C32 4, Term.C32 3, Term.C32 2, Term.C32 1])
 
 /-- Lookup event, element-internal byte offset, pointer Map term, and the Map cell
 for a sized store/load. The Map term is the third component of `lookupAddress`
@@ -1010,7 +1010,7 @@ def exportOverrideKeeps (_unused : UInt32) : UInt32 :=
 
 private def frozenResourceBuffersCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 7]
-  let E := Expr.nil
+  let some E := Anchor.installMaps (Expr.nil
     |>.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 10) (Term.C32 3)
     |>.insertEq (Reg.mapWord 9 0) (Term.C32 0x04030201)
@@ -1020,24 +1020,23 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
     |>.insertEq (Reg.ctx32 2) (Term.C32 0x04030201)
     |>.insertEq (Reg.ctx32 3) (Term.C32 0x08070605)
     |>.insertEq (Reg.ctx32 4) (Term.C32 0)
-    |>.insertEq (Reg.ctx32 5) (Term.C32 0)
+    |>.insertEq (Reg.ctx32 5) (Term.C32 0))
+    [{ mapId := 42, keySize := 3, valueSize := 6 }] | return false
   let expected := some [Term.C32 4, Term.C32 5, Term.C32 6]
-  let maps : List MapLayout := [{ mapId := 42, keySize := 3, valueSize := 6 }]
-  if readBufferBytes E (addStar .w32 pointer (Term.C32 3)) 3 maps != expected then return false
+  if readBufferBytes E (addStar .w32 pointer (Term.C32 3)) 3 != expected then return false
   let contextPtr := addStar .w32 (Term.V32 1) (Term.C32 11)
-  if readBufferBytes E contextPtr 3 maps (some (Term.V32 1)) != expected ||
-      (readBufferBytes E contextPtr 3 maps).isSome ||
-      (readBufferBytes E (Term.C32 3) 1 maps).isSome then return false
+  if readBufferBytes E contextPtr 3 (some (Term.V32 1)) != expected ||
+      (readBufferBytes E contextPtr 3).isSome ||
+      (readBufferBytes E (Term.C32 3) 1).isSome then return false
   let missing := E.filter (fun e => e.reg != Reg.mapWord 9 4)
-  if (readBufferBytes missing (addStar .w32 pointer (Term.C32 3)) 3 maps).isSome then return false
+  if (readBufferBytes missing (addStar .w32 pointer (Term.C32 3)) 3).isSome then return false
   let overlap := E.insertEq (Reg.real32 2) (Term.V32 4)
     |>.insertEq (Reg.sw ((1 <<< 32) + 5 * (1 <<< 32))) (Term.C32 0x01020304)
     |>.insertEq (Reg.packet 0 0) (Term.C32 4)
-  if (readBufferBytes overlap (Term.V32 4) 1 maps).isSome ||
-      (readBufferBytes E (addStar .w32 (Term.V32 4) (Term.C32 7)) 2 maps).isSome then
+  if (readBufferBytes overlap (Term.V32 4) 1).isSome ||
+      (readBufferBytes E (addStar .w32 (Term.V32 4) (Term.C32 7)) 2).isSome then
     return false
-  -- Untouched packet bytes freeze as inputByte under the ctx data binding.
-  let some [open0] := readBufferBytes E (Term.V32 4) 1 maps | return false
+  let some [open0] := readBufferBytes E (Term.V32 4) 1 | return false
   let access : PacketAccess := ⟨0, 0, 1, .little, some (Term.V32 4), none⟩
   let some expected := (access.read E .w32 true).map (fun r => solve r.value) | return false
   return open0 == expected

@@ -2,31 +2,24 @@
 //! Lean FFI stays thin and stateless in `lean-binding`.
 
 use lean_binding::ebpf;
-use lean_binding::rv32::{self, Meta};
+use lean_binding::rv32::{self, MapLayout};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::driver::{Agenda, ConfigSnapshot, Dir, MergeEffect, MergePort, RecordStore};
 
-/// ISA-owned program words and Meta for one expand session.
+/// Instruction words for one expand session. Anchors live in the create snapshot.
 enum IsaState {
-    Rv32 { insns: Vec<u32>, meta: Meta },
-    Ebpf { insns: Vec<u64>, meta: ebpf::Meta },
+    Rv32 { insns: Vec<u32> },
+    Ebpf { insns: Vec<u64> },
 }
 
 impl IsaState {
-    fn expand_create(&self) -> String {
-        match self {
-            Self::Rv32 { meta, .. } => rv32::expand_create(meta),
-            Self::Ebpf { meta, .. } => ebpf::expand_create(meta),
-        }
-    }
-
     fn expand_step(&self, event: u32, j: u32, exprs: &str, preds: &str) -> String {
         match self {
-            Self::Rv32 { insns, meta } => rv32::expand_step(insns, meta, event, j, exprs, preds),
-            Self::Ebpf { insns, meta } => ebpf::expand_step(insns, meta, event, j, exprs, preds),
+            Self::Rv32 { insns } => rv32::expand_step(insns, event, j, exprs, preds),
+            Self::Ebpf { insns } => ebpf::expand_step(insns, event, j, exprs, preds),
         }
     }
 }
@@ -82,7 +75,7 @@ pub enum PoolError {
     Join,
 }
 
-/// Owns program image, Meta, applied graph snapshot, Agenda, and fuel.
+/// Owns program words, applied graph snapshot, Agenda, and fuel.
 pub struct ExpandSession {
     isa: IsaState,
     /// Applied SemState graph + status/fuel. `work` is derived from Agenda.
@@ -93,9 +86,8 @@ pub struct ExpandSession {
 }
 
 impl ExpandSession {
-    fn from_isa(isa: IsaState, budget: u32) -> Self {
-        let mut snapshot: Value =
-            serde_json::from_str(&isa.expand_create()).expect("Lean create snapshot JSON");
+    fn from_isa(isa: IsaState, created: String, budget: u32) -> Self {
+        let mut snapshot: Value = serde_json::from_str(&created).expect("Lean create snapshot JSON");
         if snapshot["status"] == "running" {
             snapshot["fuel"] = json!(budget);
         }
@@ -115,24 +107,59 @@ impl ExpandSession {
         session
     }
 
-    pub fn create(insns: &[u32], meta: Meta, budget: u32) -> Self {
-        Self::from_isa(
-            IsaState::Rv32 {
-                insns: insns.to_vec(),
-                meta,
-            },
-            budget,
-        )
+    pub fn create(
+        insns: &[u32],
+        base: u32,
+        helper: u32,
+        wrapper_return: u32,
+        maps: &[MapLayout],
+        budget: u32,
+    ) -> Self {
+        let map_ids: Vec<u32> = maps.iter().map(|m| m.map_id).collect();
+        let key_sizes: Vec<u32> = maps.iter().map(|m| m.key_size).collect();
+        let value_sizes: Vec<u32> = maps.iter().map(|m| m.value_size).collect();
+        let created = rv32::expand_create(
+            base,
+            helper,
+            wrapper_return,
+            &map_ids,
+            &key_sizes,
+            &value_sizes,
+        );
+        Self::from_isa(IsaState::Rv32 { insns: insns.to_vec() }, created, budget)
     }
 
-    pub fn create_ebpf(insns: &[u64], meta: ebpf::Meta, budget: u32) -> Self {
-        Self::from_isa(
-            IsaState::Ebpf {
-                insns: insns.to_vec(),
-                meta,
-            },
-            budget,
-        )
+    pub fn create_ebpf(
+        insns: &[u64],
+        t_ctx: &str,
+        t_sp: &str,
+        t_data: &str,
+        packet_bytes: u32,
+        alpha_ctx: u32,
+        packet_id: u32,
+        stack_id: u32,
+        slots: &[u32],
+        terms: &[u64],
+        map_ids: &[u32],
+        key_sizes: &[u32],
+        value_sizes: &[u32],
+        budget: u32,
+    ) -> Self {
+        let created = ebpf::expand_create(
+            t_ctx,
+            t_sp,
+            t_data,
+            packet_bytes,
+            alpha_ctx,
+            packet_id,
+            stack_id,
+            slots,
+            terms,
+            map_ids,
+            key_sizes,
+            value_sizes,
+        );
+        Self::from_isa(IsaState::Ebpf { insns: insns.to_vec() }, created, budget)
     }
 
     fn sync_work(&mut self) {
@@ -330,14 +357,14 @@ impl ExpandSession {
 #[cfg(test)]
 async fn run_many_to_completion(
     pool: &InferencePool,
-    jobs: Vec<(Vec<u32>, Meta, u32)>,
+    jobs: Vec<(Vec<u32>, u32)>,
 ) -> Result<Vec<String>, PoolError> {
     let mut handles = Vec::with_capacity(jobs.len());
-    for (insns, meta, budget) in jobs {
+    for (insns, budget) in jobs {
         let pool = pool.clone();
         handles.push(tokio::spawn(async move {
             pool.run(move || {
-                let mut session = ExpandSession::create(&insns, meta, budget);
+                let mut session = ExpandSession::create(&insns, 0x400, 0x100, 0x2000, &[], budget);
                 session.run_to_completion(budget);
                 session.snapshot_json()
             })
@@ -356,8 +383,20 @@ async fn run_many_to_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lean_binding::rv32::Meta;
     use serde_json::{json, Value};
+
+    fn replay(words: &[u32], session: &ExpandSession, steps: u32, budget: u32) -> Value {
+        let snapshot = snap(session);
+        let node = &snapshot["nodes"][0];
+        serde_json::from_str(&rv32::expand_bound_words_snapshot(
+            words,
+            &node["exprs"].to_string(),
+            &node["predicates"].to_string(),
+            steps,
+            budget,
+        ))
+        .unwrap()
+    }
 
     fn snap(session: &ExpandSession) -> Value {
         serde_json::from_str(&session.snapshot_json()).expect("session JSON")
@@ -366,21 +405,14 @@ mod tests {
     #[test]
     fn rust_graph_steps_once_snapshots_repeatedly_and_stops_at_terminal() {
         let words = [0x00700513, 0x00150513, 0x00008067];
-        let mut complete = ExpandSession::create(&words, Meta::new(0x400, 0x100), 3);
-        let mut limited = ExpandSession::create(&words, Meta::new(0x400, 0x100), 1);
+        let mut complete = ExpandSession::create(&words, 0x400, 0x100, 0x2000, &[], 3);
+        let mut limited = ExpandSession::create(&words, 0x400, 0x100, 0x2000, &[], 1);
         for steps in 0..6 {
             for (session, budget) in [(&mut complete, 3), (&mut limited, 1)] {
                 let snapshot = snap(session);
                 assert_eq!(snap(session), snapshot);
                 assert_eq!(session.is_running(), snapshot["status"] == "running");
-                let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-                    &words,
-                    &Meta::new(0x400, 0x100),
-                    steps,
-                    budget,
-                ))
-                .unwrap();
-                assert_eq!(snapshot, replay);
+                assert_eq!(snapshot, replay(&words, session, steps, budget));
                 if steps <= budget {
                     assert_eq!(
                         snapshot["nodes"].as_array().unwrap().len(),
@@ -405,7 +437,7 @@ mod tests {
     #[test]
     fn rejection_preserves_graph_and_stops_at_terminal() {
         let mut session =
-            ExpandSession::create(&[0x00700513, 0xffffffff], Meta::new(0x400, 0x100), 5);
+            ExpandSession::create(&[0x00700513, 0xffffffff], 0x400, 0x100, 0x2000, &[], 5);
         let _ = session.step_wave(1);
         let before = snap(&session);
         let _ = session.step_wave(1);
@@ -432,7 +464,7 @@ mod tests {
             (0x400, 0x400),
         ] {
             let mut session =
-                ExpandSession::create(&[0x00008067], Meta::new(base, helper_address), 10);
+                ExpandSession::create(&[0x00008067], base, helper_address, 0x2000, &[], 10);
             let failed = snap(&session);
             assert_eq!(failed["reason"], "InvalidEntry");
             assert_eq!(failed["nodes"], json!([]));
@@ -441,19 +473,15 @@ mod tests {
             assert_eq!(snap(&session), failed);
         }
         for insns in [vec![], vec![0x00008067, 0x00008067]] {
-            let meta = if insns.len() == 2 {
-                Meta::new(0xffff_fffc, 0x100)
-            } else {
-                Meta::new(0x400, 0x100)
-            };
-            let mut session = ExpandSession::create(&insns, meta, 10);
-            assert!(session.is_running(), "create is Meta-only");
+            let base = if insns.len() == 2 { 0xffff_fffc } else { 0x400 };
+            let mut session = ExpandSession::create(&insns, base, 0x100, 0x2000, &[], 10);
+            assert!(session.is_running(), "create checks addresses, not extent");
             assert_eq!(snap(&session)["fuel"], 10);
             let _ = session.step_wave(1);
             let failed = snap(&session);
             assert_eq!(failed["reason"], "InvalidEntry");
         }
-        let mut session = ExpandSession::create(&[0x00008067], Meta::new(0xffff_fffc, 0x100), 0);
+        let mut session = ExpandSession::create(&[0x00008067], 0xffff_fffc, 0x100, 0x2000, &[], 0);
         assert!(session.is_running());
         assert_eq!(snap(&session)["fuel"], 0);
         let _ = session.step_wave(1);
@@ -467,16 +495,9 @@ mod tests {
     #[test]
     fn helper_loop_keeps_dynamic_event_identity_across_steps() {
         let words = [0x00500513, 0xcfdff0ef, 0x00050493, 0xff5ff06f];
-        let mut session = ExpandSession::create(&words, Meta::new(0x400, 0x100), 10);
+        let mut session = ExpandSession::create(&words, 0x400, 0x100, 0x2000, &[], 10);
         for steps in 0..7 {
-            let replay: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-                &words,
-                &Meta::new(0x400, 0x100),
-                steps,
-                10,
-            ))
-            .unwrap();
-            assert_eq!(snap(&session), replay);
+            assert_eq!(snap(&session), replay(&words, &session, steps, 10));
             assert!(session.is_running());
             if steps == 6 {
                 let snapshot = snap(&session);
@@ -496,7 +517,7 @@ mod tests {
     async fn run_many_to_completion_overlaps_independent_sessions() {
         let words = [0x00700513, 0x00150513, 0x00008067];
         let jobs = (0..4)
-            .map(|_| (words.to_vec(), Meta::new(0x400, 0x100), 3u32))
+            .map(|_| (words.to_vec(), 3u32))
             .collect::<Vec<_>>();
         let results = run_many_to_completion(&InferencePool::new(), jobs)
             .await

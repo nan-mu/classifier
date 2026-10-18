@@ -34,11 +34,9 @@ private def raw (opcode dst src : Nat) (off : Int := 0) (imm : Nat := 0) : UInt6
 private def entry : EBPF.EntryParams :=
   ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 0, 0, 0⟩
 
-private def context : EBPF.StepContext := { entry := entry }
-
-private def ebpf (words : Array UInt64) (E : List Expr) (ctx : EBPF.StepContext := context)
-    (j : Nat := 0) : StepResult :=
-  EBPF.ebpfStep (EBPF.decodeProgram words) ctx 70 j ⟨E, []⟩
+private def ebpf (words : Array UInt64) (E : List Expr) (j : Nat := 0)
+    (p : EBPF.EntryParams := entry) (maps : List MapLayout := []) : StepResult :=
+  EBPF.ebpfStep (EBPF.decodeProgram words) 70 j ⟨EBPF.host p E maps, []⟩
 
 private def ebpfValue (name : String) (word : UInt64) (E : List Expr)
     (r expected : Nat) : Except String Unit := do
@@ -175,7 +173,7 @@ private def jumpChecks : Except String Unit := do
   expect "known false prunes invalid taken target" (c.dir, c.loc) (.notTaken, .pos 1)
   let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 7)
   let c ← one "known true prunes invalid fallthrough"
-    (ebpf #[0x95, raw 0x15 0 0 (-2) 7] E context 1)
+    (ebpf #[0x95, raw 0x15 0 0 (-2) 7] E 1)
   expect "known true prunes invalid fallthrough" (c.dir, c.loc) (.taken, .pos 0)
 
 private def memoryChecks : Except String Unit := do
@@ -258,11 +256,10 @@ private def atomicChecks : Except String Unit := do
   expect "CMPXCHG reads source before writing r0"
     (c.E_k.lookupEq (Reg.sw 0), c.E_k.lookupEq (Reg.real64 0))
     (some (Term.C32 10), some (Term.C64 10))
-  let concreteContext : EBPF.StepContext := { entry := { entry with tSp := Term.C64 4096 } }
   let E := Expr.nil.insertEq (Reg.real64 2) (Term.C64 4092)
     |>.insertEq (Reg.sw 0) (Term.C32 10)
   let c ← one "XCHG base/source alias"
-    (ebpf #[raw 0xc3 2 2 0 0xe1, 0x95] E concreteContext)
+    (ebpf #[raw 0xc3 2 2 0 0xe1, 0x95] E (p := { entry with tSp := Term.C64 4096 }))
   expect "XCHG address and source from one pre-state"
     (c.E_k.lookupEq (Reg.sw 0), c.E_k.lookupEq (Reg.real64 2))
     (some (Term.C32 4092), some (Term.C64 10))
@@ -282,8 +279,17 @@ private def rvWord (funct : Nat) : UInt32 :=
   UInt32.ofNat (0x02000033 + 9 * 1048576 + 8 * 32768 + funct * 4096 + 10 * 128)
 
 private def rv (words : Array UInt32) (E : List Expr)
-    (ctx : RV32.StepContext := {}) : StepResult :=
-  RV32.inferStep (RV32.decodeProgram words) ctx 70 0 ⟨E, []⟩
+    (base : Option Nat := none) (helper : Option Nat := none)
+    (maps : List MapLayout := []) : StepResult :=
+  let anchors := match base, helper with
+    | some b, some h =>
+      [(Anchor.imageBase, Term.C32 b), (.helper, Term.C32 h), (.wrapperReturn, Term.C32 0x2000)]
+    | _, _ => []
+  let hosted := match Anchor.mapRows (maps.map (·.mapId)) (maps.map (·.keySize))
+      (maps.map (·.valueSize)) with
+    | some rows => (Anchor.install E (anchors ++ rows)).getD E
+    | none => (Anchor.install E anchors).getD E
+  RV32.inferStep (RV32.decodeProgram words) 70 0 ⟨hosted, []⟩
 
 private def rvMChecks : Except String Unit := do
   let rows : List (Nat × Op × Nat) := [
@@ -331,13 +337,13 @@ private def helperChecks : Except String Unit := do
       (3, HelperKind.delete, [Term.C64 42, key64], [Term.C64 17, Term.C64 34, Term.C64 51]),
       (2, HelperKind.update, [Term.C64 42, key64, value64, Term.C64 0],
         [Term.C64 17, Term.C64 34, Term.C64 51, Term.C64 170, Term.C64 187])] do
-    let c ← one s!"eBPF helper/{id}" (ebpf #[raw 0x85 0 0 0 id, 0x95] E { context with maps := maps })
+    let c ← one s!"eBPF helper/{id}" (ebpf #[raw 0x85 0 0 0 id, 0x95] E (maps := maps))
     expect s!"eBPF helper frozen/{id}" c.P_k [.helper 70 kind (abi ++ tail)]
     expect s!"eBPF helper return ABI-only/{id}" (c.E_k.lookupEq (Reg.real64 0))
       (some (.app .w64 (.externalResult 70 0) (Term.C64 id :: abi)))
     let changed := E.insertEq (Reg.sw 1) (Term.C32 0x00030201)
     let c' ← one "eBPF helper changed snapshot"
-      (ebpf #[raw 0x85 0 0 0 id, 0x95] changed { context with maps := maps })
+      (ebpf #[raw 0x85 0 0 0 id, 0x95] changed (maps := maps))
     let changedTail := [Term.C64 1, Term.C64 2, Term.C64 3] ++
       (if id == 2 then [Term.C64 170, Term.C64 187] else [])
     expect "eBPF helper current bytes" c'.P_k [.helper 70 kind (abi ++ changedTail)]
@@ -347,14 +353,10 @@ private def helperChecks : Except String Unit := do
       E.filter (fun e => e.reg != Reg.sw 0),
       E.filter (fun e => e.reg != Reg.sw 1)] do
     let c ← one "eBPF update incomplete"
-      (ebpf #[raw 0x85 0 0 0 2, 0x95] incomplete { context with maps := maps })
+      (ebpf #[raw 0x85 0 0 0 2, 0x95] incomplete (maps := maps))
     expect "eBPF update no half tail" c.P_k [.helper 70 .update prefix64]
-  let c ← one "eBPF duplicate layout"
-    (ebpf #[raw 0x85 0 0 0 2, 0x95] E { context with maps := maps ++ maps })
-  expect "eBPF ambiguous layout prefix" c.P_k [.helper 70 .update prefix64]
   let c ← one "eBPF delete missing key" (ebpf #[raw 0x85 0 0 0 3, 0x95]
-    (E.filter (fun e => e.reg != Reg.sw 1))
-    { context with maps := maps })
+    (E.filter (fun e => e.reg != Reg.sw 1)) (maps := maps))
   expect "eBPF delete missing key prefix" c.P_k [.helper 70 .delete [Term.C64 42, key64]]
   let key32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 3]
   let value32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 4]
@@ -365,31 +367,26 @@ private def helperChecks : Except String Unit := do
     |>.insertEq (Reg.real32 14) (Term.C32 0)
     |>.insertEq (Reg.sw 8589934592) (Term.C32 0x04030201)
     |>.insertEq (Reg.sw 8589934596) (Term.C32 0x08070605)
-  let ctx : RV32.StepContext := {
-    imageBase := some 0x1000, helperAddress := some 0x1100, maps := maps }
+  let rvCall (state : List Expr) := rv #[0x100000ef, 0x0001] state (some 0x1000) (some 0x1100) maps
   for (id, kind, abi, tail) in [
       (1, HelperKind.lookup, [Term.C32 42, key32], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (3, HelperKind.delete, [Term.C32 42, key32], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (2, HelperKind.update, [Term.C32 42, key32, value32, Term.C32 0],
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 5, Term.C32 6])] do
     let state := E.insertEq (Reg.real32 10) (Term.C32 id)
-    let c ← one s!"RV helper/{id}" (rv #[0x100000ef, 0x0001] state ctx)
+    let c ← one s!"RV helper/{id}" (rvCall state)
     expect s!"RV helper full tail/{id}" c.P_k [.helper 70 kind (abi ++ tail)]
     expect s!"RV helper return ABI-only/{id}" (c.E_k.lookupEq (Reg.real32 10))
       (some (.app .w32 (.externalResult 70 0) (Term.C32 id :: abi)))
     let missing := state.filter (fun e => e.reg != Reg.sw 8589934596)
-    let c ← one "RV helper incomplete" (rv #[0x100000ef, 0x0001] missing ctx)
+    let c ← one "RV helper incomplete" (rvCall missing)
     expect "RV helper no partial tail" c.P_k [.helper 70 kind abi]
   let missingValue : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 7]
   let state := E.insertEq (Reg.real32 10) (Term.C32 2)
     |>.insertEq (Reg.real32 13) missingValue
-  let c ← one "RV update missing final byte" (rv #[0x100000ef, 0x0001] state ctx)
+  let c ← one "RV update missing final byte" (rvCall state)
   expect "RV update missing final byte no half tail" c.P_k
     [.helper 70 .update [Term.C32 42, key32, missingValue, Term.C32 0]]
-  let state := E.insertEq (Reg.real32 10) (Term.C32 2)
-  let c ← one "RV ambiguous layout" (rv #[0x100000ef, 0x0001] state { ctx with maps := maps ++ maps })
-  expect "RV ambiguous layout original prefix" c.P_k
-    [.helper 70 .update [Term.C32 42, key32, value32, Term.C32 0]]
 
 private def solverChecks : Except String Unit := do
   let x := Term.V32 1
@@ -606,9 +603,8 @@ private def expectFailure (name response reason : String) : Except String Unit :
   expectJson (name ++ "/atomic rejection") (.arr (← arrField result "successors")) (.arr #[])
 
 private def ffiChecks : Except String Unit := do
-  let metadataJson := "{\"entry\":{\"tCtx\":\"v64:1\",\"tSp\":\"v64:0\",\"tData\":\"v32:2\",\"packetBytes\":64,\"alphaCtx\":0,\"packetId\":0,\"stackId\":0}}"
   let call := fun words event j E P =>
-    EBPF.exportEbpfExpandStep words metadataJson event j E P
+    EBPF.exportEbpfExpandStep words event j E P
   expectStep "String FFI MOV actual state" (call #[raw 0xb7 0 0 0 7, 0x95] 70 0 "[]" "[]")
     "1" [(Reg.real64 0, Term.C64 7)] []
   expectStep "String FFI LDDW value and raw-slot successor"
@@ -642,14 +638,13 @@ private def ffiChecks : Except String Unit := do
   let E := "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"7\"}]"
   expectStep "String FFI EXIT frozen return" (call #[0x95] 70 0 E "[]")
     "exit" [(Reg.real64 0, Term.C64 7)] [.ret (Term.C64 7)]
-  let rvMeta := "{\"base\":4096,\"helperAddress\":4352,\"returnAddress\":8192}"
   expectStep "RV String FFI actual open M"
-    (RV32.exportRv32ExpandStep #[rvWord 5, 0x0001] rvMeta 70 0
+    (RV32.exportRv32ExpandStep #[rvWord 5, 0x0001] 70 0
       "[{\"reg\":\"real32:8\",\"rel\":\"eq\",\"term\":\"v32:41\"},{\"reg\":\"real32:9\",\"rel\":\"eq\",\"term\":\"v32:42\"}]" "[]")
     "1" [(Reg.real32 8, Term.V32 41), (Reg.real32 9, Term.V32 42),
       (Reg.real32 10, .app .w32 (.udiv .w32 4294967295) [Term.V32 41, Term.V32 42])] []
   expectFailure "RV String FFI illegal all-or-nothing"
-    (RV32.exportRv32ExpandStep #[0xffffffff, 0x0001] rvMeta 70 0 "[]" "[]") "LocalReject"
+    (RV32.exportRv32ExpandStep #[0xffffffff, 0x0001] 70 0 "[]" "[]") "LocalReject"
 
 private def rvFixture : Array UInt32 :=
   #[4417, 50694, 50210, 49702, 2048, 16644, 16716, 14976531, 17669, 180744035, 12899843, 26285,
@@ -660,14 +655,23 @@ private def rvFixture : Array UInt32 :=
     46504803, 6591747, 8689027, 10786307, 300675, 2397955, 4495235, 10784803, 11833635, 12882467,
     13931299, 14980131, 16028963, 17677, 16562, 17442, 17554, 321, 32898]
 
+private def rootJson (response : String) : Except String (String × String) := do
+  let value ← Json.parse response
+  let nodes ← (value.getObjVal? "nodes" >>= Json.getArr?)
+  let some node := nodes[0]? | throw "missing create root"
+  let exprs ← node.getObjVal? "exprs"
+  let preds ← node.getObjVal? "predicates"
+  pure (exprs.compress, preds.compress)
+
 private def snapshotProtocolChecks : Except String Unit := do
   let program := #[raw 0xb7 0 0 0 7, 0x95]
-  let metadataJson := "{\"entry\":{\"tCtx\":\"v64:1\",\"tSp\":\"v64:0\",\"tData\":\"v32:2\",\"packetBytes\":64,\"alphaCtx\":0,\"packetId\":0,\"stackId\":0}}"
+  let (exprs, preds) ← rootJson (EBPF.exportEbpfExpandCreate "v64:1" "v64:0" "v32:2" 64 0 0 0
+    #[] #[] #[] #[] #[])
   let rows : List (UInt32 × String × String × List Predicate × List String) := [
     (1, "running", "1", [], ["1"]),
     (2, "complete", "exit", [.ret (Term.C64 7)], [])]
   for (steps, status, location, observations, pending) in rows do
-    let result ← Json.parse (EBPF.exportEbpfBoundWordsSnapshot program metadataJson steps 4)
+    let result ← Json.parse (EBPF.exportEbpfBoundWordsSnapshot program exprs preds steps 4)
     expect ("MOV/EXIT snapshot status/" ++ status) (← strField result "status") status
     expectJson ("MOV/EXIT snapshot reason/" ++ status) (← field result "reason") Json.null
     expectJson ("MOV/EXIT snapshot failed/" ++ status) (← field result "failed") Json.null
@@ -690,7 +694,9 @@ private def snapshotProtocolChecks : Except String Unit := do
     expect ("MOV/EXIT snapshot observations/" ++ status) state.predicates observations
 
 private def regressionChecks : Except String Unit := do
-  let e ← Json.parse (EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram EBPF.productMetaJson 2000 1024)
+  let (ebpfExprs, ebpfPreds) ← rootJson (EBPF.exportEbpfExpandCreate "v64:1" "v64:0" "v32:4" 128 0 0 0
+    #[34] #[1077412584] #[1077412584] #[4] #[8])
+  let e ← Json.parse (EBPF.exportEbpfBoundWordsSnapshot EBPF.justTxProgram ebpfExprs ebpfPreds 2000 1024)
   expect "just_tx eBPF status" (← strField e "status") "complete"
   let nodes ← arrField e "nodes"
   let terminalReturns ← nodes.toList.filterMapM fun n => do
@@ -701,8 +707,9 @@ private def regressionChecks : Except String Unit := do
         else pure (parseTerm (← strField p "term") .w64)
       pure (some rs)
   expect "just_tx eBPF concrete TX return" (terminalReturns.any (·.contains (Term.C64 3))) true
-  let r ← Json.parse (RV32.exportRv32BoundWordsSnapshot rvFixture
-    "{\"base\":1077412352,\"helperAddress\":1077411840,\"returnAddress\":8192,\"maps\":[{\"mapId\":1077412584,\"keySize\":4,\"valueSize\":8}]}" 400 400)
+  let (rvExprs, rvPreds) ← rootJson (RV32.exportRv32ExpandCreate 1077412352 1077411840 8192
+    #[1077412584] #[4] #[8])
+  let r ← Json.parse (RV32.exportRv32BoundWordsSnapshot rvFixture rvExprs rvPreds 400 400)
   expect "just_tx RV status" (← strField r "status") "complete"
   expectJson "just_tx RV reason" (← field r "reason") Json.null
   let rvNodes ← arrField r "nodes"

@@ -4,7 +4,7 @@
  * Numeric leaves stay as decimal/hex strings (never JS number) for 64-bit safety.
  */
 
-export type RegKind = "real" | "stack" | "map" | "context" | "packet" | "unknown";
+export type RegKind = "real" | "stack" | "map" | "context" | "packet" | "anchor" | "unknown";
 
 export type ParsedReg = {
   raw: string;
@@ -23,7 +23,7 @@ export type TermView =
   | { kind: "app"; op: string; args: TermView[] }
   | { kind: "raw"; text: string };
 
-const REG_RE = /^(real|stack|map|context|packet)(32|64):(\d+)$/;
+const REG_RE = /^(real|stack|map|context|packet|anchor)(32|64):(\d+)$/;
 
 /** Inverse of Lean `Reg.packet` / `Reg.mapWord` pairing: α = T_{κ+off} + off. */
 export function cantorUnpair(alpha: number): { first: number; second: number } | null {
@@ -142,6 +142,7 @@ export const kindLabel: Record<RegKind, string> = {
   map: "Map",
   context: "Context",
   packet: "Packet",
+  anchor: "Anchor",
   unknown: "?",
 };
 
@@ -161,6 +162,7 @@ export const REG_KIND_ORDER: RegKind[] = [
   "map",
   "context",
   "packet",
+  "anchor",
   "unknown",
 ];
 

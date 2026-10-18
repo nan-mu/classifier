@@ -57,15 +57,22 @@ pub(crate) mod ffi {
         pub fn lean_rv32_expand_builtin_snapshot(steps: u32, budget: u32) -> LeanObj;
         pub fn lean_rv32_expand_bound_words_snapshot(
             insns: LeanObj,
-            meta_json: LeanObj,
+            exprs_json: LeanObj,
+            preds_json: LeanObj,
             steps: u32,
             budget: u32,
         ) -> LeanObj;
         pub fn lean_rv32_expand_words_snapshot(insns: LeanObj, steps: u32, budget: u32) -> LeanObj;
-        pub fn lean_rv32_expand_create(meta_json: LeanObj) -> LeanObj;
+        pub fn lean_rv32_expand_create(
+            base: u32,
+            helper: u32,
+            wrapper_return: u32,
+            map_ids: LeanObj,
+            key_sizes: LeanObj,
+            value_sizes: LeanObj,
+        ) -> LeanObj;
         pub fn lean_rv32_expand_step(
             insns: LeanObj,
-            meta_json: LeanObj,
             event: u32,
             j: u32,
             exprs_json: LeanObj,
@@ -74,10 +81,22 @@ pub(crate) mod ffi {
         /// HelperOnly ExactConfig merge (`Node/Merge.lean`).
         pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
 
-        pub fn lean_ebpf_expand_create(meta_json: LeanObj) -> LeanObj;
+        pub fn lean_ebpf_expand_create(
+            t_ctx: LeanObj,
+            t_sp: LeanObj,
+            t_data: LeanObj,
+            packet_bytes: u32,
+            alpha_ctx: u32,
+            packet_id: u32,
+            stack_id: u32,
+            slots: LeanObj,
+            terms: LeanObj,
+            map_ids: LeanObj,
+            key_sizes: LeanObj,
+            value_sizes: LeanObj,
+        ) -> LeanObj;
         pub fn lean_ebpf_expand_step(
             insns: LeanObj,
-            meta_json: LeanObj,
             event: u32,
             j: u32,
             exprs_json: LeanObj,
@@ -85,7 +104,8 @@ pub(crate) mod ffi {
         ) -> LeanObj;
         pub fn lean_ebpf_expand_bound_words_snapshot(
             insns: LeanObj,
-            meta_json: LeanObj,
+            exprs_json: LeanObj,
+            preds_json: LeanObj,
             steps: u32,
             budget: u32,
         ) -> LeanObj;
@@ -271,50 +291,6 @@ pub mod rv32 {
         pub value_size: u32,
     }
 
-    /// Static program bindings outside SemState / Predicate.
-    /// Extend fields here; create/step FFI takes one Meta JSON blob.
-    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Meta {
-        pub base: u32,
-        /// ELF dispatcher binding — not a Predicate.
-        pub helper_address: u32,
-        /// Synthetic wrapper return; default `0x2000`.
-        #[serde(default = "Meta::default_return_address")]
-        pub return_address: u32,
-        /// Optional Map layouts; empty keeps MapWrite rejected (no frozen keys).
-        #[serde(default)]
-        pub maps: Vec<MapLayout>,
-        /// Forward-compatible bag for future bindings.
-        #[serde(flatten)]
-        pub extra: serde_json::Map<String, serde_json::Value>,
-    }
-
-    impl Meta {
-        const fn default_return_address() -> u32 {
-            0x2000
-        }
-
-        pub fn new(base: u32, helper_address: u32) -> Self {
-            Self {
-                base,
-                helper_address,
-                return_address: Self::default_return_address(),
-                maps: Vec::new(),
-                extra: serde_json::Map::new(),
-            }
-        }
-
-        pub fn with_maps(mut self, maps: Vec<MapLayout>) -> Self {
-            self.maps = maps;
-            self
-        }
-
-        pub fn to_json(&self) -> String {
-            serde_json::to_string(self).expect("Meta JSON")
-        }
-    }
-
     unsafe fn lean_string(s: &str) -> ffi::LeanObj {
         use std::ffi::CString;
         let c = CString::new(s).expect("JSON contains NUL");
@@ -323,55 +299,73 @@ pub mod rv32 {
 
     pub fn expand_bound_words_snapshot(
         insns: &[u32],
-        meta: &Meta,
+        exprs_json: &str,
+        preds_json: &str,
         steps: u32,
         budget: u32,
     ) -> String {
         let insns = insns.to_vec();
-        let meta_json = meta.to_json();
+        let exprs_json = exprs_json.to_owned();
+        let preds_json = preds_json.to_owned();
         lean_call(move || unsafe {
             let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
-            let meta = lean_string(&meta_json);
-            let obj = ffi::lean_rv32_expand_bound_words_snapshot(arr, meta, steps, budget);
+            let exprs = lean_string(&exprs_json);
+            let preds = lean_string(&preds_json);
+            let obj =
+                ffi::lean_rv32_expand_bound_words_snapshot(arr, exprs, preds, steps, budget);
             take_string(obj)
         })
     }
 
-    /// Entry SemState + root node. Program image and fuel stay in the server engine.
-    pub fn expand_create(meta: &Meta) -> String {
-        let meta_json = meta.to_json();
+    /// Entry state plus anchors. Program image and fuel stay in the server engine.
+    pub fn expand_create(
+        base: u32,
+        helper: u32,
+        wrapper_return: u32,
+        map_ids: &[u32],
+        key_sizes: &[u32],
+        value_sizes: &[u32],
+    ) -> String {
+        let map_ids = map_ids.to_vec();
+        let key_sizes = key_sizes.to_vec();
+        let value_sizes = value_sizes.to_vec();
         lean_call(move || unsafe {
-            let meta = lean_string(&meta_json);
-            take_string(ffi::lean_rv32_expand_create(meta))
+            let map_ids = ffi::lean_binding_mk_uint32_array(map_ids.as_ptr(), map_ids.len());
+            let key_sizes = ffi::lean_binding_mk_uint32_array(key_sizes.as_ptr(), key_sizes.len());
+            let value_sizes =
+                ffi::lean_binding_mk_uint32_array(value_sizes.as_ptr(), value_sizes.len());
+            take_string(ffi::lean_rv32_expand_create(
+                base,
+                helper,
+                wrapper_return,
+                map_ids,
+                key_sizes,
+                value_sizes,
+            ))
         })
     }
 
-    /// Stateless head inference. Lean returns successors or reject; no fuel field.
+    /// Stateless head inference. Anchors travel in `exprs_json`.
     /// Graph / fuel / work-queue ownership lives in the server expand engine.
     pub fn expand_step(
         insns: &[u32],
-        meta: &Meta,
         event: u32,
         j: u32,
         exprs_json: &str,
         preds_json: &str,
     ) -> String {
         let insns = insns.to_vec();
-        let meta_json = meta.to_json();
         let exprs_json = exprs_json.to_owned();
         let preds_json = preds_json.to_owned();
         lean_call(move || unsafe {
             let arr = ffi::lean_binding_mk_uint32_array(insns.as_ptr(), insns.len());
-            let meta = lean_string(&meta_json);
             let exprs = lean_string(&exprs_json);
             let preds = lean_string(&preds_json);
-            take_string(ffi::lean_rv32_expand_step(
-                arr, meta, event, j, exprs, preds,
-            ))
+            take_string(ffi::lean_rv32_expand_step(arr, event, j, exprs, preds))
         })
     }
 
-    /// HelperOnly ExactConfig merge. Request JSON only (no program / Meta).
+    /// HelperOnly ExactConfig merge. Request JSON only.
     /// See `doc/NodeInference/路径合并FFI.md`.
     pub fn expand_merge(request_json: &str) -> String {
         let request_json = request_json.to_owned();
@@ -387,104 +381,14 @@ pub mod ebpf {
     use super::{ffi, lean_call};
     use std::ffi::CStr;
 
-    /// One LDDW resource binding (`slot` = raw program word index).
-    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct ResourceLocation {
-        pub slot: u32,
-        /// `null` marks an unbound target (map LDDW without relocation term).
-        pub term: Option<String>,
-    }
-
     /// Same wire record as `rv32::MapLayout`. Fields are mapId, keySize, and valueSize.
     pub type MapLayout = super::rv32::MapLayout;
 
-    /// Entry terms and packet/stack identities for `buildE0`.
-    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Entry {
-        pub t_ctx: String,
-        pub t_sp: String,
-        pub t_data: String,
-        pub packet_bytes: u32,
-        pub alpha_ctx: u32,
-        pub packet_id: u32,
-        pub stack_id: u32,
-    }
-
-    impl Entry {
-        /// Fixture entry matching `EBPF/Expand.lean` / just_tx smoke Meta.
-        pub fn just_tx() -> Self {
-            Self {
-                t_ctx: "v64:1".into(),
-                t_sp: "v64:0".into(),
-                t_data: "v32:4".into(),
-                packet_bytes: 128,
-                alpha_ctx: 0,
-                packet_id: 0,
-                stack_id: 0,
-            }
-        }
-    }
-
-    /// Static eBPF bindings outside SemState (wire schema for `parseMetaJson`).
-    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct Meta {
-        pub entry: Entry,
-        #[serde(default)]
-        pub resource_locations: Vec<ResourceLocation>,
-        /// Optional map layouts. Empty leaves map ops without a frozen layout.
-        #[serde(default)]
-        pub maps: Vec<MapLayout>,
-    }
-
-    impl Meta {
-        /// AOT VMA of the just_tx rxcnt map in `just_tx.elf`.
-        const JUST_TX_MAP_VMA: u32 = 0x4038_02e8;
-
-        /// Entry only. LDDW immediates use encoded bits, srcType 0.
-        pub fn just_tx() -> Self {
-            Self {
-                entry: Entry::just_tx(),
-                resource_locations: vec![],
-                maps: vec![],
-            }
-        }
-
-        /// just_tx with slot 34 map LDDW marked unbound (`term: null`).
-        pub fn just_tx_unbound_map() -> Self {
-            Self {
-                entry: Entry::just_tx(),
-                resource_locations: vec![ResourceLocation {
-                    slot: 34,
-                    term: None,
-                }],
-                maps: vec![],
-            }
-        }
-
-        /// just_tx with slot 34 bound to the shared rxcnt map. The term is that VMA as a decimal C64.
-        pub fn just_tx_product() -> Self {
-            let map = MapLayout {
-                map_id: Self::JUST_TX_MAP_VMA,
-                key_size: 4,
-                value_size: 8,
-            };
-            Self {
-                entry: Entry::just_tx(),
-                resource_locations: vec![ResourceLocation {
-                    slot: 34,
-                    term: Some(map.map_id.to_string()),
-                }],
-                maps: vec![map],
-            }
-        }
-
-        pub fn to_json(&self) -> String {
-            serde_json::to_string(self).expect("eBPF Meta JSON")
-        }
-    }
+    /// Symbolic entry passed at the HTTP/kernel create boundary.
+    pub const T_CTX: &str = "v64:1";
+    pub const T_SP: &str = "v64:0";
+    pub const T_DATA: &str = "v32:4";
+    pub const PACKET_BYTES: u32 = 128;
 
     unsafe fn take_string(obj: ffi::LeanObj) -> String {
         let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
@@ -500,77 +404,91 @@ pub mod ebpf {
         ffi::lean_binding_mk_string(c.as_ptr())
     }
 
-    pub fn expand_create(meta: &Meta) -> String {
-        let meta_json = meta.to_json();
+    pub fn expand_create(
+        t_ctx: &str,
+        t_sp: &str,
+        t_data: &str,
+        packet_bytes: u32,
+        alpha_ctx: u32,
+        packet_id: u32,
+        stack_id: u32,
+        slots: &[u32],
+        terms: &[u64],
+        map_ids: &[u32],
+        key_sizes: &[u32],
+        value_sizes: &[u32],
+    ) -> String {
+        let t_ctx = t_ctx.to_owned();
+        let t_sp = t_sp.to_owned();
+        let t_data = t_data.to_owned();
+        let slots = slots.to_vec();
+        let terms = terms.to_vec();
+        let map_ids = map_ids.to_vec();
+        let key_sizes = key_sizes.to_vec();
+        let value_sizes = value_sizes.to_vec();
         lean_call(move || unsafe {
-            let meta = lean_string(&meta_json);
-            take_string(ffi::lean_ebpf_expand_create(meta))
+            let t_ctx = lean_string(&t_ctx);
+            let t_sp = lean_string(&t_sp);
+            let t_data = lean_string(&t_data);
+            let slots = ffi::lean_binding_mk_uint32_array(slots.as_ptr(), slots.len());
+            let terms = ffi::lean_binding_mk_uint64_array(terms.as_ptr(), terms.len());
+            let map_ids = ffi::lean_binding_mk_uint32_array(map_ids.as_ptr(), map_ids.len());
+            let key_sizes = ffi::lean_binding_mk_uint32_array(key_sizes.as_ptr(), key_sizes.len());
+            let value_sizes =
+                ffi::lean_binding_mk_uint32_array(value_sizes.as_ptr(), value_sizes.len());
+            take_string(ffi::lean_ebpf_expand_create(
+                t_ctx,
+                t_sp,
+                t_data,
+                packet_bytes,
+                alpha_ctx,
+                packet_id,
+                stack_id,
+                slots,
+                terms,
+                map_ids,
+                key_sizes,
+                value_sizes,
+            ))
         })
     }
 
     pub fn expand_step(
         insns: &[u64],
-        meta: &Meta,
         event: u32,
         j: u32,
         exprs_json: &str,
         preds_json: &str,
     ) -> String {
         let insns = insns.to_vec();
-        let meta_json = meta.to_json();
         let exprs_json = exprs_json.to_owned();
         let preds_json = preds_json.to_owned();
         lean_call(move || unsafe {
             let arr = ffi::lean_binding_mk_uint64_array(insns.as_ptr(), insns.len());
-            let meta = lean_string(&meta_json);
             let exprs = lean_string(&exprs_json);
             let preds = lean_string(&preds_json);
-            take_string(ffi::lean_ebpf_expand_step(
-                arr, meta, event, j, exprs, preds,
-            ))
+            take_string(ffi::lean_ebpf_expand_step(arr, event, j, exprs, preds))
         })
     }
 
     pub fn expand_bound_words_snapshot(
         insns: &[u64],
-        meta: &Meta,
+        exprs_json: &str,
+        preds_json: &str,
         steps: u32,
         budget: u32,
     ) -> String {
         let insns = insns.to_vec();
-        let meta_json = meta.to_json();
+        let exprs_json = exprs_json.to_owned();
+        let preds_json = preds_json.to_owned();
         lean_call(move || unsafe {
             let arr = ffi::lean_binding_mk_uint64_array(insns.as_ptr(), insns.len());
-            let meta = lean_string(&meta_json);
+            let exprs = lean_string(&exprs_json);
+            let preds = lean_string(&preds_json);
             take_string(ffi::lean_ebpf_expand_bound_words_snapshot(
-                arr, meta, steps, budget,
+                arr, exprs, preds, steps, budget,
             ))
         })
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::Meta;
-
-        #[test]
-        fn just_tx_product_json_binds_slot_34_and_map() {
-            assert_eq!(
-                Meta::just_tx_product().to_json(),
-                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":"1077412584"}],"maps":[{"mapId":1077412584,"keySize":4,"valueSize":8}]}"#
-            );
-        }
-
-        #[test]
-        fn just_tx_and_unbound_map_stay_empty_of_layouts() {
-            assert_eq!(
-                Meta::just_tx().to_json(),
-                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[],"maps":[]}"#
-            );
-            assert_eq!(
-                Meta::just_tx_unbound_map().to_json(),
-                r#"{"entry":{"tCtx":"v64:1","tSp":"v64:0","tData":"v32:4","packetBytes":128,"alphaCtx":0,"packetId":0,"stackId":0},"resourceLocations":[{"slot":34,"term":null}],"maps":[]}"#
-            );
-        }
     }
 }
 

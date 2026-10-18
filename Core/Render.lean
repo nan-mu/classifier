@@ -19,6 +19,7 @@ def renderRegKind : RegKind → String
   | .map => "map"
   | .packet => "packet"
   | .context => "context"
+  | .anchor => "anchor"
 
 def renderReg (r : Reg) : String :=
   match r.compound with

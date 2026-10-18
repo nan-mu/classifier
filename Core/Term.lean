@@ -151,7 +151,7 @@ mutual
 end
 
 private def regKindCode : RegKind → Nat
-  | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4
+  | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4 | .anchor => 5
 
 mutual
   /-- Prefix encoding for the raw structural order. Zero delimits argument lists. -/

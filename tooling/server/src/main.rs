@@ -14,12 +14,11 @@ use base64::Engine;
 use futures_util::future::FutureExt;
 use futures_util::StreamExt;
 use lean_binding::compare;
-use lean_binding::ebpf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use server::bpf_image;
 use server::engine::InferencePool;
-use server::expand::{Arch, Session, Snapshot, WaveBatchPolicy};
+use server::expand::{zip_ebpf_maps, Arch, Session, Snapshot, WaveBatchPolicy};
 use server::pred_match;
 use server::pred_tree;
 use server::rv32_image;
@@ -123,38 +122,15 @@ fn default_name(arch: Arch) -> &'static str {
 }
 
 /// Default HTTP create: just_tx bpf LDDW slots + just_tx.elf maps (same as Kernel path).
-fn ebpf_product_meta(bpf_bytes: &[u8], elf_bytes: &[u8]) -> Result<ebpf::Meta, StatusCode> {
+fn ebpf_product_bound(
+    bpf_bytes: &[u8],
+    elf_bytes: &[u8],
+) -> Result<server::expand::EbpfBound, StatusCode> {
     let maps = rv32_image::parse_xdp_elf(elf_bytes)
         .map_err(|_| StatusCode::BAD_REQUEST)?
         .maps;
     let slots = bpf_image::map_lddw_slots(bpf_bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
-    let resource_locations = if slots.is_empty() {
-        vec![]
-    } else if maps.len() == 1 {
-        slots
-            .iter()
-            .map(|&slot| ebpf::ResourceLocation {
-                slot,
-                term: Some(maps[0].map_id.to_string()),
-            })
-            .collect()
-    } else if maps.len() == slots.len() {
-        slots
-            .iter()
-            .zip(maps.iter())
-            .map(|(&slot, map)| ebpf::ResourceLocation {
-                slot,
-                term: Some(map.map_id.to_string()),
-            })
-            .collect()
-    } else {
-        return Err(StatusCode::BAD_REQUEST);
-    };
-    Ok(ebpf::Meta {
-        entry: ebpf::Entry::just_tx(),
-        resource_locations,
-        maps,
-    })
+    zip_ebpf_maps(&slots, &maps).map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 fn default_bytes(arch: Arch) -> &'static [u8] {
@@ -279,11 +255,11 @@ async fn create_session(
         Arch::Ebpf => {
             let program =
                 bpf_image::extract_insn_words(&bin).map_err(|_| StatusCode::BAD_REQUEST)?;
-            let meta = ebpf_product_meta(&bin, &elf_for_maps)?;
+            let bound = ebpf_product_bound(&bin, &elf_for_maps)?;
             app.pool
                 .run(move || {
                     Arc::new(Mutex::new(Session::new_ebpf(
-                        id, budget, name, program, meta,
+                        id, budget, name, program, bound,
                     )))
                 })
                 .await

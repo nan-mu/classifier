@@ -317,7 +317,7 @@ mutual
   termination_by sizeOf xs + sizeOf ys
 
   private def regRank : RegKind → Nat
-    | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4
+    | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4 | .anchor => 5
 end
 
 /- Width of the represented observation, not of its original carrier.
