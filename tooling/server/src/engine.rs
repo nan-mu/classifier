@@ -136,36 +136,8 @@ impl ExpandSession {
         )
     }
 
-    pub fn create_ebpf(
-        insns: &[u64],
-        t_ctx: &str,
-        t_sp: &str,
-        t_data: &str,
-        packet_bytes: u32,
-        alpha_ctx: u32,
-        packet_id: u32,
-        stack_id: u32,
-        slots: &[u32],
-        terms: &[u64],
-        map_ids: &[u32],
-        key_sizes: &[u32],
-        value_sizes: &[u32],
-        budget: u32,
-    ) -> Self {
-        let created = ebpf::expand_create(
-            t_ctx,
-            t_sp,
-            t_data,
-            packet_bytes,
-            alpha_ctx,
-            packet_id,
-            stack_id,
-            slots,
-            terms,
-            map_ids,
-            key_sizes,
-            value_sizes,
-        );
+    pub fn create_ebpf(insns: &[u64], args: &ebpf::Create<'_>, budget: u32) -> Self {
+        let created = ebpf::expand_create(args);
         Self::from_isa(
             IsaState::Ebpf {
                 insns: insns.to_vec(),

@@ -334,20 +334,20 @@ mod ebpf_expand_ffi {
     #[test]
     fn create_then_step_one_insn() {
         let words = [MOV_R0_1, EXIT];
-        let root: Value = serde_json::from_str(&ebpf::expand_create(
-            ebpf::T_CTX,
-            ebpf::T_SP,
-            ebpf::T_DATA,
-            ebpf::PACKET_BYTES,
-            0,
-            0,
-            0,
-            &[34],
-            &[0],
-            &[],
-            &[],
-            &[],
-        ))
+        let root: Value = serde_json::from_str(&ebpf::expand_create(&ebpf::Create {
+            t_ctx: ebpf::T_CTX,
+            t_sp: ebpf::T_SP,
+            t_data: ebpf::T_DATA,
+            packet_bytes: ebpf::PACKET_BYTES,
+            alpha_ctx: 0,
+            packet_id: 0,
+            stack_id: 0,
+            slots: &[34],
+            terms: &[0],
+            map_ids: &[],
+            key_sizes: &[],
+            value_sizes: &[],
+        }))
         .unwrap();
         assert_eq!(root["status"], "running");
         assert!(root.get("fuel").is_none());

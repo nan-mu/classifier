@@ -389,6 +389,23 @@ pub mod ebpf {
     pub const T_DATA: &str = "v32:4";
     pub const PACKET_BYTES: u32 = 128;
 
+    /// One create request: symbolic entry, LDDW slot terms, and map layouts.
+    /// Written into the root snapshot as anchors. Not a session store.
+    pub struct Create<'a> {
+        pub t_ctx: &'a str,
+        pub t_sp: &'a str,
+        pub t_data: &'a str,
+        pub packet_bytes: u32,
+        pub alpha_ctx: u32,
+        pub packet_id: u32,
+        pub stack_id: u32,
+        pub slots: &'a [u32],
+        pub terms: &'a [u64],
+        pub map_ids: &'a [u32],
+        pub key_sizes: &'a [u32],
+        pub value_sizes: &'a [u32],
+    }
+
     unsafe fn take_string(obj: ffi::LeanObj) -> String {
         let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
             .to_string_lossy()
@@ -403,28 +420,19 @@ pub mod ebpf {
         ffi::lean_binding_mk_string(c.as_ptr())
     }
 
-    pub fn expand_create(
-        t_ctx: &str,
-        t_sp: &str,
-        t_data: &str,
-        packet_bytes: u32,
-        alpha_ctx: u32,
-        packet_id: u32,
-        stack_id: u32,
-        slots: &[u32],
-        terms: &[u64],
-        map_ids: &[u32],
-        key_sizes: &[u32],
-        value_sizes: &[u32],
-    ) -> String {
-        let t_ctx = t_ctx.to_owned();
-        let t_sp = t_sp.to_owned();
-        let t_data = t_data.to_owned();
-        let slots = slots.to_vec();
-        let terms = terms.to_vec();
-        let map_ids = map_ids.to_vec();
-        let key_sizes = key_sizes.to_vec();
-        let value_sizes = value_sizes.to_vec();
+    pub fn expand_create(args: &Create<'_>) -> String {
+        let t_ctx = args.t_ctx.to_owned();
+        let t_sp = args.t_sp.to_owned();
+        let t_data = args.t_data.to_owned();
+        let packet_bytes = args.packet_bytes;
+        let alpha_ctx = args.alpha_ctx;
+        let packet_id = args.packet_id;
+        let stack_id = args.stack_id;
+        let slots = args.slots.to_vec();
+        let terms = args.terms.to_vec();
+        let map_ids = args.map_ids.to_vec();
+        let key_sizes = args.key_sizes.to_vec();
+        let value_sizes = args.value_sizes.to_vec();
         lean_call(move || unsafe {
             let t_ctx = lean_string(&t_ctx);
             let t_sp = lean_string(&t_sp);

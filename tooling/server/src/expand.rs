@@ -200,18 +200,20 @@ impl Session {
         let insn_len = words.len();
         let expand = ExpandSession::create_ebpf(
             &words,
-            ebpf::T_CTX,
-            ebpf::T_SP,
-            ebpf::T_DATA,
-            ebpf::PACKET_BYTES,
-            0,
-            0,
-            0,
-            &bound.slots,
-            &bound.terms,
-            &bound.map_ids,
-            &bound.key_sizes,
-            &bound.value_sizes,
+            &ebpf::Create {
+                t_ctx: ebpf::T_CTX,
+                t_sp: ebpf::T_SP,
+                t_data: ebpf::T_DATA,
+                packet_bytes: ebpf::PACKET_BYTES,
+                alpha_ctx: 0,
+                packet_id: 0,
+                stack_id: 0,
+                slots: &bound.slots,
+                terms: &bound.terms,
+                map_ids: &bound.map_ids,
+                key_sizes: &bound.key_sizes,
+                value_sizes: &bound.value_sizes,
+            },
             budget,
         );
         let image = DisplayInsns::Ebpf(words);
