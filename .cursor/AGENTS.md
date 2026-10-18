@@ -65,7 +65,7 @@ Use Lake as the repo entrypoint (`lake build`, `lake test`, `lake run dev`).
 Cargo and npm are component tools. Do not hard-code
 `tooling/target/debug/server`; take the path from Cargo artifacts.
 Keep one workspace lockfile. Validate Compact XDP ELF uploads via sibling
-`../xpost/xpost-elf` (need that checkout). Reject raw BIN uploads.
+`tooling/vendor/xpost-elf`. Reject raw BIN uploads.
 
 Default fixture budget notes used by tests/UI: HTTP/WebUI default budget
 1024; budget 512 remains a fuel-exhaustion regression on `just_tx`.
@@ -174,7 +174,7 @@ lake build            # if Lean libs are stale; not part of rust-ci.sh
 (`lean-binding`, `server` only) then nightly `clippy -D warnings`
 (deny `dbg_macro` / `todo` / `unimplemented`; see `tooling/clippy.toml`).
 Artifacts go to `tooling/target-nightly/`. Needs nightly rustup components,
-built Lean libs, and sibling `../xpost`.
+built Lean libs, and vendored `tooling/vendor/xpost-elf`.
 
 Before reporting done: `git status` / `git diff`, preserve unrelated dirty
 files, run checks that match what you edited. Do not commit unless asked.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Nightly fmt + clippy for tooling/ workspace crates only.
-# Does not install toolchains, run lake, or format path deps (e.g. ../xpost).
-# Prereq: rustup nightly (+ rustfmt, clippy), lake build done, ../xpost present.
+# Does not install toolchains, run lake, or format vendored path deps.
+# Prereq: rustup nightly (+ rustfmt, clippy), lake build done.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
