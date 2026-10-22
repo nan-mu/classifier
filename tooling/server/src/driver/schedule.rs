@@ -338,9 +338,11 @@ impl Agenda {
             parent_loc_wire,
             opens_branch,
             only_taken,
+            successors,
             node_lookup,
             effects,
         ) {
+            self.advance_frames(records, node_lookup, effects);
             return;
         }
 
@@ -371,14 +373,13 @@ impl Agenda {
     }
 
 
-    /// Back at the parent jump during Taken推演.
-    /// Both directions: stop the session. Only taken: count one loop.
     fn reentry_stop(
         &mut self,
         parent: NodeId,
         parent_loc: &str,
         opens_branch: bool,
         only_taken: bool,
+        successors: &[(Dir, NodeId, String)],
         node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
         effects: &mut Vec<MergeEffect>,
     ) -> bool {
@@ -388,6 +389,7 @@ impl Agenda {
             .enumerate()
             .filter(|(_, frame)| {
                 frame.phase == BranchPhase::OpenTaken
+                    && frame.taken_arm_nodes.contains(&parent)
                     && node_lookup(frame.cb)
                         .map(|cfg| cfg.loc == parent_loc)
                         .unwrap_or(false)
@@ -398,10 +400,22 @@ impl Agenda {
             return false;
         }
         let exhausted = only_taken && frames.iter().any(|&i| self.frames[i].loops_left == 0);
-        if opens_branch || exhausted {
+        if exhausted {
             effects.push(MergeEffect::Rejected {
                 taken: parent,
                 reason: RejectReason::Counterexample,
+            });
+            return true;
+        }
+        if opens_branch {
+            for &(_, id, ref loc) in successors {
+                if loc != "exit" {
+                    self.drop_pending(id);
+                }
+            }
+            effects.push(MergeEffect::Reuse {
+                taken: parent,
+                reuse_from: self.frames[frames[0]].cb,
             });
             return true;
         }
@@ -808,5 +822,73 @@ mod tests {
             &mut effects,
         );
         assert!(effects.is_empty());
+    }
+
+    fn jump_lookup(id: NodeId) -> Option<ConfigSnapshot> {
+        Some(ConfigSnapshot {
+            id,
+            loc: if id == 10 { "47" } else { "9" }.into(),
+            exprs: serde_json::json!([]),
+            predicates: serde_json::json!([]),
+        })
+    }
+
+    fn open_taken_at_jump(agenda: &mut Agenda) {
+        agenda.open_branch(1, 10, 1, 2);
+        let mut records = RecordStore::default();
+        let mut effects = Vec::new();
+        agenda.on_successors(1, "0", &[], &mut records, &jump_lookup, &mut effects);
+        assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
+    }
+
+    #[test]
+    fn second_path_at_same_loc_is_not_a_taken_return() {
+        let mut agenda = Agenda::default();
+        open_taken_at_jump(&mut agenda);
+        let mut records = RecordStore::default();
+        let mut effects = Vec::new();
+        agenda.on_successors(
+            20,
+            "47",
+            &[
+                (Dir::Taken, 21, "48".into()),
+                (Dir::NotTaken, 22, "49".into()),
+            ],
+            &mut records,
+            &jump_lookup,
+            &mut effects,
+        );
+        assert!(effects.is_empty());
+        assert_eq!(agenda.frames.len(), 2);
+    }
+
+    #[test]
+    fn taken_arm_reopening_both_directions_reuses_the_jump() {
+        let mut agenda = Agenda::default();
+        open_taken_at_jump(&mut agenda);
+        agenda.frames[0].taken_arm_nodes.insert(20);
+        let mut records = RecordStore::default();
+        let mut effects = Vec::new();
+        agenda.on_successors(
+            20,
+            "47",
+            &[
+                (Dir::Taken, 21, "48".into()),
+                (Dir::NotTaken, 22, "49".into()),
+            ],
+            &mut records,
+            &jump_lookup,
+            &mut effects,
+        );
+        assert_eq!(
+            effects,
+            vec![MergeEffect::Reuse {
+                taken: 20,
+                reuse_from: 10,
+            }]
+        );
+        assert_eq!(agenda.frames.len(), 1);
+        assert!(!agenda.ready_ids().contains(&21));
+        assert!(!agenda.ready_ids().contains(&22));
     }
 }

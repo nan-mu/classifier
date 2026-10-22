@@ -306,7 +306,7 @@ impl ExpandSession {
             self.apply_merge_effects(merge_effects);
         }
         self.sync_work();
-        if self.agenda.is_idle() {
+        if self.snapshot["status"] == "running" && self.agenda.is_idle() {
             self.snapshot["status"] = json!("complete");
         }
         // LimitExceeded is declared on the next expand attempt when fuel is already 0,
