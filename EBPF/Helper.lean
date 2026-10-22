@@ -64,8 +64,8 @@ def lookupAnchor (E : List Expr) (event : NodeId) (call : HelperCall)
     match Anchor.layout? E map, eval (solve map) with
     | none, _ | _, none => pure []
     | some layout, some id =>
-      if key.length != layout.keySize || layout.valueSize < 8 then return []
-      let bits := 64
+      if key.length != layout.keySize || layout.valueSize == 0 then return []
+      let bits := 8 * min layout.valueSize 8
       let key ← match keyTile key with
         | .ok tile => pure tile
         | .error _ => throw .undefinedSrc
@@ -158,5 +158,22 @@ private def existingBufferKindsCheck : Bool := Id.run do
 
 #guard helperMutationFreezeCheck
 #guard existingBufferKindsCheck
+
+private def narrowLookupAnchorCheck : Bool := Id.run do
+  let p : EntryParams := ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 0, 0, 0⟩
+  let key := [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
+  let call : HelperCall := ⟨.lookup, 1, [Term.C64 42, Term.V64 9]⟩
+  let .ok tile := keyTile key | return false
+  let narrow := host p Expr.nil [⟨42, 4, 4⟩]
+  let wide := host p Expr.nil [⟨42, 4, 8⟩]
+  let narrowOk := match lookupAnchor narrow 7 call (call.args ++ key) with
+    | .ok [w] => w.slot == .map 42 tile && w.start == 0 && w.tile.width == 32
+    | _ => false
+  let wideOk := match lookupAnchor wide 7 call (call.args ++ key) with
+    | .ok [w] => w.slot == .map 42 tile && w.start == 0 && w.tile.width == 64
+    | _ => false
+  return narrowOk && wideOk
+
+#guard narrowLookupAnchorCheck
 
 end EBPF
