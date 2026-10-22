@@ -551,7 +551,9 @@ fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
     assert_eq!(at(72)["slice"]["w"], 8);
     assert_eq!(at(96)["slice"]["v"], 128);
     assert_eq!(at(96)["slice"]["w"], 32);
-    assert!(!pieces.iter().any(|p| p.to_string().contains("externalResult")));
+    assert!(!pieces
+        .iter()
+        .any(|p| p.to_string().contains("externalResult")));
 }
 
 #[test]

@@ -215,10 +215,7 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
 fn rv32_stack_alias_subword_store_preserves_the_rest_of_the_word() {
     let result = rv32_case(1, 0xdd);
     assert!(result["byte"]["updates"].as_array().unwrap().is_empty());
-    assert_eq!(
-        result["byte"]["writes"][0]["pieces"][0]["slice"]["v"],
-        0xdd
-    );
+    assert_eq!(result["byte"]["writes"][0]["pieces"][0]["slice"]["v"], 0xdd);
     assert_eq!(
         term(&result["read"]["updates"], "real32:14"),
         0x1122_dd44u32.to_string()

@@ -179,9 +179,7 @@ fn finish_program(slot: RawProgram) -> Result<(String, String, String, Expect), 
         return Err("[[program]] needs name, elf, bpf, and expect".into());
     }
     let Some(expect) = expect.as_deref().and_then(Expect::parse) else {
-        return Err(
-            "[[program]] expect must be \"strict\", \"weak\", or \"fail\"".into(),
-        );
+        return Err("[[program]] expect must be \"strict\", \"weak\", or \"fail\"".into());
     };
     Ok((name, elf, bpf, expect))
 }

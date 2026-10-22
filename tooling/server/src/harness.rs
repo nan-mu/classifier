@@ -123,7 +123,11 @@ impl SuiteReport {
 pub fn run_profile(programs: &[crate::profile::Program]) -> SuiteReport {
     let mut outcomes = Vec::new();
     for program in programs {
-        eprintln!("profile {} expect {}", program.name, program.expect.as_str());
+        eprintln!(
+            "profile {} expect {}",
+            program.name,
+            program.expect.as_str()
+        );
         let spec = profile_case(program);
         let outcome = match run_case(&spec, Path::new(".")) {
             Ok(()) => CaseOutcome {
@@ -470,16 +474,12 @@ fn check_expect(
                 let incomplete = count_expr_incomplete(last);
                 if let Some(exact) = ct.expr_incomplete {
                     if incomplete != exact {
-                        return Err(format!(
-                            "expr incomplete want {exact} got {incomplete}"
-                        ));
+                        return Err(format!("expr incomplete want {exact} got {incomplete}"));
                     }
                 }
                 if let Some(min) = ct.expr_incomplete_at_least {
                     if incomplete < min {
-                        return Err(format!(
-                            "expr incomplete_at_least {min} got {incomplete}"
-                        ));
+                        return Err(format!("expr incomplete_at_least {min} got {incomplete}"));
                     }
                 }
             }

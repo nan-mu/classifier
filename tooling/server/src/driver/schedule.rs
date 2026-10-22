@@ -372,7 +372,6 @@ impl Agenda {
         self.advance_frames(records, node_lookup, effects);
     }
 
-
     fn reentry_stop(
         &mut self,
         parent: NodeId,
@@ -527,7 +526,6 @@ impl Agenda {
         }
     }
 
-
     fn advance_frames(
         &mut self,
         records: &mut RecordStore,
@@ -638,14 +636,7 @@ mod tests {
         assert!(!agenda.ready_heads(8).contains(&2));
         let mut records = RecordStore::default();
         let mut effects = Vec::new();
-        agenda.on_successors(
-            1,
-            "0",
-            &[],
-            &mut records,
-            &stub_lookup,
-            &mut effects,
-        );
+        agenda.on_successors(1, "0", &[], &mut records, &stub_lookup, &mut effects);
         assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
         assert!(agenda.ready_ids().contains(&2));
     }
@@ -715,19 +706,12 @@ mod tests {
                 "14",
                 &[(Dir::Ok, child, "15".into())],
                 &mut records,
-                    &stub_lookup,
+                &stub_lookup,
                 &mut effects,
             );
             assert_eq!(agenda.frames[0].phase, BranchPhase::OpenNotTaken);
         }
-        agenda.on_successors(
-            31,
-            "18",
-            &[],
-            &mut records,
-            &stub_lookup,
-            &mut effects,
-        );
+        agenda.on_successors(31, "18", &[], &mut records, &stub_lookup, &mut effects);
 
         // Drain nested Taken so the nested frame can close; outer should already
         // hold the join tip as a candidate and move to OpenTaken.
@@ -744,14 +728,7 @@ mod tests {
             &mut effects,
         );
         effects.clear();
-        agenda.on_successors(
-            30,
-            "18",
-            &[],
-            &mut records,
-            &stub_lookup,
-            &mut effects,
-        );
+        agenda.on_successors(30, "18", &[], &mut records, &stub_lookup, &mut effects);
         assert!(effects.is_empty());
     }
 
@@ -772,14 +749,7 @@ mod tests {
             &stub_lookup,
             &mut effects,
         );
-        agenda.on_successors(
-            22,
-            "18",
-            &[],
-            &mut records,
-            &stub_lookup,
-            &mut effects,
-        );
+        agenda.on_successors(22, "18", &[], &mut records, &stub_lookup, &mut effects);
         assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
 
         agenda.on_successors(
@@ -813,14 +783,7 @@ mod tests {
             &mut effects,
         );
         effects.clear();
-        agenda.on_successors(
-            49,
-            "18",
-            &[],
-            &mut records,
-            &stub_lookup,
-            &mut effects,
-        );
+        agenda.on_successors(49, "18", &[], &mut records, &stub_lookup, &mut effects);
         assert!(effects.is_empty());
     }
 
