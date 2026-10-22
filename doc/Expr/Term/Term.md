@@ -7,7 +7,7 @@
 \mathrm{Var}_w=\{V_w(\xi):\xi\in\Xi_w\}
 \sqcup\{R_w^{\varepsilon}(r):r\in\mathrm{Reg}_{\mathrm{Real},w},\ \varepsilon\in\mathcal I_{\mathrm{call}}\}.
 \]
-常元表示确定值。\(V_w(\xi)\) 表示固定的符号输入。\(R_w^{\varepsilon}(r)\) 表示指定调用返回时刻由真实寄存器承载的值；\(\mathcal I_{\mathrm{call}}\) 是动态调用身份集合，见[lookup 关联规则](../../Predicate/Helper谓词.md#生成的-expr)。两类变元不交，后者的身份包括事件及完整寄存器标记。同名但位宽不同的变元是不同元素。普通输入变元不查询后续可变的寄存器。未定义寄存器不自动对应一个新变元。
+常元表示确定值。\(V_w(\xi)\) 表示固定的符号输入。\(R_w^{\varepsilon}(r)\) 表示指定调用返回时刻由真实寄存器承载的值；\(\mathcal I_{\mathrm{call}}\) 是动态调用身份集合，见[lookup 关联规则](../../Predicate/Helper谓词.md#生成的-expression)。两类变元不交，后者的身份包括事件及完整寄存器标记。同名但位宽不同的变元是不同元素。普通输入变元不查询后续可变的寄存器。未定义寄存器不自动对应一个新变元。
 
 对 \(n\in\mathbb N_{>0}\) 及 \(w_1,\ldots,w_n,w\in W\)，\(f\) 是形式运算符，\(\widehat f\) 是对应的数值解释。
 \[

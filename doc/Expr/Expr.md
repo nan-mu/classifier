@@ -1,8 +1,8 @@
-# Expr
+# Expression
 
 ## 索引
 
-- [表达式定义](#表达式定义)：表达式定义、关系符定义。
+- [表达式定义](#表达式定义)：表达式定义、比较运算符定义。
 - [比较关系](#比较关系)：比较关系。
 - [关系集合更新](#关系集合按键覆写)：关系集合按键覆写、多目标更新与同一来源。
 - [指令结果](#指令结果的前提)：指令结果的前提、局部值效果的类型与解释保持。
@@ -10,7 +10,7 @@
 - [资源读取与位置赋值](寄存器/资源读取与位置赋值.md)：资源读取与位置赋值。
 - [单元字段读写](寄存器/单元字段读写.md)：Stack、Map 与 Context 的规范单元字段读写。
 - [原子数值更新与旧值返回](寄存器/原子数值更新与旧值返回.md)：顺序 RMW、旧值返回，以及两个 SW32 与原 Map64 字段的[规范单元桥接](寄存器/原子数值更新与旧值返回.md#规范单元桥接)。
-- [Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)：辅助调用的返回赋值与 Map 关联。
+- [Helper 生成的 Expression](../Predicate/Helper谓词.md#生成的-expression)：辅助调用的返回赋值与 Map 关联。
 - [Term/Term](Term/Term.md)：Term。
 - [Term/solve](Term/solve.md)：整项闭项折叠与 R2 至 R6 规范化；解释保持要求[完整外部补全](Term/Term.md#未解释运算的解释补全)。
 - [寄存器/真实寄存器](寄存器/真实寄存器.md)：真实寄存器赋值、真实寄存器低位视图与写回、常元赋值、移动与符号扩展赋值、算术与位运算赋值、乘法高半赋值、除法与余数赋值、字节序转换赋值、跳转链接值赋值。
@@ -23,14 +23,14 @@
 
 ## 表达式定义
 
-位宽集合 \(W\) 与寄存器集合 \(\mathrm{Reg}_w\) 见[寄存器定义](../寄存器定义.md)。\(\mathrm{Rel}_w\) 是[关系符](#关系符定义)集合，\(\mathrm{Term}_w\) 是[Term](Term/Term.md#term)项集合。
+位宽集合 \(W\) 与寄存器集合 \(\mathrm{Reg}_w\) 见[寄存器定义](../寄存器定义.md)。\(\mathrm{op}_w\) 是[比较运算符](#比较运算符定义)集合，\(\mathrm{Term}_w\) 是[Term](Term/Term.md#term)项集合。
 \[
 \boxed{
-\mathrm{Expr}=\bigsqcup_{w\in W}
-\bigl(\mathrm{Reg}_w\times\mathrm{Rel}_w\times\mathrm{Term}_w\bigr).
+\mathrm{Expression}=\bigsqcup_{w\in W}
+\bigl(\mathrm{Reg}_w\times\mathrm{op}_w\times\mathrm{Term}_w\bigr).
 }
 \]
-\(e=(r_w,\bowtie,t_w)\) 表示关系 \(r_w\bowtie t_w\)。完整值绑定与比较约束的角色由列表顺序推导，不单独存成两个集合。比较仅使用 Expr。
+\(E=(r_w,\mathbin{\mathrm{op}},t_w)\) 表示关系 \(r_w\mathbin{\mathrm{op}} t_w\)。完整值绑定与比较约束的角色由列表顺序推导，不单独存成两个集合。比较仅使用 Expression。
 
 ### 左值
 
@@ -38,7 +38,7 @@
 
 #### 左值的类型
 
-对位宽 \(w\in\{32,64\}\)，Expr 的左值是 \(r_w\in\mathrm{Reg}_w\)。左值与右值必须同位宽。
+对位宽 \(w\in\{32,64\}\)，Expression 的左值是 \(r_w\in\mathrm{Reg}_w\)。左值与右值必须同位宽。
 
 Real、Stack、Map、Context、Packet 均可作为左值；对象身份与相等见[寄存器定义](../寄存器定义.md)。
 
@@ -58,59 +58,59 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 表达式分量
 
-语义状态的表达式分量为有限列表 \(E\in\mathrm{List}(\mathrm{Expr})\)，形状与谓词分量 \(\mathrm{List}(\mathrm{Predicate})\) 相同。每一行是 \((r_w,\bowtie,t_w)\)。列表按结构相等去重；角色不另存字段。
+语义状态的表达式分量为有限列表 \(\bar{E}\in\mathrm{List}(\mathrm{Expression})\)，形状与观察分量 \(\mathrm{List}(\mathrm{Observation})\) 相同。每一行是 \((r_w,\mathbin{\mathrm{op}},t_w)\)。列表按结构相等去重；角色不另存字段。
 
 对每个寄存器，列表中**第一条**完整等式 \(r=t\) 是该寄存器的值绑定。其后各行，包括另一条 \(r=t'\)，都是比较约束，不替换该值。记
 
 \[
-\operatorname{bindings}(E)
+\operatorname{bindings}(\bar{E})
 =\text{各寄存器首次出现的完整等式，按列表顺序},
 \qquad
-\operatorname{constraints}(E)
-=E\setminus\operatorname{bindings}(E).
+\operatorname{constraints}(\bar{E})
+=\bar{E}\setminus\operatorname{bindings}(\bar{E}).
 \]
 
 \(\{r=t\}\) 表示只含该赋值的一元列表。空分量为 \([]\)。
 
-源值查询只读取 \(\operatorname{bindings}(E)\)。单独出现的 \(r=10\) 若是该寄存器的第一条等式，按当前顺序就是值绑定；分支比较通过[局部更新](#赋值覆盖全部旧关系)追加，使它落在既有值绑定之后。比较约束与值绑定可以具有相同左值和关系符。
+源值查询只读取 \(\operatorname{bindings}(\bar{E})\)。单独出现的 \(r=10\) 若是该寄存器的第一条等式，按当前顺序就是值绑定；分支比较通过[局部更新](#赋值覆盖全部旧关系)追加，使它落在既有值绑定之后。比较约束与值绑定可以具有相同左值和比较运算符。
 
 ### 右侧项的求解
 
-\(\operatorname{solve}_{\mathrm{Expr}}\) 只对右侧项应用[整项求解](Term/solve.md#化简规则)，保留左值 \(r_w\) 与关系符 \(\bowtie\)。
+\(\operatorname{solve}_{\mathrm{Expression}}\) 只对右侧项应用[整项求解](Term/solve.md#化简规则)，保留左值 \(r_w\) 与比较运算符 \(\mathbin{\mathrm{op}}\)。
 \[
-\operatorname{solve}_{\mathrm{Expr}}(r_w,\bowtie,t_w)
-=(r_w,\bowtie,\operatorname{solve}_w(t_w)).
+\operatorname{solve}_{\mathrm{Expression}}(r_w,\mathbin{\mathrm{op}},t_w)
+=(r_w,\mathbin{\mathrm{op}},\operatorname{solve}_w(t_w)).
 \]
 没有寄存器值解释时，不能仅凭左侧标记判定关系真假。
 
 ### 关系解释
 
-\(\rho_w:\mathrm{Reg}_w\to\mathbb B_w\) 是寄存器赋值族，寄存器见[寄存器定义](../寄存器定义.md)。\(\widehat{\bowtie}\) 是关系符的解释，\(\nu\) 是[项的变元赋值](Term/Term.md#项的解释)。
+\(\rho_w:\mathrm{Reg}_w\to\mathbb B_w\) 是寄存器赋值族，寄存器见[寄存器定义](../寄存器定义.md)。\(\widehat{\mathrm{op}}\) 是比较运算符的解释，\(\nu\) 是[项的变元赋值](Term/Term.md#项的解释)。
 \[
-\left[\!\left[(r_w,\bowtie,t_w)\right]\!\right]_{\rho,\nu}
-=\widehat{\bowtie}(\rho_w(r_w),\left[\!\left[ t_w\right]\!\right]_\nu).
+\left[\!\left[(r_w,\mathbin{\mathrm{op}},t_w)\right]\!\right]_{\rho,\nu}
+=\widehat{\mathrm{op}}(\rho_w(r_w),\left[\!\left[ t_w\right]\!\right]_\nu).
 \]
-**推论 8（纯数值子域的解释保持）。** 在[假设 A](Term/Term.md#叶子与运算符)下，\(e\in\mathrm{Expr}\) 的关系解释满足
+**推论 8（纯数值子域的解释保持）。** 在[假设 A](Term/Term.md#叶子与运算符)下，\(E\in\mathrm{Expression}\) 的关系解释满足
 \[
-\left[\!\left[\operatorname{solve}_{\mathrm{Expr}}(e)\right]\!\right]_{\rho,\nu}
+\left[\!\left[\operatorname{solve}_{\mathrm{Expression}}(e)\right]\!\right]_{\rho,\nu}
 =\left[\!\left[ e\right]\!\right]_{\rho,\nu}.
 \]
-**证明。** 左侧寄存器与关系符号不变，右侧解释由[命题 7](Term/solve.md#解释保持性)保持。\(\square\)
+**证明。** 左侧寄存器与比较运算符不变，右侧解释由[命题 7](Term/solve.md#解释保持性)保持。\(\square\)
 
 \(\rho,\nu\) 是关系的数学解释。推论仅保证单个关系的解释保持性，不包含两个架构的中间关系集合相同这一结论。
 
-含外部结果或包输入的良构右侧项在固定完整补全 \(\theta\) 下也有相同的单关系结论。Lean 实现 `interpretExpr ρ ν θ e : Option Bool` 显式接收外部环境；在 `θ.Total` 与 `e.term.wellFormed=true` 下，`Core.solve_interpret` 保持右侧解释，`solve_width` 保持位宽检查，故按 `interpretExpr` 定义可得求解前后结果相等。这是由项定理得到的推论，未另行声称存在独立的 Expr 保持定理。一般项定理及部分环境反例见 [solve 的解释保持性](Term/solve.md#解释保持性)。
+含外部结果或包输入的良构右侧项在固定完整补全 \(\theta\) 下也有相同的单关系结论。Lean 实现 `interpretExpr ρ ν θ e : Option Bool` 显式接收外部环境；在 `θ.Total` 与 `e.term.wellFormed=true` 下，`Core.solve_interpret` 保持右侧解释，`solve_width` 保持位宽检查，故按 `interpretExpr` 定义可得求解前后结果相等。这是由项定理得到的推论，未另行声称存在独立的 Expression 保持定理。一般项定理及部分环境反例见 [solve 的解释保持性](Term/solve.md#解释保持性)。
 
-## 关系符定义
+## 比较运算符定义
 
 等式、比较等关系用于指令直接构造基础对象时，其值规则见[真实寄存器的各赋值小节](寄存器/真实寄存器.md)，栈、Map、Context 和包目标的访问规则分别见[虚拟栈读写](寄存器/虚拟栈.md#虚拟栈读写)、[虚拟映射读写](寄存器/虚拟映射.md#虚拟映射读写)、[单元字段读写](寄存器/单元字段读写.md#单元字段读写)与[包字节读写](寄存器/包字节.md#包字节读写)。
 用于构造跳转相关事实的关系由 [step](../NodeInference/step.md#生成指令结果) 与 [Jump 的比较指令处理](../NodeInference/Jump/待处理.md#比较指令处理)处理，寄存器文档不讨论这些关系。
 
-项位宽 \(w\in\{32,64\}\)。\(\mathbb T=\{\mathsf{true},\mathsf{false}\}\) 是真值集合，\(\widehat{\bowtie}\) 是关系符 \(\bowtie\in\mathrm{Rel}_w\) 的解释。
+项位宽 \(w\in\{32,64\}\)。\(\mathbb T=\{\mathsf{true},\mathsf{false}\}\) 是真值集合，\(\widehat{\mathrm{op}}\) 是比较运算符 \(\mathbin{\mathrm{op}}\in\mathrm{op}_w\) 的解释。
 \[
-\widehat{\bowtie}:\mathbb B_w\times\mathbb B_w\to\mathbb T.
+\widehat{\mathrm{op}}:\mathbb B_w\times\mathbb B_w\to\mathbb T.
 \]
-\(\mathrm{Rel}_w\) 包含以下关系符；下标 u、s 分别对应无符号、有符号比较。
+\(\mathrm{op}_w\) 包含以下比较运算符；下标 u、s 分别对应无符号、有符号比较。
 \[
 =,\ne,<_{u},\le_u,>_u,\ge_u,<_{s},\le_s,>_s,\ge_s.
 \]
@@ -135,13 +135,13 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 \widehat{\mathrm{BITSNZ}^{[q]}}(a,b)
 \iff\mathrm{AND}_q(M_q(a),M_q(b))\ne0,
 \]
-\(\mathrm{BITSZ}^{[q]}\) 判断低 q 位按位与是否为零，\(\overline{\bowtie}\) 是关系符 \(\bowtie\) 的补关系。
+\(\mathrm{BITSZ}^{[q]}\) 判断低 q 位按位与是否为零，\(\overline{\mathrm{op}}\) 是比较运算符 \(\mathbin{\mathrm{op}}\) 的补关系。
 \[
 \widehat{\mathrm{BITSZ}^{[q]}}(a,b)
 \iff\mathrm{AND}_q(M_q(a),M_q(b))=0,
 \qquad
-\widehat{\overline{\bowtie}}(a,b)
-=\neg\widehat{\bowtie}(a,b).
+\widehat{\overline{\mathrm{op}}}(a,b)
+=\neg\widehat{\mathrm{op}}(a,b).
 \]
 例如 \(\overline{<_s}=\ge_s\)。对确定的 \(a,b\)，某关系与其补关系恰有一个成立。
 
@@ -162,7 +162,7 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ## 比较关系
 
-比较使用已有 Expr \(e=(r_w,\bowtie,t_w)\)。\(r_w\) 是 w 位寄存器标记，\(t_w\) 是同位宽右值，\(\bowtie\in\mathrm{Rel}_w\) 指定关系；w 为 32 或 64。左值、关系符与右值分别见[左值](#左值)、[关系符定义](#关系符定义)与[Term](Term/Term.md#term)。
+比较使用已有 Expression \(E=(r_w,\mathbin{\mathrm{op}},t_w)\)。\(r_w\) 是 w 位寄存器标记，\(t_w\) 是同位宽右值，\(\mathbin{\mathrm{op}}\in\mathrm{op}_w\) 指定关系；w 为 32 或 64。左值、比较运算符与右值分别见[左值](#左值)、[比较运算符定义](#比较运算符定义)与[Term](Term/Term.md#term)。
 
 ### 值关系与比较约束
 
@@ -170,25 +170,25 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 关系解释（比较关系）
 
-\(\rho_w(r_w)\) 表示当前寄存器的 w 位值；\(\nu\) 为符号输入赋值，\(\theta\) 为[未解释运算的解释补全](Term/Term.md#未解释运算的解释补全)。\(\llbracket t\rrbracket_{\nu,\theta}\) 是右值在固定赋值和补全下的数值；\(\widehat{\bowtie}\) 是关系对应的布尔函数：
+\(\rho_w(r_w)\) 表示当前寄存器的 w 位值；\(\nu\) 为符号输入赋值，\(\theta\) 为[未解释运算的解释补全](Term/Term.md#未解释运算的解释补全)。\(\llbracket t\rrbracket_{\nu,\theta}\) 是右值在固定赋值和补全下的数值；\(\widehat{\mathrm{op}}\) 是关系对应的布尔函数：
 
 \[
-\llbracket r_w\bowtie t_w\rrbracket_{\rho,\nu,\theta}
-=\widehat{\bowtie}\bigl(\rho_w(r_w),\llbracket t_w\rrbracket_{\nu,\theta}\bigr).
+\llbracket r_w\mathbin{\mathrm{op}} t_w\rrbracket_{\rho,\nu,\theta}
+=\widehat{\mathrm{op}}\bigl(\rho_w(r_w),\llbracket t_w\rrbracket_{\nu,\theta}\bigr).
 \]
 
 已取得右值项的含义见[叶子与运算符](Term/Term.md#叶子与运算符)。
 
 ### 部分判定
 
-\(\operatorname{decide}(e,u)\) 用执行前取得的左值项 u 判定比较 Expr e，结果为真、假或未知，不求解累积条件。
+\(\operatorname{decide}(e,u)\) 用执行前取得的左值项 u 判定比较 Expression e，结果为真、假或未知，不求解累积条件。
 
-\(e=(r_w,\bowtie,t_w)\)，\(u\in\mathrm{Term}_w\) 为 r 的完整旧值项，a、b 为取得的确定数值。\(\operatorname{solve}_w\)、部分数值求值 \(D_w\) 与未确定结果 \(\bot\) 见[部分求值与未解释运算](Term/solve.md#部分求值与未解释运算)，w=32 时使用 \(D_{32}\)。\(\land\) 表示两个条件都满足：
+\(E=(r_w,\mathbin{\mathrm{op}},t_w)\)，\(u\in\mathrm{Term}_w\) 为 r 的完整旧值项，a、b 为取得的确定数值。\(\operatorname{solve}_w\)、部分数值求值 \(D_w\) 与未确定结果 \(\bot\) 见[部分求值与未解释运算](Term/solve.md#部分求值与未解释运算)，w=32 时使用 \(D_{32}\)。\(\land\) 表示两个条件都满足：
 
 \[
 \operatorname{decide}(e,u)=
 \begin{cases}
-\widehat{\bowtie}(a,b),&D_w(\operatorname{solve}_w(u))=a\ \land\ D_w(\operatorname{solve}_w(t_w))=b,\\
+\widehat{\mathrm{op}}(a,b),&D_w(\operatorname{solve}_w(u))=a\ \land\ D_w(\operatorname{solve}_w(t_w))=b,\\
 \bot,&D_w(\operatorname{solve}_w(u))=\bot\ \lor\ D_w(\operatorname{solve}_w(t_w))=\bot.
 \end{cases}
 \]
@@ -197,15 +197,15 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 位宽与补关系
 
-比较宽度 q 满足 \(1\le q\le w\)；\(\bowtie^{[q]}\) 的定义与 q=w 时的记号约定见[关系符定义](#关系符定义)。eBPF JMP32 可以在 Real64 左值与 Term64 右值之间使用带 \([32]\) 的关系，无需创建 Real32 身份。
+比较宽度 q 满足 \(1\le q\le w\)；\(\mathbin{\mathrm{op}}^{[q]}\) 的定义与 q=w 时的记号约定见[比较运算符定义](#比较运算符定义)。eBPF JMP32 可以在 Real64 左值与 Term64 右值之间使用带 \([32]\) 的关系，无需创建 Real32 身份。
 
-补关系 \(\overline{\bowtie}\) 及 BITSNZ、BITSZ 的定义见[关系符定义](#关系符定义)，例如 \(\overline{<_s^{[q]}}=\ge_s^{[q]}\)。
+补关系 \(\overline{\mathrm{op}}\) 及 BITSNZ、BITSZ 的定义见[比较运算符定义](#比较运算符定义)，例如 \(\overline{<_s^{[q]}}=\ge_s^{[q]}\)。
 
-**命题（互补方向）。** 对同一状态的左值 r、右值项 t 及固定的 \((\rho,\nu,\theta)\)，\(r\bowtie t\) 与 \(r\overline{\bowtie}t\) 恰有一个为真。
+**命题（互补方向）。** 对同一状态的左值 r、右值项 t 及固定的 \((\rho,\nu,\theta)\)，\(r\mathbin{\mathrm{op}} t\) 与 \(r\overline{\mathrm{op}}t\) 恰有一个为真。
 
 **证明。** 两源在该解释下有确定的同位宽值，原条件及补条件的真值为 \(\beta\)、\(\neg\beta\)；\(\neg\) 是布尔否定，二者恰有一个成立。\(\square\)
 
-该命题不证明完整路径可行，也不证明后继位置有效。不同状态的左值可能已经改变，不能仅凭关系符互补就断言两次条件矛盾。
+该命题不证明完整路径可行，也不证明后继位置有效。不同状态的左值可能已经改变，不能仅凭比较运算符互补就断言两次条件矛盾。
 
 比较的指令侧处理见 [NodeInference/Jump/待处理](../NodeInference/Jump/待处理.md#比较指令处理)。
 
@@ -214,44 +214,44 @@ LOAD 与普通 STORE 的包左值选择见[包字节读写](寄存器/包字节.
 
 ### 唯一性与新增比较
 
-比较约束不按 \((r,\bowtie)\) 强制右值唯一。同一列表里 \(r=a\) 的值绑定和其后的 \(r=10\) 可以并存。\(r<10\) 与 \(r<20\) 两个约束也可以并存。
+比较约束不按 \((r,\mathbin{\mathrm{op}})\) 强制右值唯一。同一列表里 \(r=a\) 的值绑定和其后的 \(r=10\) 可以并存。\(r<10\) 与 \(r<20\) 两个约束也可以并存。
 
 结构去重不承担可满足性求解。
 
 ### 赋值覆盖全部旧关系
 
-设输入列表为 \(E\)，指令局部结果为 \(\sigma_i=(E_i,P_i)\)，其中 \(E_i\) 是 Expr 列表，\(P_i\) 是谓词列表。记 \(\operatorname{lhs}(e)\) 为左值。赋值与比较的基本操作：
+设输入列表为 \(\bar{E}\)，指令局部结果为 \(\sigma_i=(\bar{E}_i,\mathcal{O}_i)\)，其中 \(\bar{E}_i\) 是 Expression 列表，\(\mathcal{O}_i\) 是观察列表。记 \(\operatorname{lhs}(E)\) 为左值。赋值与比较的基本操作：
 
 - \(\operatorname{insertEq}(E,r,t)\)：将求解后的 \(r=t\) 置于列表头部，并删除该寄存器的全部旧行。
 - \(\operatorname{insertConstraint}(E,e)\)：若 \(e\) 尚未出现则追加到末尾；即使 \(e\) 的关系是 =，也不删除既有值绑定。
-- \(\operatorname{override}(E,E_i)\)：以 \(\operatorname{bindings}(E_i)\) 为写入集 \(W_i\)，删除 \(E\) 中左值属于 \(W_i\) 的全部旧行，再接上这些新赋值，最后把 \(\operatorname{constraints}(E_i)\) 逐条 \(\operatorname{insertConstraint}\)。
+- \(\operatorname{override}(E,\bar{E}_i)\)：以 \(\operatorname{bindings}(\bar{E}_i)\) 为写入集 \(W_i\)，删除 \(\bar{E}\) 中左值属于 \(W_i\) 的全部旧行，再接上这些新赋值，最后把 \(\operatorname{constraints}(\bar{E}_i)\) 逐条 \(\operatorname{insertConstraint}\)。
 
-分支比较不得把单独的 \(r=10\) 当成赋值。`applyLocal` 先识别与 \(P_i\) 中 Branch 条件同关系、同右侧、且当前值绑定仍等于条件左侧的行，对这些行只做 \(\operatorname{insertConstraint}\)；其余行再经 \(\operatorname{override}\)。因此
+分支比较不得把单独的 \(r=10\) 当成赋值。`applyLocal` 先识别与 \(\mathcal{O}_i\) 中 Branch 条件同关系、同右侧、且当前值绑定仍等于条件左侧的行，对这些行只做 \(\operatorname{insertConstraint}\)；其余行再经 \(\operatorname{override}\)。因此
 
 \[
-\operatorname{updateExpr}(E,E_i,P_i)
+\operatorname{updateExpr}(E,\bar{E}_i,\mathcal{O}_i)
 =\operatorname{insertConstraint}^\ast\bigl(
-\operatorname{override}(E,E_i\setminus F),\,F\bigr),
+\operatorname{override}(E,\bar{E}_i\setminus F),\,F\bigr),
 \]
 
-其中 \(F\subseteq E_i\) 是上述分支事实，\(\operatorname{insertConstraint}^\ast\) 表示依次追加。直接调用 \(\operatorname{override}\)（溢出、ALU、Map 等）仍把 \(E_i\) 的首条等式当作写入。
+其中 \(F\subseteq \bar{E}_i\) 是上述分支事实，\(\operatorname{insertConstraint}^\ast\) 表示依次追加。直接调用 \(\operatorname{override}\)（溢出、ALU、Map 等）仍把 \(\bar{E}_i\) 的首条等式当作写入。
 
 既有完整值与比较约束都在对应左值被赋值时删除。未写入的其他寄存器关系保持不变。
 
-例如 \(E=[r_1=a,\,r_1<10]\)，执行赋值 \(r_1=20\) 后得到 \([r_1=20]\)。新状态不会继续约束当前值 20 小于 10。
+例如 \(\bar{E}=[r_1=a,\,r_1<10]\)，执行赋值 \(r_1=20\) 后得到 \([r_1=20]\)。新状态不会继续约束当前值 20 小于 10。
 
 ### 结构性质
 
-**命题 9（有效性保持）。** 输入与 \(E_i\) 有限、行结构去重且位宽正确时，更新结果仍满足这些条件。
+**命题 9（有效性保持）。** 输入与 \(\bar{E}_i\) 有限、行结构去重且位宽正确时，更新结果仍满足这些条件。
 
-**证明。** 赋值删除该寄存器全部旧行后再前置新等式，故每个寄存器至多保留一条作为首条等式的值绑定，其余为后置比较。有限列表过滤与追加仍有限。关系本身的位宽不变。约束按结构去重，不要求同关系符右值唯一。\(\square\)
+**证明。** 赋值删除该寄存器全部旧行后再前置新等式，故每个寄存器至多保留一条作为首条等式的值绑定，其余为后置比较。有限列表过滤与追加仍有限。关系本身的位宽不变。约束按结构去重，不要求同比较运算符右值唯一。\(\square\)
 
-**推论 10（更新代数）。** 对上述有效列表 \(E,F,H\)，\(\times\) 表示 \(\operatorname{override}\)，\([]\) 是空效果；有空更新、重复更新与结合性质：
+**推论 10（更新代数）。** 对上述有效列表 \(\bar{E},\bar{F},\bar{H}\)，\(\times\) 表示 \(\operatorname{override}\)，\([]\) 是空效果；有空更新、重复更新与结合性质：
 
 \[
-E\times[]=E,
-\qquad (E\times F)\times F=E\times F,
-\qquad (E\times F)\times H=E\times(F\times H).
+\bar{E}\times[]=\bar{E},
+\qquad (\bar{E}\times\bar{F})\times\bar{F}=\bar{E}\times\bar{F},
+\qquad (\bar{E}\times\bar{F})\times\bar{H}=\bar{E}\times(\bar{F}\times\bar{H}).
 \]
 
 **证明。** 对每个寄存器分别考察。没有赋值时保留原行并合并约束。有赋值时取最后一次赋值，删除它之前的绑定与约束，只保留其后新增约束。空效果、相同效果重复及括号位置均不改变这个选择。\(\square\)
@@ -260,16 +260,16 @@ E\times[]=E,
 
 ## 多目标更新与同一来源
 
-一次 \(\sigma_i\) 可以写多个对象，更新一次性应用。设实际目标为互异的 \(r_1,\ldots,r_m\)，所需旧源项为 \(t_1,\ldots,t_n\)，均从补充输入后的同一写入前关系 \(\overline E_g\) 取得；没有输入补充时 \(\overline E_g=E_g\)。\(f_j^\star\) 是第 j 个输出函数的[符号提升](Term/solve.md#化简规则)，\(E_i\) 是 Expr 分量，\(E_g'\) 是更新后关系：
+一次 \(\sigma_i\) 可以写多个对象，更新一次性应用。设实际目标为互异的 \(r_1,\ldots,r_m\)，所需旧源项为 \(t_1,\ldots,t_n\)，均从补充输入后的同一写入前关系 \(\bar{E}_g^{\mathrm{in}}\) 取得；没有输入补充时 \(\bar{E}_g^{\mathrm{in}}=\bar{E}_g\)。\(f_j^\star\) 是第 j 个输出函数的[符号提升](Term/solve.md#化简规则)，\(\bar{E}_i\) 是 Expression 分量，\(\bar{E}_g'\) 是更新后关系：
 
 \[
-E_i=\{r_j=f_j^\star(t_1,\ldots,t_n):1\le j\le m\},
-\qquad E_g'=E_g\times E_i.
+\bar{E}_i=\{r_j=f_j^\star(t_1,\ldots,t_n):1\le j\le m\},
+\qquad \bar{E}_g'=\bar{E}_g\times \bar{E}_i.
 \]
 
 某个 \(f_j\) 只使用其中实际所需的源，不因此增加其他输入要求。目标可以同时包含真实寄存器和虚拟单元。即使真实源同时也是写回目标，其旧项也在更新前固定。顺序计算并立即覆写某个目标，会改变其他输出的取源，不能替代本规则。
 
-[FETCH、XCHG、CMPXCHG 的公式与旧值返回证明](寄存器/原子数值更新与旧值返回.md#原子数值更新与旧值返回)、[包存储的多字节写入](寄存器/包字节.md#包字节读写)、[辅助调用的返回赋值和 Map 关系](../Predicate/Helper谓词.md#生成的-expr)。
+[FETCH、XCHG、CMPXCHG 的公式与旧值返回证明](寄存器/原子数值更新与旧值返回.md#原子数值更新与旧值返回)、[包存储的多字节写入](寄存器/包字节.md#包字节读写)、[辅助调用的返回赋值和 Map 关系](../Predicate/Helper谓词.md#生成的-expression)。
 
 局部目标互异不代替右侧的类型检查或访问条件。[键唯一性](#局部值效果的类型与解释保持)、[按键覆写](#关系集合按键覆写)。
 
@@ -285,7 +285,7 @@ E_i=\{r_j=f_j^\star(t_1,\ldots,t_n):1\le j\le m\},
 - 完整写入新规范单元，可以由源值建立完整等式，无需目标旧值。
 - 部分写入新规范单元，若其余位没有当前值依据，不能建立完整结果。
 
-输入补充只增加值绑定：按输入契约引入本次读取所需的有限个完整等式，每个左值在补充前列表中尚无值绑定；既有比较行全部保留。补充输入后的关系记作 \(\overline E_g\)。指令效果从该关系计算。仅有比较而缺少完整源值时，不能当成尚未记录的入口输入。未定义的真实源寄存器不适用这一补充规则。
+输入补充只增加值绑定：按输入契约引入本次读取所需的有限个完整等式，每个左值在补充前列表中尚无值绑定；既有比较行全部保留。补充输入后的关系记作 \(\bar{E}_g^{\mathrm{in}}\)。指令效果从该关系计算。仅有比较而缺少完整源值时，不能当成尚未记录的入口输入。未定义的真实源寄存器不适用这一补充规则。
 
 ## 指令结果的前提
 
@@ -298,18 +298,18 @@ E_i=\{r_j=f_j^\star(t_1,\ldots,t_n):1\le j\le m\},
 - 指令操作数与访问规则唯一确定所访问的资源单元。
 - 访问有效。
 
-无法确定来源或单元的访问无定义，不能以空 Expr 或新变元代替缺失语义。
+无法确定来源或单元的访问无定义，不能以空 Expression 或新变元代替缺失语义。
 
 真实源值可由已有完整等式取得，或由架构固定值取得，例如 RV32 的 \(x_0\) 恒为零。这个例外不允许为其他缺失源补任意值。
 
-### 局部 Expr 的共同形状
+### 局部 Expression 的共同形状
 
 每个实际写入对象在局部效果列表中产生一个完整等式，其中的右侧项是该对象的新完整值项；写入效果不含比较行。
 
-\(E_i\) 依[多目标取源规则](#多目标更新与同一来源)从[补充输入后的关系](#未记录虚拟寄存器的取源)计算；\(E_g'\) 是最终关系，\(\times\) 是[完整值按键覆写](#赋值覆盖全部旧关系)：
+\(\bar{E}_i\) 依[多目标取源规则](#多目标更新与同一来源)从[补充输入后的关系](#未记录虚拟寄存器的取源)计算；\(\bar{E}_g'\) 是最终关系，\(\times\) 是[完整值按键覆写](#赋值覆盖全部旧关系)：
 
 \[
-E_g'=\overline E_g\times E_i.
+\bar{E}_g'=\bar{E}_g^{\mathrm{in}}\times \bar{E}_i.
 \]
 
 读取对象与写入对象可以重叠，例如二元原地算术和原子交换。
@@ -322,22 +322,22 @@ E_g'=\overline E_g\times E_i.
 
 指令操作数所确定的访问对象与实际访问对象的一致性、跨规范单元的一致性、访问有效性的证明仍需独立论证。
 
-### Expr 与 Predicate 的效果组合
+### Expression 与 Observation 的效果组合
 
 设某个指令实例产生 \(\sigma_i\)。可区分：
 
-- 仅产生 Expr：寄存器赋值、算术结果或链接值。
-- Expr 仅增加比较行、Predicate 产生 Branch：分支两侧的关系不替换完整值；每个保留候选另按[Branch 的生成条件](../Predicate/Branch谓词.md#生成条件)生成谓词。
+- 仅产生 Expression：寄存器赋值、算术结果或链接值。
+- Expression 仅增加比较行、Observation 产生 Branch：分支两侧的关系不替换完整值；每个保留候选另按[Branch 的生成条件](../Predicate/Branch谓词.md#生成条件)生成观察。
 - 同时产生二者：值关系与调用观察共同发生；Map 元素内写入按[MapWrite 生成条件](../Predicate/MapWrite谓词.md#生成条件)生成观察，包实际存储按[PacketWrite 生成条件](../Predicate/PacketWrite谓词.md#生成条件)生成观察。
-- 仅产生 Return：不带链接值的最外层正常返回，其 Expr 列表为空；正常返回仍须[检查返回寄存器的完整等式](../NodeInference/step.md)，并在已识别为最外层正常返回的步骤按[Return 的生成条件](../Predicate/Return谓词.md#生成条件)生成谓词。
+- 仅产生 Return：不带链接值的最外层正常返回，其 Expression 列表为空；正常返回仍须[检查返回寄存器的完整等式](../NodeInference/step.md)，并在已识别为最外层正常返回的步骤按[Return 的生成条件](../Predicate/Return谓词.md#生成条件)生成观察。
 - 二者均为空：只改变后继位置的无条件跳转或观察范围外的操作。
 - 局部规则无定义：不产生成功候选。
 
 分类由指令实例及选定观察范围共同决定。带链接值的跳转与无链接跳转不同。普通间接跳转与已绑定的最外层返回也不同。
 
-后继位置不作为额外语义状态。若某实例明确产生 PC 等式，就按实际局部关系分类。Map 元素内写入与包写入的观察由各类谓词维护；栈访问及其余资源访问的观察形式仍须规定。数值传值公式不能代替这些观察。
+后继位置不作为额外语义状态。若某实例明确产生 PC 等式，就按实际局部关系分类。Map 元素内写入与包写入的观察由各类观察维护；栈访问及其余资源访问的观察形式仍须规定。数值传值公式不能代替这些观察。
 
-未选取观察的算术赋值、普通传值及未被识别为最外层正常返回的无条件跳转可以取 \(P_i=\varnothing\)。空局部观察仅表示所用规则未增加观察。它不证明没有副作用。它不证明访问或调用满足全部有效性条件。局部观察集合的元素域为[五类谓词域](../Predicate/谓词定义.md#类型与结构相等)，构造分别见[Helper谓词](../Predicate/Helper谓词.md#生成条件)、[Branch谓词](../Predicate/Branch谓词.md#生成条件)、[Return谓词](../Predicate/Return谓词.md#生成条件)、[MapWrite谓词](../Predicate/MapWrite谓词.md#生成条件)与[PacketWrite谓词](../Predicate/PacketWrite谓词.md#生成条件)。混合观察接入 step 的规则见[结构累积及解释义务](../Predicate/谓词定义.md#观察集合累积与可满足性)。已绑定 helper 的值关系见[Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)。
+未选取观察的算术赋值、普通传值及未被识别为最外层正常返回的无条件跳转可以取 \(\mathcal{O}_i=\varnothing\)。空局部观察仅表示所用规则未增加观察。它不证明没有副作用。它不证明访问或调用满足全部有效性条件。局部观察集合的元素域为[五类观察域](../Predicate/谓词定义.md#类型与结构相等)，构造分别见[Helper观察](../Predicate/Helper谓词.md#生成条件)、[Branch观察](../Predicate/Branch谓词.md#生成条件)、[Return观察](../Predicate/Return谓词.md#生成条件)、[MapWrite观察](../Predicate/MapWrite谓词.md#生成条件)与[PacketWrite观察](../Predicate/PacketWrite谓词.md#生成条件)。混合观察接入 step 的规则见[结构累积及解释义务](../Predicate/谓词定义.md#观察集合累积与可满足性)。已绑定 helper 的值关系见[Helper 生成的 Expression](../Predicate/Helper谓词.md#生成的-expression)。
 
 ### 部分值函数与符号提升
 
@@ -351,9 +351,9 @@ E_g'=\overline E_g\times E_i.
 
 输入键唯一、源项类型正确且齐备，以及[指令参数、访问对象与访问前提](#指令结果的前提)均作为前提。数值运算的解释必须遵循所给签名。未解释外部结果不套用纯数值全函数假设。
 
-**命题。** 对成功的 \(E_i\)：
+**命题。** 对成功的 \(\bar{E}_i\)：
 
-1. \(E_i\) 是有限 Expr 集合，每个关系左右两侧位宽一致。
+1. \(\bar{E}_i\) 是有限 Expression 集合，每个关系左右两侧位宽一致。
 2. 对任一类型正确、完整应用项属于纯数值子域的规则，在其解释域内有以下等式。\(t_1,\ldots,t_n\) 是源项，\(f_i^\star\) 是规则的符号提升，\(\widehat f_i\) 是其数值解释；\(\nu\) 是变元赋值，\(\theta\) 是[未解释运算的解释补全](Term/Term.md#未解释运算的解释补全)，双括号表示项解释：
 
 \[

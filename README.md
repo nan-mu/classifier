@@ -6,10 +6,10 @@
 
 完整阅读路线见 [文档索引](doc/README.md)。
 
-- [寄存器定义](doc/寄存器定义.md)、[Expr](doc/Expr/表达式阅读索引.md)与 [Predicate](doc/Predicate/谓词阅读索引.md)：对象定义、关系生成和观察规则。
+- [寄存器定义](doc/寄存器定义.md)、[Expression](doc/Expr/Expr.md)与 [Observation](doc/Predicate/谓词定义.md)：对象定义、比较运算符和观察规则。
 - [位向量与数值函数](doc/Expr/位向量与共同数值函数.md)：共同数值基础。
 - [节点推理](doc/NodeInference/节点推理阅读索引.md)：推理入口、各判断步骤、展开模型与证明。
-- [RV32 初态描述](doc/RV32初态描述.md)：入口条件与初始关系。共同指令规则按问题放在 Expr、Predicate 和 NodeInference 中。
+- [RV32 初态描述](doc/RV32初态描述.md)：入口条件与初始关系。共同指令规则按问题放在 Expression、Observation 和 NodeInference 中。
 - [代数程序分析](doc/NodeInference/路径语言与位置消去.md)：路径表达式与语义解释的研究说明。
 
 ## 启动调试界面

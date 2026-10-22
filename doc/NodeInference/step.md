@@ -14,20 +14,20 @@ Step 是所选局部指令规则的数学记号；产品接口及其实现对应
 
 #### 输入
 
-输入 \(\mathbf I\) 为指令序列，\(j\) 为当前指令的序号，二者见[指令序列与程序位置](路径.md#指令序列与程序位置)；索引空间的区别见[程序位置](路径.md#程序位置)。\(\sigma_g=(E_g,P_g)\) 为当前指令执行前的语义状态，见[语义状态](#语义状态)。
+输入 \(\mathbf I\) 为指令序列，\(j\) 为当前指令的序号，二者见[指令序列与程序位置](路径.md#指令序列与程序位置)；索引空间的区别见[程序位置](路径.md#程序位置)。\(\sigma_g=(\bar{E}_g,\mathcal{O}_g)\) 为当前指令执行前的语义状态，见[语义状态](#语义状态)。
 
 \[
 \operatorname{Input}=(\mathbf I,j,\sigma_g)
 \]
 
-具体地，\(\mathbf I=(i_0,\ldots,i_{m-1})\in\mathrm{Insn}^{\ast}\)，当前位置 \(j\in\mathrm{Pos}_{\mathbf I}=\{j\in\mathbb N:1\le j\le m\}\)，该位置的指令为 \(\mathbf I[j-1]=i_{j-1}\)；后继位置域为 \(\mathrm{Loc}_{\mathbf I}=\mathrm{Pos}_{\mathbf I}\sqcup\{\mathrm{Exit}\}\)，其中 Exit 不属于 \(\mathrm{Pos}_{\mathbf I}\)。Step 接收当前指令执行前的状态 \(\sigma_g=(E_g,P_g)\)。控制目标绑定与当前指令的位置绑定是本步的前提。
+具体地，\(\mathbf I=(i_0,\ldots,i_{m-1})\in\mathrm{Insn}^{\ast}\)，当前位置 \(j\in\mathrm{Pos}_{\mathbf I}=\{j\in\mathbb N:1\le j\le m\}\)，该位置的指令为 \(\mathbf I[j-1]=i_{j-1}\)；后继位置域为 \(\mathrm{Loc}_{\mathbf I}=\mathrm{Pos}_{\mathbf I}\sqcup\{\mathrm{Exit}\}\)，其中 Exit 不属于 \(\mathrm{Pos}_{\mathbf I}\)。Step 接收当前指令执行前的状态 \(\sigma_g=(\bar{E}_g,\mathcal{O}_g)\)。控制目标绑定与当前指令的位置绑定是本步的前提。
 
 \[
 \begin{aligned}
 \mathbf I&=(i_0,\ldots,i_{m-1})\in\mathrm{Insn}^{\ast},
 \qquad m=|\mathbf I|,\\
 j&\in\mathrm{Pos}_{\mathbf I}=\{j\in\mathbb N:1\le j\le m\},\\
-\sigma_g&=(E_g,P_g)\in\mathrm{State},\\
+\sigma_g&=(\bar{E}_g,\mathcal{O}_g)\in\mathrm{State},\\
 \mathrm{Loc}_{\mathbf I}&=\mathrm{Pos}_{\mathbf I}\sqcup\{\mathrm{Exit}\},\\
 \end{aligned}
 \]
@@ -45,11 +45,11 @@ j&\in\mathrm{Pos}_{\mathbf I}=\{j\in\mathbb N:1\le j\le m\},\\
 \end{aligned}
 \]
 
-\(m\) 为序列长度，\(\mathrm{Insn}\) 与 \(\mathrm{Exit}\) 见[指令序列与程序位置](路径.md#指令序列与程序位置)；\(\mathrm{State}\) 见[语义状态](#语义状态)，输入分量 \(E_g,P_g\) 分别对应该类型的 \(\mathcal E,\mathcal P\)；Step 的结果见[两种结果](#两种结果)，其中 \(c\) 为候选数，\(a\) 与各输出分量的含义和取值范围见[输出](#输出)。
+\(m\) 为序列长度，\(\mathrm{Insn}\) 与 \(\mathrm{Exit}\) 见[指令序列与程序位置](路径.md#指令序列与程序位置)；\(\mathrm{State}\) 见[语义状态](#语义状态)，输入分量 \(\bar{E}_g,\mathcal{O}_g\) 分别对应该类型的 \(\bar{E},\mathcal{O}\)；Step 的结果见[两种结果](#两种结果)，其中 \(c\) 为候选数，\(a\) 与各输出分量的含义和取值范围见[输出](#输出)。
 
 eBPF 的 \(\mathbf I\) 按原始 8 字节槽位排列，\(m\) 为槽位数，数学位置 \(j\) 仍从 1 开始。LDDW 占相邻两个槽位，第二槽位为 continuation；它占据序列位置，但不能作为入口、待执行指令或跳转目标。当前位置和每个保留的非 Exit 后继还须满足这个入口限制；顺序与跳转公式见[eBPF 槽位后继](#ebpf-槽位后继)。
 
-Expr 的内部定义见[关系结构](../Expr/Expr.md#表达式定义)。固定输入指令序列 \(\mathbf I\) 的谓词域为 \(\mathrm{Predicate}_{\mathbf I}\)，其五类构造见[谓词类型](../Predicate/谓词定义.md#类型与结构相等)。
+Expression 的内部定义见[关系结构](../Expr/Expr.md#表达式定义)。固定输入指令序列 \(\mathbf I\) 的观察域为 \(\mathrm{Observation}_{\mathbf I}\)，其五类构造见[观察类型](../Predicate/谓词定义.md#类型与结构相等)。
 
 ##### 语义状态
 
@@ -57,15 +57,15 @@ Expr 的内部定义见[关系结构](../Expr/Expr.md#表达式定义)。固定�
 
 \[
 \boxed{\mathrm{State}
-:=\mathrm{List}(\mathrm{Expr})\times\mathrm{List}(\mathrm{Predicate}_{\mathbf I}),
-\qquad \sigma=(E,P).}
+:=\mathrm{List}(\mathrm{Expression})\times\mathrm{List}(\mathrm{Observation}_{\mathbf I}),
+\qquad \sigma=(\bar{E},\mathcal{O}).}
 \]
 
-其中 \(E\) 是表达式列表，\(P\) 是观察列表；二者形状相同，结构去重后的成员相等。\(\mathrm{State}\) 在固定 \(\mathbf I\) 的语境中使用。
+其中 \(\bar{E}\) 是表达式列表，\(\mathcal{O}\) 是观察列表；二者形状相同，结构去重后的成员相等。\(\mathrm{State}\) 在固定 \(\mathbf I\) 的语境中使用。
 
-\(E\) 的内部结构见[表达式定义](../Expr/Expr.md#表达式分量)。\(P\) 的五类观察分别为 Helper 的外部调用观察、Branch 的选定方向及其条件、Return 的最外层正常返回结果、MapWrite 的 Map 元素内写入与 PacketWrite 的包写入，各类解释入口见[谓词定义](../Predicate/谓词定义.md#类型与结构相等)。完整路径条件由历史记录中各步的状态解释，见[比较指令处理](Jump/待处理.md#后继状态与历史条件)。
+\(\bar{E}\) 的内部结构见[表达式定义](../Expr/Expr.md#表达式分量)。\(\mathcal{O}\) 的五类观察分别为 Helper 的外部调用观察、Branch 的选定方向及其条件、Return 的最外层正常返回结果、MapWrite 的 Map 元素内写入与 PacketWrite 的包写入，各类解释入口见[观察定义](../Predicate/谓词定义.md#类型与结构相等)。完整路径条件由历史记录中各步的状态解释，见[比较指令处理](Jump/待处理.md#后继状态与历史条件)。
 
-\(\mathrm{Predicate}_{\mathbf I}\) 采用[结构相等](../Predicate/谓词定义.md#类型与结构相等)下的列表语义，不在该分量内部记录重复次数或事件顺序。历史记录保留步骤顺序，但不能仅由观察列表的变化恢复重复事件；需要事件轨迹时还须另行定义，见[观察集合与历史顺序](../Predicate/谓词定义.md#观察集合与历史顺序)。
+\(\mathrm{Observation}_{\mathbf I}\) 采用[结构相等](../Predicate/谓词定义.md#类型与结构相等)下的列表语义，不在该分量内部记录重复次数或事件顺序。历史记录保留步骤顺序，但不能仅由观察列表的变化恢复重复事件；需要事件轨迹时还须另行定义，见[观察集合与历史顺序](../Predicate/谓词定义.md#观察集合与历史顺序)。
 
 #### 输出
 
@@ -85,7 +85,7 @@ Expr 的内部定义见[关系结构](../Expr/Expr.md#表达式定义)。固定�
 
 输出的三个分量依次是方向、后继指令序号与候选的局部语义增量。条件后继的方向见[选择条件后继方向](#选择条件后继方向)。正常返回的目标见[绑定后继位置](#绑定后继位置)。
 
-\(d_k\in\mathrm{Direction}\) 是第 \(k\) 个候选的方向，方向域及 OK 的含义见[方向与后继](路径.md#方向与后继)；\(j_k\) 是该候选的后继指令序号，正常返回时取 Exit；\(\sigma_k=(E_k,P_k)\) 是该候选的局部语义增量，其中 \(E_k\) 是 Expr 增量，\(P_k\) 是 Predicate 增量。\(\sigma_k\) 不得读作已经组合好的全局状态。与输入状态的组合见[状态变换的组合](#状态变换的组合)。\(\operatorname{Reject}(a)\) 的 \(a\) 记录拒绝原因。
+\(d_k\in\mathrm{Direction}\) 是第 \(k\) 个候选的方向，方向域及 OK 的含义见[方向与后继](路径.md#方向与后继)；\(j_k\) 是该候选的后继指令序号，正常返回时取 Exit；\(\sigma_k=(\bar{E}_k,\mathcal{O}_k)\) 是该候选的局部语义增量，其中 \(\bar{E}_k\) 是 Expression 增量，\(\mathcal{O}_k\) 是 Observation 增量。\(\sigma_k\) 不得读作已经组合好的全局状态。与输入状态的组合见[状态变换的组合](#状态变换的组合)。\(\operatorname{Reject}(a)\) 的 \(a\) 记录拒绝原因。
 
 \[
 (d_k,j_k,\sigma_k)
@@ -95,7 +95,7 @@ Expr 的内部定义见[关系结构](../Expr/Expr.md#表达式定义)。固定�
 
 #### 局部规则的假设
 
-**假设 B（局部终止与有效性）。** Step 与各局部合并均结束。成功候选的 Expr 键唯一，位宽正确，非 Exit 目标已绑定到输入位置。
+**假设 B（局部终止与有效性）。** Step 与各局部合并均结束。成功候选的 Expression 键唯一，位宽正确，非 Exit 目标已绑定到输入位置。
 
 **假设 C（语义覆盖）。** 局部规则不遗漏任何可行后继，且成功候选的值与观察正确。只能排除已证明不可行的方向；条件未知、求解失败与绑定失败不能作为不可行证明。
 
@@ -121,9 +121,9 @@ C.ADDI、C.LI、C.ANDI 使用已符号扩展的六位立即数；C.LUI 的上位
 
 参数非法、源等式缺失、访问对象不唯一、访问有效性未确立、部分写入缺少旧值或间接目标未绑定时，拒绝对应推理，不用成功空集或新变元代替缺失语义。除法特殊输入按[数值规则](../Expr/寄存器/真实寄存器.md#除法与余数赋值)得到确定结果，不作为异常拒绝。
 
-异常处理、特权状态与未选定的外部语义须独立定义：RV32 的 ECALL、EBREAK、C.EBREAK、MRET、SRET、WFI、SFENCE.VMA 未给出成功规则；eBPF 的 LDDW 平台变量子类型、旧 LD ABS/IND、CALLX、MAY_GOTO 也未给出相应完整规则。LOAD_ACQ、STORE_REL、STX ATOMIC 只具有各 Expr 正文定义的数值关系，未包含并发与排序观察。
+异常处理、特权状态与未选定的外部语义须独立定义：RV32 的 ECALL、EBREAK、C.EBREAK、MRET、SRET、WFI、SFENCE.VMA 未给出成功规则；eBPF 的 LDDW 平台变量子类型、旧 LD ABS/IND、CALLX、MAY_GOTO 也未给出相应完整规则。LOAD_ACQ、STORE_REL、STX ATOMIC 只具有各 Expression 正文定义的数值关系，未包含并发与排序观察。
 
-符合现有 32 位分派器调用约定的已绑定 helper 使用[Helper谓词](../Predicate/Helper谓词.md)，其返回结果采用[结果赋值](../Predicate/Helper谓词.md#生成的-expr)。原生 eBPF `call imm` 按[独立的原生调用约定](../Predicate/Helper谓词.md#ebpf)处理：先要求下一原始槽位存在，再检查执行前关系的键唯一性与类型有效性，按立即数编号选择 helper 类型并取得该类型所需的完整参数。成功时产生调用观察与返回效果，以 OK 方向顺序推进；参数数量由共同类型确定，时钟与未支持编号均不读取附加参数。BTF CALL、CALLX 及其余非法调用形式不在该成功规则的定义域内，不能生成成功的空调用效果。
+符合现有 32 位分派器调用约定的已绑定 helper 使用[Helper观察](../Predicate/Helper谓词.md)，其返回结果采用[结果赋值](../Predicate/Helper谓词.md#生成的-expression)。原生 eBPF `call imm` 按[独立的原生调用约定](../Predicate/Helper谓词.md#ebpf)处理：先要求下一原始槽位存在，再检查执行前关系的键唯一性与类型有效性，按立即数编号选择 helper 类型并取得该类型所需的完整参数。成功时产生调用观察与返回效果，以 OK 方向顺序推进；参数数量由共同类型确定，时钟与未支持编号均不读取附加参数。BTF CALL、CALLX 及其余非法调用形式不在该成功规则的定义域内，不能生成成功的空调用效果。
 
 RV32 普通指令的合法域依据为 [RV32I](https://docs.riscv.org/reference/isa/v20260120/unpriv/rv32.html)。压缩形式的依据为 [C 扩展](https://docs.riscv.org/reference/isa/v20260120/unpriv/c-st-ext.html)。eBPF 的依据为 [BPF ISA](https://docs.kernel.org/bpf/standardization/instruction-set.html)。指令登记见 [IANA 指令登记表](https://www.iana.org/assignments/bpf-instructions/bpf-instructions.xhtml)。Linux BPF 定义见 [Linux BPF 定义](https://github.com/torvalds/linux/blob/master/include/uapi/linux/bpf.h)。LLVM 扩展定义见 [LLVM 扩展定义](https://llvm.googlesource.com/llvm-project/+/17bfc00f7c4a424d7b5dc6da575865833701fd1a%5E%21/)。
 
@@ -131,23 +131,23 @@ RV32 普通指令的合法域依据为 [RV32I](https://docs.riscv.org/reference/
 
 检查源项与访问对象要求指令能够取得所需值，且由其操作数与访问规则唯一确定访问对象，不生成替代缺失值的新名称。
 
-1. 参数须满足[指令规则的合法域](#局部规则的合法域)。实际需要的源项和访问对象须满足[局部 Expr 的前提](../Expr/Expr.md#指令结果的前提)。两项均满足时：进入[指令结果生成](#生成指令结果)。
+1. 参数须满足[指令规则的合法域](#局部规则的合法域)。实际需要的源项和访问对象须满足[局部 Expression 的前提](../Expr/Expr.md#指令结果的前提)。两项均满足时：进入[指令结果生成](#生成指令结果)。
 2. 缺少必需源项、位宽不符、资源单元不能唯一确定，或必要访问条件不成立：拒绝本次处理。
 3. 访问涉及尚未记录的虚拟寄存器：按[未记录虚拟寄存器的取源](../Expr/Expr.md#未记录虚拟寄存器的取源)判断能否补充。补充成功后继续；无依据时拒绝。
 
-具体需要哪些源项由指令规则规定，见[值规则索引](../Expr/Expr.md#索引)。不要求每个目标都有旧值；需要旧值的情形由[字段读写](../Expr/寄存器/单元字段读写.md#单元字段读写)等规则决定。helper 编号和参数的检查见 [helper Predicate 创建](../Predicate/Helper谓词.md)。
+具体需要哪些源项由指令规则规定，见[值规则索引](../Expr/Expr.md#索引)。不要求每个目标都有旧值；需要旧值的情形由[字段读写](../Expr/寄存器/单元字段读写.md#单元字段读写)等规则决定。helper 编号和参数的检查见 [helper Observation 创建](../Predicate/Helper谓词.md)。
 
 检查源项与访问对象仅检查所选规则的前提，不自动证明访问对象与实际指令操作数一致或完整资源契约成立。
 
 ### 生成指令结果
 
-\(\sigma_k=(E_k,P_k)\) 采用与指令及该候选方向对应的关系或观察规则。各候选都从同一个执行前状态 \(\sigma_g\) 取源。
+\(\sigma_k=(\bar{E}_k,\mathcal{O}_k)\) 采用与指令及该候选方向对应的关系或观察规则。各候选都从同一个执行前状态 \(\sigma_g\) 取源。
 
 - 普通数值赋值、算术或链接值：使用[真实寄存器值规则](../Expr/寄存器/真实寄存器.md#真实寄存器赋值)。各类数值规则见[数值规则索引](../Expr/寄存器/真实寄存器.md#算术与位运算赋值)。
 - 访问对象已确定的资源读写：根据对象类别选择规则。栈采用[栈规则](../Expr/寄存器/虚拟栈.md#虚拟栈读写)。Map 采用[Map 规则](../Expr/寄存器/虚拟映射.md#虚拟映射读写)，元素内写入另按[MapWrite 生成条件](../Predicate/MapWrite谓词.md#生成条件)取得局部观察。包采用[包规则](../Expr/寄存器/包字节.md#包字节读写)，实际存储另按[PacketWrite 生成条件](../Predicate/PacketWrite谓词.md#生成条件)取得局部观察。共享字段函数见[字段读写](../Expr/寄存器/单元字段读写.md#单元字段读写)。
 - 访问对象已确定的原子数值操作：使用[原子数值更新与旧值返回](../Expr/寄存器/原子数值更新与旧值返回.md#原子数值更新与旧值返回)，一次取得全部右侧。
-- 已识别为 helper 调用的指令实例：调用观察按 [helper Predicate](../Predicate/Helper谓词.md)创建，并按 [Helper 生成的 Expr](../Predicate/Helper谓词.md#生成的-expr)取得返回赋值与 Map 关联。RV32 分派器调用还保留调用自身的链接效果；原生 eBPF helper 按顺序后继推进。
-- 条件分支：Expr 的取源和候选规则见[比较指令处理](Jump/待处理.md)。采用这些规则后，进入[条件方向选择](#选择条件后继方向)；各保留候选的 Branch 谓词按[Branch 生成条件](../Predicate/Branch谓词.md#生成条件)生成。
+- 已识别为 helper 调用的指令实例：调用观察按 [helper Observation](../Predicate/Helper谓词.md)创建，并按 [Helper 生成的 Expression](../Predicate/Helper谓词.md#生成的-expression)取得返回赋值与 Map 关联。RV32 分派器调用还保留调用自身的链接效果；原生 eBPF helper 按顺序后继推进。
+- 条件分支：Expression 的取源和候选规则见[比较指令处理](Jump/待处理.md)。采用这些规则后，进入[条件方向选择](#选择条件后继方向)；各保留候选的 Branch 观察按[Branch 生成条件](../Predicate/Branch谓词.md#生成条件)生成。
 - 无条件跳转或其他所选规则不增加值与观察的操作：保留其控制处理要求，进入[后继位置绑定](#绑定后继位置)。
 - 所选局部规则无定义：拒绝本次处理；不能以空效果代替缺失语义。
 
@@ -155,19 +155,19 @@ eBPF LDDW 先判断当前位置的资源位置绑定，再选择值规则。`src
 
 普通赋值不自动增加观察。空局部观察只表示所选规则没有增加观察，不证明没有副作用。允许的效果组合及局部规则前提见[局部推理接口](#局部推理接口)。多目标取源见[同一执行前状态取源](../Expr/Expr.md#多目标更新与同一来源)。
 
-对于非条件效果，使用 [OK 方向](路径.md#方向与后继)并继续[后继位置绑定](#绑定后继位置)。已识别的最外层正常返回按[Return 生成条件](../Predicate/Return谓词.md#生成条件)生成 Return 谓词；其取源时点与后继结果的一致性由[Return 证明义务](../Predicate/Return谓词.md#证明义务)维护。返回寄存器完整等式的后继检查时点见[准备后继状态](#准备全部后继状态)。缺失时的拒绝处理见[失败情形](#失败情形)。
+对于非条件效果，使用 [OK 方向](路径.md#方向与后继)并继续[后继位置绑定](#绑定后继位置)。已识别的最外层正常返回按[Return 生成条件](../Predicate/Return谓词.md#生成条件)生成 Return 观察；其取源时点与后继结果的一致性由[Return 证明义务](../Predicate/Return谓词.md#证明义务)维护。返回寄存器完整等式的后继检查时点见[准备后继状态](#准备全部后继状态)。缺失时的拒绝处理见[失败情形](#失败情形)。
 
 eBPF EXIT 在这一切片中表示最外层正常返回。它从执行前状态取得 \(r_0\) 的完整 64 位等式右侧项，生成 Return 观察，并以 OK 方向到达 Exit；没有局部值赋值。完整项缺失时拒绝，低 32 位等式不能替代它。执行到槽位数组末尾仍按[目标绑定失败](#绑定后继位置)处理。
 
 ### 选择条件后继方向
 
-条件后继方向选择仅决定保留哪些方向。源项处理、判定函数及互补 Expr 的构造见[比较 Expr](Jump/待处理.md)。
+条件后继方向选择仅决定保留哪些方向。源项处理、判定函数及互补 Expression 的构造见[比较 Expression](Jump/待处理.md)。
 
 1. 本次比较判定为真：只保留 Taken 方向。
 2. 本次比较判定为假：只保留 NotTaken 方向。
 3. 本次比较判定未知：保留 Taken 与 NotTaken 两个方向。
 
-每个保留方向携带其对应的比较 Expr 约束，再进入[后继位置绑定](#绑定后继位置)。目标绑定满足生成前提后，各候选分别按[Branch 生成条件](../Predicate/Branch谓词.md#生成条件)取得自己的 Branch 增量；其接入观察集合见[状态组合的适用范围](#状态变换的组合)。缺失源项属于[前提检查失败](#检查源项与访问对象)，不作为未知比较处理。
+每个保留方向携带其对应的比较 Expression 约束，再进入[后继位置绑定](#绑定后继位置)。目标绑定满足生成前提后，各候选分别按[Branch 生成条件](../Predicate/Branch谓词.md#生成条件)取得自己的 Branch 增量；其接入观察集合见[状态组合的适用范围](#状态变换的组合)。缺失源项属于[前提检查失败](#检查源项与访问对象)，不作为未知比较处理。
 
 eBPF JEQ、JNE、无符号 JGT 的关系分别取相等、非等、无符号大于；宽度 `.w64` 选择完整关系，`.w32` 选择相应的低 32 位关系。JMP32 的两个操作数仍是从同一执行前状态取得的 64 位项，比较低位而不改写完整源值；取源和各补关系见[取源与比较宽度](Jump/待处理.md#取源与比较宽度)及[两个方向](Jump/待处理.md#指令产生的两个方向)。Taken 使用原关系，NotTaken 使用补关系；每个保留方向都同时携带约束与 Branch 观察，包括比较已经确定而仅保留一侧的情况。
 
@@ -218,29 +218,29 @@ j_{\mathrm{NotTaken}}=j+1.
 
 step 为各候选计算局部语义增量。若候选需要补充尚未记录的虚拟寄存器，其组合所用的输入状态由[未记录虚拟寄存器的取源](../Expr/Expr.md#未记录虚拟寄存器的取源)给出。
 
-\(P_k\) 与 \(P_g\) 均属于[五类谓词域](../Predicate/谓词定义.md#类型与结构相等)的有限集合 \(\mathscr F(\mathrm{Predicate}_{\mathbf I})\)，混合观察按[结构累积](../Predicate/谓词定义.md#结构并集)组合。在该定义域内，调用方将输入状态 \(\sigma_g\) 与候选增量 \(\sigma_k\) 组合为后继状态：
+\(\mathcal{O}_k\) 与 \(\mathcal{O}_g\) 均属于[五类观察域](../Predicate/谓词定义.md#类型与结构相等)的有限集合 \(\mathscr F(\mathrm{Observation}_{\mathbf I})\)，混合观察按[结构累积](../Predicate/谓词定义.md#结构并集)组合。在该定义域内，调用方将输入状态 \(\sigma_g\) 与候选增量 \(\sigma_k\) 组合为后继状态：
 
 \[
 \sigma'=
-\bigl(\operatorname{updateExpr}(E_g,E_k),
-\operatorname{mergePredicate}(P_g,P_k)\bigr).
+\bigl(\operatorname{updateExpr}(\bar{E}_g,\bar{E}_k),
+\operatorname{mergePredicate}(\mathcal{O}_g,\mathcal{O}_k)\bigr).
 \]
 
 **尚待讨论：** 上述组合式暂归调用方应用；操作者没有说明组合发生在哪里，此归属尚未确定。\(\sigma'\) 表示组合后的后继状态，不是 step 返回的 \(\sigma_k\)。
 
-观察合并的集合解释满足有限性、单位元、幂等、交换与结合性质，证明见[Predicate 结构累积](../Predicate/谓词定义.md#观察集合累积与可满足性)。合并不判断路径条件是否可满足。各候选的输入补充和局部变换都从同一个父状态计算，互不使用另一候选的结果；各类观察与实际指令及历史的对应仍需满足所属生成条件和证明义务。
+观察合并的集合解释满足有限性、单位元、幂等、交换与结合性质，证明见[Observation 结构累积](../Predicate/谓词定义.md#观察集合累积与可满足性)。合并不判断路径条件是否可满足。各候选的输入补充和局部变换都从同一个父状态计算，互不使用另一候选的结果；各类观察与实际指令及历史的对应仍需满足所属生成条件和证明义务。
 
-Expr 的 \(\operatorname{updateExpr}\) 采用[按键覆写](../Expr/Expr.md#关系集合按键覆写)的定义。局部增量的准备与检查见[全部后继状态准备](#准备全部后继状态)；组合的应用归属以上述尚待讨论事项为准。
+Expression 的 \(\operatorname{updateExpr}\) 采用[按键覆写](../Expr/Expr.md#关系集合按键覆写)的定义。局部增量的准备与检查见[全部后继状态准备](#准备全部后继状态)；组合的应用归属以上述尚待讨论事项为准。
 
 ### 准备全部后继状态
 
 候选类型与有效性前提见[局部推理接口](#局部推理接口)。step 准备并检查各候选的局部语义增量；后继全局状态按[状态变换的组合](#状态变换的组合)构造，应用归属尚待讨论。
 
-1. 对每个候选，从同一个父状态引入所需虚拟寄存器的当前值关系，规则见[未记录虚拟寄存器的取源](../Expr/Expr.md#未记录虚拟寄存器的取源)。引入后的值关系按 [Expr 按键覆写](../Expr/Expr.md#关系集合按键覆写)准备。
-2. 对 Exit 候选，在执行前 Expr 列表施加局部值更新后的表达式列表中检查返回寄存器的完整等式：RV32 为 32 位 \(a_0\)，eBPF 为 64 位 \(r_0\)。只有低位关系或不等式不满足要求。返回项可以是符号项；没有返回项则拒绝。右侧可以是尚不能数值求出的符号项，不要求数值求值成功。
+1. 对每个候选，从同一个父状态引入所需虚拟寄存器的当前值关系，规则见[未记录虚拟寄存器的取源](../Expr/Expr.md#未记录虚拟寄存器的取源)。引入后的值关系按 [Expression 按键覆写](../Expr/Expr.md#关系集合按键覆写)准备。
+2. 对 Exit 候选，在执行前 Expression 列表施加局部值更新后的表达式列表中检查返回寄存器的完整等式：RV32 为 32 位 \(a_0\)，eBPF 为 64 位 \(r_0\)。只有低位关系或不等式不满足要求。返回项可以是符号项；没有返回项则拒绝。右侧可以是尚不能数值求出的符号项，不要求数值求值成功。
 3. 各候选的 Helper 局部观察、各条件候选的 Branch 增量、最外层正常返回的 Return 增量、Map 元素内写入的 MapWrite 增量与包写入的 PacketWrite 增量分别由所属生成条件给出。混合观察按[结构并集](../Predicate/谓词定义.md#结构并集)累积；生成前提缺失时拒绝整个步骤，不能以成功的空观察代替。运行结果仍从 [Exit 状态的表达式列表 \(E\)](#正常返回历史)读取。
 4. 任一候选的目标、关系键、位宽或必要观察不满足要求：拒绝整个步骤，不返回已准备的部分候选。
-5. 全部候选准备成功：step 返回各候选的方向、后继指令序号与局部语义增量 \(\sigma_k=(E_k,P_k)\)。
+5. 全部候选准备成功：step 返回各候选的方向、后继指令序号与局部语义增量 \(\sigma_k=(\bar{E}_k,\mathcal{O}_k)\)。
 
 状态的两个分量见[语义状态](#语义状态)。不同候选的局部增量都从执行前状态 \(\sigma_g\) 计算，不读取另一个候选的结果。
 
@@ -259,7 +259,7 @@ Expr 的 \(\operatorname{updateExpr}\) 采用[按键覆写](../Expr/Expr.md#关�
 
 #### 历史记录类型
 
-固定 \(\mathbf I\) 的历史观察域为 \(\mathrm{Predicate}_{\mathbf I}\)，包含 Helper、Branch、Return、MapWrite 与 PacketWrite，五类含义及解释见[语义状态](#语义状态)。访问有效性与完整外部调用契约仍待证明或定义。
+固定 \(\mathbf I\) 的历史观察域为 \(\mathrm{Observation}_{\mathbf I}\)，包含 Helper、Branch、Return、MapWrite 与 PacketWrite，五类含义及解释见[语义状态](#语义状态)。访问有效性与完整外部调用契约仍待证明或定义。
 
 一项历史记录属于 [History 的逐步记录类型](History.md#逐步记录与统一类型) \(\mathrm{Record}_{\mathbf I}\)，保留执行位置、方向、后继位置与有序局部结果。原始指令由该记录的位置在 \(\mathbf I\) 中取得；方向见[方向与后继](路径.md#方向与后继)。
 
@@ -267,7 +267,7 @@ Expr 的 \(\operatorname{updateExpr}\) 采用[按键覆写](../Expr/Expr.md#关�
 
 序列保留执行顺序，列表成员相等不引入额外顺序语义。每步的执行后关系与观察由 [History 的 stateAt](History.md#逐步状态与末态)沿组合定义域重建；最后一项对应 Exit 状态的表达式列表 \(E\) 与五类观察列表。混合观察的结构累积已定义，其指令覆盖与记录对应仍受[观察解释与历史义务](../Predicate/谓词定义.md#观察集合累积与可满足性)约束。
 
-Expr 描述中间寄存器关系。比较的两侧可以产生不同 Expr。
+Expression 描述中间寄存器关系。比较的两侧可以产生不同 Expression。
 
 #### 历史构造
 

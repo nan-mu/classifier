@@ -1,4 +1,4 @@
-# OtherHelper谓词
+# OtherHelper观察
 
 ## 类型定义
 
@@ -47,7 +47,7 @@ OtherHelper 解释为事件记录：
 
 ## 数学性质
 
-**命题 H1（OtherHelper 生成的唯一性与参数齐备）。** 在有效 \(E_g\)、既定调用约定、固定调用指令及固定 \(\varepsilon\) 下，若所选类型属于 \(H_{\mathrm{other}}\)，则成功生成的 OtherHelper 谓词唯一，并具有恰好 \(n(h)\) 个所选载体宽度 \(w\) 的参数项。
+**命题 H1（OtherHelper 生成的唯一性与参数齐备）。** 在有效 \(\bar{E}_g\)、既定调用约定、固定调用指令及固定 \(\varepsilon\) 下，若所选类型属于 \(H_{\mathrm{other}}\)，则成功生成的 OtherHelper 观察唯一，并具有恰好 \(n(h)\) 个所选载体宽度 \(w\) 的参数项。
 
 **证明。** 已命名编号互异，未支持类型由其确定编号给出，因此 \(h\) 唯一。完整等式的键唯一使每个参数项唯一，solve 是确定的；构造逐一取得所需的 \(n(h)\) 个项。\(\square\)
 
@@ -59,7 +59,7 @@ OtherHelper 的规范结果保存 helper 编号及规范参数列表，规则见
 
 ## 相关文档
 
-- [Helper 生成的 Expr](Helper谓词.md#生成的-expr)
+- [Helper 生成的 Expression](Helper谓词.md#生成的-expression)
 - [检查源项与访问对象](../NodeInference/step.md#检查源项与访问对象)
 - [指令参数与规则定义域](../NodeInference/step.md#局部规则的合法域)
 - [solve 的化简与求值](../Expr/Term/solve.md#solve-的化简与求值)

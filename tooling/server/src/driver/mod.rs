@@ -1,5 +1,6 @@
-//! Expand-driver domain types: Agenda schedule, History shells, merge port, loc boundary.
-//! SemState bytes stay in the applied graph snapshot; merge calls Lean exact-config FFI.
+//! Expand-driver domain types: Agenda schedule, History shells, loc boundary.
+//! SemState bytes stay in the applied graph snapshot. Exact-config merge is not
+//! called from the schedule.
 
 pub mod history;
 pub mod loc;

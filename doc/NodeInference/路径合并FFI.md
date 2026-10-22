@@ -2,23 +2,23 @@
 
 ## 共同接口与实现边界
 
-create 的入口假设与 step 的指令规则按目标架构给定，具体入口项见[create](create.md)。数学 step、history、merge 与运行时驱动的 merge-step 使用共同的状态、位置和历史契约；指令的局部规则仍由各所属正文规定。RV32IMC 与 EBPF 分别提供产品 create/step 和预算展开适配器；与架构无关的预算、工作队列及图快照驱动归 [Node/Budget.lean](../../Node/Budget.lean)。实现与研究限度见[语义范围与证据边界](#语义范围与证据边界)。
+create 的入口假设与 step 的指令规则按目标架构给定，具体入口项见[create](create.md)。数学 step 与 history 使用共同的状态、位置和历史契约；指令的局部规则仍由各所属正文规定。标准推理和 Taken推演见[分支合并处理](分支合并处理.md)。RV32IMC 与 EBPF 分别提供产品 create/step 和预算展开适配器；与架构无关的预算、工作队列及图快照驱动归 [Node/Budget.lean](../../Node/Budget.lean)。实现与研究限度见[语义范围与证据边界](#语义范围与证据边界)。
 
 数学 step 的语义输入与[局部推理接口](step.md#输入)一致，为 \((\mathbf I,j,\sigma_g)\)：\(\mathbf I\) 是指令序列，\(j\) 是从 1 开始的当前指令序号，\(\sigma_g\) 是执行前状态。已解码指令实例及其位置、控制目标绑定须满足该接口的前提；程序编码数组、Meta 和额外身份参数属于具体产品的工程接口。状态组合的数学归属仍见[状态变换的组合](step.md#状态变换的组合)，history 的构造与良构域见[统一历史类型](History.md#逐步记录与统一类型)。
 
-现有 [RV32/Expand.lean](../../RV32/Expand.lean) 的 `lean_rv32_expand_step` 与 [EBPF/Expand.lean](../../EBPF/Expand.lean) 的 `lean_ebpf_expand_step` 都接收程序编码数组、`metaJson`、`event`、`j` 以及 Expr、Predicate 字符串，并调用 `Node.prepareAll` 组合后继状态。两者与上述数学 step 的局部增量契约仍有差异；产品导出返回组合后的全局状态。程序解码、静态绑定和额外身份参数的处理不得据此成为数学 step 的输入。
+现有 [RV32/Expand.lean](../../RV32/Expand.lean) 的 `lean_rv32_expand_step` 与 [EBPF/Expand.lean](../../EBPF/Expand.lean) 的 `lean_ebpf_expand_step` 都接收程序编码数组、`metaJson`、`event`、`j` 以及 Expression、Observation 字符串，并调用 `Node.prepareAll` 组合后继状态。两者与上述数学 step 的局部增量契约仍有差异；产品导出返回组合后的全局状态。程序解码、静态绑定和额外身份参数的处理不得据此成为数学 step 的输入。
 
-共同 merge FFI 只比较已经取得的完整配置。外部运行时负责 step 推进、历史保存及[合并步](分支合并处理.md#合并步merge-step)调度；使用产品 step 时，后继状态组合已在导出内部完成。预算与 fuel 的产品调度归外部运行时；显式预算快照导出借用 Node 的共同驱动，在给定步数和预算内展开。
+`lean_expand_merge` 仍导出精确配置比较。标准推理和 Taken推演不调用它。外部运行时负责 step 推进和 \((E_i,O_i)\) 的保存，并按[分支合并处理](分支合并处理.md)调度；使用产品 step 时，后继状态组合已在导出内部完成。按指令扣减的 fuel 仍留在预算展开里，Taken推演本身只限制循环。显式预算快照导出借用 Node 的共同驱动，在给定步数和预算内展开。
 
 ## 工程模块与迁移
 
 U3 按职责拆分库、模块与命名空间，入口与构建目标一一对应：
 
-- [Core.lean](../../Core.lean) / `Core`：共享表达式表示与操作，模块为 [Bits](../../Core/Bits.lean)、[Reg](../../Core/Reg.lean)、[Numeric](../../Core/Numeric.lean)、[Op](../../Core/Op.lean)、[Term](../../Core/Term.lean)、[Expr](../../Core/Expr.lean)、[Virtual](../../Core/Virtual.lean)、[Direction](../../Core/Direction.lean)、[Insn](../../Core/Insn.lean)、[Parse](../../Core/Parse.lean)、[Render](../../Core/Render.lean)、[Ffi](../../Core/Ffi.lean)。渲染仅依赖表达式对象，不导入路径模块。
+- [Core.lean](../../Core.lean) / `Core`：共享表达式表示与操作，模块为 [Bits](../../Core/Bits.lean)、[Reg](../../Core/Reg.lean)、[Numeric](../../Core/Numeric.lean)、[Op](../../Core/Op.lean)、[Term](../../Core/Term.lean)、[Expression](../../Core/Expr.lean)、[Virtual](../../Core/Virtual.lean)、[Direction](../../Core/Direction.lean)、[Insn](../../Core/Insn.lean)、[Parse](../../Core/Parse.lean)、[Render](../../Core/Render.lean)、[Ffi](../../Core/Ffi.lean)。渲染仅依赖表达式对象，不导入路径模块。
   共享层还包含 [MapLayout](../../Core/MapLayout.lean)、[CrossPred](../../Core/Cross/Pred.lean)、[ObservationEq](../../Core/Cross/Unify.lean)，新增数值证明、项解释和结构对齐证明分别位于 [NumericProofs](../../Core/NumericProofs.lean)、[Semantics](../../Core/Semantics.lean)、[ObservationEqProofs](../../Core/Cross/UnifyProofs.lean)。这几个模块的存在与本轮 gate 状态分别记录，证明范围见[证据普查](跨架构比较.md#形式化证据普查)。
-- [Node.lean](../../Node.lean) / `Node`：[Path](../../Node/Path.lean) 维护位置、候选、节点、边与状态组合，[Budget](../../Node/Budget.lean) 维护预算、工作队列与图快照驱动，[Merge](../../Node/Merge.lean) 维护线协议精确配置比较。三者显式导入并使用 Core 类型。
-- [RV32.lean](../../RV32.lean) / `RV32`：[Initial](../../RV32/Initial.lean)、[Expr](../../RV32/Expr.lean)、[Expand](../../RV32/Expand.lean) 分别承载产品入口、指令值规则与 create/step 导出。RV32IMC 按所需对象导入 Core、Node.Path 与 Node.Budget，不以 Node.Merge 作为聚合入口。
-- [EBPF.lean](../../EBPF.lean) / `EBPF`：[Insn](../../EBPF/Insn.lean) 与 [Encode](../../EBPF/Encode.lean) 维护指令及原始槽位解码，[Expr](../../EBPF/Expr.lean) 维护 MOV、二元 ALU、NEG、MOVSX 与字节序值关系，[Initial](../../EBPF/Initial.lean) 维护入口，[Memory](../../EBPF/Memory.lean) 维护资源地址绑定、共享单元读写、顺序原子数值更新及既有内容字节冻结，[Helper](../../EBPF/Helper.lean) 维护原生 helper 的 ABI 取源、完整冻结尾和返回效果，[Step](../../EBPF/Step.lean) 维护 `EBPF.ebpfStep` 的局部候选及观察，[Expand](../../EBPF/Expand.lean) 维护 Meta 解析、create/step String 导出及 Node 预算驱动适配。入口关系由[create 的 eBPF 规则](create.md#ebpf)维护。本轮源码的编译证据见[本轮实现与验证状态](#本轮实现与验证状态)。
+- [Node.lean](../../Node.lean) / `Node`：[Path](../../Node/Path.lean) 维护位置、候选、节点、边与状态组合，[Budget](../../Node/Budget.lean) 维护预算、工作队列与图快照驱动，[Drive](../../Node/Drive.lean) 维护标准推理、Taken推演和 history，[BpfBound](../../Node/BpfBound.lean) 记录 Linux BPF 检查器的人为定理，[Merge](../../Node/Merge.lean) 仍导出线协议精确配置比较，驱动不调用它。这些模块显式导入并使用 Core 类型。
+- [RV32.lean](../../RV32.lean) / `RV32`：[Initial](../../RV32/Initial.lean)、[Expression](../../RV32/Expr.lean)、[Expand](../../RV32/Expand.lean) 分别承载产品入口、指令值规则与 create/step 导出。RV32IMC 按所需对象导入 Core、Node.Path 与 Node.Budget，不以 Node.Merge 作为聚合入口。
+- [EBPF.lean](../../EBPF.lean) / `EBPF`：[Insn](../../EBPF/Insn.lean) 与 [Encode](../../EBPF/Encode.lean) 维护指令及原始槽位解码，[Expression](../../EBPF/Expr.lean) 维护 MOV、二元 ALU、NEG、MOVSX 与字节序值关系，[Initial](../../EBPF/Initial.lean) 维护入口，[Memory](../../EBPF/Memory.lean) 维护资源地址绑定、共享单元读写、顺序原子数值更新及既有内容字节冻结，[Helper](../../EBPF/Helper.lean) 维护原生 helper 的 ABI 取源、完整冻结尾和返回效果，[Step](../../EBPF/Step.lean) 维护 `EBPF.ebpfStep` 的局部候选及观察，[Expand](../../EBPF/Expand.lean) 维护 Meta 解析、create/step String 导出及 Node 预算驱动适配。入口关系由[create 的 eBPF 规则](create.md#ebpf)维护。本轮源码的编译证据见[本轮实现与验证状态](#本轮实现与验证状态)。
 
 旧聚合库及其目录整体撤除，不保留兼容导入、命名空间别名或 umbrella；Demo 及其唯一 RV32 示例检查一并撤除。两种产品的指令侧展开适配器保留在各自库中，共同预算驱动移入 Node。
 
@@ -101,7 +101,7 @@ step 成功响应的字段与 RV32 step 相同：
 {"status":"ok","reason":null,"successors":[{"dir":"OK","loc":"1","exprs":[],"predicates":[]}]}
 ```
 
-`dir` 取 `"OK"`、`"Taken"` 或 `"NotTaken"`；`loc` 为零基原始槽位下标的十进制字符串，或正常返回的 `"exit"`。`exprs`、`predicates` 保存由 `Node.prepareAll` 对执行前状态施加局部效果后的完整后继状态，使用[共同 Expr](#expr-的表示)和[Predicate JSON](#共同-predicate-json)。每个保留候选准备成功后才返回全部后继，不返回部分成功结果。step 不返回节点 `id`、工作队列或 `fuel`。拒绝响应为：
+`dir` 取 `"OK"`、`"Taken"` 或 `"NotTaken"`；`loc` 为零基原始槽位下标的十进制字符串，或正常返回的 `"exit"`。`exprs`、`predicates` 保存由 `Node.prepareAll` 对执行前状态施加局部效果后的完整后继状态，使用[共同 Expression](#expression-的表示)和[Observation JSON](#共同-observation-json)。每个保留候选准备成功后才返回全部后继，不返回部分成功结果。step 不返回节点 `id`、工作队列或 `fuel`。拒绝响应为：
 
 ```json
 {"status":"fail","reason":"UnboundTarget","successors":[]}
@@ -172,15 +172,15 @@ def Node.exportExpandMerge (requestJson : String) : String
 - `loc` 使用当前共同表示：普通位置为非负十进制整数的字符串，存储从零开始的指令数组下标，例如 `"3"` 对应数学文档中的第 4 条指令；正常结束为 `"exit"`。共同 merge 校验其表示并比较解析后的位置，不校验程序范围；运行时负责该位置属于共同程序的位置域。不同节点可以有相同 `loc`，重复到达仍由 `id` 区分。
 - `exprs`、`predicates` 都是数组，表示该配置已施加全部局部更新后的全局状态。普通位置保存待执行指令的执行前状态，`"exit"` 保存最终状态。数学 step 的候选局部增量须先按既有规则组合。现有 step String 导出的后继状态行为见[实现边界](#共同接口与实现边界)。
 
-### Expr 的表示
+### Expression 的表示
 
-Expr 行沿用共享解析与渲染格式，例如：
+Expression 行沿用共享解析与渲染格式，例如：
 
 ```json
 {"reg":"real32:10","rel":"eq","term":"v32:1"}
 ```
 
-`reg`、`rel`、`term` 均为字符串，分别按 `parseReg`、`parseRel`、`parseTerm` 解析。状态只存一个 Expr 列表：缺少 `role` 的完整 `eq` 行排在前面（解析时拼成值绑定前缀），带 `"role":"constraint"` 的行排在后面。运行时角色由列表顺序推导——每个寄存器的第一条 `eq` 是值，其后各行（包括另一条 `eq`）是比较。其他显式 `role` 值拒绝。
+`reg`、`rel`、`term` 均为字符串，分别按 `parseReg`、`parseRel`、`parseTerm` 解析。状态只存一个 Expression 列表：缺少 `role` 的完整 `eq` 行排在前面（解析时拼成值绑定前缀），带 `"role":"constraint"` 的行排在后面。运行时角色由列表顺序推导——每个寄存器的第一条 `eq` 是值，其后各行（包括另一条 `eq`）是比较。其他显式 `role` 值拒绝。
 
 共同状态检查包括：
 
@@ -190,9 +190,9 @@ Expr 行沿用共享解析与渲染格式，例如：
 
 共同 merge 不施加入口寄存器赋值策略或 x0 求零检查，也不限制为某一目标架构的状态。共享 AST 的 `externalResult` 应用允许 32 位或 64 位结果，要求至少一个参数且全部参数与结果同宽；`inputByte` 的结果仍限 32 位。这些表示条件由共同项检查保留，不构成目标指令的调用或内存语义验证。
 
-### 共同 Predicate JSON
+### 共同 Observation JSON
 
-五类 Predicate 的共享线协议由 [Core.Insn](../../Core/Insn.lean)、[Parse](../../Core/Parse.lean) 与 [Render](../../Core/Render.lean)实现；数学构造及各类解释由[谓词定义](../Predicate/谓词定义.md#类型与结构相等)所链接的正文维护。
+五类 Observation 的共享线协议由 [Core.Insn](../../Core/Insn.lean)、[Parse](../../Core/Parse.lean) 与 [Render](../../Core/Render.lean)实现；数学构造及各类解释由[观察定义](../Predicate/谓词定义.md#类型与结构相等)所链接的正文维护。
 
 ```json
 {"kind":"helper","event":8,"helperId":1,"args":["c64:1077412584","v64:0","c64:0","c64:0","c64:0","c64:0"]}
@@ -212,12 +212,12 @@ Expr 行沿用共享解析与渲染格式，例如：
 
 Branch、Return 及 Map 项的载体位宽字段仅接受 JSON 数字 `32` 或 `64`，并须与实际项位宽一致。两类写入的访问位宽接受 `8`、`16`、`32`、`64`，且不得超过解析所得源项的载体位宽。写入事件和偏移允许零。所有项均递归检查 AST 的常量范围、寄存器变元、运算符签名、参数个数与宽度；所有必填字段均检查类型。`predicateWellFormed` 提供这一结构检查，不提供资源有效性、动态身份唯一性或指令语义的证明。
 
-Lean 的 `Cond` 以 `lhs`、`rel`、`rhs` 存储条件，载体取自 `lhs.width`；`Predicate` 保存上述五类构造，列表承载全局与局部观察。直接构造这些 Lean 值并不自动满足数学良构域；不经 JSON 的调用方须保证与 `predicateWellFormed` 相同的结构条件及所属规则的语义前提。`Node.applyLocal` 只检查 Expr 键和位宽并作结构累积，不证明 Predicate 生成可靠性。P2 的集合性质是数学正文的证明，尚无对应的混合累积、指令观察覆盖或完整 History 保持的 Lean 定理。
+Lean 的 `Cond` 以 `lhs`、`rel`、`rhs` 存储条件，载体取自 `lhs.width`；`Predicate` 保存上述五类构造，列表承载全局与局部观察。直接构造这些 Lean 值并不自动满足数学良构域；不经 JSON 的调用方须保证与 `predicateWellFormed` 相同的结构条件及所属规则的语义前提。`Node.applyLocal` 只检查 Expression 键和位宽并作结构累积，不证明 Observation 生成可靠性。P2 的集合性质是数学正文的证明，尚无对应的混合累积、指令观察覆盖或完整 History 保持的 Lean 定理。
 
 
-共享 Expr、Helper 与五类 Predicate 的项字符串中，裸常量继承字段位宽；嵌套常量载体与上下文不同则使用 `c32:n` 或 `c64:n`。应用结果载体与上下文不同可用 `t32(term)` 或 `t64(term)`。投影与扩展的跨载体应用显式保留输入位宽：`lowq/v`、`extracto,len/v`、`bswapq/v`，以及 `zextq/w/v`、`sextq/w/v`，其中 `v` 是输入载体，`w` 是输出载体。例如 `zext8/64/32(v32:1)` 保留 32 位输入和 64 位结果。载体相同时保留既有短写法；共享解析器与渲染器保留这些载体标注。
+共享 Expression、Helper 与五类 Observation 的项字符串中，裸常量继承字段位宽；嵌套常量载体与上下文不同则使用 `c32:n` 或 `c64:n`。应用结果载体与上下文不同可用 `t32(term)` 或 `t64(term)`。投影与扩展的跨载体应用显式保留输入位宽：`lowq/v`、`extracto,len/v`、`bswapq/v`，以及 `zextq/w/v`、`sextq/w/v`，其中 `v` 是输入载体，`w` 是输出载体。例如 `zext8/64/32(v32:1)` 保留 32 位输入和 64 位结果。载体相同时保留既有短写法；共享解析器与渲染器保留这些载体标注。
 
-新符号算子的原始项标签为 `udiv{bits}_{zeroResult}`、`sdiv{bits}_{zeroResult}`、`urem{bits}`、`srem{bits}`、`mulh{bits}`、`mulhu{bits}`、`mulhsu{bits}`、`selectEq{bits}`，其中 `bits` 为 32 或 64。除法的除零结果参数参与 AST 与文本相等，不能在往返时删除。`selectEq` 接受四个同宽项，其余新增算子接受两个同宽项。`Op.validSignature` 是共享签名检查入口，`Term.wellFormed` 递归复用该检查，Predicate 解析不另设第二套签名规则。数学数值定义见[除法与余数](../Expr/寄存器/真实寄存器.md#除法与余数赋值)、[乘法高半](../Expr/寄存器/真实寄存器.md#乘法高半赋值)和[原子比较交换](../Expr/寄存器/原子数值更新与旧值返回.md#ebpf-stx-atomic)。
+新符号算子的原始项标签为 `udiv{bits}_{zeroResult}`、`sdiv{bits}_{zeroResult}`、`urem{bits}`、`srem{bits}`、`mulh{bits}`、`mulhu{bits}`、`mulhsu{bits}`、`selectEq{bits}`，其中 `bits` 为 32 或 64。除法的除零结果参数参与 AST 与文本相等，不能在往返时删除。`selectEq` 接受四个同宽项，其余新增算子接受两个同宽项。`Op.validSignature` 是共享签名检查入口，`Term.wellFormed` 递归复用该检查，Observation 解析不另设第二套签名规则。数学数值定义见[除法与余数](../Expr/寄存器/真实寄存器.md#除法与余数赋值)、[乘法高半](../Expr/寄存器/真实寄存器.md#乘法高半赋值)和[原子比较交换](../Expr/寄存器/原子数值更新与旧值返回.md#ebpf-stx-atomic)。
 
 `predicates` 允许重复同结构成员。结构累积保留已有列表次序，再依局部列表次序追加尚未出现的成员；精确合并仅比较集合成员，不比较排列或重复次数。参数和键数组的内部顺序仍参与每个观察的相等。列表排列、集合相等及有序 History 记录是三种不同的比较范围。
 
@@ -228,15 +228,15 @@ RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构
 - Helper 的调用身份和 ABI 前缀参数继续沿用既有生成；lookup 的 `externalResult` 使用 `[helperId, map, keyPtr]`。`RV32.readBufferBytes` 是 Stack、Map、Packet 与显式绑定 Context 的统一冻结读取入口，取同一执行前关系，范围内每字节须唯一解析到同一资源对象。Stack、Map、Context 要求已有的唯一、位宽匹配的完整等式；未记录的 Packet 字节可经 `PacketAccess.read` 物化 `inputByte` 项，已写入的包字节使用当前完整等式，仅有比较关系时不重新取入口输入。读取定义域由[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)维护。布局唯一、完整读取成功时，lookup/delete 追加完整键，update 同时追加完整键和值；任一读取不足就保留原 ABI 前缀。`inferStep` 传入 `context.boundContext`，helper 编号寄存器不提供 Context 权限。返回项始终只使用 ABI 前缀；未支持编号产生空参数 Helper 及 32 位全一返回项。完整事件的数学定义见[共同生成条件](../Predicate/Helper谓词.md#生成条件)。
   Packet 的常量分支经 `packetBindingAt` 从 `Reg.ctx32 α` 的 ctx-data 完整绑定取得包基，并要求 `Reg.ctx32 (α+1)` 的 packet-end 绑定。起址与包基须解析到同一仿射根，字节范围不得跨越 \(2^{32}\)；若 packet-end 可解析到仿射根，则还检查同根及结束偏移界限，否则仅在包基具有符号根时接纳，实际包界限仍是外部前提。符号分支使用下述复合寄存器的格式与显式检查。成功绑定将包基保存在 `inputBase`，供未记录字节物化使用。
   `readBufferBytes(E,addr,n,maps,boundCtx)` 对 Map 缓冲区先从实际 lookup 来源确定事件、模位移及源 Map 项，再要求该源 Map 具有唯一布局，检查位移加 n 同时不超过其 `valueSize` 和 \(2^{32}\)。缓冲区所在 Map 与被调用 helper 的目标 Map 可以不同，范围检查使用前者。缺失或重复源布局、未知源 Map、超界或整段回绕均保留原 ABI 前缀，即使范围外旧单元等式已经存在也不冻结。`BufferOrigin` 要求整段资源来源一致；该结构检查仍不证明资源权限或外部布局真实性。
-- Branch 覆盖 `BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`、`C.BEQZ`、`C.BNEZ` 的每个保留方向；取同一执行前关系的两端 solve 后完整项，Taken 使用原关系，NotTaken 使用补关系。`position` 为运行时数组下标加一，原 Expr 比较约束继续保留；确定比较保留一侧时也生成该侧观察。
+- Branch 覆盖 `BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`、`C.BEQZ`、`C.BNEZ` 的每个保留方向；取同一执行前关系的两端 solve 后完整项，Taken 使用原关系，NotTaken 使用补关系。`position` 为运行时数组下标加一，原 Expression 比较约束继续保留；确定比较保留一侧时也生成该侧观察。
 - Return 在 `JALR x0,0(ra)` 或 `C.JR ra` 经已有绑定识别为外层 Exit 后，读取执行前关系中 `a0` 的完整 32 位项。程序内返回不生成 Return；完整项缺失拒绝。Exit 的写后完整项检查仍保留，两个时点与实际返回结果的一致性仍需证明。
-- PacketWrite 覆盖 Expr 实际选定为 Packet 的 `SB`、`SH`、`SW`、`C.SW`、`C.SWSP`。资源选择沿用 Stack、Map、Packet 的既有优先级；能取得包别名不改变已选定的 Stack 存储，正常对齐的 `C.SWSP` 通常走 Stack。选定 Packet 后取得 `PacketAccess` 的资源身份、偏移与访问宽度，并保存 Expr 字节拆分使用的同一完整源项，生成一个事件。绑定层以 `Option NodeId` 接收真实执行前节点引用；产品 `inferStep` 与 `rv32Snapshot` 传入来源节点身份，无身份时拒绝 `UndefinedSrc`。局部效果与观察一起组合，后续字节覆写保留旧事件。
+- PacketWrite 覆盖 Expression 实际选定为 Packet 的 `SB`、`SH`、`SW`、`C.SW`、`C.SWSP`。资源选择沿用 Stack、Map、Packet 的既有优先级；能取得包别名不改变已选定的 Stack 存储，正常对齐的 `C.SWSP` 通常走 Stack。选定 Packet 后取得 `PacketAccess` 的资源身份、偏移与访问宽度，并保存 Expression 字节拆分使用的同一完整源项，生成一个事件。绑定层以 `Option NodeId` 接收真实执行前节点引用；产品 `inferStep` 与 `rv32Snapshot` 传入来源节点身份，无身份时拒绝 `UndefinedSrc`。局部效果与观察一起组合，后续字节覆写保留旧事件。
   RV32 的 `packetBindingAt` 与 eBPF 的 `resolveAddress` 在地址可分解为同一入口包基加[复合包偏移](../Predicate/跨架构谓词.md#项与关系)、且当前路径已有对应 `data_end` 检查时生成复合包寄存器。偏移格式识别与投影擦除由该定义给定。记录保留包身份、偏移树、访问字节数、结束 Context 单元与比较严格性，各字节再保留访问内下标；这些分量进入跨架构键。[CompoundPacketFixture.lean](../../CrossArch/CompoundPacketFixture.lean) 的有限 guards 固定含零扩展投影与常元减法的两侧绑定、记录与规范键相等，并覆盖缺失检查、无关自由寄存器、非常元乘积及非常元右端减法的拒绝。常量偏移继续沿用既有 `affineAddress`／`relativeOffset` 分支及其入口范围前提。PacketWrite 的原始 JSON 在符号目的地址时增加 `compound` 字段，并检查保存的访问位宽等于其字节数乘八；规范 JSON 使用 `offsetTerm` 保存复合键。包字节与 Helper 冻结分别遵循[包字节访问](../Expr/寄存器/包字节.md)和[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)。同入口包资源对应、偏移共同值与不回绕仍由 CP-End 及 CP-Q 的相应前提维护。
-- MapWrite 在 lookup 观察已带冻结键、Meta 布局匹配且元素内偏移加访问宽度不超过 `valueSize` 时，对 Expr 选定为 Map 的 `SB`/`SH`/`SW`/`C.SW` 发射一条观察（写入事件为当前节点身份，`map`/`key`/`offset`/`source` 取自 lookup 与执行前源寄存器）。缺冻结键、缺布局或越界时拒绝 `UndefinedSrc`；不得只提交 Map Expr 写入。低层 Expr 的 Map 数值切片仍可在观察拒绝前存在于 value step，但不构成产品成功。包侧键缓冲区冻结与 MW-O* 证明义务仍未关闭。
+- MapWrite 在 lookup 观察已带冻结键、Meta 布局匹配且元素内偏移加访问宽度不超过 `valueSize` 时，对 Expression 选定为 Map 的 `SB`/`SH`/`SW`/`C.SW` 发射一条观察（写入事件为当前节点身份，`map`/`key`/`offset`/`source` 取自 lookup 与执行前源寄存器）。缺冻结键、缺布局或越界时拒绝 `UndefinedSrc`；不得只提交 Map Expression 写入。低层 Expression 的 Map 数值切片仍可在观察拒绝前存在于 value step，但不构成产品成功。包侧键缓冲区冻结与 MW-O* 证明义务仍未关闭。
 
 eBPF 的局部候选由 [EBPF/Step.lean](../../EBPF/Step.lean)生成，内存写入观察由 [EBPF/Memory.lean](../../EBPF/Memory.lean)与值效果一起返回：
 
-- Helper 覆盖 [EBPF.Encode](../../EBPF/Encode.lean) 解码出的 `.callHelper imm`，即操作码 `0x85` 且 `dst=src=off=0`。`EBPF.ebpfStep` 先检查下一原始槽位存在，再由 [parseHelperCall](../../EBPF/Helper.lean) 检查执行前 Expr 的 `keysUnique` 与 `wellTyped`，按立即数编号读取参数。`helperRequired` 之前的寄存器必须是完整 64 位等式，缺失或宽度不符为 `UndefinedSrc`。`printk` 的要求是 2，格式串和长度之后的空位结束参数列表，已出现的后续参数仍保留。其余种类的要求个数等于 `helperArity`。成功时发射 `.helper event call.kind args`，创建 `real64:0` 返回等式；lookup 另创建 `Reg.mapDword event 0 = Term.regVar event (Reg.real64 0)`。`EBPF.freezeHelperArgs` 经统一的 `EBPF.Memory.availableBufferBytes` 从唯一可解析的 Stack、Map、Packet、Context 冻结字节，lookup/delete 追加完整键，update 仅在键和值均齐备时追加全部尾部；每项为 Term64。失败保留原 ABI 参数，返回项仍只使用该前缀。独立 ABI 与事件解释见[Helper 共同规则](../Predicate/Helper谓词.md#类型定义)。
+- Helper 覆盖 [EBPF.Encode](../../EBPF/Encode.lean) 解码出的 `.callHelper imm`，即操作码 `0x85` 且 `dst=src=off=0`。`EBPF.ebpfStep` 先检查下一原始槽位存在，再由 [parseHelperCall](../../EBPF/Helper.lean) 检查执行前 Expression 的 `keysUnique` 与 `wellTyped`，按立即数编号读取参数。`helperRequired` 之前的寄存器必须是完整 64 位等式，缺失或宽度不符为 `UndefinedSrc`。`printk` 的要求是 2，格式串和长度之后的空位结束参数列表，已出现的后续参数仍保留。其余种类的要求个数等于 `helperArity`。成功时发射 `.helper event call.kind args`，创建 `real64:0` 返回等式；lookup 另创建 `Reg.mapDword event 0 = Term.regVar event (Reg.real64 0)`。`EBPF.freezeHelperArgs` 经统一的 `EBPF.Memory.availableBufferBytes` 从唯一可解析的 Stack、Map、Packet、Context 冻结字节，lookup/delete 追加完整键，update 仅在键和值均齐备时追加全部尾部；每项为 Term64。失败保留原 ABI 参数，返回项仍只使用该前缀。独立 ABI 与事件解释见[Helper 共同规则](../Predicate/Helper谓词.md#类型定义)。
   Stack、Map、Context 仍要求已有的唯一、位宽匹配的完整等式。Packet 分支要求 `packetRoot` 经 ctx-data 单元读取取得包基；常量位移检查非负及 Meta 的 `packetBytes` 范围，符号位移使用上述复合格式及已通过的 `data_end` 约束。`availableBufferBytes` 保留 `inputBase`，只对 Packet 接纳 `PacketAccess.read` 产生的输入项。未记录的包字节可物化带复合注记的 `inputByte`，已写入字节复用当前完整等式，仅有比较关系时读取无定义；详细读取规则见[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)。
   Context 的逐字节冻结只投影两个已有 Context32 单元；普通地址解析仍仅允许这两个单元的完整四字节读取，没有因此增加普通 Context 访问权限。
   每个字节的资源解析须唯一，并以 `BufferOrigin` 要求整段保持同一 Stack、Context、Map 或 Packet 身份，跨资源拼接不冻结完整尾。
@@ -257,11 +257,11 @@ Packet 与 Map 的源项载体宽度和访问位宽 \(q\) 分别保存；wire �
 
 ## 比较规则
 
-通过全部请求与配置有效性检查后，按 `notTaken` 的数组次序寻找首个与 `taken` 相等的配置。`Node.ExactMerge.sameConfig` 比较位置、完整 Expr 列表（按集合相等）、派生比较行和五类混合观察列表；运行时节点引用不参与配置相等。互补的比较 Expr 仍参与比较，当前状态的更新遵守[赋值覆盖全部旧关系](../Expr/Expr.md#赋值覆盖全部旧关系)。
+通过全部请求与配置有效性检查后，按 `notTaken` 的数组次序寻找首个与 `taken` 相等的配置。`Node.ExactMerge.sameConfig` 比较位置、完整 Expression 列表（按集合相等）、派生比较行和五类混合观察列表；运行时节点引用不参与配置相等。互补的比较 Expression 仍参与比较，当前状态的更新遵守[赋值覆盖全部旧关系](../Expr/Expr.md#赋值覆盖全部旧关系)。
 
-项 AST 的相等由返回等式证明或不等式证明的 `DecidableEq` 判定，Expr、Cond 与五类 Predicate 沿用该结构相等。各集合通过双向成员检查比较，不比较 JSON 字符串或渲染文本。集合排列与 Predicate 重复成员不影响结果；约束的重复拒绝规则仍适用。
+项 AST 的相等由返回等式证明或不等式证明的 `DecidableEq` 判定，Expression、Cond 与五类 Observation 沿用该结构相等。各集合通过双向成员检查比较，不比较 JSON 字符串或渲染文本。集合排列与 Observation 重复成员不影响结果；约束的重复拒绝规则仍适用。
 
-项的构造、位宽、寄存器身份、运算符及其固定参数、关系、Expr 角色与五类观察的全部构造分量均参与结构相等。改变 Branch 位置、方向或条件，Return 项，MapWrite 事件、Map 项、键、偏移、访问位宽或源项，PacketWrite 事件、资源、目的记录、访问位宽或源项，均阻止精确匹配。项、调用参数及键数组按次序比较。不作代数等价求解、名称重命名、投影或差异豁免；HelperOnly 标签也不能放宽这些比较。一个请求内全部配置须有效，全部节点引用须互异，不能因较早候选匹配而忽略后续无效输入。
+项的构造、位宽、寄存器身份、运算符及其固定参数、关系、Expression 角色与五类观察的全部构造分量均参与结构相等。改变 Branch 位置、方向或条件，Return 项，MapWrite 事件、Map 项、键、偏移、访问位宽或源项，PacketWrite 事件、资源、目的记录、访问位宽或源项，均阻止精确匹配。项、调用参数及键数组按次序比较。不作代数等价求解、名称重命名、投影或差异豁免；HelperOnly 标签也不能放宽这些比较。一个请求内全部配置须有效，全部节点引用须互异，不能因较早候选匹配而忽略后续无效输入。
 
 ## 结果与调用方动作
 
@@ -286,8 +286,8 @@ Packet 与 Map 的源项载体宽度和访问位宽 \(q\) 分别保存；wire �
 - `InvalidRequestJSON:<解析错误>`；`MissingOrInvalidField:<字段名>`。
 - `UnsupportedObservationModel:<模型>`；`UnsupportedRequiredObservation:<类别>`。
 - `InvalidLocation:<配置标签>` 报告位置字符串无法解析为普通非负下标或 `exit`。
-- `InvalidSnapshot:<配置标签>` 报告共享状态解析、寄存器表示、位宽、Expr 角色或键唯一性检查失败。
-- `InvalidTerm:<配置标签>` 报告 Expr 递归项或关系参数检查失败；`InvalidPredicate:<配置标签>` 报告已识别类的字段、位宽、递归 AST、关系或构造合法性检查失败。
+- `InvalidSnapshot:<配置标签>` 报告共享状态解析、寄存器表示、位宽、Expression 角色或键唯一性检查失败。
+- `InvalidTerm:<配置标签>` 报告 Expression 递归项或关系参数检查失败；`InvalidPredicate:<配置标签>` 报告已识别类的字段、位宽、递归 AST、关系或构造合法性检查失败。
 - `UnsupportedPredicateKind:<配置标签>:<类别>`；`DuplicateNodeId`；`EmptyNotTaken`。
 
 配置标签为 `taken` 或 `notTaken[k]`，其中 `k` 是从零开始的候选数组下标。`InvalidRequestJSON` 的后缀保留 Lean JSON 解析器给出的错误文字。嵌套字段的类型错误按实际失败的校验阶段报告，诊断不承诺枚举同一请求的全部错误。
@@ -302,11 +302,11 @@ Architecture-Agnostic 仍是研究假设。共享对象、结构比较与共同�
 
 - 运行时须保证位置有效、相同程序与固定语义语境、同一次分支的两侧来源、配置真实到达及可复用后缀的归属。共同 merge 的结构检查不证明这些事实。
 - 完整数学 `Merged(M)` 仍要求 [e_N](Jump/路径合并-接口契约.md#输入) 的 NotTaken 后缀适用性与完整行为覆盖、`e_T` 的 Taken 记录有效性及到达覆盖，以及 [e_M](Jump/路径合并-接口契约.md#mergedm) 的全称精确复用、前缀连接和后缀引用适用性。此 String 请求不传入或产生这些证明，不得把 `status:"merged"` 当作完整 `Merged(M)` 凭据。
-- 全部应有观察的生成与保存仍需证明，空数组相等及 FiveClass 声明不能证明观察齐备。同一次分支的 Taken 与 NotTaken 谓词保留不同方向和条件；后续 Expr 覆写不删除这些观察，因而即使 Expr 汇合也不能据此放宽五类精确相等。没有新类观察的旧 HelperOnly 捕获只能证明其已提供状态的比较结果。
-- 不同 Expr 或观察的更宽共享仍须完成差异依赖、投影行为保持及覆盖义务，见[未决义务](Jump/路径合并-接口契约.md#未决义务)。有限后续一致性仍以 [P1 至 P4](Jump/证明义务-路径合并完备.md#充分性前提) 为前提：共同语境与良构相等、局部结果外延性、后继准备外延性与闭合性、有限局部结果均须成立。动态调用及写入身份如何同时满足外延性与不同动态步骤的区分要求，仍是[动态身份与名称的模型冲突](Jump/证明义务-路径合并完备.md#仍待证明的义务)；[History 的 H-O1 至 H-O4](History.md#证明边界与待证义务)还要求记录来源、路径保持、完整依赖与事件可恢复范围的对应。实际指令语义、共享后的完整历史与无限行为仍须各自证明。
+- 全部应有观察的生成与保存仍需证明，空数组相等及 FiveClass 声明不能证明观察齐备。同一次分支的 Taken 与 NotTaken 观察保留不同方向和条件；后续 Expression 覆写不删除这些观察，因而即使 Expression 汇合也不能据此放宽五类精确相等。没有新类观察的旧 HelperOnly 捕获只能证明其已提供状态的比较结果。
+- 不同 Expression 或观察的更宽共享仍须完成差异依赖、投影行为保持及覆盖义务，见[未决义务](Jump/路径合并-接口契约.md#未决义务)。有限后续一致性仍以 [P1 至 P4](Jump/证明义务-路径合并完备.md#充分性前提) 为前提：共同语境与良构相等、局部结果外延性、后继准备外延性与闭合性、有限局部结果均须成立。动态调用及写入身份如何同时满足外延性与不同动态步骤的区分要求，仍是[动态身份与名称的模型冲突](Jump/证明义务-路径合并完备.md#仍待证明的义务)；[History 的 H-O1 至 H-O4](History.md#证明边界与待证义务)还要求记录来源、路径保持、完整依赖与事件可恢复范围的对应。实际指令语义、共享后的完整历史与无限行为仍须各自证明。
 - 结构不相等只否定精确配置判据，不能作为更宽行为等价的反例。数学拒绝原因中的 `Counterexample` 须有明确否定范围的已证反例；当前导出不产生该结果。
 - 特殊循环仅由满足 `Admit(W)` 及 `e_F` 的 `Escape(W)` 获得许可，见[数学契约](Jump/路径合并-接口契约.md#escapew)。精确匹配、比较失败或回返到分支位置均不建立该准入；当前导出不返回 `Escape`，不生成循环凭据。
-- [Node/Merge.lean](../../Node/Merge.lean) 的项、Cond 与 Predicate 相等判定使用携带等式或不等式证明的 `DecidableEq`。`#guard` 与 `Node.runMergeChecks` 覆盖有限 wire 回归，包括混合重排与重复成员成功、各类构造字段差异拒绝、全部候选有效性和旧声明标签不投影。`mergeJustDropOverwriteCheck` 与 `mergeComplementaryOverwriteCheck` 是不含新类观察的旧表示缩减实例，只检验 Expr 覆写前后及互补约束；不能作为新 Branch 累积后的汇合依据。这些实例不建立 P1 至 P4、完整 `Merged(M)` 或一般指令语义正确性。[MergeCheck.lean](../../MergeCheck.lean) 提供 `lake env lean --run MergeCheck.lean` 入口；实际执行结果由对应验证记录提供。
+- [Node/Merge.lean](../../Node/Merge.lean) 的项、Cond 与 Observation 相等判定使用携带等式或不等式证明的 `DecidableEq`。`#guard` 与 `Node.runMergeChecks` 覆盖有限 wire 回归，包括混合重排与重复成员成功、各类构造字段差异拒绝、全部候选有效性和旧声明标签不投影。`mergeJustDropOverwriteCheck` 与 `mergeComplementaryOverwriteCheck` 是不含新类观察的旧表示缩减实例，只检验 Expression 覆写前后及互补约束；不能作为新 Branch 累积后的汇合依据。这些实例不建立 P1 至 P4、完整 `Merged(M)` 或一般指令语义正确性。[MergeCheck.lean](../../MergeCheck.lean) 提供 `lake env lean --run MergeCheck.lean` 入口；实际执行结果由对应验证记录提供。
 
 ### 本轮实现与验证状态
 
@@ -345,7 +345,7 @@ Architecture-Agnostic 仍是研究假设。共享对象、结构比较与共同�
 
 1. 节点 20 与 21 位于 `loc:"15"`，即 `j15` 的 `BLTU a0,a2,80` 执行前。两份状态仅 `real32:13` 的完整值绑定不同：分别为 `43144` 与 `129`。清除 `a2` 旧约束已发生，剩余的 `a3` 值差异仍阻止精确匹配。
 2. 沿所捕获的两个 NotTaken 后继，节点 27 与 28 位于 `loc:"17"`。两侧都已执行 `j16` 的 `LHU a2,16(a1)`，`a3` 仍分别为 `43144` 与 `129`。
-3. `j17` 的 `ADDI a3,zero,18` 写入相同完整值，得到节点 30 与 31，均位于 `loc:"18"`。此时两份完整 Expr 状态按比较规则相等，`predicates` 均为空；共同的两条 `a0` 无符号下界约束仍在状态中。因此相等来自既有指令更新后的完整状态，不来自删去所有约束。
+3. `j17` 的 `ADDI a3,zero,18` 写入相同完整值，得到节点 30 与 31，均位于 `loc:"18"`。此时两份完整 Expression 状态按比较规则相等，`predicates` 均为空；共同的两条 `a0` 无符号下界约束仍在状态中。因此相等来自既有指令更新后的完整状态，不来自删去所有约束。
 
 已提供的受控 Lean 重放记录以真实外层方向设置 `taken` 为节点 30、`notTaken` 的候选为节点 31，返回：
 
@@ -353,7 +353,7 @@ Architecture-Agnostic 仍是研究假设。共享对象、结构比较与共同�
 {"reuseFrom":31,"scope":"ExactConfig","status":"merged","taken":30}
 ```
 
-该结果表明现有 oracle 已准许这对可达状态的精确匹配，无需降低 Expr、约束或 Helper 观察的相等要求。空 Helper 观察的证明范围仍受[语义范围与证据边界](#语义范围与证据边界)限制。
+该结果表明现有 oracle 已准许这对可达状态的精确匹配，无需降低 Expression、约束或 Helper 观察的相等要求。空 Helper 观察的证明范围仍受[语义范围与证据边界](#语义范围与证据边界)限制。
 
 仅有 `loc:"17"` 的两份状态，不能证明 `a3` 差异对后续观察无关。该 String 请求未携带指令序列、后缀或依赖证明，无法从请求中排除后续读取 `a3` 并据此产生不同 Helper 观察的程序。实际 `j17` 写回后的完整状态可供精确比较；预先掩去差异则属于尚未取得行为保持证明的放宽。
 
@@ -397,7 +397,7 @@ Cursor 提供的 U2 live 报告 `.omp/u2-tooling-live-report.md` 记录：在 `a
 ### U3 重新链接后的 live 复查
 
 1. Cursor 先适配 tooling 绑定与链接顺序，将服务重新链接到 U3 的 Core、Node、RV32 共享库；随后按[服务端接口](../../tooling/server/README.md)通过 `POST /api/session` 分别上传真实 `just_drop.elf` 与 `merge_try.elf` 的 `image_b64`，对各会话执行 `POST /api/session/<id>/run` 并保留返回快照。只设置显示名称而省略镜像仍使用默认镜像。按实际指令位置和边的方向定位两侧到达，保留完整 `exprs`、`predicates`、后继边及本次节点引用；`merge_try.elf` 使用自身的指令和分支来源，不沿用 just_drop 的下标或节点引用。
-2. 对重新捕获状态构造完整请求，比较对应 `loc:"15"`、`loc:"17"` 与 `loc:"18"` 的配置对。Taken 与 NotTaken 标签须遵守外层分支的真实来源，不得只抽取 `a3` 行代替完整状态。旧 U3 空观察记录在最终覆写后曾匹配；五类生成扩展后，只要保留不同 Branch 成员，即使 `loc:"18"` 的 Expr 相等仍应返回 `NoExactConfigMatch`，不能丢弃观察重现旧成功。
+2. 对重新捕获状态构造完整请求，比较对应 `loc:"15"`、`loc:"17"` 与 `loc:"18"` 的配置对。Taken 与 NotTaken 标签须遵守外层分支的真实来源，不得只抽取 `a3` 行代替完整状态。旧 U3 空观察记录在最终覆写后曾匹配；五类生成扩展后，只要保留不同 Branch 成员，即使 `loc:"18"` 的 Expression 相等仍应返回 `NoExactConfigMatch`，不能丢弃观察重现旧成功。
 3. 跟踪重新链接后服务的外层 frame 候选集合、每次实际交给 merge 端口的完整请求及原始响应，核对镜像、状态来源、可复用后缀归属与最终阶段。just_drop 按新捕获定位 `loc:"18"` 的真实比较；merge_try 按其实际汇合配置核对。源码重放结果、Cursor handoff 测量、受控 Lean 成功及切换前 U2 测量不能替代 U3 的 live 请求响应证据。
 4. 对两个 `/run` 返回快照分别检查 `dir:"reuse"` 边和节点的 `merge_reuse_from` 引用，确认匹配响应被应用为保留各自前缀的后缀引用，并检查该复用范围的重复后缀是否停止展开。只有真实请求、原始响应及引用动作均被观察到，才能报告 live 复用成功。
 

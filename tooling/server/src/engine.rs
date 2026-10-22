@@ -7,7 +7,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use crate::driver::{Agenda, ConfigSnapshot, Dir, MergeEffect, MergePort, RecordStore};
+use crate::driver::merge::RejectReason;
+use crate::driver::{Agenda, ConfigSnapshot, Dir, MergeEffect, RecordStore};
 
 /// Instruction words for one expand session. Anchors live in the create snapshot.
 enum IsaState {
@@ -82,7 +83,6 @@ pub struct ExpandSession {
     snapshot: Value,
     agenda: Agenda,
     records: RecordStore,
-    merge: MergePort,
 }
 
 impl ExpandSession {
@@ -102,7 +102,6 @@ impl ExpandSession {
             snapshot,
             agenda,
             records: RecordStore::default(),
-            merge: MergePort::default(),
         };
         session.sync_work();
         session
@@ -171,9 +170,12 @@ impl ExpandSession {
                             "dst": reuse_from,
                         }));
                 }
-                MergeEffect::Rejected { .. } => {
-                    // Exact-config reject is expected on branch diamonds that keep
-                    // complementary constraints; Agenda continues merge-step.
+                MergeEffect::Rejected { taken, reason } => {
+                    if reason == RejectReason::Counterexample {
+                        self.snapshot["status"] = json!("fail");
+                        self.snapshot["reason"] = json!("LocalReject");
+                        self.snapshot["failed"] = json!(taken);
+                    }
                 }
             }
         }
@@ -298,7 +300,6 @@ impl ExpandSession {
                 &parent_loc,
                 &succ_meta,
                 &mut self.records,
-                &self.merge,
                 &lookup,
                 &mut merge_effects,
             );

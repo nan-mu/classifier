@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet, VecDeque};
 
 use super::history::{self, HistoryShell, RecordStore};
 use super::loc::wire_loc_to_doc;
-use super::merge::{ConfigSnapshot, MergeEffect, MergePort, MergeVerdict, RejectReason};
+use super::merge::{ConfigSnapshot, MergeEffect, RejectReason};
 
 pub type NodeId = u32;
 
@@ -67,6 +67,8 @@ pub struct BranchFrame {
     /// Unfinished nodes in the Taken arm.
     pending_taken: HashSet<NodeId>,
     merge_settled: bool,
+    /// Only-taken returns to this parent still allowed.
+    loops_left: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -191,6 +193,7 @@ impl Agenda {
             pending_not_taken,
             pending_taken,
             merge_settled: false,
+            loops_left: 128,
         });
         self.items.push_back(WorkItem::Ready(not_taken));
         self.items.push_back(WorkItem::BlockedTaken {
@@ -208,7 +211,6 @@ impl Agenda {
         parent_loc_wire: &str,
         successors: &[(Dir, NodeId, String)],
         records: &mut RecordStore,
-        merge: &MergePort,
         node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
         effects: &mut Vec<MergeEffect>,
     ) {
@@ -217,7 +219,6 @@ impl Agenda {
             parent_loc_wire,
             successors,
             records,
-            merge,
             node_lookup,
             effects,
         );
@@ -231,7 +232,6 @@ impl Agenda {
         parent_loc_wire: &str,
         successors: &[(Dir, NodeId, String)],
         records: &mut RecordStore,
-        merge: &MergePort,
         node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
         effects: &mut Vec<MergeEffect>,
     ) {
@@ -332,6 +332,18 @@ impl Agenda {
             }
         }
 
+        let only_taken = taken.is_some() && not_taken.is_none() && linear.is_empty();
+        if self.reentry_stop(
+            parent,
+            parent_loc_wire,
+            opens_branch,
+            only_taken,
+            node_lookup,
+            effects,
+        ) {
+            return;
+        }
+
         match (taken, not_taken) {
             (Some(t), Some(n)) => {
                 let jb_doc = wire_loc_to_doc(parent_loc_wire).unwrap_or(1);
@@ -339,19 +351,7 @@ impl Agenda {
                 self.open_branch(jb_doc, parent, n, t);
             }
             (t_only, n_only) => {
-                let mut suppress_ready: HashSet<NodeId> = HashSet::new();
-                if !in_t.is_empty() {
-                    for &i in &in_t {
-                        if self.frames[i].phase == BranchPhase::OpenTaken {
-                            self.try_merge_at_tip(i, parent, merge, node_lookup, effects);
-                            if self.frames[i].merge_settled {
-                                suppress_ready
-                                    .extend(self.frames[i].taken_arm_nodes.iter().copied());
-                            }
-                        }
-                    }
-                }
-
+                let suppress_ready: HashSet<NodeId> = HashSet::new();
                 for id in linear {
                     let loc = loc_of(successors, id).to_string();
                     self.enqueue_fresh(id, &loc, &suppress_ready, node_lookup, effects);
@@ -367,7 +367,50 @@ impl Agenda {
             }
         }
 
-        self.advance_frames(records, merge, node_lookup, effects);
+        self.advance_frames(records, node_lookup, effects);
+    }
+
+
+    /// Back at the parent jump during Taken推演.
+    /// Both directions: stop the session. Only taken: count one loop.
+    fn reentry_stop(
+        &mut self,
+        parent: NodeId,
+        parent_loc: &str,
+        opens_branch: bool,
+        only_taken: bool,
+        node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
+        effects: &mut Vec<MergeEffect>,
+    ) -> bool {
+        let frames: Vec<usize> = self
+            .frames
+            .iter()
+            .enumerate()
+            .filter(|(_, frame)| {
+                frame.phase == BranchPhase::OpenTaken
+                    && node_lookup(frame.cb)
+                        .map(|cfg| cfg.loc == parent_loc)
+                        .unwrap_or(false)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if frames.is_empty() {
+            return false;
+        }
+        let exhausted = only_taken && frames.iter().any(|&i| self.frames[i].loops_left == 0);
+        if opens_branch || exhausted {
+            effects.push(MergeEffect::Rejected {
+                taken: parent,
+                reason: RejectReason::Counterexample,
+            });
+            return true;
+        }
+        if only_taken {
+            for i in frames {
+                self.frames[i].loops_left -= 1;
+            }
+        }
+        false
     }
 
     fn enqueue_fresh(
@@ -470,133 +513,12 @@ impl Agenda {
         }
     }
 
-    fn try_merge_at_tip(
-        &mut self,
-        frame_idx: usize,
-        taken_tip: NodeId,
-        merge: &MergePort,
-        node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
-        effects: &mut Vec<MergeEffect>,
-    ) {
-        let frame = &mut self.frames[frame_idx];
-        if frame.merge_settled || frame.phase != BranchPhase::OpenTaken {
-            return;
-        }
-        let Some(taken_cfg) = node_lookup(taken_tip) else {
-            return;
-        };
-        let candidates: Vec<ConfigSnapshot> = frame
-            .not_taken_candidates
-            .iter()
-            .filter_map(|&id| node_lookup(id))
-            .collect();
-        let verdict = merge.try_merge_configs(frame.jb_doc, &taken_cfg, &candidates);
-        self.apply_merge_verdict(frame_idx, taken_tip, verdict, effects);
-    }
-
-    fn apply_merge_verdict(
-        &mut self,
-        frame_idx: usize,
-        taken_tip: NodeId,
-        verdict: MergeVerdict,
-        effects: &mut Vec<MergeEffect>,
-    ) {
-        let frame = &mut self.frames[frame_idx];
-        match verdict {
-            MergeVerdict::Merged { reuse_suffix_from } => {
-                let frame_id = frame.id;
-                let taken_arm = frame.taken_arm_nodes.clone();
-                frame.merge_settled = true;
-                frame.phase = BranchPhase::Closed;
-                frame.pending_taken.clear();
-                effects.push(MergeEffect::Reuse {
-                    taken: taken_tip,
-                    reuse_from: reuse_suffix_from,
-                });
-                self.cancel_frame_taken_work(frame_id, &taken_arm);
-            }
-            MergeVerdict::Reject {
-                reason: RejectReason::InsufficientEvidence,
-            } => {
-                effects.push(MergeEffect::Rejected {
-                    taken: taken_tip,
-                    reason: RejectReason::InsufficientEvidence,
-                });
-                if frame.pending_taken.is_empty() {
-                    frame.phase = BranchPhase::Closed;
-                }
-            }
-            MergeVerdict::Reject {
-                reason: RejectReason::Counterexample,
-            } => {
-                frame.merge_settled = true;
-                frame.phase = BranchPhase::Closed;
-                frame.pending_taken.clear();
-                effects.push(MergeEffect::Rejected {
-                    taken: taken_tip,
-                    reason: RejectReason::Counterexample,
-                });
-            }
-            MergeVerdict::Escape { .. } => {
-                frame.merge_settled = true;
-                frame.phase = BranchPhase::Closed;
-                frame.pending_taken.clear();
-            }
-        }
-    }
-
-    fn cancel_frame_taken_work(&mut self, frame_id: u32, taken_arm: &HashSet<NodeId>) {
-        let mut kept = VecDeque::new();
-        while let Some(item) = self.items.pop_front() {
-            match item {
-                WorkItem::Ready(id) if taken_arm.contains(&id) => {}
-                WorkItem::BlockedTaken { frame, node }
-                    if frame == frame_id || taken_arm.contains(&node) => {}
-                other => kept.push_back(other),
-            }
-        }
-        self.items = kept;
-        // Drop cancelled ids from every frame pending set so nested frames opened on
-        // the Taken arm cannot keep the Agenda non-idle with stranded BlockedTaken.
-        for frame in &mut self.frames {
-            frame.pending_not_taken.retain(|id| !taken_arm.contains(id));
-            frame.pending_taken.retain(|id| !taken_arm.contains(id));
-            if frame.id != frame_id
-                && !frame.merge_settled
-                && frame.pending_not_taken.is_empty()
-                && frame.pending_taken.is_empty()
-                && matches!(
-                    frame.phase,
-                    BranchPhase::OpenNotTaken
-                        | BranchPhase::NotTakenDone
-                        | BranchPhase::OpenTaken
-                        | BranchPhase::MergeAttempted
-                )
-            {
-                frame.phase = BranchPhase::Closed;
-                frame.merge_settled = true;
-            }
-        }
-        self.scrub_closed_blocked();
-    }
-
-    fn scrub_closed_blocked(&mut self) {
-        let mut kept = VecDeque::new();
-        while let Some(item) = self.items.pop_front() {
-            match item {
-                WorkItem::BlockedTaken { frame, .. } if !self.frame_blocks_progress(frame) => {}
-                other => kept.push_back(other),
-            }
-        }
-        self.items = kept;
-    }
 
     fn advance_frames(
         &mut self,
         records: &mut RecordStore,
-        merge: &MergePort,
         node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
-        effects: &mut Vec<MergeEffect>,
+        _effects: &mut Vec<MergeEffect>,
     ) {
         let n = self.frames.len();
         let mut unblock: Vec<u32> = Vec::new();
@@ -636,15 +558,8 @@ impl Agenda {
                     let history_t = HistoryShell::from_arm(cb, jb_doc, Dir::Taken, t_root);
                     let _ = records.alloc(history_t.records[0].clone());
                     self.frames[i].history_t = Some(history_t);
-                    self.frames[i].phase = BranchPhase::MergeAttempted;
-                    let tip = self.frames[i]
-                        .taken_tip
-                        .or(self.frames[i].taken_root)
-                        .unwrap_or(cb);
-                    self.try_merge_at_tip(i, tip, merge, node_lookup, effects);
-                    if self.frames[i].phase != BranchPhase::Closed {
-                        self.frames[i].phase = BranchPhase::Closed;
-                    }
+                    self.frames[i].phase = BranchPhase::Closed;
+                    self.frames[i].merge_settled = true;
                 }
                 _ => {}
             }
@@ -690,7 +605,6 @@ fn union_preds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::merge::{MergePort, MergeVerdict, RejectReason};
 
     fn stub_lookup(id: NodeId) -> Option<ConfigSnapshot> {
         Some(ConfigSnapshot {
@@ -709,16 +623,12 @@ mod tests {
         assert!(agenda.ready_heads(8).contains(&1));
         assert!(!agenda.ready_heads(8).contains(&2));
         let mut records = RecordStore::default();
-        let merge = MergePort::fixed(MergeVerdict::Reject {
-            reason: RejectReason::InsufficientEvidence,
-        });
         let mut effects = Vec::new();
         agenda.on_successors(
             1,
             "0",
             &[],
             &mut records,
-            &merge,
             &stub_lookup,
             &mut effects,
         );
@@ -730,41 +640,20 @@ mod tests {
     fn merge_step_merged_stops_taken_suffix_queue() {
         let mut agenda = Agenda::default();
         agenda.open_branch(1, 0, 1, 2);
-        let merge_insufficient = MergePort::fixed(MergeVerdict::Reject {
-            reason: RejectReason::InsufficientEvidence,
-        });
         let mut records = RecordStore::default();
         let mut effects = Vec::new();
-        agenda.on_successors(
-            1,
-            "0",
-            &[],
-            &mut records,
-            &merge_insufficient,
-            &stub_lookup,
-            &mut effects,
-        );
-        let merge_merged = MergePort::fixed(MergeVerdict::Merged {
-            reuse_suffix_from: 1,
-        });
+        agenda.on_successors(1, "0", &[], &mut records, &stub_lookup, &mut effects);
         agenda.on_successors(
             2,
             "0",
-            &[(Dir::Ok, 3, "1".into())],
+            &[(Dir::Ok, 3, "2".into())],
             &mut records,
-            &merge_merged,
             &stub_lookup,
             &mut effects,
         );
-        assert_eq!(agenda.frames[0].phase, BranchPhase::Closed);
-        assert_eq!(
-            effects,
-            vec![crate::driver::merge::MergeEffect::Reuse {
-                taken: 2,
-                reuse_from: 1,
-            }]
-        );
-        assert!(!agenda.ready_ids().contains(&3));
+        assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
+        assert!(effects.is_empty());
+        assert!(agenda.ready_ids().contains(&3));
     }
 
     /// just_drop-shaped nest: outer NT walks through an inner branch before the
@@ -774,9 +663,6 @@ mod tests {
         let mut agenda = Agenda::default();
         // Outer: cb=12, NT=14, T=13 (node ids mirror the captured just_drop graph).
         agenda.open_branch(12, 12, 14, 13);
-        let merge_reject = MergePort::fixed(MergeVerdict::Reject {
-            reason: RejectReason::InsufficientEvidence,
-        });
         let mut records = RecordStore::default();
         let mut effects = Vec::new();
 
@@ -785,7 +671,6 @@ mod tests {
             "12",
             &[(Dir::Ok, 16, "13".into())],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -800,7 +685,6 @@ mod tests {
                 (Dir::NotTaken, 19, "14".into()),
             ],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -817,8 +701,7 @@ mod tests {
                 "14",
                 &[(Dir::Ok, child, "15".into())],
                 &mut records,
-                &merge_reject,
-                &stub_lookup,
+                    &stub_lookup,
                 &mut effects,
             );
             assert_eq!(agenda.frames[0].phase, BranchPhase::OpenNotTaken);
@@ -828,7 +711,6 @@ mod tests {
             "18",
             &[],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -839,15 +721,11 @@ mod tests {
         assert_eq!(agenda.frames[0].phase, BranchPhase::OpenTaken);
         assert!(agenda.ready_ids().contains(&13));
 
-        let merge_merged = MergePort::fixed(MergeVerdict::Merged {
-            reuse_suffix_from: 31,
-        });
         agenda.on_successors(
             13,
             "14",
             &[(Dir::Ok, 30, "18".into())],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -857,17 +735,10 @@ mod tests {
             "18",
             &[],
             &mut records,
-            &merge_merged,
             &stub_lookup,
             &mut effects,
         );
-        assert_eq!(
-            effects,
-            vec![crate::driver::merge::MergeEffect::Reuse {
-                taken: 30,
-                reuse_from: 31,
-            }]
-        );
+        assert!(effects.is_empty());
     }
 
     /// Outer Taken opens a nested branch whose join tip lies on nested NotTaken
@@ -876,9 +747,6 @@ mod tests {
     fn nested_not_taken_on_outer_taken_reaches_merge_tip() {
         let mut agenda = Agenda::default();
         agenda.open_branch(12, 12, 14, 13);
-        let merge_reject = MergePort::fixed(MergeVerdict::Reject {
-            reason: RejectReason::InsufficientEvidence,
-        });
         let mut records = RecordStore::default();
         let mut effects = Vec::new();
 
@@ -887,7 +755,6 @@ mod tests {
             "12",
             &[(Dir::Ok, 22, "18".into())],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -896,7 +763,6 @@ mod tests {
             "18",
             &[],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -907,7 +773,6 @@ mod tests {
             "14",
             &[(Dir::Ok, 33, "15".into())],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -919,7 +784,6 @@ mod tests {
                 (Dir::NotTaken, 39, "16".into()),
             ],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
@@ -931,29 +795,18 @@ mod tests {
             "16",
             &[(Dir::Ok, 49, "18".into())],
             &mut records,
-            &merge_reject,
             &stub_lookup,
             &mut effects,
         );
-        let merge_merged = MergePort::fixed(MergeVerdict::Merged {
-            reuse_suffix_from: 22,
-        });
         effects.clear();
         agenda.on_successors(
             49,
             "18",
             &[],
             &mut records,
-            &merge_merged,
             &stub_lookup,
             &mut effects,
         );
-        assert_eq!(
-            effects,
-            vec![crate::driver::merge::MergeEffect::Reuse {
-                taken: 49,
-                reuse_from: 22,
-            }]
-        );
+        assert!(effects.is_empty());
     }
 }

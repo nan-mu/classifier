@@ -1,4 +1,4 @@
-# MapLookup谓词
+# MapLookup观察
 
 ## 类型定义
 
@@ -35,7 +35,7 @@ MapLookup 解释为查询调用事件：
 
 ## 生成条件
 
-[共同参数取源](Helper谓词.md#生成条件)成功后，令 \(t_m=t_1\)，\(L_k=L_k(t_m;\mathcal L)\)，其中 \(\mathcal L,w\) 是共同规则给定的布局与载体。调用时 \(t_m\) 唯一指向的 Map 对象布局须给出键字节长度 \(L_k\)，且键地址项 \(t_2\) 指向的对象须满足该长度的读取条件。\(\vec k=\operatorname{readBytes}(E_g,t_2,L_k,\mathcal L,w)\) 有定义时，生成完整事件 \(\operatorname{mapLookup}(\varepsilon,t_m,\vec k)\)。键的冻结与后续覆写行为见[调用时的字节读取](Helper谓词.md#调用时的字节读取)。调用的返回效果按[lookup 返回关联](Helper谓词.md#生成的-expr)处理。
+[共同参数取源](Helper谓词.md#生成条件)成功后，令 \(t_m=t_1\)，\(L_k=L_k(t_m;\mathcal L)\)，其中 \(\mathcal L,w\) 是共同规则给定的布局与载体。调用时 \(t_m\) 唯一指向的 Map 对象布局须给出键字节长度 \(L_k\)，且键地址项 \(t_2\) 指向的对象须满足该长度的读取条件。\(\vec k=\operatorname{readBytes}(\bar{E}_g,t_2,L_k,\mathcal L,w)\) 有定义时，生成完整事件 \(\operatorname{mapLookup}(\varepsilon,t_m,\vec k)\)。键的冻结与后续覆写行为见[调用时的字节读取](Helper谓词.md#调用时的字节读取)。调用的返回效果按[lookup 返回关联](Helper谓词.md#生成的-expression)处理。
 
 ### 错误类型
 
@@ -52,6 +52,6 @@ MapLookup 解释为查询调用事件：
 
 ## 相关文档
 
-- [lookup 返回关联](Helper谓词.md#生成的-expr)：返回项与 Map 关联。
+- [lookup 返回关联](Helper谓词.md#生成的-expression)：返回项与 Map 关联。
 - [寄存器标记的身份](../寄存器定义.md#寄存器定义)：Map 对象、条目及单元身份。
 - [Helper 共同约定](Helper谓词.md#类型定义)：分派参数位置、调用身份、字节项数组及解释参数。
