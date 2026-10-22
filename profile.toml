@@ -36,7 +36,7 @@ expect = "weak"
 name = "firewall"
 elf = "firewall/firewall.elf"
 bpf = "firewall/bpf.o"
-expect = "fail"
+expect = "weak"
 
 [[program]]
 name = "fletcher32"
@@ -48,7 +48,7 @@ expect = "weak"
 name = "helper_loop"
 elf = "helper_loop/helper_loop.elf"
 bpf = "helper_loop/bpf.o"
-expect = "fail"
+expect = "weak"
 
 [[program]]
 name = "incr"
@@ -60,7 +60,7 @@ expect = "weak"
 name = "just_tx"
 elf = "just_tx/just_tx.elf"
 bpf = "just_tx/bpf.o"
-expect = "fail"
+expect = "weak"
 
 [[program]]
 name = "memcpy"
