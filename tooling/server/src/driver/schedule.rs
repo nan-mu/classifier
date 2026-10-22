@@ -532,23 +532,18 @@ impl Agenda {
         node_lookup: &impl Fn(NodeId) -> Option<ConfigSnapshot>,
         _effects: &mut Vec<MergeEffect>,
     ) {
-        let n = self.frames.len();
         let mut unblock: Vec<u32> = Vec::new();
-        for i in 0..n {
-            match self.frames[i].phase {
-                BranchPhase::OpenNotTaken if self.frames[i].pending_not_taken.is_empty() => {
-                    let frame_id = self.frames[i].id;
-                    let cb = self.frames[i].cb;
-                    let jb_doc = self.frames[i].jb_doc;
-                    let nt_root = self.frames[i].not_taken_root.unwrap_or(cb);
-                    let nt_ids: Vec<NodeId> = self.frames[i]
-                        .not_taken_candidates
-                        .iter()
-                        .copied()
-                        .collect();
+        for frame in &mut self.frames {
+            match frame.phase {
+                BranchPhase::OpenNotTaken if frame.pending_not_taken.is_empty() => {
+                    let frame_id = frame.id;
+                    let cb = frame.cb;
+                    let jb_doc = frame.jb_doc;
+                    let nt_root = frame.not_taken_root.unwrap_or(cb);
+                    let nt_ids: Vec<NodeId> = frame.not_taken_candidates.iter().copied().collect();
                     if let Some(branch) = node_lookup(cb) {
                         let path_preds = union_preds(&nt_ids, node_lookup);
-                        self.frames[i].history_regs = Some(history::registers_outliving_branch(
+                        frame.history_regs = Some(history::registers_outliving_branch(
                             &branch.exprs,
                             &branch.predicates,
                             &path_preds,
@@ -556,22 +551,22 @@ impl Agenda {
                     }
                     let history_n = HistoryShell::from_arm(cb, jb_doc, Dir::NotTaken, nt_root);
                     let _ = records.alloc(history_n.records[0].clone());
-                    self.frames[i].history_n = Some(history_n);
-                    self.frames[i].phase = BranchPhase::NotTakenDone;
-                    self.frames[i].phase = BranchPhase::OpenTaken;
+                    frame.history_n = Some(history_n);
+                    frame.phase = BranchPhase::NotTakenDone;
+                    frame.phase = BranchPhase::OpenTaken;
                     unblock.push(frame_id);
                 }
                 BranchPhase::OpenTaken
-                    if self.frames[i].pending_taken.is_empty() && !self.frames[i].merge_settled =>
+                    if frame.pending_taken.is_empty() && !frame.merge_settled =>
                 {
-                    let cb = self.frames[i].cb;
-                    let jb_doc = self.frames[i].jb_doc;
-                    let t_root = self.frames[i].taken_root.unwrap_or(cb);
+                    let cb = frame.cb;
+                    let jb_doc = frame.jb_doc;
+                    let t_root = frame.taken_root.unwrap_or(cb);
                     let history_t = HistoryShell::from_arm(cb, jb_doc, Dir::Taken, t_root);
                     let _ = records.alloc(history_t.records[0].clone());
-                    self.frames[i].history_t = Some(history_t);
-                    self.frames[i].phase = BranchPhase::Closed;
-                    self.frames[i].merge_settled = true;
+                    frame.history_t = Some(history_t);
+                    frame.phase = BranchPhase::Closed;
+                    frame.merge_settled = true;
                 }
                 _ => {}
             }
