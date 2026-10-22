@@ -77,7 +77,7 @@ private def place (progLen : Nat) (σ : SemState) (c : Candidate) :
       if k ≥ progLen then
         .error .unboundTarget
       else do
-        let state ← applyLocal σ c.E_k c.P_k
+        let state ← applyLocal σ c.E_k c.P_k c.memWrites
         pure (some (k, state))
 
 private def asStandard (loopsLeft : Option Nat) (placed : Option (Nat × SemState)) : DriveResult :=
@@ -154,7 +154,7 @@ private def eq0 (n : Nat) : List Expr :=
   [Expr.mkEq r0 (.const .w32 n)]
 
 private def state (n : Nat) : SemState :=
-  ⟨eq0 n, []⟩
+  ⟨eq0 n, [], .empty⟩
 
 private def go (j : Nat) (dir : Direction) : Candidate :=
   { dir, loc := .pos j, E_k := [], P_k := [] }

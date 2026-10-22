@@ -7,6 +7,7 @@ namespace Core
 structure ExprEffect where
   inputs : List Expr := []
   updates : List Expr := []
+  writes : List MemWrite := []
   deriving Inhabited, Repr
 
 def ExprEffect.delta (effect : ExprEffect) : List Expr :=
@@ -153,6 +154,16 @@ def packetOffsetFrom (E : List Expr) (t : Term) : Option PacketOffset :=
           (fun a => .lshr a k) <$> packetOffsetFrom E a
         else none
       | none => none
+    -- A materialized numeric packet byte is `inputByte` at `base + n`.
+    -- Its leaf is that byte offset, the same role a packet-register alpha had.
+    | .app _ (.inputByte _) [base, address] =>
+      let disp : Term → Option Nat
+        | a => if a == base then some 0 else
+          match a with
+          | .app _ (.add _) [b, .const _ n]
+          | .app _ (.add _) [.const _ n, b] => if b == base then some (MNat 32 n) else none
+          | _ => none
+      (.packet ·) <$> disp address
     | _ => none
 termination_by sizeOf t
 

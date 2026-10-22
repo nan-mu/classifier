@@ -3,6 +3,7 @@ import Core.Reg
 import Core.Numeric
 import Core.Op
 import Core.Term
+import Core.BitMem
 import Core.MapLayout
 import Core.Expr
 import Core.Anchor

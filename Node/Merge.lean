@@ -118,7 +118,7 @@ private def snapshot (label : String) (j : Lean.Json) :
     throw ("InvalidSnapshot:" ++ label)
   if !state.exprs.all (fun e => validRel e.reg.width e.rel && validTerm e.term) then
     throw ("InvalidTerm:" ++ label)
-  pure (id, ⟨loc, ⟨state.exprs, parsedPredicates⟩⟩)
+  pure (id, ⟨loc, { exprs := state.exprs, predicates := parsedPredicates, mem := state.mem }⟩)
 
 /-- Validate all evidence before selecting the first exactly equal ordered suffix entry.
 Snapshots are already-applied global states. Position validity, common origin, history,
@@ -384,8 +384,8 @@ private def mergeMixedPredicates : List Predicate :=
    .packetWrite 9 2 0 32 (Term.V32 5)]
 
 private def mergeMixedRequest (a b : List Predicate) (model : String := "FiveClass") : String :=
-  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨Expr.nil, a⟩)
-    (mergeStateSnapshotFixture 17 "1" ⟨Expr.nil, b⟩)
+  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨Expr.nil, a, .empty⟩)
+    (mergeStateSnapshotFixture 17 "1" ⟨Expr.nil, b, .empty⟩)
     (if model == "HelperOnly" then "[\"Helper\"]" else mergeFiveClassRequirements) model
 
 private def mergeMixedSetCheck : Bool :=
@@ -394,8 +394,8 @@ private def mergeMixedSetCheck : Bool :=
     mergeReuses (mergeMixedRequest ps ps.reverse "HelperOnly") 17 42 &&
     match mergePredicate [ps[0]!, ps[1]!] (ps.reverse ++ ps) with
     | .ok result => result == [ps[0]!, ps[1]!, ps[4]!, ps[3]!, ps[2]!] &&
-      ExactMerge.sameConfig ⟨.pos 1, ⟨Expr.nil, result⟩⟩
-        ⟨.pos 1, ⟨Expr.nil, ps⟩⟩
+      ExactMerge.sameConfig ⟨.pos 1, ⟨Expr.nil, result, .empty⟩⟩
+        ⟨.pos 1, ⟨Expr.nil, ps, .empty⟩⟩
     | .error _ => false
 
 private def mergeChangedClassFieldCheck : Bool :=
@@ -479,8 +479,8 @@ private def mergeJustDropOverwriteCheck : Bool :=
       (addStar .w32 (Term.V32 4) (Term.C32 14)))
     |>.insertConstraint (Expr.mkRel (Reg.real32 10) .geu
       (addStar .w32 (Term.V32 4) (Term.C32 18)))
-  let taken : SemState := ⟨common.insertEq a3 (Term.C32 43144), []⟩
-  let notTaken : SemState := ⟨common.insertEq a3 (Term.C32 129), []⟩
+  let taken : SemState := ⟨common.insertEq a3 (Term.C32 43144), [], .empty⟩
+  let notTaken : SemState := ⟨common.insertEq a3 (Term.C32 129), [], .empty⟩
   -- ADDI a3,zero,18 at wire loc17 contributes this local value effect.
   let localExprs := Expr.nil.insertEq a3 (Term.C32 18)
   match Node.applyLocal taken localExprs [], Node.applyLocal notTaken localExprs [] with
@@ -511,8 +511,8 @@ private def mergeComplementaryOverwriteCheck : Bool :=
   [Rel.eq, .ltu].all fun rel =>
     let condition := Expr.mkRel compared rel (Term.C32 10)
     let complement := Expr.mkRel compared rel.compl (Term.C32 10)
-    let taken : SemState := ⟨common.insertConstraint condition, []⟩
-    let notTaken : SemState := ⟨common.insertConstraint complement, []⟩
+    let taken : SemState := ⟨common.insertConstraint condition, [], .empty⟩
+    let notTaken : SemState := ⟨common.insertConstraint complement, [], .empty⟩
     let request (a b : SemState) := mergeRequestFixture (mergeStateSnapshotFixture 42 "17" a)
       (mergeStateSnapshotFixture 17 "17" b)
     let overwrite := Expr.nil.insertEq compared (Term.C32 18)

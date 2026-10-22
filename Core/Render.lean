@@ -126,7 +126,33 @@ def renderExprsJson (E : List Expr) : String :=
 def renderPredicatesJson (ps : List Predicate) : String :=
   String.intercalate "," (ps.map renderPredicateJson)
 
+def renderSliceJson : Slice → String
+  | .const w v => s!"\{\"k\":\"c\",\"w\":{w},\"v\":{v}}"
+  | .proj w source shift =>
+      s!"\{\"k\":\"p\",\"w\":{w},\"tw\":{source.width.bits},\"t\":\"{renderTermAt source.width source}\",\"s\":{shift}}"
+
+def renderSlotJson : BitSlot → String
+  | .stack => "\"slot\":\"stack\""
+  | .packet => "\"slot\":\"packet\""
+  | .context field => s!"\"slot\":\"context\",\"field\":{field}"
+  | .map id key =>
+      let keys := String.intercalate "," (key.slices.map renderSliceJson)
+      s!"\"slot\":\"map\",\"map\":{id},\"key\":[{keys}]"
+
+def renderMemJson (mem : Mem) : String :=
+  let cells := mem.canonical.cells
+  String.intercalate "," (cells.map fun (slot, ps) =>
+    let pieces := String.intercalate "," (ps.map fun (start, s) =>
+      s!"\{\"start\":{start},\"slice\":{renderSliceJson s}}")
+    s!"\{\"role\":\"mem\",{renderSlotJson slot},\"pieces\":[{pieces}]}")
+
 def renderSemStateJson (σ : SemState) : String × String :=
-  (renderExprsJson σ.exprs, renderPredicatesJson σ.predicates)
+  let exprs := renderExprsJson σ.exprs
+  let mem := renderMemJson σ.mem
+  let body :=
+    if exprs.isEmpty then mem
+    else if mem.isEmpty then exprs
+    else exprs ++ "," ++ mem
+  (body, renderPredicatesJson σ.predicates)
 
 end Core

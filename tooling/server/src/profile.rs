@@ -3,11 +3,43 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Dual-arch outcome checked by `classifier test`.
+///
+/// `strict`: both sides complete, kind counts match, and branch expressions unify.
+/// `weak`: both sides complete and kind counts match, but some branch expression does not.
+/// `fail`: a side does not complete, or some segment's kind counts disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Expect {
+    Strict,
+    Weak,
+    Fail,
+}
+
+impl Expect {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "strict" => Some(Self::Strict),
+            "weak" => Some(Self::Weak),
+            "fail" => Some(Self::Fail),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Weak => "weak",
+            Self::Fail => "fail",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub name: String,
     pub elf: PathBuf,
     pub bpf: PathBuf,
+    pub expect: Expect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,8 +98,8 @@ pub fn find_file() -> Result<PathBuf, String> {
 
 pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
     let mut build_rel: Option<String> = None;
-    let mut programs: Vec<(String, String, String)> = Vec::new();
-    let mut cur: Option<(Option<String>, Option<String>, Option<String>)> = None;
+    let mut programs: Vec<(String, String, String, Expect)> = Vec::new();
+    let mut cur: Option<RawProgram> = None;
 
     for (lineno, raw) in text.lines().enumerate() {
         let line = strip_comment(raw).trim();
@@ -78,7 +110,7 @@ pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
             if let Some(done) = cur.take() {
                 programs.push(finish_program(done)?);
             }
-            cur = Some((None, None, None));
+            cur = Some(RawProgram::default());
             continue;
         }
         let (key, value) = split_assign(line).map_err(|e| format!("line {}: {e}", lineno + 1))?;
@@ -89,15 +121,16 @@ pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
                 }
                 build_rel = Some(unquote(value)?);
             }
-            "name" | "elf" | "bpf" => {
+            "name" | "elf" | "bpf" | "expect" => {
                 let slot = cur
                     .as_mut()
                     .ok_or_else(|| format!("line {}: {key} is outside [[program]]", lineno + 1))?;
                 let stored = unquote(value)?;
                 match key {
-                    "name" => slot.0 = Some(stored),
-                    "elf" => slot.1 = Some(stored),
-                    "bpf" => slot.2 = Some(stored),
+                    "name" => slot.name = Some(stored),
+                    "elf" => slot.elf = Some(stored),
+                    "bpf" => slot.bpf = Some(stored),
+                    "expect" => slot.expect = Some(stored),
                     _ => unreachable!(),
                 }
             }
@@ -114,22 +147,43 @@ pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
     let build = base.join(build_rel);
     let programs = programs
         .into_iter()
-        .map(|(name, elf, bpf)| Program {
+        .map(|(name, elf, bpf, expect)| Program {
             name,
             elf: build.join(elf),
             bpf: build.join(bpf),
+            expect,
         })
         .collect();
     Ok(Profile { build, programs })
 }
 
-fn finish_program(
-    slot: (Option<String>, Option<String>, Option<String>),
-) -> Result<(String, String, String), String> {
-    match slot {
-        (Some(name), Some(elf), Some(bpf)) if !name.is_empty() => Ok((name, elf, bpf)),
-        _ => Err("[[program]] needs name, elf, and bpf".into()),
+#[derive(Default)]
+struct RawProgram {
+    name: Option<String>,
+    elf: Option<String>,
+    bpf: Option<String>,
+    expect: Option<String>,
+}
+
+fn finish_program(slot: RawProgram) -> Result<(String, String, String, Expect), String> {
+    let RawProgram {
+        name,
+        elf,
+        bpf,
+        expect,
+    } = slot;
+    let (Some(name), Some(elf), Some(bpf)) = (name, elf, bpf) else {
+        return Err("[[program]] needs name, elf, bpf, and expect".into());
+    };
+    if name.is_empty() {
+        return Err("[[program]] needs name, elf, bpf, and expect".into());
     }
+    let Some(expect) = expect.as_deref().and_then(Expect::parse) else {
+        return Err(
+            "[[program]] expect must be \"strict\", \"weak\", or \"fail\"".into(),
+        );
+    };
+    Ok((name, elf, bpf, expect))
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -171,13 +225,13 @@ build = "../build"
 name = "just_tx"
 elf = "just_tx/just_tx.elf"
 bpf = "just_tx/bpf.o"
+expect = "weak"
 "#;
         let profile = parse(text, Path::new("/repo")).unwrap();
         assert_eq!(profile.build, Path::new("/repo/../build"));
         assert_eq!(profile.programs.len(), 1);
-        assert_eq!(
-            profile.get("just_tx").unwrap().elf,
-            Path::new("/repo/../build/just_tx/just_tx.elf")
-        );
+        let program = profile.get("just_tx").unwrap();
+        assert_eq!(program.elf, Path::new("/repo/../build/just_tx/just_tx.elf"));
+        assert_eq!(program.expect, Expect::Weak);
     }
 }

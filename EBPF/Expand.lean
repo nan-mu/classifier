@@ -57,7 +57,7 @@ def exportEbpfExpandCreate
         | some maps =>
           match Anchor.install σ0.exprs (entryRows p ++ lddwRows slots terms ++ maps) with
           | none => createFailJson .invalidEntry
-          | some exprs => runningJson ⟨exprs, σ0.predicates⟩
+          | some exprs => runningJson { σ0 with exprs }
     | _, _, _ => createFailJson .invalidEntry
 
 private def headFailJson (reason : RejectReason) : String :=
@@ -147,10 +147,12 @@ private def laterStepsCheck : Bool := Id.run do
   let .ok σ := buildE0 justTxEntry | return false
   let plainE := host justTxEntry σ.exprs
   let some markedE := Anchor.install plainE [(.lddw 34, Anchor.unboundLddw)] | return false
-  let plain := ebpfSnapshot I ⟨plainE, []⟩ 0 200 200
-  let marked := ebpfSnapshot I ⟨markedE, []⟩ 0 200 200
-  let (pexprs, ppreds) := renderSemStateJson ⟨plainE, []⟩
-  let (mexprs, mpreds) := renderSemStateJson ⟨markedE, []⟩
+  let plainState := { exprs := plainE, predicates := [], mem := σ.mem }
+  let markedState := { exprs := markedE, predicates := [], mem := σ.mem }
+  let plain := ebpfSnapshot I plainState 0 200 200
+  let marked := ebpfSnapshot I markedState 0 200 200
+  let (pexprs, ppreds) := renderSemStateJson plainState
+  let (mexprs, mpreds) := renderSemStateJson markedState
   return failedSlotCheck plain "UndefinedSrc" 38 &&
     failedSlotCheck marked "UnboundTarget" 34 &&
     exportEbpfBoundWordsSnapshot justTxProgram s!"[{pexprs}]" s!"[{ppreds}]" 200 200 == plain &&
@@ -240,11 +242,11 @@ private def budgetCheck : Bool := Id.run do
 #guard (decodeProgram justTxProgram)[36]? == some (.callHelper 1)
 #guard (decodeProgram justTxProgram)[57]? == some .exit
 #guard match ebpfStep (decodeProgram justTxProgram) 36 36
-    ⟨host justTxEntry Expr.nil, []⟩ with
+    ⟨host justTxEntry Expr.nil, [], .empty⟩ with
   | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep (decodeProgram justTxProgram) 57 57
-    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
+    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), [], .empty⟩ with
   | .candidates [c] => c.dir == .ok && c.loc == .exit &&
       c.E_k == Expr.nil && c.P_k == [.ret (Term.C64 1)]
   | _ => false
@@ -258,29 +260,36 @@ private def budgetCheck : Bool := Id.run do
 
 private def extendedInstructionFfiCheck : Bool := Id.run do
   let .ok initial := buildE0 justTxEntry | return false
+  let .ok mem := initial.mem.write .stack (508 * 8) ⟨[.const 32 0x11223380]⟩ | return false
   let E := host justTxEntry (initial.exprs.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
-    |>.insertEq (Reg.real64 2) (Term.C64 0x81)
-    |>.insertEq (stackUnitReg 0 0) (Term.C32 0x11223380))
-  let (exprs, preds) := renderSemStateJson ⟨E, []⟩
+    |>.insertEq (Reg.real64 2) (Term.C64 0x81))
+  let start := { exprs := E, predicates := [], mem := mem }
+  let (exprs, preds) := renderSemStateJson start
+  let stack := stackUnitReg 0 0
   let cases : List (UInt64 × Reg × Nat) :=
     [(0x0000000200000114, Reg.real64 1, 13),
       (0x00000000000821bc, Reg.real64 1, 0xffffff81),
       (0x00000010000002dc, Reg.real64 2, 0x8100),
-      (0x00000001fffc0a62, stackUnitReg 0 0, 1),
+      (0x00000001fffc0a62, stack, 1),
       (0x00000000fffca391, Reg.real64 3, 0xffffffffffffff80),
       (0x00000100fffca3d3, Reg.real64 3, 0x80),
-      (0x00000110fffc2ad3, stackUnitReg 0 0, 0x11223381)]
+      (0x00000110fffc2ad3, stack, 0x11223381)]
   for (word, reg, expected) in cases do
     let response := exportEbpfExpandStep #[word, 0x95] 11 0
       s!"[{exprs}]" s!"[{preds}]"
-    let state : SemState :=
-      ⟨E.override (Expr.nil.insertEq reg (Term.C reg.width expected)), []⟩
+    let updated := E.override (Expr.nil.insertEq reg (Term.C reg.width expected))
+    let state ← if reg == stack then
+        match mem.write .stack (508 * 8) ⟨[.const 32 expected]⟩ with
+        | .ok written => pure { start with mem := written }
+        | .error _ => pure start
+      else
+        pure { start with exprs := updated }
     if response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
       return false
   let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95] 11 0 s!"[{exprs}]" "[]"
-  let delta := Expr.nil.insertEq (stackUnitReg 0 0) (Term.C32 0x11223401)
-    |>.insertEq (Reg.real64 2) (Term.C64 0x11223380)
-  let state : SemState := ⟨E.override delta, []⟩
+  let .ok added := mem.write .stack (508 * 8) ⟨[.const 32 0x11223401]⟩ | return false
+  let updated := E.override (Expr.nil.insertEq (Reg.real64 2) (Term.C64 0x11223380))
+  let state := { start with exprs := updated, mem := added }
   return response ==
     s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}"
 

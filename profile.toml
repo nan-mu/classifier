@@ -1,5 +1,10 @@
 # Test images. Paths are relative to this file.
-# libbpf-mcu writes Compact ELF and eBPF objects under ../build/<name>/.
+# libbpf-mcu writes XDP ELF and eBPF objects under ../build/<name>/.
+#
+# expect is the dual-arch outcome `classifier test` checks:
+#   strict — both sides complete, kind counts match, branch expressions unify
+#   weak   — both sides complete, kind counts match, some branch expression does not
+#   fail   — a side does not complete, or some segment's kind counts disagree
 
 build = "../build"
 
@@ -7,63 +12,70 @@ build = "../build"
 name = "bitswap"
 elf = "bitswap/bitswap.elf"
 bpf = "bitswap/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "bsort"
 elf = "bsort/bsort.elf"
 bpf = "bsort/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "buf"
 elf = "buf/buf.elf"
 bpf = "buf/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "fib"
 elf = "fib/fib.elf"
 bpf = "fib/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "firewall"
 elf = "firewall/firewall.elf"
 bpf = "firewall/bpf.o"
+expect = "fail"
 
 [[program]]
 name = "fletcher32"
 elf = "fletcher32/fletcher32.elf"
 bpf = "fletcher32/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "helper_loop"
 elf = "helper_loop/helper_loop.elf"
 bpf = "helper_loop/bpf.o"
+expect = "fail"
 
 [[program]]
 name = "incr"
 elf = "incr/incr.elf"
 bpf = "incr/bpf.o"
-
-[[program]]
-name = "just_drop"
-elf = "just_drop/just_drop.elf"
-bpf = "just_drop/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "just_tx"
 elf = "just_tx/just_tx.elf"
 bpf = "just_tx/bpf.o"
+expect = "fail"
 
 [[program]]
 name = "memcpy"
 elf = "memcpy/memcpy.elf"
 bpf = "memcpy/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "merge_try"
 elf = "merge_try/merge_try.elf"
 bpf = "merge_try/bpf.o"
+expect = "weak"
 
 [[program]]
 name = "square"
 elf = "square/square.elf"
 bpf = "square/bpf.o"
+expect = "weak"

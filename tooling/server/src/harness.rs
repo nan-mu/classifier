@@ -55,6 +55,9 @@ pub struct Expect {
     pub status: Option<String>,
     #[serde(default)]
     pub compare_tree: Option<CompareExpect>,
+    /// Pass when a side does not finish, or the compare tree has a kind-count failure.
+    #[serde(default)]
+    pub accept_failure: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +66,11 @@ pub struct CompareExpect {
     pub fail: Option<u64>,
     #[serde(default)]
     pub fail_at_least: Option<u64>,
+    /// Exact number of compare nodes whose branch expressions do not unify.
+    #[serde(default)]
+    pub expr_incomplete: Option<u64>,
+    #[serde(default)]
+    pub expr_incomplete_at_least: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,11 +118,12 @@ impl SuiteReport {
     }
 }
 
-/// Dual-arch cases for every program in `profile.toml`. Budget 1024, compare fail 0.
+/// Dual-arch cases for every program in `profile.toml`.
+/// Each program's `expect` selects failure, a strict match, or a weak match.
 pub fn run_profile(programs: &[crate::profile::Program]) -> SuiteReport {
     let mut outcomes = Vec::new();
     for program in programs {
-        eprintln!("profile {}", program.name);
+        eprintln!("profile {} expect {}", program.name, program.expect.as_str());
         let spec = profile_case(program);
         let outcome = match run_case(&spec, Path::new(".")) {
             Ok(()) => CaseOutcome {
@@ -131,9 +140,10 @@ pub fn run_profile(programs: &[crate::profile::Program]) -> SuiteReport {
             },
         };
         eprintln!(
-            "profile {} {}",
+            "profile {} {} {}",
             program.name,
-            if outcome.ok { "ok" } else { "FAIL" }
+            if outcome.ok { "ok" } else { "FAIL" },
+            outcome.detail
         );
         outcomes.push(outcome);
     }
@@ -141,6 +151,20 @@ pub fn run_profile(programs: &[crate::profile::Program]) -> SuiteReport {
 }
 
 fn profile_case(program: &crate::profile::Program) -> CaseSpec {
+    use crate::profile::Expect;
+    let (compare, status, accept_failure) = match program.expect {
+        Expect::Strict => (
+            serde_json::json!({ "fail": 0, "expr_incomplete": 0 }),
+            Value::String("complete".into()),
+            false,
+        ),
+        Expect::Weak => (
+            serde_json::json!({ "fail": 0, "expr_incomplete_at_least": 1 }),
+            Value::String("complete".into()),
+            false,
+        ),
+        Expect::Fail => (Value::Null, Value::Null, true),
+    };
     let raw = serde_json::json!({
         "id": format!("profile.{}", program.name),
         "suite": "profile",
@@ -156,7 +180,12 @@ fn profile_case(program: &crate::profile::Program) -> CaseSpec {
             { "op": "run", "bind": "bpf" },
             { "op": "compare_tree", "left": "rv", "right": "bpf" }
         ],
-        "expect": { "kind": "pass", "status": "complete", "compare_tree": { "fail": 0 } },
+        "expect": {
+            "kind": "pass",
+            "status": status,
+            "compare_tree": compare,
+            "accept_failure": accept_failure,
+        },
     });
     serde_json::from_value(raw).expect("profile case")
 }
@@ -364,6 +393,26 @@ fn check_expect(
             if !last.ok {
                 return Err(format!("expected ok envelope, got error {:?}", last.error));
             }
+            if spec.expect.accept_failure {
+                let mut unfinished = Vec::new();
+                for (bind, id) in binds {
+                    let snap = kernel
+                        .snapshot_value(id)
+                        .ok_or_else(|| format!("missing snapshot {bind}"))?;
+                    let got = snap.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    if got != "complete" {
+                        let reason = snap.get("reason").cloned().unwrap_or(Value::Null);
+                        unfinished.push(format!("{bind} {got} {reason}"));
+                    }
+                }
+                let fails = count_match_fails(last);
+                if !unfinished.is_empty() || fails > 0 {
+                    return Ok(());
+                }
+                return Err(
+                    "expected a failed expand or a kind-count mismatch, got a match".into(),
+                );
+            }
             if spec.expect.kind == "fail"
                 && spec.expect.status.is_none()
                 && spec.expect.compare_tree.is_none()
@@ -416,6 +465,21 @@ fn check_expect(
                 if let Some(min) = ct.fail_at_least {
                     if fails < min {
                         return Err(format!("compare fail_at_least {min} got {fails}"));
+                    }
+                }
+                let incomplete = count_expr_incomplete(last);
+                if let Some(exact) = ct.expr_incomplete {
+                    if incomplete != exact {
+                        return Err(format!(
+                            "expr incomplete want {exact} got {incomplete}"
+                        ));
+                    }
+                }
+                if let Some(min) = ct.expr_incomplete_at_least {
+                    if incomplete < min {
+                        return Err(format!(
+                            "expr incomplete_at_least {min} got {incomplete}"
+                        ));
                     }
                 }
             }
@@ -473,6 +537,16 @@ fn fail_sample(env: &Envelope) -> String {
         ));
     }
     out
+}
+
+fn count_expr_incomplete(env: &Envelope) -> u64 {
+    let Some(nodes) = pointer(env, "/payload/nodes").and_then(|v| v.as_array()) else {
+        return 0;
+    };
+    nodes
+        .iter()
+        .filter(|n| n.get("exprStatus").and_then(|m| m.as_str()) == Some("incomplete"))
+        .count() as u64
 }
 
 fn count_match_fails(env: &Envelope) -> u64 {

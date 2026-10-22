@@ -178,9 +178,8 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
     assert_eq!(result["first"]["updates"].as_array().unwrap().len(), 1);
     assert_eq!(result["first"]["updates"][0]["reg"], "real32:14");
     assert!(result["store"]["inputs"].as_array().unwrap().is_empty());
-    assert_eq!(result["store"]["updates"].as_array().unwrap().len(), 2);
-    assert_eq!(term(&result["state"], "packet32:20"), "255"); // byte 5, resource 0
-    assert_eq!(term(&result["state"], "packet32:27"), "128"); // byte 6
+    assert!(result["store"]["updates"].as_array().unwrap().is_empty());
+    assert_eq!(result["store"]["writes"].as_array().unwrap().len(), 1);
     assert!(result["reload"]["inputs"].as_array().unwrap().is_empty());
     let old = term(&result["state"], "real32:14");
     let new = term(&result["state"], "real32:15");
@@ -191,12 +190,16 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
     assert!(!new.contains("add32(v32:4,6)"));
     assert_eq!(term(&result["state"], "real32:17"), "4294967295");
     assert_eq!(term(&result["state"], "real32:13"), "33023");
+    assert!(result["compressedStore"]["updates"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
-        result["compressedStore"]["updates"]
+        result["compressedStore"]["writes"]
             .as_array()
             .unwrap()
             .len(),
-        4
+        1
     );
     assert!(result["compressedRead"]["inputs"]
         .as_array()
@@ -211,11 +214,15 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
 #[test]
 fn rv32_stack_alias_subword_store_preserves_the_rest_of_the_word() {
     let result = rv32_case(1, 0xdd);
+    assert!(result["byte"]["updates"].as_array().unwrap().is_empty());
     assert_eq!(
-        term(&result["byte"]["updates"], "stack32:8589934592"),
+        result["byte"]["writes"][0]["pieces"][0]["slice"]["v"],
+        0xdd
+    );
+    assert_eq!(
+        term(&result["read"]["updates"], "real32:14"),
         0x1122_dd44u32.to_string()
     );
-    assert_eq!(term(&result["read"]["updates"], "real32:14"), "8925"); // 0x22dd
     assert_eq!(result["crossesRejected"], true);
 }
 

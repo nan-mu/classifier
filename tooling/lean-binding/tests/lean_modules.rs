@@ -115,9 +115,12 @@ fn rv32_expand_esp32c3_root_and_opening() {
     assert!(exprs
         .iter()
         .any(|e| e["reg"] == "real32:0" && e["term"] == "0"));
-    assert!(exprs
-        .iter()
-        .any(|e| e["reg"] == "context32:0" && e["term"] == "v32:4"));
+    assert!(exprs.iter().any(|e| {
+        e["role"] == "mem"
+            && e["slot"] == "context"
+            && e["field"] == 0
+            && e["pieces"][0]["slice"]["t"] == "v32:4"
+    }));
 
     // After first C_LW a2,0(a0): real32:12 = EntryVar.data (v32:4).
     let step1: serde_json::Value =

@@ -73,21 +73,38 @@ def buildRealE0 (p : EntryParams) : Except RejectReason (List Expr) := do
   if !Ereal.keysUnique then throw .invalidEntry
   pure Ereal
 
-/-- Values of the six bound xdp_md Context cells; no access Predicates are invented. -/
-def buildECtx0 (p : EntryParams) : List Expr :=
+/-- The six xdp_md fields. Field identity is the index, not an architecture base. -/
+def contextTerms (p : EntryParams) : List Term :=
   let tEnd := addStar .w32 p.tData p.tLen
-  let fields := [p.tData, tEnd, Term.C32 0, Term.C32 p.ιWifi, Term.C32 0, Term.C32 0]
-  ((List.range 6).zip fields).foldl
-    (fun E jt => E.insertEq (Reg.ctx32 (p.αCtx + jt.1)) jt.2) Expr.nil
+  [p.tData, tEnd, Term.C32 0, Term.C32 p.ιWifi, Term.C32 0, Term.C32 0]
 
-/-- E0 is the disjoint union of real-register and Context-cell Exprs; P0 is empty. -/
+private def putField (mem : Mem) (field : Nat) (t : Term) : Except RejectReason Mem := do
+  let tile ← match Tile.ofTerm t 32 with
+    | .ok tile => pure tile
+    | .error _ => throw .invalidEntry
+  match mem.write (.context field) 0 tile with
+  | .ok mem => pure mem
+  | .error _ => throw .invalidEntry
+
+/-- Context lives in memory. `αCtx` is not a field index. -/
+def writeContext (p : EntryParams) : Except RejectReason Mem := do
+  match contextTerms p with
+  | [t0, t1, t2, t3, t4, t5] => do
+      let mem ← putField .empty 0 t0
+      let mem ← putField mem 1 t1
+      let mem ← putField mem 2 t2
+      let mem ← putField mem 3 t3
+      let mem ← putField mem 4 t4
+      putField mem 5 t5
+  | _ => throw .invalidEntry
+
+/-- Real registers stay in `exprs`. The six context fields are `mem`. -/
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if ![p.tData, p.tLen].all leaf32 || p.ιWifi ≥ (1 <<< 32) then throw .invalidEntry
   let Ereal ← buildRealE0 p
-  let Ectx := buildECtx0 p
-  let E0 : List Expr := Ereal ++ Ectx
-  if !E0.keysUnique then throw .invalidEntry
-  pure ⟨E0, []⟩
+  if !Ereal.keysUnique then throw .invalidEntry
+  let mem ← writeContext p
+  pure ⟨Ereal, [], mem⟩
 
 /-- Entry state consumed by the existing Expand adapter. -/
 def entrySemState (p : EntryParams) : Except RejectReason SemState := buildE0 p

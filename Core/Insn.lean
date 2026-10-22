@@ -1,6 +1,7 @@
 import Core.Bits
 import Core.Expr
 import Core.Direction
+import Core.BitMem
 
 namespace Core
 
@@ -123,20 +124,21 @@ inductive Location where
   | exit
   deriving DecidableEq, BEq, Repr, Inhabited
 
-/-- Semantic state \(\sigma=(\mathcal E,\mathcal P)\). -/
+/-- Semantic state. `mem` is the virtual byte store. Real registers stay in `exprs`. -/
 structure SemState where
   exprs      : List Expr
   predicates : List Predicate
+  mem        : Mem := .empty
   deriving Repr, Inhabited
 
-def SemState.empty : SemState := ⟨Expr.nil, []⟩
+def SemState.empty : SemState := { exprs := Expr.nil, predicates := [], mem := .empty }
 
 theorem savedMapKey_expr_update (p : Predicate) (E updates : List Expr) :
-    (SemState.mk (E.override updates) [p]).predicates = [p] := rfl
+    (SemState.mk (E.override updates) [p] .empty).predicates = [p] := rfl
 
 theorem lookupKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
-    lookupKeyAt (SemState.mk (E.override updates) Pg).predicates event =
+    lookupKeyAt (SemState.mk (E.override updates) Pg .empty).predicates event =
       lookupKeyAt Pg event := rfl
 
 theorem lookupKeyAt_deterministic (Pg : List Predicate) (event : NodeId)

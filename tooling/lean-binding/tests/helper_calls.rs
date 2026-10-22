@@ -134,9 +134,15 @@ fn helper_pred(node: &Value) -> &Value {
         .expect("helper Predicate")
 }
 
-fn map_word_alpha(resource: u64, byte_offset: u64) -> u64 {
-    (resource + byte_offset) * (resource + byte_offset + 1) / 2 + byte_offset
+fn map_slots(node: &Value) -> Vec<&Value> {
+    node["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["role"] == "mem" && e["slot"] == "map")
+        .collect()
 }
+
 fn call_program(id: u32, form: usize) -> (Vec<u32>, usize, u32) {
     let mut words = vec![addi(8, 1, 0), addi(10, 0, id)];
     for reg in 11..=15 {
@@ -277,23 +283,19 @@ fn context_identity_survives_returns_and_adjust_tail_keeps_data_end() {
     let before = snapshot(&words, pos as u32);
     let s = snapshot(&words, pos as u32 + 1);
     assert!(term(&s["nodes"][pos + 1], 10).contains(&format!("externalResult{pos}_0")));
-    // Return-only projection does not rewrite data_end; stack SW bindings are unchanged.
-    // Return-only projection does not rewrite data_end (context32:1).
-    let before_end = before["nodes"][pos]["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["reg"] == "context32:1")
-        .unwrap()["term"]
-        .clone();
-    let after_end = s["nodes"][pos + 1]["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["reg"] == "context32:1")
-        .unwrap()["term"]
-        .clone();
-    assert_eq!(after_end, before_end);
+    let context = |node: &Value, field: u64| {
+        node["exprs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["role"] == "mem" && e["slot"] == "context" && e["field"] == field)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        context(&s["nodes"][pos + 1], 1),
+        context(&before["nodes"][pos], 1)
+    );
 }
 
 #[test]
@@ -315,8 +317,8 @@ fn a_loop_revisiting_the_same_helper_gets_new_events() {
 fn saved_context_is_used_by_compressed_and_narrow_loads() {
     for (load, reg, expected) in [
         (0x408c, 11, "v32:4"),
-        (0x0004c603, 12, "zext8/32(extract0,8(v32:4))"),
-        (0x0004d603, 12, "zext16/32(extract0,16(v32:4))"),
+        (0x0004c603, 12, "zext8/32(low8(v32:4))"),
+        (0x0004d603, 12, "zext16/32(low16(v32:4))"),
     ] {
         let words = vec![
             addi(9, 10, 0),
@@ -395,46 +397,34 @@ fn branch_constraints_are_overwritten_while_old_snapshots_and_helper_observation
 
 #[test]
 fn lookup_introduces_helper_predicate_and_map_regvar() {
-    let (mut words, pos, _) = call_program(1, 0);
-    let s = snapshot(&words, pos as u32 + 1);
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
+    let maps = &[lookup_map()];
+    let s = snapshot_maps(&words, pos as u32 + 1, maps);
     assert_eq!(s["status"], "running", "reason {}", s["reason"]);
     let after = &s["nodes"][pos + 1];
     let pred = helper_pred(after);
     assert_eq!(pred["helperId"], 1);
     assert_eq!(pred["event"], pos);
-    let alpha = map_word_alpha(pos as u64, 0);
-    let map = after["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["reg"] == format!("map32:{alpha}"))
-        .expect("mapWord binding");
-    assert!(
-        map["term"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("regVar{pos}(")),
-        "{}",
-        map["term"]
-    );
-    let original = map["term"].as_str().unwrap().to_owned();
+    let slots = map_slots(after);
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0]["map"], 11);
+    let piece = &slots[0]["pieces"][0];
+    assert_eq!(piece["start"], 0);
+    let original = piece["slice"]["t"].as_str().unwrap().to_owned();
+    assert!(original.starts_with(&format!("regVar{pos}(")), "{original}");
     words.splice(
         pos + 1..pos + 1,
         [addi(9, 10, 0), addi(10, 0, 5), load(12, 9, 0, 4, true)],
     );
-    let s = snapshot(&words, pos as u32 + 4);
+    let s = snapshot_maps(&words, pos as u32 + 4, maps);
     assert_eq!(s["status"], "running", "{}", s["reason"]);
     let after = &s["nodes"][pos + 4];
     assert_eq!(term(after, 12), original);
     assert_eq!(term(after, 10), "5");
-    let map = after["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["reg"] == format!("map32:{alpha}"))
-        .unwrap();
-    assert_eq!(map["term"], original, "Map LOAD must only write rd");
-    assert_eq!(snapshot(&words, 100)["status"], "complete");
+    let slots = map_slots(after);
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0]["pieces"][0]["slice"]["t"], original);
+    assert_eq!(snapshot_maps(&words, 100, maps)["status"], "complete");
 }
 
 #[test]
@@ -472,18 +462,12 @@ fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
     assert_eq!(term(exit, 15), "32768");
     assert_eq!(term(exit, 12), "2147483939"); // 0x80000123
     assert_eq!(term(exit, 16), "72745251"); // 0x04560123
-    let maps: Vec<_> = exit["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| e["reg"].as_str().unwrap().starts_with("map32:"))
-        .collect();
-    assert_eq!(maps.len(), 1);
-    assert_eq!(
-        maps[0]["reg"],
-        format!("map32:{}", map_word_alpha(pos as u64, 0))
-    );
-    assert_eq!(maps[0]["term"], "72745251");
+    let slots = map_slots(exit);
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0]["map"], 11);
+    assert_eq!(slots[0]["pieces"].as_array().unwrap().len(), 1);
+    assert_eq!(slots[0]["pieces"][0]["start"], 0);
+    assert_eq!(slots[0]["pieces"][0]["slice"]["v"], 72745251);
 }
 
 #[test]
@@ -552,40 +536,22 @@ fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
     assert_eq!(term(exit, 12), content);
     assert_eq!(term(exit, 14), content);
     assert_eq!(term(exit, 10), "5");
-    assert!(term(exit, 15).contains(&content), "{}", term(exit, 15));
-    assert!(term(exit, 16).contains(&format!("externalResult{pos}_3(1)")));
+    assert_eq!(term(exit, 15), "4294967168");
+    assert_eq!(term(exit, 16), "128");
     assert_eq!(term(exit, 17), "128");
     assert_eq!(term(exit, 18), "128");
-    let maps: Vec<_> = exit["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| e["reg"].as_str().unwrap().starts_with("map32:"))
-        .collect();
-    assert_eq!(maps.len(), 4);
-    for (offset, expected) in [
-        (0, format!("regVar{pos}(real32:10)")),
-        (4, "128".into()),
-        (12, "128".into()),
-    ] {
-        let map = maps
-            .iter()
-            .find(|e| e["reg"] == format!("map32:{}", map_word_alpha(pos as u64, offset)))
-            .unwrap();
-        assert_eq!(map["term"], expected);
-    }
-    let third = maps
-        .iter()
-        .find(|e| e["reg"] == format!("map32:{}", map_word_alpha(pos as u64, 8)))
-        .unwrap();
-    assert!(third["term"]
-        .as_str()
-        .unwrap()
-        .contains(&format!("externalResult{pos}_3(1)")));
-    assert!(!maps.iter().any(|e| e["term"]
-        .as_str()
-        .unwrap()
-        .contains(&format!("externalResult{pos}_4"))));
+    let slots = map_slots(exit);
+    assert_eq!(slots.len(), 1);
+    let pieces = slots[0]["pieces"].as_array().unwrap();
+    let at = |start: u64| pieces.iter().find(|p| p["start"] == start).unwrap();
+    assert_eq!(at(0)["slice"]["t"], format!("regVar{pos}(real32:10)"));
+    assert_eq!(at(32)["slice"]["v"], 128);
+    assert_eq!(at(32)["slice"]["w"], 32);
+    assert_eq!(at(72)["slice"]["v"], 128);
+    assert_eq!(at(72)["slice"]["w"], 8);
+    assert_eq!(at(96)["slice"]["v"], 128);
+    assert_eq!(at(96)["slice"]["w"], 32);
+    assert!(!pieces.iter().any(|p| p.to_string().contains("externalResult")));
 }
 
 #[test]
@@ -600,8 +566,10 @@ fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate(
             0xc0d4, // C.SW a3,4(s1), same word as C.LW.
             0x40d8, // C.LW a4,4(s1), current stored word.
             addi(10, 0, 1),
-            // 22 = byte length of the six insns above (4+2+4+2+2+4).
-            jal(1, 0x100 - (0x400 + pos as i32 * 4 + 22)),
+            addi(16, 12, 0),
+            addi(12, 2, 0),
+            // 30 = first jal (4) plus the eight insns before the second jal.
+            jal(1, 0x100 - (0x400 + pos as i32 * 4 + 30)),
             load(15, 10, 4, 4, true),
         ],
     );
@@ -614,10 +582,10 @@ fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate(
         .iter()
         .find(|n| n["loc"] == "exit")
         .unwrap();
-    assert_eq!(term(exit, 12), format!("externalResult{pos}_2(1)"));
+    assert_eq!(term(exit, 16), format!("externalResult{pos}_2(1)"));
     assert_eq!(term(exit, 14), "291");
-    assert!(term(exit, 15).contains("externalResult"));
-    assert_ne!(term(exit, 12), term(exit, 15));
+    assert_eq!(term(exit, 15), "291");
+    assert_ne!(term(exit, 16), term(exit, 15));
     assert_eq!(
         s,
         snapshot_maps(&words, 100, &[lookup_map()]),

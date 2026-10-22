@@ -23,6 +23,7 @@ export type ProfileProgram = {
   name: string;
   elf: string;
   bpf: string;
+  expect?: "strict" | "weak" | "fail";
 };
 
 export type CreateOpts = {

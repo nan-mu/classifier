@@ -25,12 +25,13 @@ structure RunGraph where
   root  : NodeId := 0
   deriving Repr, Inhabited
 
-/-- Local result of one candidate successor: the increments σ_k = (E_k, P_k). -/
+/-- Local result of one candidate successor. `memWrites` are applied onto `σ.mem`. -/
 structure Candidate where
   dir        : Direction
   loc        : Location
   E_k : List Expr
   P_k : List Predicate
+  memWrites : List MemWrite := []
   deriving Repr, Inhabited
 
 inductive RejectReason where
@@ -75,12 +76,15 @@ def mergePredicate (P Pi : List Predicate) : Except RejectReason (List Predicate
 
 /-- The caller applies this composition rule to the input state and a candidate's
 local result; step returns the increments, not the composed global state. -/
-def applyLocal (σ : SemState) (Ei : List Expr) (Pi : List Predicate) :
-    Except RejectReason SemState := do
+def applyLocal (σ : SemState) (Ei : List Expr) (Pi : List Predicate)
+    (writes : List MemWrite := []) : Except RejectReason SemState := do
   if !σ.exprs.keysUnique || !σ.exprs.wellTyped || !Ei.keysUnique || !Ei.wellTyped then
     throw .localReject
   let predicates ← mergePredicate σ.predicates Pi
-  pure ⟨updateExpr σ.exprs Ei Pi, predicates⟩
+  let mem ← match σ.mem.apply writes with
+    | .ok mem => pure mem
+    | .error _ => throw .localReject
+  pure { exprs := updateExpr σ.exprs Ei Pi, predicates, mem }
 
 def isExit : Location → Bool
   | .exit => true

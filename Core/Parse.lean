@@ -310,21 +310,68 @@ def parsePredicateJson (value : Lean.Json) : Option Predicate := do
     | _ => none
   if predicateWellFormed predicate then some predicate else none
 
+private def parseSliceJson (value : Lean.Json) : Option Slice := do
+  match ← jsonString value "k" with
+  | "c" =>
+    if !exactFields value ["k", "w", "v"] then none else
+      let slice := Slice.const (← jsonNat value "w") (← jsonNat value "v")
+      if slice.ok then some slice else none
+  | "p" =>
+    if !exactFields value ["k", "w", "tw", "t", "s"] then none else
+      let tw ← jsonWidth value "tw"
+      let term ← parseTerm (← jsonString value "t") tw
+      if term.width != tw then none else
+        let slice := Slice.proj (← jsonNat value "w") term (← jsonNat value "s")
+        if slice.ok then some slice else none
+  | _ => none
+
+private def parseMemRow (value : Lean.Json) : Option (List MemWrite) := do
+  let slotName ← jsonString value "slot"
+  let pieces ← (value.getObjVal? "pieces" >>= Lean.Json.getArr?).toOption
+  let slot ← match slotName with
+    | "stack" =>
+      if !exactFields value ["role", "slot", "pieces"] then none else pure BitSlot.stack
+    | "packet" =>
+      if !exactFields value ["role", "slot", "pieces"] then none else pure .packet
+    | "context" =>
+      if !exactFields value ["role", "slot", "field", "pieces"] then none else
+        pure (.context (← jsonNat value "field"))
+    | "map" =>
+      if !exactFields value ["role", "slot", "map", "key", "pieces"] then none else
+        let id ← jsonNat value "map"
+        let keys ← (value.getObjVal? "key" >>= Lean.Json.getArr?).toOption
+        let slices ← keys.toList.mapM parseSliceJson
+        let tile ← (normalizeTile ⟨slices⟩).toOption
+        pure (.map id tile)
+    | _ => none
+  pieces.toList.mapM fun piece => do
+    if !exactFields piece ["start", "slice"] then none else
+      let start ← jsonNat piece "start"
+      let slice ← parseSliceJson (← (piece.getObjVal? "slice").toOption)
+      pure ⟨slot, start, ⟨[slice]⟩⟩
+
 def parseSemStateJson (exprsJson predsJson : String) : Option SemState := do
   let exprs ← ((Lean.Json.parse exprsJson) >>= Lean.Json.getArr?).toOption
   let preds ← ((Lean.Json.parse predsJson) >>= Lean.Json.getArr?).toOption
-  let rows ← exprs.toList.mapM fun row => do
-    let expr ← parseExprJson row
-    let role ← match row.getObjVal? "role" with
-      | .error _ => some (expr.rel != .eq)
-      | .ok role => do
-        if (← role.getStr?.toOption) == "constraint" then some true else none
-    pure (expr, role)
+  let mut rows : List (Expr × Bool) := []
+  let mut writes : List MemWrite := []
+  for row in exprs.toList do
+    match row.getObjVal? "role" with
+    | .ok role =>
+      match ← role.getStr?.toOption with
+      | "mem" => writes := writes ++ (← parseMemRow row)
+      | "constraint" => rows := rows ++ [(← parseExprJson row, true)]
+      | _ => none
+    | .error _ =>
+      let expr ← parseExprJson row
+      rows := rows ++ [(expr, expr.rel != .eq)]
   let bindings := (rows.filter fun row => !row.2).map Prod.fst
   let constraints := (rows.filter fun row => row.2).map Prod.fst
   let E : List Expr := bindings ++ constraints
   if !E.keysUnique || !E.wellTyped then none else
-    pure ⟨E, ← preds.toList.mapM parsePredicateJson⟩
+    let mem ← (Mem.apply .empty writes).toOption
+    let predicates ← preds.toList.mapM parsePredicateJson
+    pure { exprs := E, predicates, mem := mem.canonical }
 
 private def parseRoundTripCheck : Bool :=
   let terms := [Term.C32 4294967295, Term.V32 12, Term.regVar 42 (Reg.real32 10),
@@ -520,6 +567,26 @@ private def fiveClassSemStateCheck : Bool :=
 #guard (parseSemStateJson "[]" "[{\"kind\":\"ret\",\"term\":\"2\"}]").isNone
 #guard parseRoundTripCheck
 #guard parseOpsRoundTripCheck
+#guard Id.run do
+  let .ok mem := Mem.write .empty .stack 0 ⟨[.proj 32 (Term.V32 7) 0]⟩ | return false
+  let .ok mem := mem.write .stack 8 ⟨[.const 8 0x11]⟩ | return false
+  let key : Tile := ⟨[.const 8 1, .const 8 2]⟩
+  let .ok mem := mem.write (.map 3 key) 0 ⟨[.const 8 9]⟩ | return false
+  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real64 1) (Term.V64 1), [], mem⟩
+  let (exprs, preds) := renderSemStateJson σ
+  match parseSemStateJson s!"[{exprs}]" s!"[{preds}]" with
+  | some σ' =>
+      σ'.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1) &&
+        σ'.mem.canonical == mem.canonical &&
+        match σ'.mem.read .stack 0 32, σ'.mem.read (.map 3 ⟨[.const 16 0x0201]⟩) 0 8 with
+        | .ok stack, .ok value =>
+            stack == ⟨[.proj 8 (Term.V32 7) 0, .const 8 0x11, .proj 16 (Term.V32 7) 16]⟩ &&
+              value == ⟨[.const 8 9]⟩
+        | _, _ => false
+  | none => false
+#guard (parseSemStateJson
+  "[{\"role\":\"mem\",\"slot\":\"stack\",\"pieces\":[{\"start\":0,\"slice\":{\"k\":\"c\",\"w\":7,\"v\":1}}]}]"
+  "[]").isNone
 #guard (parseSemStateJson "{}" "[]").isNone
 #guard (parseTerm "add32(v32:1,)").isNone
 #guard (parseReg "packet64:0").isNone

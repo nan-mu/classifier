@@ -172,6 +172,7 @@ async fn get_profile() -> Result<Json<serde_json::Value>, StatusCode> {
                 "name": p.name,
                 "elf": p.elf.display().to_string(),
                 "bpf": p.bpf.display().to_string(),
+                "expect": p.expect.as_str(),
             })
         })
         .collect();

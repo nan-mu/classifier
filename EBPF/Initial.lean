@@ -27,11 +27,20 @@ private def leaf (w : Width) : Term → Bool
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if !leaf .w64 p.tCtx || !leaf .w64 p.tSp || !leaf .w32 p.tData ||
       p.packetBytes ≥ (1 <<< 32) then throw .invalidEntry
+  let data ← match Tile.ofTerm p.tData 32 with
+    | .ok tile => pure tile
+    | .error _ => throw .invalidEntry
+  let ending ← match Tile.ofTerm (addStar .w32 p.tData (Term.C32 p.packetBytes)) 32 with
+    | .ok tile => pure tile
+    | .error _ => throw .invalidEntry
+  let mem ← match Mem.write .empty (.context 0) 0 data with
+    | .ok mem => pure mem
+    | .error _ => throw .invalidEntry
+  let mem ← match mem.write (.context 1) 0 ending with
+    | .ok mem => pure mem
+    | .error _ => throw .invalidEntry
   pure ⟨Expr.nil.insertEq (Reg.real64 1) p.tCtx
-    |>.insertEq (Reg.real64 10) p.tSp
-    |>.insertEq (Reg.ctx32 p.αCtx) p.tData
-    |>.insertEq (Reg.ctx32 (p.αCtx + 1))
-      (addStar .w32 p.tData (Term.C32 p.packetBytes)), []⟩
+    |>.insertEq (Reg.real64 10) p.tSp, [], mem⟩
 
 def entrySemState := buildE0
 
@@ -60,10 +69,13 @@ def host (p : EntryParams) (E : List Expr) (maps : List MapLayout := []) : List 
   | none => withEntry
 
 #guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 3, 4, 5⟩ with
-  | .ok σ => σ.exprs.lookupEq (Reg.ctx32 3) == some (Term.V32 2) &&
-      σ.exprs.lookupEq (Reg.ctx32 4) ==
-        some (addStar .w32 (Term.V32 2) (Term.C32 64)) &&
-      σ.exprs.lookupEq (Reg.ctx32 5) == none && σ.predicates.isEmpty
+  | .ok σ =>
+      match σ.mem.read (.context 0) 0 32, σ.mem.read (.context 1) 0 32 with
+      | .ok data, .ok ending =>
+          data == ⟨[.proj 32 (Term.V32 2) 0]⟩ &&
+            ending == ⟨[.proj 32 (addStar .w32 (Term.V32 2) (Term.C32 64)) 0]⟩ &&
+            (σ.exprs.lookupEq (Reg.ctx32 3)).isNone && σ.predicates.isEmpty
+      | _, _ => false
   | _ => false
 #guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V64 2, 64, 3, 4, 5⟩ with
   | .error .invalidEntry => true

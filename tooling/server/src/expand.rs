@@ -422,11 +422,22 @@ fn parse_exprs(n: &Value) -> Vec<ExprOut> {
         .as_array()
         .into_iter()
         .flatten()
-        .map(|e| ExprOut {
-            reg: e["reg"].as_str().unwrap_or("?").to_string(),
-            rel: e["rel"].as_str().unwrap_or("?").to_string(),
-            term: e["term"].as_str().unwrap_or("?").to_string(),
-            role: e["role"].as_str().map(str::to_owned),
+        .map(|e| {
+            if e["role"] == "mem" {
+                ExprOut {
+                    reg: e["slot"].as_str().unwrap_or("mem").to_string(),
+                    rel: "mem".into(),
+                    term: e["pieces"].to_string(),
+                    role: Some("mem".into()),
+                }
+            } else {
+                ExprOut {
+                    reg: e["reg"].as_str().unwrap_or("?").to_string(),
+                    rel: e["rel"].as_str().unwrap_or("?").to_string(),
+                    term: e["term"].as_str().unwrap_or("?").to_string(),
+                    role: e["role"].as_str().map(str::to_owned),
+                }
+            }
         })
         .collect()
 }
