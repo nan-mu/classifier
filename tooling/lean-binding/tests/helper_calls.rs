@@ -1,8 +1,33 @@
-use lean_binding::rv32;
+use lean_binding::rv32::{self, MapLayout};
 use serde_json::Value;
 
 fn addi(rd: u32, rs: u32, imm: u32) -> u32 {
     ((imm & 0xfff) << 20) | (rs << 15) | (rd << 7) | 0x13
+}
+fn load(rd: u32, base: u32, offset: u32, width: u32, unsigned: bool) -> u32 {
+    let funct3 = match (width, unsigned) {
+        (1, false) => 0,
+        (2, false) => 1,
+        (4, _) => 2,
+        (1, true) => 4,
+        (2, true) => 5,
+        _ => panic!("invalid load width"),
+    };
+    ((offset & 0xfff) << 20) | (base << 15) | (funct3 << 12) | (rd << 7) | 0x03
+}
+fn store(base: u32, source: u32, offset: u32, width: u32) -> u32 {
+    let funct3 = match width {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        _ => panic!("invalid store width"),
+    };
+    ((offset & 0xfe0) << 20)
+        | (source << 20)
+        | (base << 15)
+        | (funct3 << 12)
+        | ((offset & 0x1f) << 7)
+        | 0x23
 }
 fn jal(rd: u32, delta: i32) -> u32 {
     let n = delta as u32;
@@ -25,13 +50,71 @@ fn cj(delta: i32, link: bool) -> u32 {
         | ((n >> 5 & 1) << 2);
     bits | if link { 0x2001 } else { 0xa001 }
 }
-fn snapshot(words: &[u32], steps: u32) -> Value {
+fn snapshot_maps(words: &[u32], steps: u32, maps: &[MapLayout]) -> Value {
+    let ids: Vec<u32> = maps.iter().map(|m| m.map_id).collect();
+    let keys: Vec<u32> = maps.iter().map(|m| m.key_size).collect();
+    let vals: Vec<u32> = maps.iter().map(|m| m.value_size).collect();
+    let root: Value = serde_json::from_str(&rv32::expand_create(
+        0x400, 0x100, 0x2000, &ids, &keys, &vals,
+    ))
+    .unwrap();
+    let node = &root["nodes"][0];
     serde_json::from_str(&rv32::expand_bound_words_snapshot(
-        words, 0x400, 0x100, steps, 100,
+        words,
+        &node["exprs"].to_string(),
+        &node["predicates"].to_string(),
+        steps,
+        100,
     ))
     .unwrap()
 }
-fn term<'a>(node: &'a Value, reg: u32) -> &'a str {
+
+fn snapshot(words: &[u32], steps: u32) -> Value {
+    snapshot_maps(words, steps, &[])
+}
+
+/// call_program sets a1=11; the installed layout must match that Map id.
+fn lookup_map() -> MapLayout {
+    MapLayout {
+        map_id: 11,
+        key_size: 4,
+        value_size: 32,
+    }
+}
+
+/// Lookup call with a 4-byte key at `[sp]` and `a2 = sp` (jal offset computed after setup).
+fn call_program_lookup_keyed(form: usize) -> (Vec<u32>, usize, u32) {
+    let mut words = vec![addi(8, 1, 0), addi(10, 0, 1)];
+    for reg in 11..=15 {
+        words.push(addi(reg, 0, reg));
+    }
+    words.extend([addi(13, 0, 0x101), store(2, 13, 0, 4), addi(12, 2, 0)]);
+    if form >= 2 {
+        words.push(addi(1, 0, 0x101));
+    }
+    let position = words.len();
+    let pc = 0x400 + position as u32 * 4;
+    let call = match form {
+        0 => jal(1, 0x100 - pc as i32),
+        1 => cj(0x100 - pc as i32, true),
+        2 => 0x000080e7,
+        _ => 0x9082,
+    };
+    let next = pc + if form == 1 || form == 3 { 2 } else { 4 };
+    words.extend([call, addi(1, 8, 0), 0x00008067]);
+    (words, position, next)
+}
+
+fn has_map_write(s: &Value) -> bool {
+    s["nodes"].as_array().unwrap().iter().any(|n| {
+        n["predicates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["kind"] == "mapWrite")
+    })
+}
+fn term(node: &Value, reg: u32) -> &str {
     node["exprs"]
         .as_array()
         .unwrap()
@@ -42,7 +125,7 @@ fn term<'a>(node: &'a Value, reg: u32) -> &'a str {
         .unwrap()
 }
 
-fn helper_pred<'a>(node: &'a Value) -> &'a Value {
+fn helper_pred(node: &Value) -> &Value {
     node["predicates"]
         .as_array()
         .unwrap()
@@ -51,9 +134,15 @@ fn helper_pred<'a>(node: &'a Value) -> &'a Value {
         .expect("helper Predicate")
 }
 
-fn map_word_alpha(resource: u64, byte_offset: u64) -> u64 {
-    (resource + byte_offset) * (resource + byte_offset + 1) / 2 + byte_offset
+fn map_slots(node: &Value) -> Vec<&Value> {
+    node["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["role"] == "mem" && e["slot"] == "map")
+        .collect()
 }
+
 fn call_program(id: u32, form: usize) -> (Vec<u32>, usize, u32) {
     let mut words = vec![addi(8, 1, 0), addi(10, 0, id)];
     for reg in 11..=15 {
@@ -89,19 +178,20 @@ fn all_link_call_forms_resume_and_preserve_abi() {
         // Return-only projection: only a0 is overwritten.
         assert!(term(after, 10).contains(&format!("externalResult{pos}_0")));
         for r in [5, 6, 7, 11, 12, 13, 14, 15, 16, 17, 28, 29, 30, 31] {
-            let before_t = before["exprs"].as_array().unwrap().iter().find(|e| {
-                e["reg"] == format!("real32:{r}") && e["rel"] == "eq"
-            });
-            let after_t = after["exprs"].as_array().unwrap().iter().find(|e| {
-                e["reg"] == format!("real32:{r}") && e["rel"] == "eq"
-            });
+            let before_t = before["exprs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["reg"] == format!("real32:{r}") && e["rel"] == "eq");
+            let after_t = after["exprs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["reg"] == format!("real32:{r}") && e["rel"] == "eq");
             match (before_t, after_t) {
                 (Some(b), Some(a)) => assert_eq!(a["term"], b["term"], "form {form} r{r}"),
                 (None, None) => {}
-                (None, Some(a)) => panic!(
-                    "form {form} invented r{r} binding {}",
-                    a["term"]
-                ),
+                (None, Some(a)) => panic!("form {form} invented r{r} binding {}", a["term"]),
                 (Some(_), None) => panic!("form {form} dropped r{r} binding"),
             }
         }
@@ -193,22 +283,19 @@ fn context_identity_survives_returns_and_adjust_tail_keeps_data_end() {
     let before = snapshot(&words, pos as u32);
     let s = snapshot(&words, pos as u32 + 1);
     assert!(term(&s["nodes"][pos + 1], 10).contains(&format!("externalResult{pos}_0")));
-    // Return-only projection does not rewrite data_end; stack SW bindings are unchanged.
-    let before_end = before["nodes"][pos]["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["reg"] == "stack32:1")
-        .unwrap()["term"]
-        .clone();
-    let after_end = s["nodes"][pos + 1]["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["reg"] == "stack32:1")
-        .unwrap()["term"]
-        .clone();
-    assert_eq!(after_end, before_end);
+    let context = |node: &Value, field: u64| {
+        node["exprs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["role"] == "mem" && e["slot"] == "context" && e["field"] == field)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        context(&s["nodes"][pos + 1], 1),
+        context(&before["nodes"][pos], 1)
+    );
 }
 
 #[test]
@@ -230,8 +317,8 @@ fn a_loop_revisiting_the_same_helper_gets_new_events() {
 fn saved_context_is_used_by_compressed_and_narrow_loads() {
     for (load, reg, expected) in [
         (0x408c, 11, "v32:4"),
-        (0x0004c603, 12, "zext8/32(extract0,8(v32:4))"),
-        (0x0004d603, 12, "zext16/32(extract0,16(v32:4))"),
+        (0x0004c603, 12, "zext8/32(low8(v32:4))"),
+        (0x0004d603, 12, "zext16/32(low16(v32:4))"),
     ] {
         let words = vec![
             addi(9, 10, 0),
@@ -259,21 +346,16 @@ fn bound_ffi_rejects_colliding_or_invalid_metadata() {
         (0x400, 0x2000),
         (0x400, 0x400),
     ] {
-        let s: Value = serde_json::from_str(&rv32::expand_bound_words_snapshot(
-            &[0x00008067],
-            base,
-            helper,
-            0,
-            10,
-        ))
-        .unwrap();
+        let s: Value =
+            serde_json::from_str(&rv32::expand_create(base, helper, 0x2000, &[], &[], &[]))
+                .unwrap();
         assert_eq!(s["reason"], "InvalidEntry");
         assert!(s["nodes"].as_array().unwrap().is_empty());
     }
 }
 
 #[test]
-fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
+fn branch_constraints_are_overwritten_while_old_snapshots_and_helper_observations_survive() {
     let words = vec![
         addi(8, 1, 0),
         0x00051263,
@@ -285,17 +367,24 @@ fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
     let s = snapshot(&words, 6);
     assert_eq!(s["status"], "running");
     for (before, after, rel) in [(4, 6, "ne"), (5, 7, "eq")] {
-        let before_preds = s["nodes"][before]["predicates"].as_array().unwrap();
-        assert_eq!(before_preds.len(), 1);
-        assert_eq!(before_preds[0]["kind"], "cmp");
-        assert_eq!(before_preds[0]["rel"], rel);
-        let after_preds = s["nodes"][after]["predicates"].as_array().unwrap();
-        assert!(
-            after_preds
+        let branch = if before == 4 { 2 } else { 3 };
+        let historical = s["nodes"][branch]["exprs"].as_array().unwrap();
+        assert!(historical
+            .iter()
+            .any(|e| e["role"] == "constraint" && e["reg"] == "real32:10" && e["rel"] == rel));
+        for id in [before, after] {
+            assert!(s["nodes"][id]["exprs"]
+                .as_array()
+                .unwrap()
                 .iter()
-                .any(|p| p["kind"] == "cmp" && p["rel"] == rel),
-            "cmp/{rel} must survive helper"
-        );
+                .all(|e| e["role"] != "constraint" || e["reg"] != "real32:10"));
+            assert!(s["nodes"][id]["predicates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|p| p["kind"] != "cmp"));
+        }
+        let after_preds = s["nodes"][after]["predicates"].as_array().unwrap();
         let helper = after_preds
             .iter()
             .find(|p| p["kind"] == "helper")
@@ -308,26 +397,200 @@ fn branch_predicates_survive_helper_calls_and_gain_helper_predicate() {
 
 #[test]
 fn lookup_introduces_helper_predicate_and_map_regvar() {
-    let (words, pos, _) = call_program(1, 0);
-    let s = snapshot(&words, pos as u32 + 1);
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
+    let maps = &[lookup_map()];
+    let s = snapshot_maps(&words, pos as u32 + 1, maps);
     assert_eq!(s["status"], "running", "reason {}", s["reason"]);
     let after = &s["nodes"][pos + 1];
     let pred = helper_pred(after);
     assert_eq!(pred["helperId"], 1);
     assert_eq!(pred["event"], pos);
-    let alpha = map_word_alpha(pos as u64, 0);
-    let map = after["exprs"]
+    let slots = map_slots(after);
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0]["map"], 11);
+    let piece = &slots[0]["pieces"][0];
+    assert_eq!(piece["start"], 0);
+    let original = piece["slice"]["t"].as_str().unwrap().to_owned();
+    assert!(original.starts_with(&format!("regVar{pos}(")), "{original}");
+    words.splice(
+        pos + 1..pos + 1,
+        [addi(9, 10, 0), addi(10, 0, 5), load(12, 9, 0, 4, true)],
+    );
+    let s = snapshot_maps(&words, pos as u32 + 4, maps);
+    assert_eq!(s["status"], "running", "{}", s["reason"]);
+    let after = &s["nodes"][pos + 4];
+    assert_eq!(term(after, 12), original);
+    assert_eq!(term(after, 10), "5");
+    let slots = map_slots(after);
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0]["pieces"][0]["slice"]["t"], original);
+    assert_eq!(snapshot_maps(&words, 100, maps)["status"], "complete");
+}
+
+#[test]
+fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
+    words.splice(
+        pos + 1..pos + 1,
+        [
+            addi(9, 10, 0),
+            addi(10, 0, 5),
+            addi(13, 0, 0x123),
+            store(9, 13, 0, 4),
+            addi(9, 9, 3),
+            addi(13, 0, 0x80),
+            store(9, 13, 0, 1),
+            load(14, 9, 0, 1, false),
+            load(15, 9, 0xfff, 2, true),
+            load(12, 9, 0xffd, 4, true),
+            addi(13, 0, 0x456),
+            store(9, 13, 0xfff, 2),
+            load(16, 9, 0xffd, 4, true),
+        ],
+    );
+    let s = snapshot_maps(&words, 100, &[lookup_map()]);
+    assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    assert!(has_map_write(&s), "expected MapWrite observations");
+    let exit = s["nodes"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["reg"] == format!("map32:{alpha}"))
-        .expect("mapWord binding");
-    assert!(
-        map["term"]
-            .as_str()
-            .unwrap()
-            .starts_with(&format!("regVar{pos}(")),
-        "{}",
-        map["term"]
+        .find(|n| n["loc"] == "exit")
+        .unwrap();
+    assert_eq!(term(exit, 10), "5");
+    assert_eq!(term(exit, 14), "4294967168");
+    assert_eq!(term(exit, 15), "32768");
+    assert_eq!(term(exit, 12), "2147483939"); // 0x80000123
+    assert_eq!(term(exit, 16), "72745251"); // 0x04560123
+    let slots = map_slots(exit);
+    assert_eq!(slots.len(), 1);
+    assert_eq!(slots[0]["map"], 11);
+    assert_eq!(slots[0]["pieces"].as_array().unwrap().len(), 1);
+    assert_eq!(slots[0]["pieces"][0]["start"], 0);
+    assert_eq!(slots[0]["pieces"][0]["slice"]["v"], 72745251);
+}
+
+#[test]
+fn unresolved_map_accesses_reject_without_growing_the_graph() {
+    for (id, offset, width) in [
+        (1, 3, 2),
+        (1, 7, 2),
+        (1, 5, 4),
+        (5, 0, 4),
+        (5, 4, 4),
+        (999, 0, 4),
+    ] {
+        for writing in [false, true] {
+            let (mut words, pos, _) = call_program(id, 0);
+            let access = if writing {
+                store(10, 11, offset, width)
+            } else {
+                load(12, 10, offset, width, true)
+            };
+            words.insert(pos + 1, access);
+            let before = snapshot(&words, pos as u32 + 1);
+            let failed = snapshot(&words, pos as u32 + 2);
+            assert_eq!(
+                failed["reason"], "UndefinedSrc",
+                "helper {id}, offset {offset}, write {writing}"
+            );
+            assert_eq!(failed["failed"], pos + 1);
+            assert_eq!(failed["nodes"], before["nodes"]);
+            assert_eq!(failed["edges"], before["edges"]);
+        }
+    }
+}
+
+#[test]
+fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
+    words.splice(
+        pos + 1..pos + 1,
+        [
+            addi(9, 10, 4),
+            addi(10, 0, 5),
+            load(12, 9, 0, 4, true),
+            load(14, 9, 0, 4, true),
+            addi(13, 0, 0x80),
+            store(9, 13, 3, 1),
+            load(15, 9, 3, 1, false),
+            addi(9, 9, 4),
+            store(9, 13, 1, 1), // Fresh third word needs symbolic old bits.
+            load(16, 9, 1, 1, true),
+            store(9, 13, 0xffc, 4), // Full overwrite of the second word.
+            load(17, 9, 0xffc, 4, true),
+            store(9, 13, 4, 4), // Fresh fourth word needs no old content.
+            load(18, 9, 4, 4, true),
+        ],
+    );
+    let s = snapshot_maps(&words, 100, &[lookup_map()]);
+    assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    assert!(has_map_write(&s), "expected MapWrite observations");
+    let exit = s["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["loc"] == "exit")
+        .unwrap();
+    let content = format!("externalResult{pos}_2(1)");
+    assert_eq!(term(exit, 12), content);
+    assert_eq!(term(exit, 14), content);
+    assert_eq!(term(exit, 10), "5");
+    assert_eq!(term(exit, 15), "4294967168");
+    assert_eq!(term(exit, 16), "128");
+    assert_eq!(term(exit, 17), "128");
+    assert_eq!(term(exit, 18), "128");
+    let slots = map_slots(exit);
+    assert_eq!(slots.len(), 1);
+    let pieces = slots[0]["pieces"].as_array().unwrap();
+    let at = |start: u64| pieces.iter().find(|p| p["start"] == start).unwrap();
+    assert_eq!(at(0)["slice"]["t"], format!("regVar{pos}(real32:10)"));
+    assert_eq!(at(32)["slice"]["v"], 128);
+    assert_eq!(at(32)["slice"]["w"], 32);
+    assert_eq!(at(72)["slice"]["v"], 128);
+    assert_eq!(at(72)["slice"]["w"], 8);
+    assert_eq!(at(96)["slice"]["v"], 128);
+    assert_eq!(at(96)["slice"]["w"], 32);
+    assert!(!pieces
+        .iter()
+        .any(|p| p.to_string().contains("externalResult")));
+}
+
+#[test]
+fn compressed_map_accesses_and_distinct_lookup_events_keep_later_words_separate() {
+    let (mut words, pos, _) = call_program_lookup_keyed(0);
+    words.splice(
+        pos + 1..pos + 1,
+        [
+            addi(9, 10, 0),
+            0x40d0, // C.LW a2,4(s1), first materialization.
+            addi(13, 0, 0x123),
+            0xc0d4, // C.SW a3,4(s1), same word as C.LW.
+            0x40d8, // C.LW a4,4(s1), current stored word.
+            addi(10, 0, 1),
+            addi(16, 12, 0),
+            addi(12, 2, 0),
+            // 30 = first jal (4) plus the eight insns before the second jal.
+            jal(1, 0x100 - (0x400 + pos as i32 * 4 + 30)),
+            load(15, 10, 4, 4, true),
+        ],
+    );
+    let s = snapshot_maps(&words, 100, &[lookup_map()]);
+    assert_eq!(s["status"], "complete", "{}", s["reason"]);
+    assert!(has_map_write(&s), "expected MapWrite observations");
+    let exit = s["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["loc"] == "exit")
+        .unwrap();
+    assert_eq!(term(exit, 16), format!("externalResult{pos}_2(1)"));
+    assert_eq!(term(exit, 14), "291");
+    assert_eq!(term(exit, 15), "291");
+    assert_ne!(term(exit, 16), term(exit, 15));
+    assert_eq!(
+        s,
+        snapshot_maps(&words, 100, &[lookup_map()]),
+        "event content must replay stably"
     );
 }

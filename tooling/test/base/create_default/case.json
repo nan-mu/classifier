@@ -1,0 +1,11 @@
+{
+  "id": "base.create_default",
+  "suite": "base",
+  "budget": 8,
+  "artifacts": {},
+  "steps": [
+    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "default", "budget": 8 }
+  ],
+  "expect": { "kind": "pass", "status": "running" },
+  "assert": [{ "path": "/payload/program", "eq": "just_tx.elf" }]
+}

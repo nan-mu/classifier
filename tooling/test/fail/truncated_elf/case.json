@@ -1,0 +1,10 @@
+{
+  "id": "fail.truncated_elf",
+  "suite": "fail",
+  "artifacts": { "rv32": "bad.elf" },
+  "steps": [
+    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "rv32", "budget": 8 }
+  ],
+  "expect": { "kind": "error" },
+  "assert": []
+}

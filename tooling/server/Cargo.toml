@@ -3,17 +3,30 @@ name = "server"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Lean-backed Expand HTTP server for RV32IMC firmware images"
+description = "Lean-backed Expand domain, HTTP server, and JSON CLI"
+
+[lib]
+name = "server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[[bin]]
+name = "classifier"
+path = "src/bin/classifier.rs"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 lean-binding = { path = "../lean-binding" }
 riscv-isa = "0.3"
-xpost-elf = { path = "../../../xpost/xpost-elf" }
+xpost-elf = { path = "../vendor/xpost-elf" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]

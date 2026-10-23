@@ -29,6 +29,7 @@ describe("cantorUnpair / packet regs", () => {
 
   it("rejects packet64 and unknown shapes", () => {
     expect(parseReg("packet64:0").kind).toBe("unknown");
+    expect(parseReg("anchor32:0")).toMatchObject({ kind: "anchor", width: 32, alpha: "0" });
     expect(parseReg("real32:10")).toMatchObject({
       kind: "real",
       width: 32,
@@ -37,9 +38,58 @@ describe("cantorUnpair / packet regs", () => {
       offset: null,
     });
   });
+
+  it("decodes the Map word introduced by lookup", () => {
+    const alpha = (166 * 167) / 2;
+    const row = { reg: `map32:${alpha}`, rel: "eq", term: "regVar166(real32:10)" };
+    expect(parseReg(row.reg)).toMatchObject({ kind: "map", resource: 166, offset: 0 });
+    expect(formatRegLabel(parseReg(row.reg))).toBe("Map32 κ=166 off=0");
+    expect(termToPlain(parseTerm(row.term))).toBe(row.term);
+    expect(parseReg("map64:0").resource).toBeNull();
+  });
 });
 
 describe("parseTerm", () => {
+  const data = { kind: "var", width: 32, name: "4" } as const;
+
+  it("parses extract's comma as part of the op name", () => {
+    expect(parseTerm("extract0,8(v32:4)")).toEqual({
+      kind: "app", op: "extract0,8", args: [data],
+    });
+  });
+
+  it.each([8, 16])("keeps nested extract0,%i as one zext argument", (bits) => {
+    const text = `zext${bits}/32(extract0,${bits}(v32:4))`;
+    const view = parseTerm(text);
+    expect(view).toEqual({
+      kind: "app", op: `zext${bits}/32`,
+      args: [{ kind: "app", op: `extract0,${bits}`, args: [data] }],
+    });
+    expect(termToPlain(view)).toBe(text);
+  });
+
+  it("handles nested mergeLow and still splits actual argument separators", () => {
+    const view = parseTerm("add32(mergeLow8,32(v32:4,extract0,8(v32:5)),18446744073709551615)");
+    expect(view).toEqual({
+      kind: "app", op: "add32", args: [
+        { kind: "app", op: "mergeLow8,32", args: [
+          data,
+          { kind: "app", op: "extract0,8", args: [{ kind: "var", width: 32, name: "5" }] },
+        ] },
+        { kind: "const", digits: "18446744073709551615" },
+      ],
+    });
+  });
+
+  it("handles comma-named ops following a numeric argument", () => {
+    expect(parseTerm("add32(14,extract0,8(v32:4))")).toEqual({
+      kind: "app", op: "add32", args: [
+        { kind: "const", digits: "14" },
+        { kind: "app", op: "extract0,8", args: [data] },
+      ],
+    });
+  });
+
   it("keeps regVar event in the op and preserves the Reg arg", () => {
     const view = parseTerm("regVar166(real32:10)");
     expect(view).toEqual({
@@ -63,14 +113,21 @@ describe("parseTerm", () => {
 });
 
 describe("groupExprsByKind", () => {
-  it("orders Real / Stack / Map / Packet groups", () => {
+  it("orders Real / Stack / Map / Context / Packet groups", () => {
     const groups = groupExprsByKind([
       { reg: "packet32:1", rel: "eq", term: "1" },
       { reg: "real32:10", rel: "eq", term: "2" },
       { reg: "map32:0", rel: "eq", term: "regVar1(real32:10)" },
       { reg: "stack32:0", rel: "eq", term: "3" },
+      { reg: "context32:0", rel: "eq", term: "v32:4" },
     ]);
-    expect(groups.map((g) => g.kind)).toEqual(["real", "stack", "map", "packet"]);
+    expect(groups.map((g) => g.kind)).toEqual([
+      "real",
+      "stack",
+      "map",
+      "context",
+      "packet",
+    ]);
     expect(groups[2]!.rows[0]!.reg).toBe("map32:0");
   });
 });

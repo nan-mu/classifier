@@ -1,28 +1,87 @@
-import CommonMath.Path
+import Node.Path
+import Core.Anchor
 
 namespace EBPF
-open CommonMath
+open Core Node
 
 /-! External correspondence TBD.
-Only logical context and stack inputs are bound: r1=tCtx, r10=tSp.
-RV32's tCtx/tSp name the corresponding logical inputs, but its 32-bit wrapper,
-context-slot layout, saved registers, and return address are not equated here.
-Packet/context loads, resource contracts, helper calls and internal returns are
-outside this executable slice. Uninitialized registers have no equality. -/
+The entry binds r1=tCtx, r10=tSp, xdp_md.data=tData and data_end=tData+packetBytes.
+The other four xdp_md fields, packet resource validity and stack region contents
+are not bound here. Uninitialized registers have no equality.
+RV32's context layout, wrapper bindings and return address are not equated here. -/
 structure EntryParams where
   tCtx : Term
   tSp : Term
+  tData : Term
+  packetBytes : Nat
+  αCtx : Nat
+  κPacket : Nat
+  φStack : Nat
+  deriving Repr, Inhabited
 
-private def leaf64 : Term → Bool
-  | .const .w64 c => c < (1 <<< 64)
-  | .var .w64 _ => true
+private def leaf (w : Width) : Term → Bool
+  | .const v c => v == w && c < (1 <<< w.bits)
+  | .var v _ => v == w
   | _ => false
 
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
-  if ![p.tCtx, p.tSp].all leaf64 then throw .invalidEntry
-  pure ⟨ExprSet.empty.insertEq (Reg.real64 1) p.tCtx
-    |>.insertEq (Reg.real64 10) p.tSp, []⟩
+  if !leaf .w64 p.tCtx || !leaf .w64 p.tSp || !leaf .w32 p.tData ||
+      p.packetBytes ≥ (1 <<< 32) then throw .invalidEntry
+  let data ← match Tile.ofTerm p.tData 32 with
+    | .ok tile => pure tile
+    | .error _ => throw .invalidEntry
+  let ending ← match Tile.ofTerm (addStar .w32 p.tData (Term.C32 p.packetBytes)) 32 with
+    | .ok tile => pure tile
+    | .error _ => throw .invalidEntry
+  let mem ← match Mem.write .empty (.context 0) 0 data with
+    | .ok mem => pure mem
+    | .error _ => throw .invalidEntry
+  let mem ← match mem.write (.context 1) 0 ending with
+    | .ok mem => pure mem
+    | .error _ => throw .invalidEntry
+  pure ⟨Expr.nil.insertEq (Reg.real64 1) p.tCtx
+    |>.insertEq (Reg.real64 10) p.tSp, [], mem⟩
 
 def entrySemState := buildE0
+
+def entryRows (p : EntryParams) : List (Anchor × Term) :=
+  [(.entry (.ctx .w64), p.tCtx), (.entry (.sp .w64), p.tSp), (.entry (.data .w32), p.tData),
+    (.entry .packetBytes, Term.C32 p.packetBytes), (.entry .alphaCtx, Term.C32 p.αCtx),
+    (.entry .packetId, Term.C32 p.κPacket), (.entry .stackId, Term.C32 p.φStack)]
+
+def entryParams? (E : List Expr) : Option EntryParams := do
+  let tCtx ← E.lookupEq (Reg.anchor (.entry (.ctx .w64)))
+  let tSp ← E.lookupEq (Reg.anchor (.entry (.sp .w64)))
+  let tData ← E.lookupEq (Reg.anchor (.entry (.data .w32)))
+  let packetBytes ← anchorNat E (.entry .packetBytes)
+  let αCtx ← anchorNat E (.entry .alphaCtx)
+  let κPacket ← anchorNat E (.entry .packetId)
+  let φStack ← anchorNat E (.entry .stackId)
+  if packetBytes ≥ (1 <<< 32) || αCtx ≥ (1 <<< 32) || κPacket ≥ (1 <<< 32) ||
+      φStack ≥ (1 <<< 32) then none
+  else some { tCtx, tSp, tData, packetBytes, αCtx, κPacket, φStack }
+
+/-- Install entry anchors, then map layouts. A failed map install keeps the entry anchors. -/
+def host (p : EntryParams) (E : List Expr) (maps : List MapLayout := []) : List Expr :=
+  let withEntry := (Anchor.install E (entryRows p)).getD E
+  match Anchor.mapRows (maps.map (·.mapId)) (maps.map (·.keySize)) (maps.map (·.valueSize)) with
+  | some rows => (Anchor.install withEntry rows).getD withEntry
+  | none => withEntry
+
+#guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 3, 4, 5⟩ with
+  | .ok σ =>
+      match σ.mem.read (.context 0) 0 32, σ.mem.read (.context 1) 0 32 with
+      | .ok data, .ok ending =>
+          data == ⟨[.proj 32 (Term.V32 2) 0]⟩ &&
+            ending == ⟨[.proj 32 (addStar .w32 (Term.V32 2) (Term.C32 64)) 0]⟩ &&
+            (σ.exprs.lookupEq (Reg.ctx32 3)).isNone && σ.predicates.isEmpty
+      | _, _ => false
+  | _ => false
+#guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V64 2, 64, 3, 4, 5⟩ with
+  | .error .invalidEntry => true
+  | _ => false
+#guard match buildE0 ⟨Term.V64 1, Term.V64 0, .const .w32 (1 <<< 32), 64, 3, 4, 5⟩ with
+  | .error .invalidEntry => true
+  | _ => false
 
 end EBPF

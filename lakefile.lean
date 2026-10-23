@@ -5,23 +5,35 @@ package classifier where
   version := v!"0.1.0"
 
 @[default_target]
-lean_lib CommonMath where
+lean_lib Core where
   defaultFacets := #[LeanLib.sharedFacet]
 
 @[default_target]
-lean_lib RV32IMC where
+lean_lib Node where
+  defaultFacets := #[LeanLib.sharedFacet]
+
+@[default_target]
+lean_lib RV32 where
   defaultFacets := #[LeanLib.sharedFacet]
 
 @[default_target]
 lean_lib EBPF where
   defaultFacets := #[LeanLib.sharedFacet]
 
+/-- Dual-arch fixtures; not linked into the server shared libs. -/
+lean_lib CrossArch
+
+lean_exe semanticCheck where
+  root := `SemanticCheck
+
 target server pkg : System.FilePath := do
-  let some commonLib := pkg.findLeanLib? `CommonMath | error "CommonMath library is missing"
-  let some rv32Lib := pkg.findLeanLib? `RV32IMC | error "RV32IMC library is missing"
-  let common ← commonLib.shared.fetch
+  let some exprLib := pkg.findLeanLib? `Core | error "Core library is missing"
+  let some pathLib := pkg.findLeanLib? `Node | error "Node library is missing"
+  let some rv32Lib := pkg.findLeanLib? `RV32 | error "RV32 library is missing"
+  let expr ← exprLib.shared.fetch
+  let path ← pathLib.shared.fetch
   let rv32 ← rv32Lib.shared.fetch
-  (common.mix rv32).mapM fun _ => do
+  ((expr.mix path).mix rv32).mapM fun _ => do
     let output ← IO.Process.output {cmd := "cargo", args := #["build", "--manifest-path", "tooling/Cargo.toml", "-p", "server", "--message-format=json-render-diagnostics"], cwd := pkg.dir}
     unless output.stderr.isEmpty do logInfo output.stderr
     if output.exitCode != 0 then error s!"Cargo build failed with code {output.exitCode}"

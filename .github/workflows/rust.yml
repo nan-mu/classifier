@@ -1,0 +1,64 @@
+name: rust
+
+on:
+  push:
+    paths:
+      - "tooling/**"
+      - "lakefile.lean"
+      - "lean-toolchain"
+      - "Core/**"
+      - "Node/**"
+      - "RV32/**"
+      - "EBPF/**"
+      - "CrossArch/**"
+      - "SemanticCheck.lean"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "tooling/**"
+      - "lakefile.lean"
+      - "lean-toolchain"
+      - "Core/**"
+      - "Node/**"
+      - "RV32/**"
+      - "EBPF/**"
+      - "CrossArch/**"
+      - "SemanticCheck.lean"
+      - ".github/workflows/rust.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: cargo fmt
+        run: cargo +nightly fmt --manifest-path tooling/Cargo.toml -p lean-binding -p server -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+      - name: Install elan / Lean
+        run: |
+          curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: lake build
+        run: |
+          lean --version
+          lake build
+      - name: cargo clippy
+        run: |
+          cargo +nightly clippy --manifest-path tooling/Cargo.toml --workspace --all-targets -- \
+            -D warnings \
+            -D clippy::dbg_macro \
+            -D clippy::todo \
+            -D clippy::unimplemented

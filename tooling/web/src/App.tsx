@@ -16,35 +16,85 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ReactNode,
 } from "react";
 import "@xyflow/react/dist/style.css";
-import { createSession, runSession, stepSession } from "./api";
-import { insnIndexForNode, localExprs, splitExprs } from "./exprs";
 import {
-  formatRegLabel,
-  groupExprsByKind,
-  kindLabel,
-  parseReg,
-  parseTerm,
-  termToPlain,
-} from "./parse";
+  compareTree,
+  createSession,
+  fetchProfile,
+  runSessionStream,
+  stepSession,
+  type RunStreamStats,
+} from "./api";
+import { insnIndexForNode, splitExprs } from "./exprs";
+import { formatExprMath, formatPredChip } from "./formatExpr";
+import { foldSameTypeChains, resolveFoldedId } from "./collapse";
+import { NODE_H } from "./layout";
+import {
+  classifyNodeRole,
+  foldKey,
+  insnMnemonic,
+  insnTextForNode,
+  NODE_ROLE_LEGEND,
+} from "./nodeRole";
+import { CompareDetailPanel, CompareSummaryPanel } from "./ComparePanels";
+import { CompareTreeView } from "./CompareTreeView";
 import { StateNodeView, type StateFlowNode } from "./StateNode";
-import type { ArchKind, ExprRow, PredRow, SessionSnapshot } from "./types";
+import type {
+  ArchKind,
+  PredRow,
+  ExprRow,
+  SessionSnapshot,
+  TreeNode,
+  TreeReport,
+} from "./types";
+import { toTreeSnap } from "./types";
 import { useForceLayout } from "./useForceLayout";
 import {
+  branchSource,
   countBranchEdges,
-  diffExprs,
   diffPredicates,
   edgeKey,
   formatPred,
-  inboundEdges,
   outboundEdges,
   parseEdgeKey,
-  pathToRoot,
   processedIds,
   visibleNodeIds,
   type ViewerSelection,
 } from "./viewer";
+
+type TabId = ArchKind | "compare";
+
+type Snaps = {
+  rv32imc: SessionSnapshot | null;
+  ebpf: SessionSnapshot | null;
+};
+
+type RunSlot = {
+  arch: ArchKind;
+  label: string;
+  snap: SessionSnapshot | null;
+  stats: RunStreamStats | null;
+};
+
+type CompareUi =
+  | { tag: "idle"; stopped?: boolean }
+  | { tag: "expanding"; left: RunSlot; right: RunSlot }
+  | { tag: "ready"; report: TreeReport; left: SessionSnapshot; right: SessionSnapshot };
+
+function emptySlot(arch: ArchKind): RunSlot {
+  return {
+    arch,
+    label: arch === "rv32imc" ? "just_tx.elf" : "just_tx.bpf.o",
+    snap: null,
+    stats: null,
+  };
+}
+
+function defaultName(arch: ArchKind): string {
+  return arch === "ebpf" ? "just_tx.bpf.o" : "just_tx.elf";
+}
 
 const nodeTypes = { state: StateNodeView };
 const EMPTY_FLOW_NODES: StateFlowNode[] = [];
@@ -56,138 +106,154 @@ const statusLabel: Record<SessionSnapshot["status"], string> = {
   fail: "未完成",
 };
 
-function TermTree({ view, depth = 0 }: { view: ReturnType<typeof parseTerm>; depth?: number }) {
-  const pad = { paddingLeft: depth * 10 };
-  if (view.kind === "const") {
-    return (
-      <Text className="mono term-leaf" style={pad} display="block">
-        const {view.digits}
-      </Text>
-    );
-  }
-  if (view.kind === "var") {
-    return (
-      <Text className="mono term-leaf" style={pad} display="block">
-        var{view.width ?? "?"} : {view.name}
-      </Text>
-    );
-  }
-  if (view.kind === "app") {
-    return (
-      <Box style={pad}>
-        <Text className="mono term-op" display="block">
-          {view.op}(
-        </Text>
-        {view.args.map((arg, i) => (
-          <TermTree key={i} view={arg} depth={depth + 1} />
-        ))}
-        <Text className="mono term-op" display="block">
-          )
-        </Text>
-      </Box>
-    );
-  }
-  const asReg = parseReg(view.text);
-  if (asReg.kind !== "unknown") {
-    return (
-      <Text className="mono term-leaf" style={pad} display="block">
-        {formatRegLabel(asReg)} · {view.text}
-      </Text>
-    );
-  }
-  return (
-    <Text className="mono term-leaf" style={pad} display="block">
-      {view.text}
-    </Text>
-  );
-}
-
-function ExprDetail({ e }: { e: ExprRow }) {
-  const reg = parseReg(e.reg);
-  const term = parseTerm(e.term);
-  return (
-    <Box className="expr-card">
-      <Text className="mono sem-line" display="block">
-        {formatRegLabel(reg)} · {e.rel}
-      </Text>
-      <Text className="mono muted" display="block" fontSize={11}>
-        raw {e.reg} · view {termToPlain(term)}
-      </Text>
-      <TermTree view={term} />
-    </Box>
-  );
-}
-
-function ExprGroups({ exprs }: { exprs: ExprRow[] }) {
+function ExprCapsules({ exprs }: { exprs: ExprRow[] }) {
   if (exprs.length === 0) {
-    return <Text className="mono muted">∅</Text>;
+    return <Text className="mono muted capsule-empty">∅</Text>;
   }
+  return (
+    <div className="capsule-row">
+      {exprs.map((e, i) => (
+        <span
+          key={`${e.reg}-${e.rel}-${i}`}
+          className={`capsule${e.role === "constraint" ? " capsule--constraint" : ""}`}
+          title={`${e.reg} ${e.rel} ${e.term}`}
+        >
+          {formatExprMath(e)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function PredCapsules({ preds }: { preds: PredRow[] }) {
+  if (preds.length === 0) {
+    return <Text className="mono muted capsule-empty">∅</Text>;
+  }
+  return (
+    <div className="capsule-row">
+      {preds.map((p, i) => (
+        <span
+          key={i}
+          className={`capsule capsule--pred capsule--${p.kind}`}
+          title={formatPred(p)}
+        >
+          {formatPredChip(p)}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SemBlock({ tag, children }: { tag: ReactNode; children: ReactNode }) {
+  return (
+    <div className="sem-block">
+      <span className="sem-tag mono">{tag}</span>
+      <div className="sem-block__body">{children}</div>
+    </div>
+  );
+}
+
+function EgTag() {
   return (
     <>
-      {groupExprsByKind(exprs).map(({ kind, rows }) => (
-        <Box key={kind} className="expr-group">
-          <Text className="expr-group__title mono" display="block">
-            {kindLabel[kind]} · {rows.length}
-          </Text>
-          {rows.map((expr, index) => (
-            <ExprDetail key={`${kind}-${expr.reg}-${index}`} e={expr} />
-          ))}
-        </Box>
-      ))}
+      E<sub>g</sub>
     </>
   );
 }
 
-function PredDetail({ p }: { p: PredRow }) {
-  const kindClass =
-    p.kind === "cmp"
-      ? " pred-cmp"
-      : p.kind === "ret"
-        ? " pred-ret"
-        : p.kind === "helper"
-          ? " pred-helper"
-          : "";
-  return (
-    <Box className={`pred-card${kindClass}`}>
-      <Text className={`mono sem-line${kindClass}`} display="block">
-        {formatPred(p)}
-      </Text>
-      {p.kind === "cmp" ? (
-        <>
-          <Text className="mono muted" display="block" fontSize={11}>
-            lhs
-          </Text>
-          <TermTree view={parseTerm(p.lhs ?? "")} />
-          <Text className="mono muted" display="block" fontSize={11}>
-            rhs
-          </Text>
-          <TermTree view={parseTerm(p.rhs ?? "")} />
-        </>
-      ) : null}
-      {p.kind === "ret" ? <TermTree view={parseTerm(p.term ?? "")} /> : null}
-      {p.kind === "helper"
-        ? (p.args ?? []).map((arg, i) => (
-            <Box key={i}>
-              <Text className="mono muted" display="block" fontSize={11}>
-                arg{i}
-              </Text>
-              <TermTree view={parseTerm(arg)} />
-            </Box>
-          ))
-        : null}
-    </Box>
-  );
-}
-
-function PredList({ preds }: { preds: PredRow[] }) {
-  if (preds.length === 0) {
-    return <Text className="mono muted">∅</Text>;
+function EiTag({ on }: { on?: "taken" | "not_taken" | "only" }) {
+  if (on === "taken") {
+    return (
+      <>
+        E<sub>i</sub> on taken
+      </>
+    );
+  }
+  if (on === "not_taken") {
+    return (
+      <>
+        E<sub>i</sub> on not taken
+      </>
+    );
+  }
+  if (on === "only") {
+    return (
+      <>
+        E<sub>i</sub>
+      </>
+    );
   }
   return (
     <>
-      {preds.map((p, i) => (
-        <PredDetail key={i} p={p} />
-      ))}
+      E<sub>i</sub>
+    </>
+  );
+}
+
+function PgTag() {
+  return (
+    <>
+      P<sub>g</sub>
+    </>
+  );
+}
+
+function PiTag() {
+  return (
+    <>
+      P<sub>i</sub>
+    </>
+  );
+}
+
+function eiOnLabel(dir: string | null | undefined): "taken" | "not_taken" | "only" {
+  if (dir === "taken") return "taken";
+  if (dir === "not_taken") return "not_taken";
+  return "only";
+}
+
+function CompareReadyLayout({
+  report,
+  left,
+  right,
+  nodeId,
+  detailSide,
+  fitRequest,
+  onSelectNode,
+  onDetailSide,
+}: {
+  report: TreeReport;
+  left: SessionSnapshot;
+  right: SessionSnapshot;
+  nodeId: number | null;
+  detailSide: "left" | "right";
+  fitRequest: number;
+  onSelectNode: (id: number) => void;
+  onDetailSide: (side: "left" | "right") => void;
+}) {
+  const node: TreeNode | null =
+    nodeId == null ? null : (report.nodes.find((n) => n.id === nodeId) ?? null);
+  return (
+    <>
+      <CompareSummaryPanel
+        report={report}
+        node={node}
+        provenance={{ left, right }}
+      />
+      <CompareTreeView
+        report={report}
+        selectedId={nodeId}
+        onSelectNode={onSelectNode}
+        leftArch={report.left.arch}
+        rightArch={report.right.arch}
+        fitRequest={fitRequest}
+      />
+      <CompareDetailPanel
+        report={report}
+        node={node}
+        side={detailSide}
+        onSide={onDetailSide}
+      />
     </>
   );
 }
@@ -201,60 +267,145 @@ export function App() {
 }
 
 function DebugScreen() {
-  const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+  const [tab, setTab] = useState<TabId>("rv32imc");
+  const [snaps, setSnaps] = useState<Snaps>({ rv32imc: null, ebpf: null });
   const [sel, setSel] = useState<ViewerSelection>({
     focus: 0,
     compare: null,
     edgeKey: null,
     collapseSameLoc: false,
-    panel: "node",
+    panel: "eg",
   });
-  const [budget, setBudget] = useState(512);
-  const [arch, setArch] = useState<ArchKind>("rv32imc");
+  const [budget, setBudget] = useState(1024);
   const [firmwareName, setFirmwareName] = useState("just_tx.elf");
   const [firmwareBytes, setFirmwareBytes] = useState<ArrayBuffer | null>(null);
+  const [programs, setPrograms] = useState<string[]>([]);
+  const [programName, setProgramName] = useState("just_tx");
   const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runRate, setRunRate] = useState<string | null>(null);
+  const [compareUi, setCompareUi] = useState<CompareUi>({ tag: "idle" });
+  const [compareSel, setCompareSel] = useState<{
+    nodeId: number | null;
+    detailSide: "left" | "right";
+  }>({ nodeId: null, detailSide: "left" });
+  const [compareFitRequest, setCompareFitRequest] = useState(0);
+  const [openLayer, setOpenLayer] = useState<{ rep: number; members: number[] } | null>(
+    null,
+  );
   const insnRef = useRef<HTMLDivElement | null>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
+  const compareAbortRef = useRef<AbortController | null>(null);
+  const pendingSnapRef = useRef<SessionSnapshot | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const fitOnceRef = useRef(true);
+  const tabRef = useRef<TabId>(tab);
+  const snapsRef = useRef(snaps);
+  const compareUiRef = useRef(compareUi);
   const flow = useReactFlow();
+  compareUiRef.current = compareUi;
+
+  tabRef.current = tab;
+  snapsRef.current = snaps;
+
+  const archTab: ArchKind | null = tab === "compare" ? null : tab;
+  const snap = archTab ? snaps[archTab] : null;
+  const comparing = tab === "compare";
+
+  const flushPendingSnap = useCallback(() => {
+    rafRef.current = null;
+    const next = pendingSnapRef.current;
+    if (!next) return;
+    pendingSnapRef.current = null;
+    setSnaps((prev) => ({ ...prev, [next.arch]: next }));
+    if (tabRef.current === next.arch) {
+      setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+    }
+  }, []);
+
+  const apply = useCallback(
+    (next: SessionSnapshot, opts?: { immediate?: boolean }) => {
+      if (opts?.immediate) {
+        pendingSnapRef.current = null;
+        if (rafRef.current != null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        setSnaps((prev) => ({ ...prev, [next.arch]: next }));
+        if (tabRef.current === next.arch) {
+          setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
+        }
+        return;
+      }
+      pendingSnapRef.current = next;
+      if (rafRef.current == null) {
+        rafRef.current = requestAnimationFrame(flushPendingSnap);
+      }
+    },
+    [flushPendingSnap],
+  );
 
   const boot = useCallback(
-    async (nextArch: ArchKind, b: number, name: string, image: ArrayBuffer | null) => {
+    async (
+      nextArch: ArchKind,
+      b: number,
+      name: string,
+      image: ArrayBuffer | null,
+      program: string,
+    ) => {
+      runAbortRef.current?.abort();
+      runAbortRef.current = null;
       setBusy(true);
+      setStreaming(false);
       setError(null);
+      setRunRate(null);
+      fitOnceRef.current = true;
       try {
         const next = await createSession({
           budget: b,
           arch: nextArch,
           name,
           image,
+          program,
         });
-        setSnap(next);
-        setSel((s) => ({
-          ...s,
-          focus: next.focus,
-          compare: null,
-          edgeKey: null,
-        }));
+        apply(next, { immediate: true });
+        if (tabRef.current === nextArch) {
+          setSel((s) => ({
+            ...s,
+            focus: next.focus,
+            compare: null,
+            edgeKey: null,
+          }));
+        }
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "session failed");
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [apply],
   );
 
   useEffect(() => {
-    void boot("rv32imc", 512, "just_tx.elf", null);
-  }, [boot]);
+    void fetchProfile()
+      .then((rows) => setPrograms(rows.map((row) => row.name)))
+      .catch(() => setPrograms([]));
+  }, []);
+
+  useEffect(() => {
+    if (firmwareBytes) return;
+    if (tabRef.current === "compare") return;
+    const label = archTab === "ebpf" ? `${programName}/bpf.o` : `${programName}.elf`;
+    void boot(archTab ?? "rv32imc", budget, label, null, programName);
+  }, [boot, programName]);
 
   const onFirmwarePick = useCallback((ev: ChangeEvent<HTMLInputElement>) => {
     const file = ev.target.files?.[0];
     if (!file) {
-      setFirmwareName("just_tx.elf");
+      setFirmwareName(archTab ? defaultName(archTab) : "just_tx.elf");
       setFirmwareBytes(null);
       return;
     }
@@ -262,62 +413,130 @@ function DebugScreen() {
       setFirmwareName(file.name);
       setFirmwareBytes(buf);
     });
-  }, []);
+  }, [archTab]);
 
   const focusedNode = snap?.nodes.find((n) => n.id === sel.focus) ?? null;
-  const compareNode =
-    sel.compare === null ? null : (snap?.nodes.find((n) => n.id === sel.compare) ?? null);
   const highlightJ = useMemo(
     () => (snap ? insnIndexForNode(focusedNode, snap.nodes) : null),
     [focusedNode, snap],
   );
 
   useEffect(() => {
-    insnRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [highlightJ, snap?.insns.length]);
+    setOpenLayer(null);
+  }, [snap?.id]);
 
   useEffect(() => {
+    if (!openLayer) return;
+    if (!openLayer.members.includes(sel.focus)) setOpenLayer(null);
+  }, [openLayer, sel.focus]);
+
+  useEffect(() => {
+    if (streaming || comparing) return;
+    insnRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlightJ, snap?.insns.length, streaming, comparing]);
+
+  useEffect(() => {
+    if (streaming || comparing) return;
     logRef.current?.scrollIntoView({ block: "end" });
-  }, [snap?.log.length]);
+  }, [snap?.log.length, streaming, comparing]);
 
   const visible = useMemo(() => {
     if (!snap) return new Set<number>();
     return visibleNodeIds(snap, sel.focus, sel.compare, sel.collapseSameLoc);
   }, [snap, sel.focus, sel.compare, sel.collapseSameLoc]);
 
-  const layoutNodes = useMemo(
-    () => (snap ? snap.nodes.filter((n) => visible.has(n.id)) : []),
-    [snap, visible],
-  );
-  const layoutEdges = useMemo(
+  const nodeTypeById = useMemo(() => {
+    const map = new Map<number, string>();
+    if (!snap) return map;
+    const failedId = snap.status === "fail" ? snap.failed : null;
+    for (const node of snap.nodes) {
+      const info = classifyNodeRole({
+        node,
+        nodes: snap.nodes,
+        edges: snap.edges,
+        insnText: insnTextForNode(node, snap.insns),
+        work: snap.work,
+        failedId,
+      });
+      map.set(node.id, foldKey(info));
+    }
+    return map;
+  }, [snap]);
+
+  const typeFold = useMemo(() => {
+    if (!snap) {
+      return foldSameTypeChains([], [], () => "", new Set());
+    }
+    const protectedIds = new Set<number>(snap.work);
+    if (sel.compare != null) protectedIds.add(sel.compare);
+    if (snap.status === "fail" && snap.failed != null) protectedIds.add(snap.failed);
+    return foldSameTypeChains(
+      snap.nodes.filter((n) => visible.has(n.id)),
+      snap.edges.filter((e) => visible.has(e.from) && visible.has(e.to)),
+      (id) => nodeTypeById.get(id) ?? "",
+      protectedIds,
+    );
+  }, [snap, visible, sel.compare, nodeTypeById]);
+
+  const displayNodes = useMemo(
     () =>
       snap
-        ? snap.edges.filter((e) => visible.has(e.from) && visible.has(e.to))
+        ? snap.nodes.filter((n) => visible.has(n.id) && !typeFold.hidden.has(n.id))
         : [],
-    [snap, visible],
+    [snap, visible, typeFold],
   );
+  const displayNodeIds = useMemo(
+    () => new Set(displayNodes.map((n) => n.id)),
+    [displayNodes],
+  );
+  const displayEdges = useMemo(() => {
+    if (!snap) return [];
+    const seen = new Set<string>();
+    const out: typeof snap.edges = [];
+    for (const e of snap.edges) {
+      if (!visible.has(e.from) || !visible.has(e.to)) continue;
+      if (typeFold.hidden.has(e.from)) continue;
+      const to = resolveFoldedId(e.to, typeFold);
+      if (!displayNodeIds.has(e.from) || !displayNodeIds.has(to)) continue;
+      if (e.from === to) continue;
+      const key = `${e.from}->${to}:${e.dir}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(to === e.to ? e : { from: e.from, to, dir: e.dir });
+    }
+    return out;
+  }, [snap, visible, typeFold, displayNodeIds]);
 
-  const positions = useForceLayout(layoutNodes, layoutEdges);
-  const positionCount = Object.keys(positions).length;
-  const structureKey = useMemo(() => {
-    if (!snap) return "";
-    return `${layoutNodes.map((n) => n.id).join(",")}|${layoutEdges
-      .map((e) => `${e.from}->${e.to}:${e.dir}`)
-      .join(",")}|${sel.collapseSameLoc}`;
-  }, [layoutEdges, layoutNodes, sel.collapseSameLoc, snap]);
+  const layoutMode =
+    snap?.status === "complete" || snap?.status === "fail" ? "final" : "fast";
+  const positions = useForceLayout(
+    displayNodes,
+    displayEdges,
+    `${snap?.id ?? ""}:${layoutMode}`,
+    layoutMode,
+  );
+  const hasPositions = Object.keys(positions).length > 0;
 
+  const finalFitKeyRef = useRef("");
   useEffect(() => {
-    if (positionCount === 0 || !structureKey) return;
+    if (streaming || comparing || !hasPositions) return;
+    let doFit = false;
+    if (fitOnceRef.current) {
+      fitOnceRef.current = false;
+      doFit = true;
+    } else if (layoutMode === "final") {
+      const k = `${snap?.id ?? ""}:final`;
+      if (finalFitKeyRef.current !== k) {
+        finalFitKeyRef.current = k;
+        doFit = true;
+      }
+    }
+    if (!doFit) return;
     const frame = requestAnimationFrame(() => {
       void flow.fitView({ padding: 0.28, duration: 240 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [flow, positionCount, structureKey]);
-
-  const apply = useCallback((next: SessionSnapshot) => {
-    setSnap(next);
-    setSel((s) => ({ ...s, focus: next.focus, edgeKey: null }));
-  }, []);
+  }, [flow, streaming, comparing, layoutMode, snap?.id, hasPositions]);
 
   const head = snap?.work[0];
   const canStep = Boolean(
@@ -328,7 +547,7 @@ function DebugScreen() {
 
   const focusedSplit = useMemo(() => {
     if (!focusedNode || !snap) return null;
-    return splitExprs(focusedNode, snap.nodes);
+    return splitExprs(focusedNode, snap.nodes, snap.edges);
   }, [focusedNode, snap]);
 
   const selectedEdge = useMemo(() => {
@@ -342,17 +561,19 @@ function DebugScreen() {
     );
   }, [sel.edgeKey, snap]);
 
-  const pathIds = useMemo(
-    () => (snap ? pathToRoot(sel.focus, snap.nodes) : []),
-    [sel.focus, snap],
-  );
+  const focusedPi = useMemo(() => {
+    if (!focusedNode || !snap) return [];
+    const parent = snap.nodes.find((n) => focusedNode.preds.includes(n.id));
+    if (!parent) return focusedNode.predicates;
+    return diffPredicates(parent.predicates, focusedNode.predicates).added;
+  }, [focusedNode, snap]);
 
   const onStep = useCallback(async () => {
     if (!snap || snap.status !== "running" || snap.work[0] !== sel.focus) return;
     setBusy(true);
     setError(null);
     try {
-      apply(await stepSession(snap.id));
+      apply(await stepSession(snap.id), { immediate: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "step failed");
     } finally {
@@ -362,24 +583,158 @@ function DebugScreen() {
 
   const onRun = useCallback(async () => {
     if (!snap || snap.status !== "running") return;
+    runAbortRef.current?.abort();
+    const ac = new AbortController();
+    runAbortRef.current = ac;
     setBusy(true);
+    setStreaming(true);
     setError(null);
+    setRunRate(null);
     try {
-      apply(await runSession(snap.id));
+      const final = await runSessionStream(
+        snap.id,
+        (next, stats) => {
+          apply(next);
+          setRunRate(
+            `${stats.stepsPerSec.toFixed(1)} step/s  ${stats.steps} steps  ${(
+              stats.elapsedMs / 1000
+            ).toFixed(2)}s`,
+          );
+        },
+        ac.signal,
+      );
+      apply(final, { immediate: true });
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "run failed");
+      if (!ac.signal.aborted) {
+        setError(err instanceof Error ? err.message : "run failed");
+      }
+      flushPendingSnap();
     } finally {
+      if (runAbortRef.current === ac) runAbortRef.current = null;
+      setStreaming(false);
       setBusy(false);
     }
-  }, [apply, snap]);
+  }, [apply, flushPendingSnap, snap]);
+
+  const runCompareTree = useCallback(async () => {
+    runAbortRef.current?.abort();
+    compareAbortRef.current?.abort();
+    const ac = new AbortController();
+    compareAbortRef.current = ac;
+    setBusy(true);
+    setStreaming(false);
+    setError(null);
+    setRunRate(null);
+
+    try {
+      setCompareUi({
+        tag: "expanding",
+        left: { ...emptySlot("rv32imc"), label: `${programName}.elf` },
+        right: { ...emptySlot("ebpf"), label: `${programName}/bpf.o` },
+      });
+      const patchSlot = (
+        side: "left" | "right",
+        snapNext: SessionSnapshot,
+        stats: RunStreamStats,
+      ) => {
+        apply(snapNext);
+        setCompareUi((prev) => {
+          if (prev.tag !== "expanding") return prev;
+          return {
+            ...prev,
+            [side]: { ...prev[side], snap: snapNext, stats },
+          };
+        });
+      };
+      const [left0, right0] = await Promise.all([
+        createSession({
+          budget,
+          arch: "rv32imc",
+          name: `${programName}.elf`,
+          program: programName,
+        }),
+        createSession({
+          budget,
+          arch: "ebpf",
+          name: `${programName}/bpf.o`,
+          program: programName,
+        }),
+      ]);
+      const [left, right] = await Promise.all([
+        runSessionStream(left0.id, (s, stats) => patchSlot("left", s, stats), ac.signal),
+        runSessionStream(right0.id, (s, stats) => patchSlot("right", s, stats), ac.signal),
+      ]);
+      apply(left, { immediate: true });
+      apply(right, { immediate: true });
+
+      if (ac.signal.aborted) return;
+      const report = await compareTree(toTreeSnap(left), toTreeSnap(right));
+      if (ac.signal.aborted) return;
+      setCompareSel({ nodeId: null, detailSide: "left" });
+      setCompareUi({ tag: "ready", report, left, right });
+    } catch (err: unknown) {
+      if (!ac.signal.aborted) {
+        setError(err instanceof Error ? err.message : "compare tree failed");
+        setCompareUi({ tag: "idle" });
+      }
+    } finally {
+      if (compareAbortRef.current === ac) compareAbortRef.current = null;
+      setBusy(false);
+    }
+  }, [apply, budget, programName]);
+
+  const onSelectTab = useCallback(
+    (next: TabId) => {
+      if (next === "compare") {
+        setTab("compare");
+        return;
+      }
+      if (compareUiRef.current.tag === "expanding") {
+        compareAbortRef.current?.abort();
+        compareAbortRef.current = null;
+        setCompareUi({ tag: "idle", stopped: true });
+        setBusy(false);
+      }
+      setTab(next);
+      fitOnceRef.current = true;
+      const existing = snapsRef.current[next];
+      const want =
+        next === "ebpf" ? `${programName}/bpf.o` : `${programName}.elf`;
+      if (existing && (firmwareBytes || existing.program === want)) {
+        setSel((s) => ({
+          ...s,
+          focus: existing.focus,
+          compare: null,
+          edgeKey: null,
+        }));
+      } else if (!busy && !streaming) {
+        const name = firmwareBytes
+          ? firmwareName
+          : next === "ebpf"
+            ? `${programName}/bpf.o`
+            : `${programName}.elf`;
+        void boot(next, budget, name, firmwareBytes, programName);
+      }
+      if (!firmwareBytes) {
+        setFirmwareName(defaultName(next));
+      }
+    },
+    [boot, budget, busy, firmwareBytes, firmwareName, programName, streaming],
+  );
+
+  const foldRef = useRef(typeFold);
+  foldRef.current = typeFold;
 
   const onNodeClick = useCallback<NodeMouseHandler>((event, node) => {
     const id = Number(node.id);
+    const run = foldRef.current.members.get(id);
+    if (run && run.length > 1) {
+      setOpenLayer({ rep: id, members: run });
+    }
     if (event.shiftKey) {
       setSel((s) => ({
         ...s,
         compare: s.compare === id ? null : id,
-        panel: "compare",
       }));
       return;
     }
@@ -391,18 +746,30 @@ function DebugScreen() {
       ...s,
       edgeKey: edge.id,
       focus: Number(edge.source),
-      panel: "step",
+      panel: "ei",
     }));
   }, []);
 
   const flowNodes = useMemo<StateFlowNode[]>(() => {
     if (!snap) return EMPTY_FLOW_NODES;
     const headId = snap.work[0];
+    const failedId = snap.status === "fail" ? snap.failed : null;
     const out: StateFlowNode[] = [];
-    for (const node of layoutNodes) {
+    for (const node of displayNodes) {
       const id = String(node.id);
       const pos = positions[id];
       if (!pos) continue;
+      const insnText = insnTextForNode(node, snap.insns);
+      const { role, tags, accessFamily } = classifyNodeRole({
+        node,
+        nodes: snap.nodes,
+        edges: snap.edges,
+        insnText,
+        work: snap.work,
+        failedId,
+      });
+      const mnemonic = insnMnemonic(insnText);
+      const folded = typeFold.foldedCount.get(node.id);
       out.push({
         id,
         type: "state",
@@ -415,27 +782,95 @@ function DebugScreen() {
           focused: node.id === sel.focus,
           compare: node.id === sel.compare,
           head: node.id === headId,
-          entry: node.id === 0,
           processed: done.has(node.id),
-          hasHelper: node.predicates.some((p) => p.kind === "helper"),
-          hasPacket: node.exprs.some((e) => parseReg(e.reg).kind === "packet"),
-          hasRet: node.predicates.some((p) => p.kind === "ret"),
+          role,
+          tags,
+          insnHint: mnemonic || undefined,
+          foldedCount: folded,
+          accessFamily,
         },
         draggable: false,
       });
     }
+    if (openLayer) {
+      const repPos = positions[String(openLayer.rep)];
+      if (repPos) {
+        openLayer.members.forEach((memberId, index) => {
+          if (out.some((item) => item.id === String(memberId))) return;
+          const node = snap.nodes.find((item) => item.id === memberId);
+          if (!node) return;
+          const insnText = insnTextForNode(node, snap.insns);
+          const { role, tags, accessFamily } = classifyNodeRole({
+            node,
+            nodes: snap.nodes,
+            edges: snap.edges,
+            insnText,
+            work: snap.work,
+            failedId,
+          });
+          out.push({
+            id: String(memberId),
+            type: "state",
+            zIndex: 20,
+            position: {
+              x: repPos.x,
+              y: repPos.y - (openLayer.members.length - index) * (NODE_H + 18),
+            },
+            data: {
+              nodeId: node.id,
+              loc: node.loc,
+              egCount: node.exprs.length,
+              predCount: node.predicates.length,
+              focused: node.id === sel.focus,
+              compare: node.id === sel.compare,
+              head: node.id === headId,
+              processed: done.has(node.id),
+              role,
+              tags,
+              insnHint: insnMnemonic(insnText) || undefined,
+              accessFamily,
+              layer: true,
+            },
+            draggable: false,
+          });
+        });
+      }
+    }
     return out.length === 0 ? EMPTY_FLOW_NODES : out;
-  }, [done, layoutNodes, positions, sel.compare, sel.focus, snap]);
+  }, [done, displayNodes, typeFold, positions, sel.compare, sel.focus, snap, openLayer]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     if (!snap || flowNodes.length === 0) return EMPTY_FLOW_EDGES;
     const placed = new Set(flowNodes.map((n) => n.id));
-    const next = layoutEdges
+    const next = displayEdges
       .filter((edge) => placed.has(String(edge.from)) && placed.has(String(edge.to)))
       .map((edge) => {
         const id = edgeKey(edge);
         const branch = edge.dir === "taken" || edge.dir === "not_taken";
+        const reuse = edge.dir === "reuse";
         return {
+          id,
+          source: String(edge.from),
+          target: String(edge.to),
+          sourceHandle: "r",
+          targetHandle: reuse ? "t" : "l",
+          type: "default",
+          label: edge.dir === "only" ? undefined : edge.dir,
+          className: `flow-edge${branch ? " flow-edge--branch" : ""}${reuse ? " flow-edge--reuse" : ""}${
+            sel.edgeKey === id ? " flow-edge--sel" : ""
+          }`,
+          labelStyle: { fill: "#c9bfb0", fontSize: 10 },
+        };
+      });
+    if (openLayer) {
+      const ids = new Set(openLayer.members.map(String));
+      const seen = new Set(next.map((edge) => edge.id));
+      for (const edge of snap.edges) {
+        if (!ids.has(String(edge.from)) || !ids.has(String(edge.to))) continue;
+        const id = edgeKey(edge);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        next.push({
           id,
           source: String(edge.from),
           target: String(edge.to),
@@ -443,14 +878,13 @@ function DebugScreen() {
           targetHandle: "l",
           type: "default",
           label: edge.dir === "only" ? undefined : edge.dir,
-          className: `flow-edge${branch ? " flow-edge--branch" : ""}${
-            sel.edgeKey === id ? " flow-edge--sel" : ""
-          }`,
+          className: "flow-edge flow-edge--layer",
           labelStyle: { fill: "#c9bfb0", fontSize: 10 },
-        };
-      });
+        });
+      }
+    }
     return next.length === 0 ? EMPTY_FLOW_EDGES : next;
-  }, [flowNodes, layoutEdges, sel.edgeKey, snap]);
+  }, [flowNodes, displayEdges, sel.edgeKey, snap, openLayer]);
 
   const dualTakenNotTaken = useMemo(() => {
     if (!snap || !focusedNode) return null;
@@ -468,411 +902,452 @@ function DebugScreen() {
 
   const focusBranchSource = useCallback(() => {
     if (!snap) return;
-    const src = snap.edges.find((e) => e.dir === "taken")?.from;
-    if (src === undefined) return;
-    setSel((s) => ({ ...s, focus: src, panel: "node", edgeKey: null }));
-  }, [snap]);
+    const src = branchSource(sel.focus, snap.edges);
+    if (src === null) return;
+    setSel((s) => ({ ...s, focus: src, panel: "eg", edgeKey: null }));
+  }, [sel.focus, snap]);
 
   return (
     <Flex className="app-shell" height="100%" flexDirection="column">
       <Flex className="topbar" alignItems="center" gap={10} px={12} pt={10}>
-        <Text className="panel__title" p={0}>
-          架构
-        </Text>
+        <div className="arch-tabs" role="tablist" aria-label="视图">
+          {(
+            [
+              ["rv32imc", "RV32IMC"],
+              ["ebpf", "eBPF"],
+              ["compare", "对比"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`arch-tab${tab === id ? " arch-tab--on" : ""}`}
+              onClick={() => onSelectTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <Text className="muted">程序</Text>
         <select
-          className="toolbar__select"
-          value={arch}
-          disabled={busy}
-          onChange={(ev) => setArch(ev.target.value as ArchKind)}
+          className="toolbar__input mono"
+          aria-label="程序"
+          value={programName}
+          disabled={busy || programs.length === 0}
+          onChange={(ev) => {
+            setFirmwareBytes(null);
+            setProgramName(ev.target.value);
+          }}
         >
-          <option value="rv32imc">RV32IMC</option>
+          {(programs.length > 0 ? programs : [programName]).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
         </select>
-        <Text className="muted">XDP ELF</Text>
-        <label className="toolbar__file">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".elf"
-            disabled={busy}
-            onChange={onFirmwarePick}
-          />
-          <span className="toolbar__file-btn">选择文件</span>
-        </label>
-        <Text className="mono muted" fontSize={11} title={firmwareName}>
-          {firmwareBytes ? firmwareName : "just_tx.elf（默认）"}
-        </Text>
-        {firmwareBytes ? (
-          <Button
-            type="button"
-            className="toolbar__btn toolbar__btn--quiet"
-            disabled={busy}
-            onClick={() => {
-              setFirmwareName("just_tx.elf");
-              setFirmwareBytes(null);
-              if (fileRef.current) fileRef.current.value = "";
-            }}
-          >
-            恢复默认
-          </Button>
+
+        {!comparing ? (
+          <>
+            <Text className="muted">XDP ELF</Text>
+            <label className="toolbar__file">
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".elf,.o"
+                disabled={busy}
+                onChange={onFirmwarePick}
+              />
+              <span className="toolbar__file-btn">选择文件</span>
+            </label>
+            <Text className="mono muted" fontSize={11} title={firmwareName}>
+              {firmwareBytes
+                ? firmwareName
+                : `${programName}（../build）`}
+            </Text>
+            {firmwareBytes ? (
+              <Button
+                type="button"
+                className="toolbar__btn toolbar__btn--quiet"
+                disabled={busy}
+                onClick={() => {
+                  setFirmwareName(archTab ? defaultName(archTab) : "just_tx.elf");
+                  setFirmwareBytes(null);
+                  if (fileRef.current) fileRef.current.value = "";
+                }}
+              >
+                恢复默认
+              </Button>
+            ) : null}
+          </>
         ) : null}
-        <Text className="muted">budget</Text>
+
+        <label className="muted" htmlFor="toolbar-budget">
+          budget
+        </label>
         <input
+          id="toolbar-budget"
           className="toolbar__input mono"
           type="number"
           min={0}
-          max={512}
+          max={2048}
           value={budget}
           disabled={busy}
           onChange={(ev) => setBudget(Number(ev.target.value) || 0)}
         />
-        <Button
-          type="button"
-          className="toolbar__btn"
-          disabled={busy}
-          onClick={() => void boot(arch, budget, firmwareName, firmwareBytes)}
-        >
-          新建运行
-        </Button>
-        <label className="muted collapse-toggle">
-          <input
-            type="checkbox"
-            checked={sel.collapseSameLoc}
-            onChange={(ev) =>
-              setSel((s) => ({ ...s, collapseSameLoc: ev.target.checked }))
-            }
-          />
-          折叠同位置（仅视图）
-        </label>
-        <Text className="mono muted" fontSize={11}>
-          快照不可变 · Shift+点击设比较节点 · {snap?.proof_note ?? ""}
-        </Text>
-      </Flex>
 
-      <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
-        <Flex className="panel panel--left" width={300} flexDirection="column" minHeight={0}>
-          <Text className="panel__title">指令 / 位置</Text>
-          <Box className="panel__body insn-list" flex="1" overflow="auto" minHeight={0}>
-            {snap?.insns.map((insn) => {
-              const current = highlightJ === insn.j;
-              const exec = snap.cursor_j === insn.j;
-              const sp = insn.text.indexOf(" ");
-              const addr = sp < 0 ? insn.text : insn.text.slice(0, sp);
-              const body = sp < 0 ? "" : insn.text.slice(sp + 1);
+        {!comparing && archTab ? (
+          <Button
+            type="button"
+            className="toolbar__btn"
+            disabled={busy}
+            onClick={() =>
+              void boot(archTab, budget, firmwareName, firmwareBytes, programName)
+            }
+          >
+            新建运行
+          </Button>
+        ) : null}
+
+        {comparing ? (
+          <Button
+            type="button"
+            className="toolbar__btn"
+            disabled={busy || compareUi.tag === "expanding"}
+            onClick={() => void runCompareTree()}
+          >
+            重新对比
+          </Button>
+        ) : null}
+
+        {comparing && compareUi.tag === "ready" ? (
+          <Button
+            type="button"
+            className="toolbar__btn toolbar__btn--quiet"
+            onClick={() => setCompareFitRequest((n) => n + 1)}
+          >
+            适配树
+          </Button>
+        ) : null}
+
+        {compareUi.tag === "expanding" ? (
+          <Button
+            type="button"
+            className="toolbar__btn toolbar__btn--quiet"
+            onClick={() => {
+              compareAbortRef.current?.abort();
+              setCompareUi({ tag: "idle", stopped: true });
+              setBusy(false);
+            }}
+          >
+            停止
+          </Button>
+        ) : null}
+
+        {comparing &&
+        compareUi.tag === "ready" &&
+        (compareUi.left.budget !== budget ||
+          compareUi.left.program !== `${programName}.elf`) ? (
+          <Text className="mono muted" fontSize={11}>
+            结果 {compareUi.left.program} budget={compareUi.left.budget}（已过期）
+          </Text>
+        ) : null}
+
+        {compareUi.tag === "expanding" ? (
+          <Flex flexDirection="column" gap={2} className="compare-progress">
+            {(["left", "right"] as const).map((side) => {
+              const slot = compareUi[side];
               return (
-                <Box
-                  key={insn.j}
-                  ref={current ? insnRef : undefined}
-                  className={`insn-row${current ? " insn-row--focus" : ""}${
-                    exec ? " insn-row--exec" : ""
-                  }`}
-                >
-                  <span className="insn-row__addr mono">{addr}</span>
-                  <span className="insn-row__body mono">{body}</span>
-                </Box>
+                <Text key={side} className="mono muted" fontSize={11}>
+                  {slot.arch} · {slot.label} · steps {slot.stats?.steps ?? 0} · nodes{" "}
+                  {slot.snap?.nodes.length ?? 0} · {slot.snap?.status ?? "…"}
+                </Text>
               );
             })}
-          </Box>
-          <Box className="meta-strip" px={12} py={8}>
-            <Text className="mono muted" display="block" fontSize={11}>
-              Work [{snap?.work.join(", ") ?? ""}] · fuel {snap?.fuel ?? "—"}/
-              {snap?.budget ?? "—"}
-            </Text>
-            <Text className="mono muted" display="block" fontSize={11}>
-              已处理 {done.size} · 节点 {snap?.nodes.length ?? 0} · 边{" "}
-              {snap?.edges.length ?? 0}
-            </Text>
-            {branchStats.taken > 0 || branchStats.notTaken > 0 ? (
-              <button
-                type="button"
-                className="branch-chip"
-                onClick={focusBranchSource}
-              >
-                分支 Taken×{branchStats.taken} / NotTaken×{branchStats.notTaken}
-                （点此跳到分支源）
-              </button>
-            ) : null}
-            {snap?.status === "fail" ? (
-              <Text className="fail-banner" display="block">
-                未完成 · {snap.reason ?? "?"}（保留部分图）
-              </Text>
-            ) : null}
-          </Box>
-        </Flex>
+          </Flex>
+        ) : (
+          <Text className="mono muted" fontSize={11}>
+            {comparing
+              ? "仅 branch/ret 阶段；不代表行为等价"
+              : `Shift+点击设比较 · 同类型自动折叠 · ${snap?.proof_note ?? ""}`}
+          </Text>
+        )}
+      </Flex>
 
-        <Box className="panel panel--canvas" flex="1" minWidth={0} position="relative">
+      {comparing ? (
+        <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
           {error ? (
             <Text className="error-banner" p={16} fontSize={13}>
               {error}
             </Text>
           ) : null}
-          <ReactFlow
-            nodes={flowNodes}
-            edges={flowEdges}
-            nodeTypes={nodeTypes}
-            onNodeClick={onNodeClick}
-            onEdgeClick={onEdgeClick}
-            nodesDraggable={false}
-            nodesFocusable={false}
-            elementsSelectable={false}
-            connectionMode={ConnectionMode.Loose}
-            fitView={false}
-            minZoom={0.15}
-            maxZoom={2}
-            proOptions={{ hideAttribution: false }}
-            colorMode="dark"
-          >
-            <Background color="rgba(120,112,98,0.35)" gap={24} />
-          </ReactFlow>
-        </Box>
-
-        <Flex className="panel panel--right" width={400} flexDirection="column" minHeight={0}>
-          <Flex className="panel-tabs" gap={6} px={10} pt={10}>
-            {(
-              [
-                ["node", "节点"],
-                ["step", "单步"],
-                ["path", "路径"],
-                ["compare", "比较"],
-                ["dual", "双架构"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={`tab-btn${sel.panel === id ? " tab-btn--on" : ""}`}
-                onClick={() => setSel((s) => ({ ...s, panel: id }))}
-              >
-                {label}
-              </button>
-            ))}
+          {compareUi.tag === "expanding" || compareUi.tag === "idle" ? (
+            <Flex
+              className="compare-tree panel"
+              flex="1"
+              alignItems="center"
+              justifyContent="center"
+            >
+              <Text className="mono muted">
+                {compareUi.tag === "expanding"
+                  ? "并行展开 rv32imc / ebpf…"
+                  : compareUi.stopped
+                    ? "已停止。点击重新对比。"
+                    : `点击重新对比以展开 ${programName} 并比较树。`}
+              </Text>
+            </Flex>
+          ) : null}
+          {compareUi.tag === "ready" ? (
+            <CompareReadyLayout
+              report={compareUi.report}
+              left={compareUi.left}
+              right={compareUi.right}
+              nodeId={compareSel.nodeId}
+              detailSide={compareSel.detailSide}
+              fitRequest={compareFitRequest}
+              onSelectNode={(id) =>
+                setCompareSel((s) => ({ ...s, nodeId: id }))
+              }
+              onDetailSide={(detailSide) =>
+                setCompareSel((s) => ({ ...s, detailSide }))
+              }
+            />
+          ) : null}
+        </Flex>
+      ) : (
+        <Flex flex="1" minHeight={0} gap={12} p={12} pt={8}>
+          <Flex className="panel panel--left" width={300} flexDirection="column" minHeight={0}>
+            <Text className="panel__title">指令 / 位置</Text>
+            <Box className="panel__body insn-list" flex="1" overflow="auto" minHeight={0}>
+              {snap?.insns.map((insn) => {
+                const current = highlightJ === insn.j;
+                const exec = snap.cursor_j === insn.j;
+                const sp = insn.text.indexOf(" ");
+                const addr = sp < 0 ? insn.text : insn.text.slice(0, sp);
+                const body = sp < 0 ? "" : insn.text.slice(sp + 1);
+                return (
+                  <Box
+                    key={insn.j}
+                    ref={current ? insnRef : undefined}
+                    className={`insn-row${current ? " insn-row--focus" : ""}${
+                      exec ? " insn-row--exec" : ""
+                    }`}
+                  >
+                    <span className="insn-row__addr mono">{addr}</span>
+                    <span className="insn-row__body mono">{body}</span>
+                  </Box>
+                );
+              })}
+            </Box>
+            <Box className="meta-strip" px={12} py={8}>
+              <Text className="mono muted" display="block" fontSize={11}>
+                Work [{snap?.work.join(", ") ?? ""}] · fuel {snap?.fuel ?? "—"}/
+                {snap?.budget ?? "—"}
+              </Text>
+              <Text className="mono muted" display="block" fontSize={11}>
+                已处理 {done.size} · 节点 {snap?.nodes.length ?? 0} · 边{" "}
+                {snap?.edges.length ?? 0}
+              </Text>
+              {branchStats.taken > 0 || branchStats.notTaken > 0 ? (
+                <button
+                  type="button"
+                  className="branch-chip"
+                  onClick={focusBranchSource}
+                >
+                  分支 Taken×{branchStats.taken} / NotTaken×{branchStats.notTaken}
+                  （点此跳到分支源）
+                </button>
+              ) : null}
+              {snap?.status === "fail" ? (
+                <Text className="fail-banner" display="block">
+                  未完成 · {snap.reason ?? "?"}（保留部分图）
+                  {snap.failed != null ? ` · 拒绝节点 #${snap.failed}` : ""}
+                </Text>
+              ) : null}
+            </Box>
           </Flex>
 
-          <Box className="panel__body" flex="1" overflow="auto" minHeight={0} px={14} pb={10}>
-            {sel.panel === "node" && focusedNode && focusedSplit ? (
-              <>
-                <Text className="sem-heading">
-                  执行前快照 · #{focusedNode.id} ·{" "}
-                  {focusedNode.loc === "exit" ? "exit（终态）" : `pos ${focusedNode.loc}`}
-                </Text>
-                <Text className="sem-sub">Expr（按 RegKind）</Text>
-                <ExprGroups exprs={focusedSplit.eg} />
-                {focusedSplit.eiIn.length > 0 ? (
-                  <>
-                    <Text className="sem-sub sem-sub--gap">到达 Δ（eiIn）</Text>
-                    <ExprGroups exprs={focusedSplit.eiIn} />
-                  </>
-                ) : null}
-                {focusedSplit.eiOut.length > 0 ? (
-                  <>
-                    <Text className="sem-sub sem-sub--gap">展开写出（eiOut）</Text>
-                    <ExprGroups exprs={focusedSplit.eiOut} />
-                  </>
-                ) : null}
-                <Text className="sem-sub sem-sub--gap">Predicate</Text>
-                <PredList preds={focusedNode.predicates} />
-                {dualTakenNotTaken ? (
-                  <>
-                    <Text className="sem-sub sem-sub--gap">出边 Taken / NotTaken</Text>
-                    <Text className="mono sem-line" display="block">
-                      Taken →{" "}
-                      {dualTakenNotTaken.taken.map((e) => `#${e.to}`).join(", ") || "∅"}
-                    </Text>
-                    <Text className="mono sem-line" display="block">
-                      NotTaken →{" "}
-                      {dualTakenNotTaken.notTaken.map((e) => `#${e.to}`).join(", ") ||
-                        "∅"}
-                    </Text>
-                  </>
-                ) : null}
-              </>
+          <Box className="panel panel--canvas" flex="1" minWidth={0} position="relative">
+            {error ? (
+              <Text className="error-banner" p={16} fontSize={13}>
+                {error}
+              </Text>
             ) : null}
+            <ReactFlow
+              nodes={flowNodes}
+              edges={flowEdges}
+              nodeTypes={nodeTypes}
+              onNodeClick={onNodeClick}
+              onEdgeClick={onEdgeClick}
+              onPaneClick={() => setOpenLayer(null)}
+              nodesDraggable={false}
+              nodesFocusable={false}
+              elementsSelectable={false}
+              connectionMode={ConnectionMode.Loose}
+              fitView={false}
+              minZoom={0.15}
+              maxZoom={2}
+              proOptions={{ hideAttribution: false }}
+              colorMode="dark"
+            >
+              <Background color="rgba(120,112,98,0.35)" gap={24} />
+            </ReactFlow>
+            {snap && flowNodes.length > 0 ? (
+              <div className="node-legend" aria-label="节点类型图例">
+                {NODE_ROLE_LEGEND.map((row) => (
+                  <div key={row.role} className="node-legend__row">
+                    <span
+                      className={`node-legend__swatch state-node--role-${row.role}${
+                        row.role.startsWith("reg_") ? " state-node--access" : ""
+                      }`}
+                    />
+                    <span>{row.label}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="canvas-float" aria-label="运行控制">
+              <button
+                type="button"
+                className="canvas-float__btn"
+                onClick={() => void onStep()}
+                disabled={!canStep}
+              >
+                单步（Work 首）
+              </button>
+              <button
+                type="button"
+                className="canvas-float__btn"
+                onClick={() => void onRun()}
+                disabled={!canRun}
+              >
+                运行到结束
+              </button>
+              <span className="mono canvas-float__status">
+                {snap
+                  ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
+                      snap.arch
+                    }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}${
+                      runRate ? `  ${runRate}` : ""
+                    }`
+                  : "连接中"}
+              </span>
+            </div>
+          </Box>
 
-            {sel.panel === "step" && snap ? (
-              <>
-                <Text className="sem-heading">单步 / 边详情</Text>
-                {selectedEdge ? (
-                  <>
-                    <Text className="mono sem-line" display="block">
+          <Flex className="panel panel--right" flexDirection="column" minHeight={0}>
+            <Flex className="panel-tabs" gap={6} px={10} pt={8}>
+              {(
+                [
+                  ["ei", <>E<sub>i</sub></>],
+                  ["eg", <>E<sub>g</sub></>],
+                  ["pi", <>P<sub>i</sub></>],
+                  ["pg", <>P<sub>g</sub></>],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={`tab-btn${sel.panel === id ? " tab-btn--on" : ""}`}
+                  onClick={() => setSel((s) => ({ ...s, panel: id }))}
+                >
+                  {label}
+                </button>
+              ))}
+            </Flex>
+
+            <Box
+              className="panel__body panel__body--state"
+              flex="1"
+              overflow="auto"
+              minHeight={0}
+              px={12}
+              pb={8}
+            >
+              {focusedNode ? (
+                <Text className="sem-heading">
+                  #{focusedNode.id}
+                  {focusedNode.loc === "exit" ? " · exit" : ` · pos ${focusedNode.loc}`}
+                </Text>
+              ) : null}
+
+              {sel.panel === "ei" && focusedNode && focusedSplit ? (
+                <>
+                  {selectedEdge ? (
+                    <Text className="mono muted" display="block" fontSize={11}>
                       {selectedEdge.from} —{selectedEdge.dir}→ {selectedEdge.to}
                     </Text>
-                    {(() => {
-                      const src = snap.nodes.find((n) => n.id === selectedEdge.from);
-                      const dst = snap.nodes.find((n) => n.id === selectedEdge.to);
-                      if (!src || !dst) return null;
-                      const delta = localExprs(src.exprs, dst.exprs);
-                      return (
-                        <>
-                          <Text className="sem-sub">源执行前 Expr 条数 {src.exprs.length}</Text>
-                          <Text className="sem-sub">目标执行前（到达后）Δ</Text>
-                          <ExprGroups exprs={delta} />
-                          <Text className="sem-sub sem-sub--gap">目标 Predicate</Text>
-                          <PredList preds={dst.predicates} />
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <Text className="muted">点击图上的边查看局部效果与目标快照。</Text>
-                )}
-                <Text className="sem-sub sem-sub--gap">当前节点入边</Text>
-                {focusedNode
-                  ? inboundEdges(focusedNode.id, snap.edges).map((e) => (
-                      <Text key={edgeKey(e)} className="mono sem-line" display="block">
-                        #{e.from} —{e.dir}→ #{e.to}
-                      </Text>
-                    ))
-                  : null}
-              </>
-            ) : null}
-
-            {sel.panel === "path" && snap ? (
-              <>
-                <Text className="sem-heading">路径（root → focus）</Text>
-                <Text className="mono muted" display="block">
-                  {pathIds.map((id) => `#${id}`).join(" → ")}
-                </Text>
-                {pathIds.map((id) => {
-                  const n = snap.nodes.find((x) => x.id === id);
-                  if (!n) return null;
-                  return (
-                    <Box key={id} className="path-card">
-                      <Text className="mono sem-line" display="block">
-                        #{id} loc={n.loc} E={n.exprs.length} P={n.predicates.length}
-                      </Text>
-                      <PredList preds={n.predicates} />
-                    </Box>
-                  );
-                })}
-              </>
-            ) : null}
-
-            {sel.panel === "compare" ? (
-              <>
-                <Text className="sem-heading">两节点比较</Text>
-                <Text className="muted" display="block">
-                  焦点 #{sel.focus}
-                  {sel.compare !== null ? ` · 比较 #${sel.compare}` : " · Shift+点击选第二节点"}
-                </Text>
-                {focusedNode && compareNode ? (
-                  <>
-                    <Text className="sem-sub">
-                      同位置？{" "}
-                      {focusedNode.loc === compareNode.loc
-                        ? `是 (loc ${focusedNode.loc})，引用不同`
-                        : "否"}
+                  ) : null}
+                  {focusedSplit.eiIn.length > 0 ? (
+                    <SemBlock tag={<EiTag />}>
+                      <ExprCapsules exprs={focusedSplit.eiIn} />
+                    </SemBlock>
+                  ) : null}
+                  {focusedSplit.eiOut
+                    .filter((d) =>
+                      selectedEdge
+                        ? d.to === selectedEdge.to
+                        : d.exprs.length > 0 || d.dir === "taken" || d.dir === "not_taken",
+                    )
+                    .map((delta) => (
+                      <SemBlock key={delta.to} tag={<EiTag on={eiOnLabel(delta.dir)} />}>
+                        <ExprCapsules exprs={delta.exprs} />
+                      </SemBlock>
+                    ))}
+                  {focusedSplit.eiIn.length === 0
+                  && focusedSplit.eiOut.every((d) => d.exprs.length === 0)
+                  && !selectedEdge ? (
+                    <SemBlock tag={<EiTag />}>
+                      <ExprCapsules exprs={[]} />
+                    </SemBlock>
+                  ) : null}
+                  {dualTakenNotTaken ? (
+                    <Text className="mono muted" display="block" fontSize={11}>
+                      T→{dualTakenNotTaken.taken.map((e) => e.to).join(",") || "∅"}
+                      {" · "}
+                      N→{dualTakenNotTaken.notTaken.map((e) => e.to).join(",") || "∅"}
                     </Text>
-                    {(() => {
-                      const d = diffExprs(focusedNode.exprs, compareNode.exprs);
-                      const pd = diffPredicates(
-                        focusedNode.predicates,
-                        compareNode.predicates,
-                      );
-                      return (
-                        <>
-                          <Text className="sem-sub">Expr 新增 {d.added.length}</Text>
-                          {d.added.map((e, i) => (
-                            <ExprDetail key={`a${i}`} e={e} />
-                          ))}
-                          <Text className="sem-sub">Expr 删除 {d.removed.length}</Text>
-                          {d.removed.map((e, i) => (
-                            <ExprDetail key={`r${i}`} e={e} />
-                          ))}
-                          <Text className="sem-sub">Expr 覆写 {d.changed.length}</Text>
-                          {d.changed.map((c, i) => (
-                            <Box key={`c${i}`}>
-                              <Text className="mono muted" display="block">
-                                before {c.before.term}
-                              </Text>
-                              <ExprDetail e={c.after} />
-                            </Box>
-                          ))}
-                          <Text className="sem-sub sem-sub--gap">
-                            Predicate +{pd.added.length} / −{pd.removed.length}
-                          </Text>
-                          {pd.added.map((p, i) => (
-                            <Box key={`pa${i}`}>
-                              <Text className="mono muted" display="block">
-                                +
-                              </Text>
-                              <PredDetail p={p} />
-                            </Box>
-                          ))}
-                          {pd.removed.map((p, i) => (
-                            <Box key={`pr${i}`}>
-                              <Text className="mono muted" display="block">
-                                −
-                              </Text>
-                              <PredDetail p={p} />
-                            </Box>
-                          ))}
-                        </>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <Text className="muted">需要两个节点引用。</Text>
-                )}
-              </>
-            ) : null}
+                  ) : null}
+                </>
+              ) : null}
 
-            {sel.panel === "dual" ? (
-              <>
-                <Text className="sem-heading">双架构比较</Text>
-                <Text className="fail-banner" display="block">
-                  未实现
-                </Text>
-                <Text className="muted" display="block">
-                  eBPF 侧 Step / 观察投影尚未接入核心。此处不伪造一致性结论。
-                </Text>
-              </>
-            ) : null}
+              {sel.panel === "eg" && focusedNode && focusedSplit ? (
+                <SemBlock tag={<EgTag />}>
+                  <ExprCapsules exprs={focusedSplit.eg} />
+                </SemBlock>
+              ) : null}
 
-            {!focusedNode && sel.panel !== "dual" ? (
-              <Text className="muted">等待节点…</Text>
-            ) : null}
-          </Box>
+              {sel.panel === "pi" && focusedNode ? (
+                <SemBlock tag={<PiTag />}>
+                  <PredCapsules preds={focusedPi} />
+                </SemBlock>
+              ) : null}
 
-          <Box className="log-strip">
-            <Text className="panel__title panel__title--small">日志</Text>
-            <Box className="log-strip__body" maxHeight={120} overflow="auto" px={12} pb={10}>
-              {snap?.log.map((entry) => (
-                <Text key={entry.t} className="mono log-line" display="block">
-                  {entry.t}. {entry.msg}
-                </Text>
-              ))}
-              <Box ref={logRef} />
+              {sel.panel === "pg" && focusedNode ? (
+                <SemBlock tag={<PgTag />}>
+                  <PredCapsules preds={focusedNode.predicates} />
+                </SemBlock>
+              ) : null}
+
+              {!focusedNode ? <Text className="muted">等待节点…</Text> : null}
             </Box>
-          </Box>
-        </Flex>
-      </Flex>
 
-      <Flex className="toolbar" alignItems="center" justifyContent="center" gap={12}>
-        <Button
-          type="button"
-          className="toolbar__btn"
-          onClick={() => void onStep()}
-          disabled={!canStep}
-          opacity={canStep ? 1 : 0.45}
-        >
-          单步（Work 首）
-        </Button>
-        <Button
-          type="button"
-          className="toolbar__btn"
-          onClick={() => void onRun()}
-          disabled={!canRun}
-          opacity={canRun ? 1 : 0.45}
-        >
-          运行到结束
-        </Button>
-        <Text className="mono toolbar__status">
-          {snap
-            ? `${statusLabel[snap.status]}  fuel ${snap.fuel}/${snap.budget}  ${
-                snap.arch
-              }  ${snap.program}${snap.reason ? `  ${snap.reason}` : ""}`
-            : "连接中"}
-        </Text>
-      </Flex>
+            <Box className="log-strip">
+              <Text className="panel__title panel__title--small">日志</Text>
+              <Box className="log-strip__body" maxHeight={120} overflow="auto" px={12} pb={10}>
+                {snap?.log.map((entry) => (
+                  <Text key={entry.t} className="mono log-line" display="block">
+                    {entry.t}. {entry.msg}
+                  </Text>
+                ))}
+                <Box ref={logRef} />
+              </Box>
+            </Box>
+          </Flex>
+        </Flex>
+      )}
     </Flex>
   );
 }

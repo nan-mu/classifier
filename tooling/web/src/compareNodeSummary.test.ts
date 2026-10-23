@@ -1,0 +1,125 @@
+import { describe, expect, it } from "vitest";
+import { alignListEntries, cardTier, matchStatusOf, summarizeTreeNode } from "./compareNodeSummary";
+import type { ListEntry, TreeNode } from "./types";
+
+function pred(fp: string, kind = "helper"): ListEntry {
+  return {
+    tag: "pred",
+    atom: {
+      node_id: 1,
+      loc: "0",
+      index: 0,
+      kind,
+      fields: {},
+      fingerprint: fp,
+    },
+  };
+}
+
+describe("alignListEntries", () => {
+  it("pairs equal fingerprints in order", () => {
+    const left: ListEntry[] = [pred("a"), pred("b"), { tag: "exit" }];
+    const right: ListEntry[] = [pred("a"), pred("b"), { tag: "exit" }];
+    const rows = alignListEntries(left, right);
+    expect(rows.map((r) => r.status)).toEqual(["both", "both", "both"]);
+  });
+
+  it("marks only-left and only-right inserts", () => {
+    const left: ListEntry[] = [pred("a"), pred("x"), pred("b")];
+    const right: ListEntry[] = [pred("a"), pred("b")];
+    const rows = alignListEntries(left, right);
+    expect(rows.map((r) => r.status)).toEqual(["both", "onlyLeft", "both"]);
+  });
+});
+
+describe("summarizeTreeNode", () => {
+  it("reports coverage when one side has an extra pred", () => {
+    const node: TreeNode = {
+      id: 3,
+      start: "taken",
+      left: [pred("a"), pred("extra")],
+      right: [pred("a")],
+    };
+    const s = summarizeTreeNode(node);
+    expect(s.verdict).toBe("coverage");
+    expect(s.both).toBe(1);
+    expect(s.onlyLeft).toBe(1);
+    expect(s.onlyRight).toBe(0);
+  });
+
+  it("LCS keeps left subsequence when right inserts a duplicate key", () => {
+    const node: TreeNode = {
+      id: 1,
+      start: "create",
+      left: [pred("a"), pred("b"), { tag: "exit" }],
+      right: [pred("b"), pred("a"), pred("b"), { tag: "exit" }],
+    };
+    const s = summarizeTreeNode(node);
+    expect(s.both).toBe(3);
+    expect(s.onlyLeft).toBe(0);
+    expect(s.onlyRight).toBe(1);
+    expect(s.verdict).toBe("coverage");
+    expect(s.aligned.map((r) => r.status)).toEqual([
+      "onlyRight",
+      "both",
+      "both",
+      "both",
+    ]);
+  });
+
+  it("collapses same to pass and both mismatch verdicts to fail", () => {
+    const same: TreeNode = {
+      id: 1,
+      start: "create",
+      left: [pred("a")],
+      right: [pred("a")],
+    };
+    const coverage: TreeNode = {
+      id: 2,
+      start: "taken",
+      left: [pred("a"), pred("extra")],
+      right: [pred("a")],
+    };
+    const diff: TreeNode = {
+      id: 3,
+      start: "not_taken",
+      left: [pred("only-left")],
+      right: [pred("only-right")],
+    };
+    const exitMismatch: TreeNode = {
+      id: 4,
+      start: "create",
+      left: [pred("a"), { tag: "exit" }],
+      right: [pred("a")],
+    };
+    expect(matchStatusOf(same)).toBe("pass");
+    expect(matchStatusOf(coverage)).toBe("fail");
+    expect(matchStatusOf(diff)).toBe("fail");
+    expect(matchStatusOf(exitMismatch)).toBe("fail");
+    expect(matchStatusOf({ ...coverage, matchStatus: "pass" })).toBe("pass");
+    expect(matchStatusOf({ ...same, matchStatus: "fail" })).toBe("fail");
+  });
+});
+
+describe("cardTier", () => {
+  const node: TreeNode = {
+    id: 1,
+    start: "create",
+    left: [pred("a", "branch")],
+    right: [pred("a", "branch")],
+    matchStatus: "pass",
+  };
+
+  it("treats a passing node as fully agreed when expressions are complete or omitted", () => {
+    expect(cardTier(node)).toBe("agree");
+    expect(cardTier({ ...node, exprStatus: "complete" })).toBe("agree");
+  });
+
+  it("keeps a kind-count pass with incomplete expressions out of the mismatch tier", () => {
+    expect(cardTier({ ...node, exprStatus: "incomplete" })).toBe("expr");
+  });
+
+  it("marks a kind-count failure even when expressions are complete", () => {
+    expect(cardTier({ ...node, matchStatus: "fail", exprStatus: "complete" })).toBe("mismatch");
+  });
+});

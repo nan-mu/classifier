@@ -7,7 +7,7 @@ export type ViewerSelection = {
   edgeKey: string | null;
   /** View-only: hide non-focused arrivals that share a program location. */
   collapseSameLoc: boolean;
-  panel: "node" | "step" | "path" | "compare" | "dual";
+  panel: "ei" | "eg" | "pi" | "pg";
 };
 
 export function edgeKey(e: Pick<GraphEdge, "from" | "to" | "dir">): string {
@@ -40,6 +40,10 @@ export function processedIds(snap: SessionSnapshot): Set<number> {
   const work = new Set(snap.work);
   const out = new Set<number>();
   for (const n of snap.nodes) {
+    if (snap.status === "fail" && n.id === snap.failed) {
+      out.add(n.id);
+      continue;
+    }
     if (work.has(n.id)) continue;
     if (n.loc === "exit") {
       out.add(n.id);
@@ -52,7 +56,8 @@ export function processedIds(snap: SessionSnapshot): Set<number> {
 }
 
 export function sameExprKey(a: ExprRow, b: ExprRow): boolean {
-  return a.reg === b.reg && a.rel === b.rel;
+  return a.reg === b.reg && a.rel === b.rel && a.role === b.role
+    && (a.role !== "constraint" || a.term === b.term);
 }
 
 export type ExprDiff = {
@@ -94,16 +99,63 @@ export function helperName(id: number | undefined): string {
   return HELPER_NAMES[id] ?? `helper${id}`;
 }
 
+/** ABI arity for chip text; frozen lookup-key tail is omitted from display. */
+const HELPER_DISPLAY_ARITY: Record<number, number> = {
+  1: 2,
+  2: 4,
+  3: 2,
+  5: 0,
+  6: 5,
+  28: 5,
+  65: 2,
+};
+
+/** Shorten one helper arg for chips (map VMA → hex; long terms truncated). */
+export function shortHelperArg(arg: string): string {
+  if (/^\d+$/.test(arg)) {
+    const n = Number(arg);
+    if (Number.isSafeInteger(n) && n >= 0x1000) return `0x${n.toString(16)}`;
+    return arg;
+  }
+  // id32(add32(v32:0,4294967280)) → keep structure but compress constants.
+  let s = arg
+    .replace(/\bid32\b/g, "id")
+    .replace(/\badd32\b/g, "add")
+    .replace(/\bv32:(\d+)\b/g, "v$1");
+  s = s.replace(/\b(\d{5,})\b/g, (_, d: string) => {
+    const n = Number(d);
+    if (!Number.isSafeInteger(n)) return d;
+    // Stack offsets often appear as unsigned wrap of negatives.
+    if (n >= 0xffff0000) {
+      const neg = n - 0x1_0000_0000;
+      return String(neg);
+    }
+    return n >= 0x1000 ? `0x${n.toString(16)}` : d;
+  });
+  return s.length > 28 ? `${s.slice(0, 26)}…` : s;
+}
+
+function predStr(p: PredRow, key: string): string {
+  const v = p[key];
+  return typeof v === "string" ? v : v == null ? "" : String(v);
+}
+
+function predNum(p: PredRow, key: string): number | undefined {
+  const v = p[key];
+  return typeof v === "number" ? v : undefined;
+}
+
+function predArgs(p: PredRow): string[] {
+  const v = p.args;
+  return Array.isArray(v) ? v.map((x) => String(x)) : [];
+}
+
 function predKey(p: PredRow): string {
-  if (p.kind === "cmp") {
-    return `cmp:${p.rel ?? ""}:${p.width ?? ""}:${p.lhs ?? ""}:${p.rhs ?? ""}`;
-  }
-  if (p.kind === "ret") return `ret:${p.term ?? ""}`;
+  if (p.kind === "ret" || p.kind === "return") return `ret:${predStr(p, "term")}`;
   if (p.kind === "helper") {
-    return `helper:${p.event ?? ""}:${p.helperId ?? ""}:${(p.args ?? []).join(",")}`;
+    return `helper:${predStr(p, "event")}:${predStr(p, "helperId")}:${predArgs(p).join(",")}`;
   }
-  if (p.kind === "tag") return `tag:${p.tag ?? ""}`;
-  return `unknown:${JSON.stringify(p)}`;
+  return `${p.kind}:${JSON.stringify(p)}`;
 }
 
 export function diffPredicates(a: PredRow[], b: PredRow[]): {
@@ -119,19 +171,37 @@ export function diffPredicates(a: PredRow[], b: PredRow[]): {
 }
 
 export function formatPred(p: PredRow): string {
-  if (p.kind === "cmp") {
-    const w = p.width != null ? `${p.width}` : "?";
-    return `cmp/${w} [${p.rel ?? "?"}] ${p.lhs ?? "?"} ⋈ ${p.rhs ?? "?"}`;
+  if (p.kind === "ret" || p.kind === "return") {
+    return `ret ${predStr(p, "term") || "?"}`;
   }
-  if (p.kind === "ret") return `ret ${p.term ?? "?"}`;
   if (p.kind === "helper") {
-    const name = helperName(p.helperId);
-    const ev = p.event != null ? `@e${p.event}` : "";
-    const args = (p.args ?? []).join(", ");
-    return `helper ${name}${ev}(${args})`;
+    // `event` stays in PredRow / predKey; chips do not decorate with @eN.
+    const id = predNum(p, "helperId");
+    const name = helperName(id);
+    const arity = id != null ? (HELPER_DISPLAY_ARITY[id] ?? predArgs(p).length) : predArgs(p).length;
+    const args = predArgs(p).slice(0, arity).map(shortHelperArg);
+    return args.length === 0 ? name : `${name}(${args.join(", ")})`;
   }
-  if (p.kind === "tag") return `tag ${p.tag ?? "?"}`;
-  return "unknown predicate";
+  if (p.kind === "branch") {
+    const dir = predStr(p, "dir") || "?";
+    return `branch ${dir}`;
+  }
+  if (p.kind === "mapWrite" || p.kind === "map_write") {
+    const off = predStr(p, "offset");
+    const map = predStr(p, "map");
+    if (map && off) return `mapWrite ${shortHelperArg(map)}+${off}`;
+    const target = predStr(p, "addr") || predStr(p, "key") || predStr(p, "term");
+    return target ? `mapWrite ${shortHelperArg(target)}` : "mapWrite";
+  }
+  if (p.kind === "packetWrite" || p.kind === "packet_write") {
+    const off = predStr(p, "offset") || predStr(p, "term");
+    return off ? `packetWrite +${off}` : "packetWrite";
+  }
+  if (p.kind === "mapLookup" || p.kind === "map_lookup") {
+    const target = predStr(p, "addr") || predStr(p, "key") || predStr(p, "term");
+    return target ? `mapLookup ${shortHelperArg(target)}` : "mapLookup";
+  }
+  return `${p.kind} predicate`;
 }
 
 export function countBranchEdges(snap: SessionSnapshot): {
@@ -157,6 +227,7 @@ export function visibleNodeIds(
   if (!collapseSameLoc) return new Set(snap.nodes.map((n) => n.id));
   const keep = new Set<number>([focus]);
   if (compare !== null) keep.add(compare);
+  if (snap.status === "fail" && snap.failed !== null) keep.add(snap.failed);
   const chosenLoc = new Map<string, number>();
   for (const n of snap.nodes) {
     if (keep.has(n.id)) {
@@ -177,6 +248,9 @@ export function visibleNodeIds(
   if (compare !== null) {
     for (const id of pathToRoot(compare, snap.nodes)) keep.add(id);
   }
+  if (snap.status === "fail" && snap.failed !== null) {
+    for (const id of pathToRoot(snap.failed, snap.nodes)) keep.add(id);
+  }
   return keep;
 }
 
@@ -186,4 +260,9 @@ export function inboundEdges(nodeId: number, edges: GraphEdge[]): GraphEdge[] {
 
 export function outboundEdges(nodeId: number, edges: GraphEdge[]): GraphEdge[] {
   return edges.filter((e) => e.from === nodeId);
+}
+
+export function branchSource(focus: number, edges: GraphEdge[]): number | null {
+  const branches = edges.filter((e) => e.dir === "taken" || e.dir === "not_taken");
+  return (branches.find((e) => e.from === focus) ?? branches[0])?.from ?? null;
 }

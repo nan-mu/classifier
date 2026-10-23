@@ -1,10 +1,11 @@
-import type { ExprRow, GraphNode } from "./types";
+import type { ExprRow, GraphEdge, GraphNode } from "./types";
 
 function sameKey(a: ExprRow, b: ExprRow): boolean {
-  return a.reg === b.reg && a.rel === b.rel;
+  return a.reg === b.reg && a.rel === b.rel && a.role === b.role
+    && (a.role !== "constraint" || a.term === b.term);
 }
 
-/** Reconstruct E_i from parent SemState × child SemState (override inverse). */
+/** Observable snapshot delta; identical-value writes cannot be recovered. */
 export function localExprs(eg: ExprRow[], child: ExprRow[]): ExprRow[] {
   return child.filter((ce) => {
     const pe = eg.find((p) => sameKey(p, ce));
@@ -14,18 +15,21 @@ export function localExprs(eg: ExprRow[], child: ExprRow[]): ExprRow[] {
 
 export type ExprSplit = {
   eg: ExprRow[];
-  /** Bindings produced by expanding this node (parent → child). */
-  eiOut: ExprRow[];
+  /** Separate snapshot deltas for every successor, including empty branch deltas. */
+  eiOut: { to: number; dir: GraphEdge["dir"] | null; exprs: ExprRow[] }[];
   /** Bindings written when arriving here from the first parent. */
   eiIn: ExprRow[];
 };
 
 /** E_g at η, plus outbound E_i and inbound Δ from parent. */
-export function splitExprs(node: GraphNode, nodes: GraphNode[]): ExprSplit {
+export function splitExprs(node: GraphNode, nodes: GraphNode[], edges: GraphEdge[]): ExprSplit {
   const eg = node.exprs;
   const children = nodes.filter((n) => n.preds.includes(node.id));
-  const eiOut =
-    children.length === 0 ? [] : localExprs(eg, children[0]!.exprs);
+  const eiOut = children.map((child) => ({
+    to: child.id,
+    dir: edges.find((e) => e.from === node.id && e.to === child.id)?.dir ?? null,
+    exprs: localExprs(eg, child.exprs),
+  }));
   const parent = nodes.find((n) => node.preds.includes(n.id));
   const eiIn = parent ? localExprs(parent.exprs, eg) : [];
   return { eg, eiOut, eiIn };

@@ -25,8 +25,12 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", lake_lib.display());
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
-    println!("cargo:rustc-link-lib=dylib=classifier_RV32IMC");
-    println!("cargo:rustc-link-lib=dylib=classifier_CommonMath");
+    // EBPF before Node/RV32 so unresolved compare/expand symbols resolve from
+    // the arch-specific dylib when Lake packs them there; Node still linked.
+    println!("cargo:rustc-link-lib=dylib=classifier_EBPF");
+    println!("cargo:rustc-link-lib=dylib=classifier_RV32");
+    println!("cargo:rustc-link-lib=dylib=classifier_Node");
+    println!("cargo:rustc-link-lib=dylib=classifier_Core");
     println!("cargo:rustc-link-lib=dylib=leanshared");
     println!("cargo:rustc-link-lib=dylib=Init_shared");
 
@@ -36,7 +40,13 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lean_lib.display());
     }
 
-    println!("cargo:rerun-if-changed={}", manifest_dir.join("shim.c").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("shim.c").display()
+    );
     println!("cargo:rerun-if-changed={}", lake_lib.display());
-    println!("cargo:rerun-if-changed={}", lean_root.join("lakefile.lean").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        lean_root.join("lakefile.lean").display()
+    );
 }

@@ -20,17 +20,15 @@ def request(base, method, path, body=None):
         base + path, data=data, method=method,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=120) as response:
-        chunks = []
-        while True:
-            chunk = response.read(64 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        payload = b"".join(chunks)
+    with urllib.request.urlopen(req, timeout=300) as response:
+        # One shot: chunked urllib reads of large Content-Length bodies can stop
+        # early on this platform (~490KiB) while a single read() returns the full body.
+        payload = response.read()
         declared_length = response.headers.get("Content-Length")
         if declared_length is not None:
-            assert len(payload) == int(declared_length), "HTTP response truncated"
+            assert len(payload) == int(declared_length), (
+                f"HTTP response truncated: got {len(payload)}, expected {declared_length} bytes"
+            )
         return json.loads(payload)
 
 
@@ -46,24 +44,34 @@ def snapshots(base):
         assert request(base, "GET", path) == done, "GET must return the final snapshot"
         assert done["status"] == "fail", (budget, done["status"])
         assert done["reason"] == "LimitExceeded", done["reason"]
+        assert done["failed"] is None, "budget exhaustion does not reject a step"
         assert len(stepped["nodes"]) > len(created["nodes"]), "step must expand the graph"
         result[f"just_tx.elf/{budget}"] = [created, stepped, done]
+    # Default budget is 1024. HTTP /run at 512 now finishes just_tx; early
+    # LimitExceeded is covered by the budget-2/3 checks above.
+    defaulted = request(base, "POST", "/api/session", {})
+    assert defaulted["budget"] == 1024, defaulted["budget"]
+    assert defaulted["status"] == "running"
     created = request(base, "POST", "/api/session", {"budget": 512})
+    assert created["budget"] == 512
     path = "/api/session/" + created["id"]
     done = request(base, "POST", path + "/run", {})
-    assert done["status"] == "fail", done["status"]
-    assert done["reason"] == "UndefinedSrc", done["reason"]
-    assert any(n["loc"] == "exit" for n in done["nodes"]), "partial Exit must survive"
+    assert done["status"] == "complete", done["status"]
+    assert done["reason"] is None, done["reason"]
+    assert done["failed"] is None
+    assert done["fuel"] == 374 and done["work"] == []
+    assert len(done["nodes"]) == 146 and len(done["edges"]) == 145
+    assert sum(n["loc"] == "exit" for n in done["nodes"]) == 8
     assert any(
         p.get("kind") == "helper" and p.get("helperId") == 1
         for n in done["nodes"]
         for p in n["predicates"]
-    ), "lookup helper Predicate must appear before map-load failure"
+    ), "lookup helper Predicate must appear in the graph"
     assert any(
-        e["reg"].startswith("map32:") and e["term"].startswith("regVar")
+        e["reg"].startswith("map32:") and "externalResult" in e["term"]
         for n in done["nodes"]
         for e in n["exprs"]
-    ), "lookup must introduce mapWord = regVar(a0)"
+    ), "lookup must materialize Map bindings"
     assert any(
         e["reg"].startswith("packet32:")
         for n in done["nodes"]
@@ -79,7 +87,8 @@ def snapshots(base):
         {"image_b64": base64.b64encode(default_elf).decode(), "name": "upload.elf"},
     )
     assert uploaded["program"] == "upload.elf"
-    assert uploaded["nodes"] == created["nodes"]
+    assert uploaded["budget"] == 1024
+    assert uploaded["nodes"] == defaulted["nodes"]
     firewall = (fixtures / "xdp.elf").read_bytes()
     fw = request(
         base,
@@ -89,8 +98,10 @@ def snapshots(base):
     )
     fw_done = request(base, "POST", "/api/session/" + fw["id"] + "/run", {})
     assert fw_done["status"] == "complete", fw_done["reason"]
+    assert fw_done["failed"] is None
     assert any(
-        "externalResult" in e["term"] for n in fw_done["nodes"] for e in n["exprs"]
+        e["reg"] == "real32:10" and "externalResult" in e["term"]
+        for n in fw_done["nodes"] for e in n["exprs"]
     ), "helper effects must reach the graph"
     assert any(
         p.get("kind") == "helper" and p.get("helperId") is not None
@@ -101,8 +112,10 @@ def snapshots(base):
         p.get("kind") == "ret" for n in fw_done["nodes"] for p in n["predicates"]
     ), "Exit must observe a ret Predicate"
     assert any(
-        p.get("kind") == "cmp" for n in fw_done["nodes"] for p in n["predicates"]
-    ), "branch cmp Predicates must appear"
+        e.get("role") == "constraint" and e.get("rel") == "ltu"
+        for n in fw_done["nodes"] for e in n["exprs"]
+    ), "branch comparison Exprs must appear"
+    assert {"taken", "not_taken"} <= {e["dir"] for e in fw_done["edges"]}
     invalid = [
         default_elf[:-1],
         default_elf + b"x",
@@ -116,6 +129,7 @@ def snapshots(base):
             assert error.code == 400, error.code
         else:
             raise AssertionError("invalid compact ELF must return HTTP 400")
+    result["just_tx.elf/default"] = [defaulted]
     result["just_tx.elf/512"] = [created, done]
     result["xdp.elf/512"] = [fw, fw_done]
     try:

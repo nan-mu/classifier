@@ -2,11 +2,15 @@
 /lake-manifest.json
 *.pre_session_restore
 /tooling/target/
+/tooling/target-nightly/
+/tooling/.scratch/
 /tooling/*/target/
 /tooling/web/node_modules/
 /tooling/web/dist/
 /tooling/**/__pycache__/
 /.audit/
 
-# Local Codex / agent handoff prompts (never commit)
+# Local Codex / legacy agent dirs (never commit)
 /.codex/
+/.omp/
+.cursor/omp-handoff-*.md

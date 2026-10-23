@@ -1,0 +1,18 @@
+{
+  "id": "xdp.firewall.dual",
+  "suite": "xdp",
+  "budget": 512,
+  "artifacts": {
+    "rv32": "firewall.elf",
+    "ebpf": "firewall.bpf.o"
+  },
+  "steps": [
+    { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "run", "bind": "rv" },
+    { "op": "create", "bind": "bpf", "arch": "ebpf", "artifact": "ebpf", "map_elf": "rv32" },
+    { "op": "run", "bind": "bpf" },
+    { "op": "compare_tree", "left": "rv", "right": "bpf" }
+  ],
+  "expect": { "kind": "pass", "status": "complete", "compare_tree": { "fail": 0 } },
+  "assert": []
+}

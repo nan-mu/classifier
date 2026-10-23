@@ -1,4 +1,4 @@
-use super::{ffi, init};
+use super::{ffi, lean_call};
 use serde_json::Value;
 use std::ffi::CStr;
 
@@ -21,8 +21,7 @@ fn cell(
     unsigned: bool,
     source: Option<u64>,
 ) -> Value {
-    init();
-    unsafe {
+    lean_call(move || unsafe {
         json_result(ffi::lean_virtual_cell_access(
             kind,
             width,
@@ -35,7 +34,7 @@ fn cell(
             old.unwrap_or(0),
             source.unwrap_or(0),
         ))
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -50,8 +49,8 @@ fn packet(
     input: bool,
     source: Option<u64>,
 ) -> Value {
-    init();
-    unsafe {
+    let values = values.to_vec();
+    lean_call(move || unsafe {
         let values = ffi::lean_binding_mk_uint32_array(values.as_ptr(), values.len());
         json_result(ffi::lean_virtual_packet_access(
             values,
@@ -65,12 +64,11 @@ fn packet(
             u32::from(source.is_some()),
             source.unwrap_or(0),
         ))
-    }
+    })
 }
 
 fn rv32_case(case_id: u32, value: u32) -> Value {
-    init();
-    unsafe { json_result(ffi::lean_rv32_register_effects(case_id, value)) }
+    lean_call(move || unsafe { json_result(ffi::lean_rv32_register_effects(case_id, value)) })
 }
 
 fn term<'a>(exprs: &'a Value, reg: &str) -> &'a str {
@@ -153,11 +151,9 @@ fn packet_bytes_pack_and_split_in_both_orders_without_packet64() {
         );
         let updates = write["updates"].as_array().unwrap();
         assert_eq!(updates.len(), 8);
-        assert!(
-            updates
-                .iter()
-                .all(|e| e["reg"].as_str().unwrap().starts_with("packet32:"))
-        );
+        assert!(updates
+            .iter()
+            .all(|e| e["reg"].as_str().unwrap().starts_with("packet32:")));
         assert_eq!(
             term(&write["updates"], "packet32:58"),
             if big_endian { "136" } else { "17" }
@@ -182,9 +178,8 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
     assert_eq!(result["first"]["updates"].as_array().unwrap().len(), 1);
     assert_eq!(result["first"]["updates"][0]["reg"], "real32:14");
     assert!(result["store"]["inputs"].as_array().unwrap().is_empty());
-    assert_eq!(result["store"]["updates"].as_array().unwrap().len(), 2);
-    assert_eq!(term(&result["state"], "packet32:20"), "255"); // byte 5, resource 0
-    assert_eq!(term(&result["state"], "packet32:27"), "128"); // byte 6
+    assert!(result["store"]["updates"].as_array().unwrap().is_empty());
+    assert_eq!(result["store"]["writes"].as_array().unwrap().len(), 1);
     assert!(result["reload"]["inputs"].as_array().unwrap().is_empty());
     let old = term(&result["state"], "real32:14");
     let new = term(&result["state"], "real32:15");
@@ -195,19 +190,21 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
     assert!(!new.contains("add32(v32:4,6)"));
     assert_eq!(term(&result["state"], "real32:17"), "4294967295");
     assert_eq!(term(&result["state"], "real32:13"), "33023");
+    assert!(result["compressedStore"]["updates"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
-        result["compressedStore"]["updates"]
+        result["compressedStore"]["writes"]
             .as_array()
             .unwrap()
             .len(),
-        4
+        1
     );
-    assert!(
-        result["compressedRead"]["inputs"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
+    assert!(result["compressedRead"]["inputs"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         term(&result["compressedRead"]["updates"], "real32:9"),
         "33023"
@@ -217,11 +214,12 @@ fn rv32_unaligned_packet_overlap_uses_current_bytes_and_preserves_old_load() {
 #[test]
 fn rv32_stack_alias_subword_store_preserves_the_rest_of_the_word() {
     let result = rv32_case(1, 0xdd);
+    assert!(result["byte"]["updates"].as_array().unwrap().is_empty());
+    assert_eq!(result["byte"]["writes"][0]["pieces"][0]["slice"]["v"], 0xdd);
     assert_eq!(
-        term(&result["byte"]["updates"], "stack32:8589934592"),
+        term(&result["read"]["updates"], "real32:14"),
         0x1122_dd44u32.to_string()
     );
-    assert_eq!(term(&result["read"]["updates"], "real32:14"), "8925"); // 0x22dd
     assert_eq!(result["crossesRejected"], true);
 }
 

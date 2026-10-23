@@ -1,0 +1,20 @@
+{
+  "id": "base.helper_loop",
+  "suite": "base",
+  "budget": 64,
+  "artifacts": {
+    "rv32": "helper_loop.elf",
+    "ebpf": "helper_loop.bpf.o"
+  },
+  "steps": [
+    { "op": "create", "bind": "rv", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "run", "bind": "rv" },
+    { "op": "create", "bind": "bpf", "arch": "ebpf", "artifact": "ebpf", "map_elf": "rv32" },
+    { "op": "run", "bind": "bpf" }
+  ],
+  "expect": { "kind": "fail", "status": "fail" },
+  "assert": [
+    { "path": "/payload/reason", "eq": "LimitExceeded" },
+    { "contains_kind": "helper" }
+  ]
+}

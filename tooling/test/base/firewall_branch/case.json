@@ -1,0 +1,12 @@
+{
+  "id": "base.firewall_branch",
+  "suite": "base",
+  "budget": 512,
+  "artifacts": { "rv32": "../../xdp/firewall/firewall.elf" },
+  "steps": [
+    { "op": "create", "bind": "s", "arch": "rv32imc", "artifact": "rv32" },
+    { "op": "run", "bind": "s" }
+  ],
+  "expect": { "kind": "pass", "status": "complete" },
+  "assert": [{ "contains_kind": "branch" }]
+}

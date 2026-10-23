@@ -1,0 +1,5 @@
+# Workspace Clippy policy for tooling/. CI: nightly clippy with -D warnings.
+cognitive-complexity-threshold = 40
+too-many-arguments-threshold = 8
+type-complexity-threshold = 250
+avoid-breaking-exported-api = false
