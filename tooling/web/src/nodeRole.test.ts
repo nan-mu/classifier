@@ -125,11 +125,11 @@ describe("classifyNodeRole", () => {
       preds: [0],
       exprs: [
         { reg: "real32:1", rel: "eq", term: "1" },
-        { reg: "packet32:0", rel: "eq", term: "2" },
+        { reg: "packet:[0,8)", rel: "eq", term: "2" },
       ],
     });
     expect(arrivalExprs(child, [parent, child])).toEqual([
-      { reg: "packet32:0", rel: "eq", term: "2" },
+      { reg: "packet:[0,8)", rel: "eq", term: "2" },
     ]);
     const info = classifyNodeRole({
       node: child,

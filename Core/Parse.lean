@@ -1,4 +1,5 @@
 import Core.Render
+import Core.Interval
 import Lean.Data.Json
 
 namespace Core
@@ -11,28 +12,46 @@ private def parseWidth : String → Option Width
   | "64" => some .w64
   | _ => none
 
-def parseReg (text : String) : Option Reg := do
-  if text.startsWith "packetCompound:" then
-    let [_, κ, bytes, ending, strict, index, code, checked] := text.splitOn ":" | none
-    let bytes ← bytes.toNat?
-    let strict ← strict.toNat?
-    let code ← (code.splitOn ".").mapM String.toNat?
-    let (offset, []) ← PacketOffset.decode code.length code | none
-    let checked ← (checked.splitOn ".").mapM String.toNat?
-    let (checkedEnd, []) ← PacketOffset.decode checked.length checked | none
-    if strict > 1 then none else
-      let p : CompoundPacketReg :=
-        ⟨← κ.toNat?, offset, bytes, ← ending.toNat?, strict == 1, ← index.toNat?, checkedEnd⟩
-      let r := Reg.compoundPacket p
-      if r.valid then return r else none
-  let [head, alpha] := text.splitOn ":" | none
-  let alpha ← alpha.toNat?
-  let (kind, width) ← ([ ("real", RegKind.real), ("stack", .stack),
-    ("map", .map), ("packet", .packet), ("context", .context),
-    ("anchor", .anchor) ].findSome? fun (stem, kind) => do
-      if !head.startsWith stem then none else
-        pure (kind, ← parseWidth (head.drop stem.length).toString))
-  let r : Reg := ⟨kind, width, alpha, none⟩
+private def parseHalfOpen (text : String) : Option (Nat × Nat) := do
+  if !(text.startsWith "[" && text.endsWith ")") then none
+  let body := ((text.drop 1).dropEnd 1).toString
+  let [b, e] := body.splitOn "," | none
+  pure (← b.toNat?, ← e.toNat?)
+
+private def parseContextField (text : String) : Option ContextField :=
+  match text with
+  | "data" => some .data
+  | "dataEnd" => some .dataEnd
+  | "dataMeta" => some .dataMeta
+  | "ingressIfindex" => some .ingressIfindex
+  | "rxQueueIndex" => some .rxQueueIndex
+  | "egressIfindex" => some .egressIfindex
+  | "ctx" => some .ctx
+  | "sp" => some .sp
+  | "packetBytes" => some .packetBytes
+  | "imageBase" => some .imageBase
+  | "helper" => some .helper
+  | "wrapperReturn" => some .wrapperReturn
+  | _ =>
+    if let some n := suffixNat "lddw:" text then some (.lddw n)
+    else if let some n := suffixNat "mapKeyBytes:" text then some (.mapKeyBytes n)
+    else if let some n := suffixNat "mapValueBytes:" text then some (.mapValueBytes n)
+    else none
+
+/-- Split on `;` outside parentheses. Map keys use this separator. -/
+private def splitSemi (text : String) : List String :=
+  let rec go (depth : Nat) (acc : List Char) (rest : List Char) (out : List String) : List String :=
+    match rest with
+    | [] => (out ++ [String.ofList acc.reverse]).filter (· != "")
+    | '(' :: cs => go (depth + 1) ('(' :: acc) cs out
+    | ')' :: cs => go (depth - 1) (')' :: acc) cs out
+    | ';' :: cs =>
+      if depth == 0 then go 0 [] cs (out ++ [String.ofList acc.reverse])
+      else go depth (';' :: acc) cs out
+    | c :: cs => go depth (c :: acc) cs out
+  go 0 [] text.toList []
+
+private def checked (r : Reg) : Option Reg :=
   if r.valid then some r else none
 
 def parseRel (text : String) : Option Rel :=
@@ -119,6 +138,25 @@ private def opArity : Op → Option Nat
 
 private def tokenChar (c : Char) : Bool := c != '(' && c != ')' && c != ','
 
+/-- `)` closes `[b,e)`. A `)` with no open `[` or `(` ends the argument. -/
+private def takeBalanced (chars : List Char) : Option (List Char × List Char) :=
+  let rec go (opens acc rest : List Char) : Option (List Char × List Char) :=
+    match rest with
+    | [] => none
+    | '[' :: tail => go ('[' :: opens) ('[' :: acc) tail
+    | ']' :: tail =>
+      match opens with
+      | '[' :: restOpens => go restOpens (']' :: acc) tail
+      | _ => none
+    | '(' :: tail => go ('(' :: opens) ('(' :: acc) tail
+    | ')' :: tail =>
+      match opens with
+      | '[' :: restOpens => go restOpens (')' :: acc) tail
+      | '(' :: restOpens => go restOpens (')' :: acc) tail
+      | _ => some (acc.reverse, tail)
+    | c :: tail => go opens (c :: acc) tail
+  go [] [] chars
+
 mutual
   private partial def parseTermChars (w : Width) (chars : List Char) (annotated : Bool := false) :
       Option (Term × List Char) := do
@@ -138,8 +176,7 @@ mutual
         let ')' :: tail := tail | none
         if term.width != width then none else return (term, tail)
       if let some event := suffixNat "regVar" name then
-        let (reg, tail) := tail.span (· != ')')
-        let ')' :: tail := tail | none
+        let (reg, tail) ← takeBalanced tail
         return (.regVar event (← parseReg (String.ofList reg)), tail)
       let op ← if annotated then parsePredicateOp name w else parseOp name w
       let width := opWidth w op
@@ -178,6 +215,38 @@ mutual
         let (terms, tail) ← parseTermArgs w tail annotated
         pure (term :: terms, tail)
     | _ => none
+
+  partial def parseReg (text : String) : Option Reg := do
+    if text.startsWith "real:" then
+      let rest := (text.drop 5).toString
+      let [idx, body] := rest.splitOn "[" | none
+      let idx ← ((idx.dropEnd 1).toString).toNat?
+      let (b, e) ← parseHalfOpen ("[" ++ body)
+      checked (.real idx b e)
+    else if text.startsWith "stack:" then
+      let (b, e) ← parseHalfOpen (text.drop 6).toString
+      checked (.stack b e)
+    else if text.startsWith "packet:" then
+      let (b, e) ← parseHalfOpen (text.drop 7).toString
+      checked (.packet b e)
+    else if text.startsWith "context:" then
+      let rest := (text.drop 8).toString
+      let [name, body] := rest.splitOn "[" | none
+      let field ← parseContextField (name.dropEnd 1).toString
+      let (b, e) ← parseHalfOpen ("[" ++ body)
+      checked (.context field b e)
+    else if text.startsWith "map:" then
+      let rest := (text.drop 4).toString
+      let [idPart, intervalPart, keyPart] := rest.splitOn "[" | none
+      let id ← ((idPart.dropEnd 1).toString).toNat?
+      let (b, e) ← parseHalfOpen ("[" ++ (intervalPart.dropEnd 2).toString ++ ")")
+      let body := (keyPart.dropEnd 1).toString
+      let key ← if body == "" then pure [] else
+        (splitSemi body).mapM fun s => do
+          let (t, []) ← parseTermChars .w32 s.toList true | none
+          if t.wellFormed then pure t else none
+      checked (.map id key b e)
+    else none
 end
 
 /-- Bare constants inherit the field carrier; mixed-carrier applications retain annotations. -/
@@ -191,8 +260,8 @@ private def jsonString (value : Lean.Json) (key : String) : Option String :=
 def parseExprJson (value : Lean.Json) : Option Expr := do
   let reg ← parseReg (← jsonString value "reg")
   let rel ← parseRel (← jsonString value "rel")
-  let term ← parseTerm (← jsonString value "term") reg.width
-  if term.width != reg.width then none else pure ⟨reg, rel, term⟩
+  let term ← parseTerm (← jsonString value "term") (Width.ofBits reg.bits)
+  if term.semanticBits != reg.bits then none else pure ⟨reg, rel, term⟩
 
 private def boundedWidth (q bits : Nat) : Bool := 0 < q && q ≤ bits
 
@@ -221,13 +290,9 @@ def predicateWellFormed : Predicate → Bool
       map.wellFormed && source.wellFormed &&
       key.all (fun t => t.width == .w32 && t.wellFormed &&
         match t with | .const _ c => c < 256 | _ => true)
-  | .packetWrite _ packet offset bits source compound =>
+  | .packetWrite _ offset bits source =>
     [8, 16, 32, 64].contains bits && bits ≤ source.width.bits &&
-      source.wellFormed && match compound with
-      | none => true
-      | some p => (Reg.compoundPacket p).valid && p.κ == packet &&
-          offset == 0 && p.byteIndex == 0 && 8 * p.bytes ≤ source.width.bits &&
-          bits == 8 * p.bytes
+      source.wellFormed && offset < 2 ^ 32
 
 private def jsonNat (value : Lean.Json) (key : String) : Option Nat :=
   (value.getObjVal? key >>= Lean.Json.getNat?).toOption
@@ -291,75 +356,23 @@ def parsePredicateJson (value : Lean.Json) : Option Predicate := do
         let source ← parseTerm (← jsonString value "source") .w32
         pure (.mapWrite event map key offset bits source)
     | "packetWrite" => do
-      let hasCompound := (value.getObjVal? "compound").isOk
-      let fields := ["kind", "event", "packet", "offset", "width", "source"] ++
-        if hasCompound then ["compound"] else []
-      if !exactFields value fields then none else
+      if !exactFields value ["kind", "event", "offset", "width", "source"] then none else
         let event ← jsonNat value "event"
-        let packet ← jsonNat value "packet"
         let offset ← jsonNat value "offset"
         let bits ← jsonNat value "width"
         let source ← parseTerm (← jsonString value "source") .w32
-        let compound ← if hasCompound then do
-          let text ← jsonString value "compound"
-          let reg ← parseReg text
-          let p ← reg.compound
-          pure (some p)
-        else pure none
-        pure (.packetWrite event packet offset bits source compound)
+        pure (.packetWrite event offset bits source)
     | _ => none
   if predicateWellFormed predicate then some predicate else none
-
-private def parseSliceJson (value : Lean.Json) : Option Slice := do
-  match ← jsonString value "k" with
-  | "c" =>
-    if !exactFields value ["k", "w", "v"] then none else
-      let slice := Slice.const (← jsonNat value "w") (← jsonNat value "v")
-      if slice.ok then some slice else none
-  | "p" =>
-    if !exactFields value ["k", "w", "tw", "t", "s"] then none else
-      let tw ← jsonWidth value "tw"
-      let term ← parseTerm (← jsonString value "t") tw
-      if term.width != tw then none else
-        let slice := Slice.proj (← jsonNat value "w") term (← jsonNat value "s")
-        if slice.ok then some slice else none
-  | _ => none
-
-private def parseMemRow (value : Lean.Json) : Option (List MemWrite) := do
-  let slotName ← jsonString value "slot"
-  let pieces ← (value.getObjVal? "pieces" >>= Lean.Json.getArr?).toOption
-  let slot ← match slotName with
-    | "stack" =>
-      if !exactFields value ["role", "slot", "pieces"] then none else pure BitSlot.stack
-    | "packet" =>
-      if !exactFields value ["role", "slot", "pieces"] then none else pure .packet
-    | "context" =>
-      if !exactFields value ["role", "slot", "field", "pieces"] then none else
-        pure (.context (← jsonNat value "field"))
-    | "map" =>
-      if !exactFields value ["role", "slot", "map", "key", "pieces"] then none else
-        let id ← jsonNat value "map"
-        let keys ← (value.getObjVal? "key" >>= Lean.Json.getArr?).toOption
-        let slices ← keys.toList.mapM parseSliceJson
-        let tile ← (normalizeTile ⟨slices⟩).toOption
-        pure (.map id tile)
-    | _ => none
-  pieces.toList.mapM fun piece => do
-    if !exactFields piece ["start", "slice"] then none else
-      let start ← jsonNat piece "start"
-      let slice ← parseSliceJson (← (piece.getObjVal? "slice").toOption)
-      pure ⟨slot, start, ⟨[slice]⟩⟩
 
 def parseSemStateJson (exprsJson predsJson : String) : Option SemState := do
   let exprs ← ((Lean.Json.parse exprsJson) >>= Lean.Json.getArr?).toOption
   let preds ← ((Lean.Json.parse predsJson) >>= Lean.Json.getArr?).toOption
   let mut rows : List (Expr × Bool) := []
-  let mut writes : List MemWrite := []
   for row in exprs.toList do
     match row.getObjVal? "role" with
     | .ok role =>
       match ← role.getStr?.toOption with
-      | "mem" => writes := writes ++ (← parseMemRow row)
       | "constraint" => rows := rows ++ [(← parseExprJson row, true)]
       | _ => none
     | .error _ =>
@@ -369,9 +382,8 @@ def parseSemStateJson (exprsJson predsJson : String) : Option SemState := do
   let constraints := (rows.filter fun row => row.2).map Prod.fst
   let E : List Expr := bindings ++ constraints
   if !E.keysUnique || !E.wellTyped then none else
-    let mem ← (Mem.apply .empty writes).toOption
     let predicates ← preds.toList.mapM parsePredicateJson
-    pure { exprs := E, predicates, mem := mem.canonical }
+    pure { exprs := E, predicates }
 
 private def parseRoundTripCheck : Bool :=
   let terms := [Term.C32 4294967295, Term.V32 12, Term.regVar 42 (Reg.real32 10),
@@ -383,8 +395,8 @@ private def parseRoundTripCheck : Bool :=
     Term.app .w32 (.or 32) [Term.app .w32 (.low 8 32)
       [Term.app .w32 (.inputByte 3) [Term.V32 1, Term.V32 2]], Term.C32 4],
     Term.C64 18446744073709551615, Term.V64 9]
-  let regs := [Reg.real32 10, Reg.sw 8, Reg.mapWord 7 4, Reg.packet 3 2, Reg.real64 1,
-    Reg.ctx32 100, Reg.ctx64 101]
+  let regs := [Reg.real32 10, .stack 0 32, .map 7 [Term.C32 1, Term.V32 2] 0 32,
+    .packet 16 24, Reg.real64 1, .context .data 0 32, .context (.lddw 3) 0 64]
   let rels := [Rel.eq, .ne, .ltu, .geu, .lts, .ges, .eqN 8, .neN 16,
     .ltuN 8, .leuN 8, .gtuN 8, .geuN 8, .ltsN 8, .lesN 8, .gtsN 8, .gesN 8,
     .bitsnz 8, .bitsz 8, .leu, .gtu, .les, .gts]
@@ -392,7 +404,7 @@ private def parseRoundTripCheck : Bool :=
   regs.all (fun r => parseReg (renderReg r) == some r) &&
   rels.all (fun r => parseRel (renderRel r) == some r) &&
   terms.all (fun t =>
-    let e := Expr.mkEq (Reg.real t.width 10) t
+    let e := Expr.mkEq (.real 10 0 t.semanticBits) t
     match (Lean.Json.parse (renderExprJson e)).toOption >>= parseExprJson with
     | some e' => e'.reg == e.reg && e'.rel == e.rel && e'.term == e.term
     | none => false) &&
@@ -430,7 +442,7 @@ private def crossCarrierRoundTripCheck : Bool :=
       "zext32/64/32(extract0,32(add32(v32:4,128)))")]
   fixtures.all fun (term, text) =>
     renderTerm term == text && parseTerm text term.width == some term &&
-      ((Lean.Json.parse (renderExprJson (Expr.mkEq (Reg.real term.width 1) term))).toOption
+      ((Lean.Json.parse (renderExprJson (Expr.mkEq (.real 1 0 term.semanticBits) term))).toOption
         >>= parseExprJson).any (fun e => e.term == term)
 
 #guard crossCarrierRoundTripCheck
@@ -465,10 +477,10 @@ private def fiveClassRoundTripCheck : Bool :=
     .mapWrite 6 max64 [Term.C32 0, Term.C32 255, byte] 8 32 max64,
     .mapWrite 9 max64 [Term.V32 1, Term.V32 1] 0 32 (Term.C32 0),
     .mapWrite 10 (Term.C32 1) [byte] 0 32 max64,
-    .packetWrite 7 3 0 8 (Term.C32 42),
-    .packetWrite 8 3 4 64 max64,
-    .packetWrite 9 3 0 16 (Term.V64 1),
-    .packetWrite 10 3 0 32 (Term.V32 1)].all predicateRoundTrip
+    .packetWrite 7 0 8 (Term.C32 42),
+    .packetWrite 8 4 64 max64,
+    .packetWrite 9 0 16 (Term.V64 1),
+    .packetWrite 10 0 32 (Term.V32 1)].all predicateRoundTrip
 
 private def branchComplementCheck : Bool :=
   let rels := [Rel.eq, .ne, .ltu, .leu, .gtu, .geu, .lts, .les, .gts, .ges,
@@ -487,7 +499,7 @@ private def malformedPredicateCheck : Bool :=
   let rejected (text : String) :=
     ((Lean.Json.parse text).toOption >>= parsePredicateJson).isNone
   let badTerms := [Term.const .w32 4294967296, .const .w64 18446744073709551616,
-    .regVar 1 (Reg.map32 1), .app .w32 (.neg .w32) [Term.C32 1, Term.C32 2],
+    .regVar 1 (.map 1 [] 0 0), .app .w32 (.neg .w32) [Term.C32 1, Term.C32 2],
     .app .w32 (.add .w32) [Term.V64 1, Term.C32 0],
     .app .w32 (.add .w32) [Term.app .w32 (.low 0 32) [Term.C32 1], Term.C32 0],
     .app .w32 (.extract 31 2 32) [Term.C32 0],
@@ -507,9 +519,9 @@ private def malformedPredicateCheck : Bool :=
     .mapWrite 0 (Term.C32 0) [Term.C32 256] 0 32 (Term.C32 0),
     .mapWrite 0 (Term.C32 0) [Term.V64 1] 0 32 (Term.C32 0),
     .mapWrite 0 (Term.C32 0) [] 0 24 (Term.C32 0),
-    .packetWrite 0 0 0 0 (Term.C32 0),
-    .packetWrite 0 0 0 24 (Term.C32 0),
-    .packetWrite 0 0 0 64 (Term.C32 0)]
+    .packetWrite 0 0 0 (Term.C32 0),
+    .packetWrite 0 0 24 (Term.C32 0),
+    .packetWrite 0 0 64 (Term.C32 0)]
   badTerms.all (fun t =>
     !predicateWellFormed (.ret t) && rejected (renderPredicateJson (.ret t))) &&
   badPredicates.all (fun p =>
@@ -525,10 +537,10 @@ private def malformedPredicateCheck : Bool :=
     "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"0\",\"rel\":\"eq\",\"rhs\":\"0\",\"extra\":0}}",
     "{\"kind\":\"mapWrite\",\"event\":0,\"mapWidth\":32,\"map\":\"v64:1\",\"key\":[],\"offset\":0,\"sourceWidth\":32,\"source\":\"0\"}",
     "{\"kind\":\"mapWrite\",\"event\":0,\"mapWidth\":32,\"map\":\"0\",\"key\":[0],\"offset\":0,\"sourceWidth\":32,\"source\":\"0\"}",
-    "{\"kind\":\"packetWrite\",\"event\":0,\"packet\":0,\"offset\":-1,\"width\":32,\"source\":\"0\"}",
-    "{\"kind\":\"packetWrite\",\"event\":0,\"offset\":0,\"width\":32,\"source\":\"0\"}",
+    "{\"kind\":\"packetWrite\",\"event\":0,\"packet\":0,\"offset\":0,\"width\":32,\"source\":\"0\"}",
+    "{\"kind\":\"packetWrite\",\"event\":0,\"offset\":0,\"width\":24,\"source\":\"0\"}",
     "{\"kind\":\"packetWrite\",\"event\":0,\"packet\":0,\"offset\":0,\"width\":64,\"source\":\"v32:1\"}",
-    "{\"kind\":\"packetWrite\",\"event\":0,\"packet\":0,\"offset\":0,\"width\":32,\"source\":\"add32(1,)\"}",
+    "{\"kind\":\"packetWrite\",\"event\":0,\"offset\":0,\"width\":32,\"source\":\"add32(1,)\"}",
     "{\"kind\":\"escape\"}"
   ].all rejected
 
@@ -537,7 +549,7 @@ private def fiveClassSemStateCheck : Bool :=
     .branch 1 .notTaken ⟨Term.V32 1, .ne, Term.C32 0⟩,
     .ret (Term.C64 18446744073709551615),
     .mapWrite 2 (Term.C64 1) [Term.C32 255] 0 32 (Term.C32 3),
-    .packetWrite 3 0 0 64 (Term.C64 4)]
+    .packetWrite 3 0 64 (Term.C64 4)]
   match parseSemStateJson "[]" ("[" ++ renderPredicatesJson ps ++ "]") with
   | some state => state.predicates == ps
   | none => false
@@ -568,21 +580,21 @@ private def fiveClassSemStateCheck : Bool :=
 #guard parseRoundTripCheck
 #guard parseOpsRoundTripCheck
 #guard Id.run do
-  let .ok mem := Mem.write .empty .stack 0 ⟨[.proj 32 (Term.V32 7) 0]⟩ | return false
-  let .ok mem := mem.write .stack 8 ⟨[.const 8 0x11]⟩ | return false
-  let key : Tile := ⟨[.const 8 1, .const 8 2]⟩
-  let .ok mem := mem.write (.map 3 key) 0 ⟨[.const 8 9]⟩ | return false
-  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real64 1) (Term.V64 1), [], mem⟩
+  let key := [Term.C32 1, Term.C32 2]
+  let some E := writeInterval (Expr.nil.insertEq (Reg.real64 1) (Term.V64 1))
+    (.stack 0 32) (Term.V32 7) | return false
+  let byte (n : Nat) : Term := .app .w32 (.low 8 32) [.C32 n]
+  let some E := writeInterval E (.stack 32 40) (byte 0x11) | return false
+  let some E := writeInterval E (.map 3 key 0 8) (byte 9) | return false
+  let σ : SemState := ⟨E, []⟩
   let (exprs, preds) := renderSemStateJson σ
   match parseSemStateJson s!"[{exprs}]" s!"[{preds}]" with
   | some σ' =>
-      σ'.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1) &&
-        σ'.mem.canonical == mem.canonical &&
-        match σ'.mem.read .stack 0 32, σ'.mem.read (.map 3 ⟨[.const 16 0x0201]⟩) 0 8 with
-        | .ok stack, .ok value =>
-            stack == ⟨[.proj 8 (Term.V32 7) 0, .const 8 0x11, .proj 16 (Term.V32 7) 16]⟩ &&
-              value == ⟨[.const 8 9]⟩
-        | _, _ => false
+      σ'.exprs == E &&
+        σ'.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1) &&
+        σ'.exprs.lookupEq (.stack 0 32) == E.lookupEq (.stack 0 32) &&
+        σ'.exprs.lookupEq (.stack 32 40) == E.lookupEq (.stack 32 40) &&
+        σ'.exprs.lookupEq (.map 3 key 0 8) == E.lookupEq (.map 3 key 0 8)
   | none => false
 #guard (parseSemStateJson
   "[{\"role\":\"mem\",\"slot\":\"stack\",\"pieces\":[{\"start\":0,\"slice\":{\"k\":\"c\",\"w\":7,\"v\":1}}]}]"

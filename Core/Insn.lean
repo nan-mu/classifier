@@ -1,7 +1,6 @@
 import Core.Bits
 import Core.Expr
 import Core.Direction
-import Core.BitMem
 
 namespace Core
 
@@ -66,8 +65,7 @@ inductive Predicate where
   | ret (term : Term)
   | mapWrite (event : NodeId) (map : Term) (key : List Term) (offset : Nat) (bits : Nat)
       (source : Term)
-  | packetWrite (event : NodeId) (packet : Nat) (offset : Nat) (bits : Nat) (source : Term)
-      (compound : Option CompoundPacketReg := none)
+  | packetWrite (event : NodeId) (offset : Nat) (bits : Nat) (source : Term)
   deriving BEq, Repr, Inhabited
 
 /-- The lookup event on the address pre-image ties a slot to its saved Map and key. -/
@@ -108,7 +106,7 @@ theorem lookupKeyAt_tie (Pg : List Predicate) (event : NodeId)
             simp at h
             rcases h with ⟨rfl, rfl⟩
             exact ⟨ptr, hm⟩
-    | branch _ _ _ | ret _ | mapWrite _ _ _ _ _ _ | packetWrite _ _ _ _ _ _ =>
+    | branch _ _ _ | ret _ | mapWrite _ _ _ _ _ _ | packetWrite _ _ _ _ =>
       simp_all
 
 def Predicate.savedMapKey? : Predicate → Option (List Term)
@@ -124,21 +122,20 @@ inductive Location where
   | exit
   deriving DecidableEq, BEq, Repr, Inhabited
 
-/-- Semantic state. `mem` is the virtual byte store. Real registers stay in `exprs`. -/
+/-- Semantic state. Register equalities, including virtual intervals, live in `exprs`. -/
 structure SemState where
   exprs      : List Expr
   predicates : List Predicate
-  mem        : Mem := .empty
   deriving Repr, Inhabited
 
-def SemState.empty : SemState := { exprs := Expr.nil, predicates := [], mem := .empty }
+def SemState.empty : SemState := { exprs := Expr.nil, predicates := [] }
 
 theorem savedMapKey_expr_update (p : Predicate) (E updates : List Expr) :
-    (SemState.mk (E.override updates) [p] .empty).predicates = [p] := rfl
+    (SemState.mk (E.override updates) [p]).predicates = [p] := rfl
 
 theorem lookupKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
-    lookupKeyAt (SemState.mk (E.override updates) Pg .empty).predicates event =
+    lookupKeyAt (SemState.mk (E.override updates) Pg).predicates event =
       lookupKeyAt Pg event := rfl
 
 theorem lookupKeyAt_deterministic (Pg : List Predicate) (event : NodeId)

@@ -177,14 +177,14 @@ def Node.exportExpandMerge (requestJson : String) : String
 Expression 行沿用共享解析与渲染格式，例如：
 
 ```json
-{"reg":"real32:10","rel":"eq","term":"v32:1"}
+{"reg":"real:10:[0,32)","rel":"eq","term":"v32:1"}
 ```
 
 `reg`、`rel`、`term` 均为字符串，分别按 `parseReg`、`parseRel`、`parseTerm` 解析。状态只存一个 Expression 列表：缺少 `role` 的完整 `eq` 行排在前面（解析时拼成值绑定前缀），带 `"role":"constraint"` 的行排在后面。运行时角色由列表顺序推导——每个寄存器的第一条 `eq` 是值，其后各行（包括另一条 `eq`）是比较。其他显式 `role` 值拒绝。
 
 共同状态检查包括：
 
-- 共享寄存器表示须有效，位宽只支持 32 与 64；Packet 寄存器当前只支持 32 位。寄存器与右侧项的位宽须相同。
+- 共享寄存器表示须是[五类构造](../寄存器定义.md#五类构造)之一。区间满足 \(b<e\)，Context 的 \(e\) 不超过该字段的位数。右侧项的语义位数等于 \(e-b\)。机器运算符的载体仍是 32 位或 64 位。
 - 列表按结构去重；重复行是无效输入，不通过去重修复。
 - 关系的低位宽度参数须大于零且不超过寄存器位宽。项检查递归覆盖全部子项：常元在位宽范围内，寄存器变元引用有效的真实寄存器，应用项满足运算符的参数个数、位宽和固定参数范围。
 
@@ -231,7 +231,7 @@ RV32IMC 产品 step 的成功增量及状态组合遵循下列覆盖；共享构
 - Branch 覆盖 `BEQ`、`BNE`、`BLT`、`BGE`、`BLTU`、`BGEU`、`C.BEQZ`、`C.BNEZ` 的每个保留方向；取同一执行前关系的两端 solve 后完整项，Taken 使用原关系，NotTaken 使用补关系。`position` 为运行时数组下标加一，原 Expression 比较约束继续保留；确定比较保留一侧时也生成该侧观察。
 - Return 在 `JALR x0,0(ra)` 或 `C.JR ra` 经已有绑定识别为外层 Exit 后，读取执行前关系中 `a0` 的完整 32 位项。程序内返回不生成 Return；完整项缺失拒绝。Exit 的写后完整项检查仍保留，两个时点与实际返回结果的一致性仍需证明。
 - PacketWrite 覆盖 Expression 实际选定为 Packet 的 `SB`、`SH`、`SW`、`C.SW`、`C.SWSP`。资源选择沿用 Stack、Map、Packet 的既有优先级；能取得包别名不改变已选定的 Stack 存储，正常对齐的 `C.SWSP` 通常走 Stack。选定 Packet 后取得 `PacketAccess` 的资源身份、偏移与访问宽度，并保存 Expression 字节拆分使用的同一完整源项，生成一个事件。绑定层以 `Option NodeId` 接收真实执行前节点引用；产品 `inferStep` 与 `rv32Snapshot` 传入来源节点身份，无身份时拒绝 `UndefinedSrc`。局部效果与观察一起组合，后续字节覆写保留旧事件。
-  RV32 的 `packetBindingAt` 与 eBPF 的 `resolveAddress` 在地址可分解为同一入口包基加[复合包偏移](../Predicate/跨架构谓词.md#项与关系)、且当前路径已有对应 `data_end` 检查时生成复合包寄存器。偏移格式识别与投影擦除由该定义给定。记录保留包身份、偏移树、访问字节数、结束 Context 单元与比较严格性，各字节再保留访问内下标；这些分量进入跨架构键。[CompoundPacketFixture.lean](../../CrossArch/CompoundPacketFixture.lean) 的有限 guards 固定含零扩展投影与常元减法的两侧绑定、记录与规范键相等，并覆盖缺失检查、无关自由寄存器、非常元乘积及非常元右端减法的拒绝。常量偏移继续沿用既有 `affineAddress`／`relativeOffset` 分支及其入口范围前提。PacketWrite 的原始 JSON 在符号目的地址时增加 `compound` 字段，并检查保存的访问位宽等于其字节数乘八；规范 JSON 使用 `offsetTerm` 保存复合键。包字节与 Helper 冻结分别遵循[包字节访问](../Expr/寄存器/包字节.md)和[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)。同入口包资源对应、偏移共同值与不回绕仍由 CP-End 及 CP-Q 的相应前提维护。
+  RV32 的 `packetBindingAt` 与 eBPF 的 `resolveAddress` 在地址可分解为同一入口包基加[复合包偏移](../Predicate/跨架构谓词.md#项与关系)、且当前路径已有对应 `data_end` 检查时，记下一条复合访问记录。这条记录不是寄存器。偏移落成具体位区间之后，包寄存器仍只是 \(\operatorname{Packet}([b,e))\)。偏移格式识别与投影擦除由该定义给定。记录保留包记号、偏移树、访问字节数、结束字段与比较严格性，各字节再保留访问内下标；这些分量进入跨架构键，不进入 \(\mathrm{Reg}\)。[CompoundPacketFixture.lean](../../CrossArch/CompoundPacketFixture.lean) 的有限 guards 固定含零扩展投影与常元减法的两侧绑定、记录与规范键相等，并覆盖缺失检查、无关自由寄存器、非常元乘积及非常元右端减法的拒绝。常量偏移继续沿用既有 `affineAddress`／`relativeOffset` 分支及其入口范围前提。PacketWrite 的原始 JSON 在符号目的地址时增加 `compound` 字段，并检查保存的访问位宽等于其字节数乘八；规范 JSON 使用 `offsetTerm` 保存复合键。包字节与 Helper 冻结分别遵循[包字节访问](../Expr/寄存器/包字节.md)和[调用时的字节读取](../Predicate/Helper谓词.md#调用时的字节读取)。同入口包资源对应、偏移共同值与不回绕仍由 CP-End 及 CP-Q 的相应前提维护。
 - MapWrite 在 lookup 观察已带冻结键、Meta 布局匹配且元素内偏移加访问宽度不超过 `valueSize` 时，对 Expression 选定为 Map 的 `SB`/`SH`/`SW`/`C.SW` 发射一条观察（写入事件为当前节点身份，`map`/`key`/`offset`/`source` 取自 lookup 与执行前源寄存器）。缺冻结键、缺布局或越界时拒绝 `UndefinedSrc`；不得只提交 Map Expression 写入。低层 Expression 的 Map 数值切片仍可在观察拒绝前存在于 value step，但不构成产品成功。包侧键缓冲区冻结与 MW-O* 证明义务仍未关闭。
 
 eBPF 的局部候选由 [EBPF/Step.lean](../../EBPF/Step.lean)生成，内存写入观察由 [EBPF/Memory.lean](../../EBPF/Memory.lean)与值效果一起返回：

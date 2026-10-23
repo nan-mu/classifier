@@ -7,7 +7,7 @@
 create、step、history 使用数学契约。回到父指令且只给出 not_taken 时，history 的寄存器列表用来判断两次 not_taken 的观察生成是否一致。create 的入口假设和 step 的指令规则按目标架构给定。产品 create/step 的 RV32IMC 归属与模块构建图见[工程模块与迁移](NodeInference/路径合并FFI.md#工程模块与迁移)，跨架构研究与证明限度见[语义范围与证据边界](NodeInference/路径合并FFI.md#语义范围与证据边界)。数学定义和公式由以下所属正文维护，FFI 与现有实现差异由工程文档维护。
 
 1. [位向量](Expr/Term/位向量.md)与[共同数值函数](Expr/Term/数值函数.md)：Expression 右值使用的数值记号与纯数值函数。
-2. [寄存器定义](寄存器定义.md)：五类对象的身份、位宽、值域与相等，只维护定义。
+2. [寄存器定义](寄存器定义.md)：五类构造、位区间、上下文字段与相等，只维护定义。
 3. 表达式主题见 [Expression 索引](Expr/Expr.md#索引)。
 4. 观察主题依次读[类型与结构相等](Predicate/谓词定义.md#类型与结构相等)、[Helper 共同定义](Predicate/Helper谓词.md)、[MapLookup观察](Predicate/MapLookup谓词.md)、[MapUpdate观察](Predicate/MapUpdate谓词.md)、[MapDelete观察](Predicate/MapDelete谓词.md)、[OtherHelper观察](Predicate/OtherHelper谓词.md)、[Branch观察](Predicate/Branch谓词.md)、[Return观察](Predicate/Return谓词.md)、[MapWrite观察](Predicate/MapWrite谓词.md)、[PacketWrite观察](Predicate/PacketWrite谓词.md)、[五类观察结构累积及解释义务](Predicate/谓词定义.md#观察集合累积与可满足性)、[观察集合与历史顺序](Predicate/谓词定义.md#观察集合与历史顺序)、[跨架构观察](Predicate/跨架构谓词.md)。固定程序的观察域为 \(\mathrm{Observation}_{\mathbf I}\)：Helper 的外部调用观察、Branch 的选定方向与条件、Return 的最外层正常返回结果、MapWrite 的 Map 元素内写入与 PacketWrite 的包写入分别由各所属正文维护；跨架构规范观察与相等由 CrossPred 的所属正文维护。
 5. [路径](NodeInference/路径.md)：指令序号、机器地址、字节偏移与不透明节点引用的区别，以及方向。
@@ -45,7 +45,7 @@ create、step、history 使用数学契约。回到父指令且只给出 not_tak
 - 初态关系的结构性质与代数可满足性见[create 的 RV32 初态性质](NodeInference/create.md#初态及其性质)。
 - OtherHelper 生成的唯一性与参数齐备见[OtherHelper观察](Predicate/OtherHelper谓词.md#数学性质)，动态调用区分见[Helper 共同性质](Predicate/Helper谓词.md#数学性质)；返回更新的有限性、位宽与 lookup 关联的结构有效性见[Helper 观察的性质](Predicate/Helper谓词.md#数学性质)。
 - 精确配置共享判据的完备性由配置相等给出；在前提 P1 至 P4 下的一步一致性、有限深度后续一致性与共享安全性见[证明义务-路径合并完备](NodeInference/Jump/证明义务-路径合并完备.md)。
-- 原子 Stack DW 的两个 SW32 同源拼接、一次更新与同时拆分，以及 Map W 保持原 Map64 身份的字段更新见[规范单元桥接](Expr/寄存器/原子数值更新与旧值返回.md#规范单元桥接)。
+- 栈上 64 位顺序原子把相邻区间拼成一次旧值再拆回，Map 字段更新保持同一 \((m,\bar k)\)，见[旧值拼接](Expr/寄存器/原子数值更新与旧值返回.md#规范单元桥接)。
 - 跨架构合法对齐要求共同单射替换显式覆盖匹配左观察的全部符号，包括恒等绑定。独立定义下的一般最大性、算法歧义当且仅当最大对齐不唯一、交换不变性及非歧义时所选对齐的交换均已有 Lean 证明，见[保序最大对齐](Predicate/跨架构谓词.md#保序最大对齐)。一般定理、有限检查和历史产品测量的范围见[形式化证据普查](NodeInference/跨架构比较.md#形式化证据普查)，本轮实际验证见[工程状态](NodeInference/路径合并FFI.md#本轮实现与验证状态)。
 
 以下问题仍需定义或证明：

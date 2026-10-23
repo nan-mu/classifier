@@ -1,4 +1,5 @@
 import Node.Path
+import Core.Interval
 
 namespace RV32
 open Core Node
@@ -25,7 +26,6 @@ structure EntryParams where
   tData   : Term
   tLen    : Term
   ιWifi   : Nat
-  αCtx    : Nat
   rEntries : List Reg
 
 private def leaf32 : Term → Bool
@@ -34,8 +34,9 @@ private def leaf32 : Term → Bool
   | _ => false
 
 private def validEntryReg (r : Reg) : Bool :=
-  r.kind == .real && r.width == .w32 &&
-    (r.alpha == 1 || r.alpha == 8 || r.alpha == 9 || (11 ≤ r.alpha && r.alpha < 32))
+  match r with
+  | .real idx 0 32 => idx == 1 || idx == 8 || idx == 9 || (11 ≤ idx && idx < 32)
+  | _ => false
 
 /-- Callee-saved registers s0..s11 retain the wrapper's entry-position term. -/
 def savedRegs : List Reg :=
@@ -78,33 +79,32 @@ def contextTerms (p : EntryParams) : List Term :=
   let tEnd := addStar .w32 p.tData p.tLen
   [p.tData, tEnd, Term.C32 0, Term.C32 p.ιWifi, Term.C32 0, Term.C32 0]
 
-private def putField (mem : Mem) (field : Nat) (t : Term) : Except RejectReason Mem := do
-  let tile ← match Tile.ofTerm t 32 with
-    | .ok tile => pure tile
-    | .error _ => throw .invalidEntry
-  match mem.write (.context field) 0 tile with
-  | .ok mem => pure mem
-  | .error _ => throw .invalidEntry
+private def putField (E : List Expr) (j : ContextField) (t : Term) :
+    Except RejectReason (List Expr) :=
+  match putContext E j t with
+  | some E => pure E
+  | none => throw .invalidEntry
 
-/-- Context lives in memory. `αCtx` is not a field index. -/
-def writeContext (p : EntryParams) : Except RejectReason Mem := do
-  match contextTerms p with
-  | [t0, t1, t2, t3, t4, t5] => do
-      let mem ← putField .empty 0 t0
-      let mem ← putField mem 1 t1
-      let mem ← putField mem 2 t2
-      let mem ← putField mem 3 t3
-      let mem ← putField mem 4 t4
-      putField mem 5 t5
-  | _ => throw .invalidEntry
+/-- The six `xdp_md` fields are context intervals, including the intentional zeros. -/
+def writeContext (p : EntryParams) : Except RejectReason (List Expr) := do
+  match contextTerms p, xdpFields with
+  | [t0, t1, t2, t3, t4, t5], [j0, j1, j2, j3, j4, j5] => do
+      let E ← putField Expr.nil j0 t0
+      let E ← putField E j1 t1
+      let E ← putField E j2 t2
+      let E ← putField E j3 t3
+      let E ← putField E j4 t4
+      putField E j5 t5
+  | _, _ => throw .invalidEntry
 
-/-- Real registers stay in `exprs`. The six context fields are `mem`. -/
+/-- Real registers and the six context intervals share `exprs`. -/
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if ![p.tData, p.tLen].all leaf32 || p.ιWifi ≥ (1 <<< 32) then throw .invalidEntry
   let Ereal ← buildRealE0 p
-  if !Ereal.keysUnique then throw .invalidEntry
-  let mem ← writeContext p
-  pure ⟨Ereal, [], mem⟩
+  let Ectx ← writeContext p
+  let E := Ereal.override Ectx
+  if !E.keysUnique then throw .invalidEntry
+  pure ⟨E, []⟩
 
 /-- Entry state consumed by the existing Expand adapter. -/
 def entrySemState (p : EntryParams) : Except RejectReason SemState := buildE0 p

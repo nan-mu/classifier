@@ -13,9 +13,20 @@ private def parseLeaf (text : String) (width : Width) : Option Term := do
     | .const _ _ | .var _ _ => some term
     | _ => none
 
-private def lddwRows (slots : Array UInt32) (terms : Array UInt64) : List (Anchor × Term) :=
-  (slots.toList.zip terms.toList).map fun (slot, term) =>
-    (.lddw slot.toNat, if term.toNat == 0 then Anchor.unboundLddw else Term.C64 term.toNat)
+private def bindSlots (E : List Expr) : List (Nat × Nat) → Option (List Expr)
+  | [] => some E
+  | (slot, value) :: rest => do
+    if rest.any (fun p => p.1 == slot) then none
+    let E ← Anchor.bindLddw E slot value
+    bindSlots E rest
+
+private def mapLayouts : List Nat → List Nat → List Nat → Option (List MapLayout)
+  | [], [], [] => some []
+  | id :: ids, key :: keys, value :: values => do
+    if key == 0 then none
+    let rest ← mapLayouts ids keys values
+    some ({ mapId := id, keySize := key, valueSize := value } :: rest)
+  | _, _, _ => none
 
 /-- The root contains the actual pre-instruction eBPF entry state. -/
 def ebpfInit (I : Array Insn) (σ0 : SemState) (j0 budget : Nat) :
@@ -38,26 +49,27 @@ private def runningJson (σ0 : SemState) : String :=
 
 @[export lean_ebpf_expand_create]
 def exportEbpfExpandCreate
-    (tCtx tSp tData : String) (packetBytes alphaCtx packetId stackId : UInt32)
+    (tCtx tSp tData : String) (packetBytes _alphaCtx _packetId _stackId : UInt32)
     (slots : Array UInt32) (terms : Array UInt64)
     (mapIds keySizes valueSizes : Array UInt32) : String :=
   if slots.size != terms.size || mapIds.size != keySizes.size ||
       keySizes.size != valueSizes.size then createFailJson .invalidEntry
   else match parseLeaf tCtx .w64, parseLeaf tSp .w64, parseLeaf tData .w32 with
     | some tCtx, some tSp, some tData =>
-      let p : EntryParams := {
-        tCtx, tSp, tData, packetBytes := packetBytes.toNat, αCtx := alphaCtx.toNat,
-        κPacket := packetId.toNat, φStack := stackId.toNat }
+      let p : EntryParams := { tCtx, tSp, tData, packetBytes := packetBytes.toNat }
       match buildE0 p with
       | .error reason => createFailJson reason
       | .ok σ0 =>
-        match Anchor.mapRows (mapIds.toList.map (·.toNat)) (keySizes.toList.map (·.toNat))
+        match mapLayouts (mapIds.toList.map (·.toNat)) (keySizes.toList.map (·.toNat))
             (valueSizes.toList.map (·.toNat)) with
         | none => createFailJson .invalidEntry
         | some maps =>
-          match Anchor.install σ0.exprs (entryRows p ++ lddwRows slots terms ++ maps) with
+          match bindSlots σ0.exprs ((slots.toList.map (·.toNat)).zip (terms.toList.map (·.toNat))) with
           | none => createFailJson .invalidEntry
-          | some exprs => runningJson { σ0 with exprs }
+          | some withSlots =>
+            match Anchor.installMaps withSlots maps with
+            | none => createFailJson .invalidEntry
+            | some exprs => runningJson { σ0 with exprs }
     | _, _, _ => createFailJson .invalidEntry
 
 private def headFailJson (reason : RejectReason) : String :=
@@ -124,8 +136,9 @@ private def statelessStepCheck : Bool := Id.run do
   let (exprs, preds) := renderSemStateJson root
   let .inr next := expandOne I.size (ebpfStep I 0) ws | return false
   let response := exportEbpfExpandStep justTxProgram 0 0 s!"[{exprs}]" s!"[{preds}]"
+  let some r0 := readInterval next.nodes[1]!.state.exprs (Reg.real64 0) | return false
   return next.nodes[1]!.loc == .pos 1 &&
-    next.nodes[1]!.state.exprs.lookupEq (Reg.real64 0) == some (Term.C64 1) &&
+    eval (solve r0) == some 1 &&
     next.nodes[1]!.state.exprs.lookupEq (Reg.real64 1) == some justTxEntry.tCtx &&
     lddwBind root.exprs 34 == .unbound &&
     response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, next.nodes[1]!.loc, next.nodes[1]!.state)}]}" &&
@@ -146,17 +159,11 @@ private def laterStepsCheck : Bool := Id.run do
   let I := decodeProgram justTxProgram
   let .ok σ := buildE0 justTxEntry | return false
   let plainE := host justTxEntry σ.exprs
-  let some markedE := Anchor.install plainE [(.lddw 34, Anchor.unboundLddw)] | return false
-  let plainState := { exprs := plainE, predicates := [], mem := σ.mem }
-  let markedState := { exprs := markedE, predicates := [], mem := σ.mem }
+  let plainState : SemState := { exprs := plainE, predicates := [] }
   let plain := ebpfSnapshot I plainState 0 200 200
-  let marked := ebpfSnapshot I markedState 0 200 200
   let (pexprs, ppreds) := renderSemStateJson plainState
-  let (mexprs, mpreds) := renderSemStateJson markedState
   return failedSlotCheck plain "UndefinedSrc" 38 &&
-    failedSlotCheck marked "UnboundTarget" 34 &&
-    exportEbpfBoundWordsSnapshot justTxProgram s!"[{pexprs}]" s!"[{ppreds}]" 200 200 == plain &&
-    exportEbpfBoundWordsSnapshot justTxProgram s!"[{mexprs}]" s!"[{mpreds}]" 200 200 == marked
+    exportEbpfBoundWordsSnapshot justTxProgram s!"[{pexprs}]" s!"[{ppreds}]" 200 200 == plain
 
 private def productRoot : Option SemState :=
   rootOf (fixtureCreate #[34] #[42] #[42] #[4] #[8])
@@ -173,10 +180,13 @@ private def earlyExitCheck : Bool := Id.run do
   let some rhs := compare.state.exprs.lookupEq (Reg.real64 2) | return false
   return graph.nodes.any fun node =>
     node.loc == .exit &&
-    node.state.exprs.lookupEq (Reg.real64 0) == some (Term.C64 1) &&
+    (match readInterval node.state.exprs (Reg.real64 0) with
+      | some t => eval (solve t) == some 1
+      | none => false) &&
     node.state.predicates.contains (.branch 6 .taken ⟨lhs, .gtu, rhs⟩) &&
-    node.state.predicates.filter (fun p => match p with | .ret _ => true | _ => false) ==
-      [.ret (Term.C64 1)]
+    node.state.predicates.any fun p => match p with
+      | .ret t => eval (solve t) == some 1
+      | _ => false
 
 private def productSnapshotCheck : Bool := (do
   let some root := productRoot | none
@@ -197,7 +207,7 @@ private def productSnapshotCheck : Bool := (do
         (fun p => (p.getObjVal? "helperId" >>= Lean.Json.getNat?).toOption == some 1)) &&
     nodes.any (fun node =>
       ((node.getObjVal? "exprs" >>= Lean.Json.getArr?).toOption.getD #[]).any (fun e =>
-        (e.getObjVal? "reg" >>= Lean.Json.getStr?).toOption == some "real64:0" &&
+        (e.getObjVal? "reg" >>= Lean.Json.getStr?).toOption == some "real:0:[0,64)" &&
         (e.getObjVal? "rel" >>= Lean.Json.getStr?).toOption == some "eq" &&
         (match (e.getObjVal? "term" >>= Lean.Json.getStr?).toOption >>= fun text =>
             parseTerm text .w64 with
@@ -242,11 +252,11 @@ private def budgetCheck : Bool := Id.run do
 #guard (decodeProgram justTxProgram)[36]? == some (.callHelper 1)
 #guard (decodeProgram justTxProgram)[57]? == some .exit
 #guard match ebpfStep (decodeProgram justTxProgram) 36 36
-    ⟨host justTxEntry Expr.nil, [], .empty⟩ with
+    ⟨host justTxEntry Expr.nil, []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep (decodeProgram justTxProgram) 57 57
-    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), [], .empty⟩ with
+    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
   | .candidates [c] => c.dir == .ok && c.loc == .exit &&
       c.E_k == Expr.nil && c.P_k == [.ret (Term.C64 1)]
   | _ => false
@@ -258,14 +268,18 @@ private def budgetCheck : Bool := Id.run do
 #guard productMapWriteCheck
 #guard budgetCheck
 
+private def putWord (E : List Expr) (r : Reg) (value : Nat) : Option (List Expr) :=
+  let term := if r.bits ≤ 32 then Term.C32 value else Term.C64 value
+  writeInterval E r term
+
 private def extendedInstructionFfiCheck : Bool := Id.run do
   let .ok initial := buildE0 justTxEntry | return false
-  let .ok mem := initial.mem.write .stack (508 * 8) ⟨[.const 32 0x11223380]⟩ | return false
-  let E := host justTxEntry (initial.exprs.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
+  let stack : Reg := .stack (508 * 8) (508 * 8 + 32)
+  let E0 := host justTxEntry (initial.exprs.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
     |>.insertEq (Reg.real64 2) (Term.C64 0x81))
-  let start := { exprs := E, predicates := [], mem := mem }
+  let some E := putWord E0 stack 0x11223380 | return false
+  let start : SemState := { exprs := E, predicates := [] }
   let (exprs, preds) := renderSemStateJson start
-  let stack := stackUnitReg 0 0
   let cases : List (UInt64 × Reg × Nat) :=
     [(0x0000000200000114, Reg.real64 1, 13),
       (0x00000000000821bc, Reg.real64 1, 0xffffff81),
@@ -277,21 +291,20 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
   for (word, reg, expected) in cases do
     let response := exportEbpfExpandStep #[word, 0x95] 11 0
       s!"[{exprs}]" s!"[{preds}]"
-    let updated := E.override (Expr.nil.insertEq reg (Term.C reg.width expected))
-    let state ← if reg == stack then
-        match mem.write .stack (508 * 8) ⟨[.const 32 expected]⟩ with
-        | .ok written => pure { start with mem := written }
-        | .error _ => pure start
-      else
-        pure { start with exprs := updated }
-    if response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
+    let .candidates [c] := ebpfStep (decodeProgram #[word, 0x95]) 11 0 start | return false
+    let .ok state := Node.applyLocal start c.E_k c.P_k | return false
+    let some got := readInterval state.exprs reg | return false
+    if eval (solve got) != some expected ||
+        response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
       return false
   let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95] 11 0 s!"[{exprs}]" "[]"
-  let .ok added := mem.write .stack (508 * 8) ⟨[.const 32 0x11223401]⟩ | return false
-  let updated := E.override (Expr.nil.insertEq (Reg.real64 2) (Term.C64 0x11223380))
-  let state := { start with exprs := updated, mem := added }
-  return response ==
-    s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}"
+  let .candidates [c] := ebpfStep (decodeProgram #[0x00000001fffc2ac3, 0x95]) 11 0 start | return false
+  let .ok state := Node.applyLocal start c.E_k c.P_k | return false
+  let some stackGot := readInterval state.exprs stack | return false
+  let some regGot := readInterval state.exprs (Reg.real64 2) | return false
+  return eval (solve stackGot) == some 0x11223401 &&
+    eval (solve regGot) == some 0x11223380 &&
+    response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}"
 
 #guard extendedInstructionFfiCheck
 

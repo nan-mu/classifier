@@ -84,19 +84,19 @@ def Expr.mkRel (r : Reg) (rel : Rel) (t : Term) : Expr := ⟨r, rel, t⟩
 
 /-- Decide using the pre-instruction value of the left register. -/
 def Expr.decideWith (e : Expr) (lhs : Term) : Option Bool := do
-  if lhs.width != e.reg.width || e.term.width != e.reg.width then none else
+  if lhs.semanticBits != e.reg.bits || e.term.semanticBits != e.reg.bits then none else
     let a ← eval (solve lhs)
     let b ← eval (solve e.term)
-    pure (interpretRel e.reg.width.bits e.rel a b)
+    pure (interpretRel e.reg.bits e.rel a b)
 
 def solveExpr (e : Expr) : Expr := { e with term := solve e.term }
 
 /-- Partial interpretation. Missing external meanings and malformed terms remain undefined. -/
 def interpretExpr (ρ : Reg → Nat) (ν : Var → Nat) (θ : ExternalInterpretation)
     (e : Expr) : Option Bool := do
-  if !e.reg.valid || e.term.width != e.reg.width then none else
+  if !e.reg.valid || e.term.semanticBits != e.reg.bits then none else
     let value ← interpretTerm ν θ e.term
-    pure (interpretRel e.reg.width.bits e.rel (ρ e.reg) value)
+    pure (interpretRel e.reg.bits e.rel (ρ e.reg) value)
 
 /-! ## Expr lists
 
@@ -123,7 +123,7 @@ def constraints (E : List Expr) : List Expr :=
   E.filter fun e => !(E.bindings.contains e)
 
 def wellTyped (E : List Expr) : Bool :=
-  E.all fun e => e.reg.valid && e.reg.width == e.term.width
+  E.all fun e => e.reg.valid && e.term.semanticBits == e.reg.bits
 
 /-- Rows are structurally unique. Several relations may share one register. -/
 def keysUnique (E : List Expr) : Bool :=
@@ -156,7 +156,9 @@ A comparison equality is not an assignment; `applyLocal` appends those from the
 branch predicate instead of passing them through this write set. -/
 def override (Eg Ei : List Expr) : List Expr :=
   let writes := Ei.bindings
-  let keep (e : Expr) := !(writes.any (fun w => w.reg == e.reg))
+  -- A partial interval replaces every overlapping value of the same resource.
+  let keep (e : Expr) :=
+    !(writes.any (fun w => w.reg == e.reg || w.reg.overlaps e.reg))
   Ei.constraints.foldl insertConstraint ((Eg.filter keep) ++ writes)
 
 def mapTerms (E : List Expr) (f : Term → Term) : List Expr :=

@@ -21,10 +21,12 @@ private theorem value_lt (ν : Var → Nat) (θ : ExternalInterpretation)
     · simp [value, interpretTerm, hc, Term.width]
     · simpa [value, interpretTerm, hc, Term.width] using Nat.two_pow_pos w.bits
   | var w n => simpa [value, interpretTerm, Term.width] using MNat_lt w.bits _
-  | regVar event r =>
-    by_cases hr : (r.valid && r.kind == .real) = true
-    · simpa [value, interpretTerm, hr, Term.width] using MNat_lt r.width.bits _
-    · simpa [value, interpretTerm, hr, Term.width] using Nat.two_pow_pos r.width.bits
+  | regVar _ r =>
+    by_cases hr : r.valid = true
+    · simp only [value, interpretTerm, hr, Term.width]
+      exact MNat_lt _ _
+    · simp only [value, interpretTerm, hr, Term.width]
+      exact Nat.two_pow_pos _
   | app w op args =>
     cases hs : op.validSignature w (args.map Term.width) with
     | false =>

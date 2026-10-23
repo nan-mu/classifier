@@ -637,15 +637,15 @@ mod tests {
         assert_eq!(snap.cursor_j, 0);
         assert_eq!(snap.nodes.len(), 1);
         assert_eq!(snap.nodes[0].loc, "0");
-        assert_eq!(eq_term(&snap.nodes[0], "real32:0"), Some("0"));
-        // Entry binds context cells + R_s (x8/x9/x18..x27) to t_entry; stack cells on first access.
-        assert_eq!(eq_term(&snap.nodes[0], "context32:0"), Some("v32:4"));
+        assert_eq!(eq_term(&snap.nodes[0], "real:0:[0,32)"), Some("0"));
+        // 19 real regs, six xdp fields, imageBase/helper/wrapperReturn/ctx, and one map's key and value sizes.
+        assert_eq!(eq_term(&snap.nodes[0], "context:data:[0,32)"), Some("v32:4"));
         assert_eq!(
-            eq_term(&snap.nodes[0], "real32:8"),
-            eq_term(&snap.nodes[0], "real32:9")
+            eq_term(&snap.nodes[0], "real:8:[0,32)"),
+            eq_term(&snap.nodes[0], "real:9:[0,32)")
         );
-        assert!(eq_term(&snap.nodes[0], "real32:9").is_some());
-        assert_eq!(snap.nodes[0].exprs.len(), 25);
+        assert!(eq_term(&snap.nodes[0], "real:9:[0,32)").is_some());
+        assert_eq!(snap.nodes[0].exprs.len(), 31);
         assert!(snap.nodes[0].predicates.is_empty());
         assert_eq!(snap.edges.len(), 0);
         assert!(snap.log[0].msg.contains("just_tx.elf"));
@@ -713,7 +713,7 @@ mod tests {
         assert_eq!(snap.nodes[1].loc, "1");
 
         assert_eq!(
-            eq_term(&snap.nodes[1], "real32:2"),
+            eq_term(&snap.nodes[1], "real:2:[0,32)"),
             Some("add32(v32:0,4294967280)")
         );
         assert_eq!(snap.nodes[1].preds, vec![0]);
@@ -731,7 +731,7 @@ mod tests {
         let snap = session.snapshot();
         assert_eq!(snap.program, "upload.elf");
         assert_eq!(snap.insns.len(), 79);
-        assert_eq!(snap.nodes[0].exprs.len(), 30);
+        assert_eq!(snap.nodes[0].exprs.len(), 31);
     }
 
     #[test]
@@ -757,14 +757,21 @@ mod tests {
                 .unwrap()
                 .to_string()
         };
-        assert_eq!(term("anchor32:1"), program.base_address.to_string());
-        assert_eq!(term("anchor32:0"), program.helper_address.to_string());
-        assert_eq!(term("anchor32:2"), rv32_image::WRAPPER_RETURN.to_string());
+        assert_eq!(term("context:imageBase:[0,32)"), program.base_address.to_string());
+        assert_eq!(term("context:helper:[0,32)"), program.helper_address.to_string());
+        assert_eq!(
+            term("context:wrapperReturn:[0,32)"),
+            rv32_image::WRAPPER_RETURN.to_string()
+        );
         for map in &program.maps {
-            let idx = (1u64 << 32) + map.map_id as u64;
-            let packed: u64 = term(&format!("anchor64:{idx}")).parse().unwrap();
-            assert_eq!(packed & 0xffff, map.key_size as u64);
-            assert_eq!(packed >> 16, map.value_size as u64);
+            assert_eq!(
+                term(&format!("context:mapKeyBytes:{}:[0,32)", map.map_id)),
+                map.key_size.to_string()
+            );
+            assert_eq!(
+                term(&format!("context:mapValueBytes:{}:[0,32)", map.map_id)),
+                map.value_size.to_string()
+            );
         }
     }
 

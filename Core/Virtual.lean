@@ -1,5 +1,6 @@
 import Core.Expr
 import Core.Insn
+import Core.Interval
 
 namespace Core
 
@@ -7,7 +8,6 @@ namespace Core
 structure ExprEffect where
   inputs : List Expr := []
   updates : List Expr := []
-  writes : List MemWrite := []
   deriving Inhabited, Repr
 
 def ExprEffect.delta (effect : ExprEffect) : List Expr :=
@@ -18,68 +18,52 @@ def ExprEffect.validFor (effect : ExprEffect) (Eg : List Expr) : Bool :=
     effect.inputs.keysUnique && effect.updates.keysUnique &&
     effect.inputs.all (fun e => (Eg.lookupRel e.reg e.rel).isNone)
 
-/-- A resolved field in a canonical Stack, Map or Context cell; address binding is ISA-owned. -/
+/-- A virtual interval. The bit range is the register, not a second offset. -/
 structure CellAccess where
   reg : Reg
-  bitOffset : Nat
-  bits : Nat
   deriving Inhabited, Repr
 
-def CellAccess.valid (a : CellAccess) (valueWidth : Width) : Bool :=
-  (a.reg.kind == .stack || a.reg.kind == .map || a.reg.kind == .context) &&
-    a.bits > 0 && a.bits ≤ valueWidth.bits && a.bitOffset + a.bits ≤ a.reg.width.bits
+def CellAccess.valid (a : CellAccess) : Bool :=
+  a.reg.valid &&
+    match a.reg with
+    | .real .. => false
+    | _ => true
 
 def CellAccess.read (a : CellAccess) (Eg : List Expr) (w : Width)
     (isUnsigned : Bool) : Option Term := do
-  if !Eg.keysUnique || !Eg.wellTyped || !a.valid w then none
-  else
-    let old ← Eg.lookupEq a.reg
-    if old.width != a.reg.width then none
-    else if a.bitOffset == 0 && a.bits == a.reg.width.bits && w == a.reg.width then some old
-    else
-      let field := star a.reg.width (.extract a.bitOffset a.bits a.reg.width.bits) [old]
-      some (if isUnsigned then zStar a.bits w a.reg.width.bits field
-        else sStar a.bits w a.reg.width.bits field)
-
-/-- A frozen cell byte is the low-eight-bit zero-extension of its stored field. -/
-theorem CellAccess.read_byte (a : CellAccess) (Eg : List Expr) (w : Width)
-    (value : Term) (hb : a.bits = 8) (h : a.read Eg w true = some value) :
-    ∃ stored, Eg.lookupEq a.reg = some stored ∧
-      value = zStar 8 w a.reg.width.bits
-        (star a.reg.width (.extract a.bitOffset 8 a.reg.width.bits) [stored]) := by
-  unfold CellAccess.read at h
-  split at h
-  · simp at h
-  · cases hs : Eg.lookupEq a.reg with
-    | none => simp [hs] at h
-    | some stored =>
-      have hn : (8 : Nat) ≠ a.reg.width.bits := by
-        cases a.reg.width <;> simp [Width.bits]
-      by_cases hw : stored.width = a.reg.width
-      · simp [hs, hw, hb, hn] at h
-        exact ⟨stored, rfl, h.symm⟩
-      · simp [hs, hw] at h
+  if !Eg.keysUnique || !Eg.wellTyped || !a.valid then none
+  let old ← readInterval Eg a.reg
+  if old.semanticBits == w.bits && old.width == w then some old
+  else if isUnsigned then some (zStar old.semanticBits w old.width.bits old)
+  else some (sStar old.semanticBits w old.width.bits old)
 
 def CellAccess.write (a : CellAccess) (Eg : List Expr) (source : Term) : Option (List Expr) := do
-  if !Eg.keysUnique || !Eg.wellTyped || !a.valid source.width then none
-  else
-    let low := zStar a.bits a.reg.width source.width.bits source
-    if a.bitOffset == 0 && a.bits == a.reg.width.bits then
-      some (Expr.nil.insertEq a.reg
-        (if source.width == a.reg.width then source else low))
-    else
-      let old ← Eg.lookupEq a.reg
-      if old.width != a.reg.width then none
-      else
-        let mask := ((1 <<< a.bits) - 1) <<< a.bitOffset
-        let kept := andStar a.reg.width.bits a.reg.width old
-          (Term.C a.reg.width (a.reg.width.mask ^^^ mask))
-        let inserted := shlStar a.reg.width low (Term.C a.reg.width a.bitOffset)
-        some (Expr.nil.insertEq a.reg (orStar a.reg.width.bits a.reg.width kept inserted))
+  if !Eg.keysUnique || !a.valid then none
+  let n := a.reg.bits
+  let stored := if source.semanticBits == n then source
+    else zStar n (Width.ofBits n) source.width.bits source
+  writeUpdates Eg a.reg stored
 
 inductive ByteOrder where
   | little | big
   deriving BEq, Repr, Inhabited
+
+/-- Symbolic packet displacement before the address is a concrete bit interval.
+This is not a register. -/
+inductive PacketOffset where
+  | c (value : Nat)
+  | packet (byte : Nat)
+  | add (lhs rhs : PacketOffset)
+  | low (bits : Nat) (arg : PacketOffset)
+  | shl (arg amount : PacketOffset)
+  | sub (arg : PacketOffset) (constant : Nat)
+  | id (arg : PacketOffset)
+  | zext (bits input : Nat) (arg : PacketOffset)
+  | sext (bits input : Nat) (arg : PacketOffset)
+  | or (lhs rhs : PacketOffset)
+  | mask (arg : PacketOffset) (constant : Nat)
+  | lshr (arg : PacketOffset) (constant : Nat)
+  deriving DecidableEq, BEq, Repr, Inhabited
 
 def PacketOffset.plus (a b : PacketOffset) : PacketOffset :=
   match a, b with
@@ -111,9 +95,11 @@ private def packetSext (q v : Nat) (w : Width) (a : PacketOffset) : PacketOffset
 def packetOffsetFrom (E : List Expr) (t : Term) : Option PacketOffset :=
   let normalized := solve t
   let isOpen := match t with | .const _ _ => false | _ => true
-  match E.bindings.find? (fun e => isOpen && e.reg.kind == .packet &&
-      e.reg.compound.isNone && e.rel == .eq && e.term == normalized) with
-  | some e => some (.packet e.reg.alpha)
+  match E.bindings.find? (fun e => isOpen && e.rel == .eq && e.term == normalized &&
+      match e.reg with
+      | .packet b hi => hi == b + 8 && b % 8 == 0
+      | _ => false) with
+  | some e => some (.packet (e.reg.lo / 8))
   | none => match t with
     | .const _ n => some (.c n)
     | .app _ (.id _) [a] => packetOffsetFrom E a
@@ -155,7 +141,7 @@ def packetOffsetFrom (E : List Expr) (t : Term) : Option PacketOffset :=
         else none
       | none => none
     -- A materialized numeric packet byte is `inputByte` at `base + n`.
-    -- Its leaf is that byte offset, the same role a packet-register alpha had.
+    -- The leaf is that byte offset.
     | .app _ (.inputByte _) [base, address] =>
       let disp : Term → Option Nat
         | a => if a == base then some 0 else
@@ -186,9 +172,9 @@ termination_by sizeOf address
 
 def PacketOffset.toTerm (E : List Expr) (w : Width) : PacketOffset → Option Term
   | .c n => some (Term.C w n)
-  | .packet alpha => do
-    let byte ← E.lookupEq ⟨.packet, .w32, alpha, none⟩
-    pure (if w == .w32 then byte else zStar 8 w 32 byte)
+  | .packet n => do
+    let byte ← readInterval E (.packet (8 * n) (8 * n + 8))
+    pure (if w == .w32 then byte else zStar 8 w byte.width.bits byte)
   | .add a b => do pure (addStar w (← a.toTerm E w) (← b.toTerm E w))
   | .low q a => do pure (star w (.low q w.bits) [← a.toTerm E w])
   | .shl a b => do pure (shlStar w (← a.toTerm E w) (← b.toTerm E w))
@@ -253,69 +239,63 @@ def packetBoundWitness (E : List Expr) (base address ending : Term) (bytes : Nat
         let disp ← packetDisplacement E base address
         some (false, disp.plus (.c bytes))
 
-/-- Decimal digit blocks keep arbitrary Nat identities in well-formed 32-bit
-metadata constants; 10 terminates a block. -/
-private def packetMetadata (ns : List Nat) : List Term :=
-  ns.flatMap fun n =>
-    ((toString n).toList.map (fun c => Term.C32 (c.toNat - '0'.toNat))) ++ [Term.C32 10]
-
-private def parsePacketMetadata : Nat → List Term → Option (List Nat)
-  | 0, [] => some []
-  | 0, _ => none
-  | fuel + 1, ts => if ts.isEmpty then some [] else do
-    let (digits, rest) := ts.span (· != Term.C32 10)
-    if digits.isEmpty then none else
-      let chars ← digits.mapM fun t => match t with
-        | .const .w32 n => if n < 10 then some (Char.ofNat ('0'.toNat + n)) else none
-        | _ => none
-      let n ← (String.ofList chars).toNat?
-      let _ :: rest := rest | none
-      pure (n :: (← parsePacketMetadata fuel rest))
-
-def CompoundPacketReg.annotate (p : CompoundPacketReg) (value : Term) : Term :=
-  .app .w32 (.packetRead p.bytes p.endCtx)
-    (value :: packetMetadata ([p.κ, if p.strict then 1 else 0, p.byteIndex] ++
-      p.offset.code ++ p.checkedEnd.code))
-
-def compoundPacketFromMetadata (bytes endCtx : Nat) (metadata : List Term) :
-    Option CompoundPacketReg := do
-  let values ← parsePacketMetadata metadata.length metadata
-  let κ :: strict :: byteIndex :: code := values | none
-  if strict > 1 || byteIndex ≥ bytes || ![1, 2, 4, 8].contains bytes then none else
-    let (offset, rest) ← PacketOffset.decode code.length code
-    let (checkedEnd, []) ← PacketOffset.decode rest.length rest | none
-    pure ⟨κ, offset, bytes, endCtx, strict == 1, byteIndex, checkedEnd⟩
-
-/-- A unique packet identity and byte offset. Access validity is an external premise.
-Only `inputBase` authorizes first-read materialization of untouched input bytes. -/
+/-- One input packet. A constant displacement materializes `Packet([8*o, 8*o+8))`.
+A symbolic displacement stays an address calculation and creates no packet register. -/
 structure PacketAccess where
-  κ : Nat
-  offset : Nat
+  displacement : PacketOffset
   bytes : Nat
   order : ByteOrder := .little
   inputBase : Option Term := none
-  compound : Option CompoundPacketReg := none
   deriving Inhabited, Repr
 
 def PacketAccess.valid (a : PacketAccess) (w : Width) : Bool :=
   (a.bytes == 1 || a.bytes == 2 || a.bytes == 4 || a.bytes == 8) &&
     8 * a.bytes ≤ w.bits
-    && (match a.compound with
-      | none => true
-      | some p => p.κ == a.κ && p.bytes == a.bytes && p.byteIndex == 0)
 
-def PacketAccess.byteReg (a : PacketAccess) (j : Nat) : Reg :=
-  match a.compound with
-  | none => Reg.packet a.κ (a.offset + j)
-  | some p => Reg.compoundPacket { p with byteIndex := j }
+def PacketAccess.constOffset? (a : PacketAccess) : Option Nat :=
+  match a.displacement with
+  | .c n => some n
+  | _ => none
+
+def PacketAccess.byteReg? (a : PacketAccess) (j : Nat) : Option Reg :=
+  match a.constOffset? with
+  | some o => some (.packet (8 * (o + j)) (8 * (o + j) + 8))
+  | none => none
 
 private def bytePosition (a : PacketAccess) (j : Nat) : Nat :=
   if a.order == .little then j else a.bytes - 1 - j
+
+private def packetByteTerm (base : Term) (address : Term) : Term :=
+  star .w32 (.low 8 32) [star .w32 (.inputByte 0) [base, address]]
 
 structure PacketRead where
   inputs : List Expr
   value : Term
   deriving Inhabited, Repr
+
+def PacketAccess.readStored (a : PacketAccess) (Eg : List Expr) (j : Nat) :
+    Option (List Expr × Term) :=
+  match a.byteReg? j with
+  | some reg =>
+    match readInterval Eg reg with
+    | some t => some (Expr.nil, t)
+    | none => do
+      if !(Eg.forReg reg).isEmpty then none
+      else
+        let base ← a.inputBase
+        let o ← a.constOffset?
+        if o + j ≥ (1 <<< base.width.bits) then none
+        else
+          let rawByte := packetByteTerm base
+            (addStar base.width base (Term.C base.width (o + j)))
+          let delta ← writeUpdates Eg reg rawByte
+          some (delta, rawByte)
+  | none => do
+    let base ← a.inputBase
+    let off ← a.displacement.toTerm Eg base.width
+    let address := addStar base.width
+      (addStar base.width base off) (Term.C base.width j)
+    some (Expr.nil, packetByteTerm base address)
 
 def PacketAccess.read (a : PacketAccess) (Eg : List Expr) (w : Width)
     (isUnsigned : Bool) : Option PacketRead := do
@@ -324,28 +304,8 @@ def PacketAccess.read (a : PacketAccess) (Eg : List Expr) (w : Width)
     let mut inputs := Expr.nil
     let mut raw := Term.C w 0
     for j in List.range a.bytes do
-      let reg := a.byteReg j
-      let byte ← match Eg.lookupEq reg with
-        | some t => if t.width == .w32 then some t else none
-        | none => do
-          -- Other relations alone do not authorize inventing a current equality.
-          if !(Eg.forReg reg).isEmpty then none
-          else
-            let base ← a.inputBase
-            let displacement ← match a.compound with
-              | none =>
-                if a.offset + j ≥ (1 <<< base.width.bits) then none
-                else some (Term.C base.width (a.offset + j))
-              | some p => do
-                let off ← p.offset.toTerm Eg base.width
-                pure (addStar base.width off (Term.C base.width j))
-            let address := addStar base.width base displacement
-            let rawByte := star .w32 (.low 8 32) [star .w32 (.inputByte a.κ) [base, address]]
-            let t := match a.compound with
-              | none => rawByte
-              | some p => ({ p with byteIndex := j } : CompoundPacketReg).annotate rawByte
-            inputs := inputs.insertEq reg t
-            some t
+      let (delta, byte) ← a.readStored Eg j
+      inputs := inputs.override delta
       let widened := zStar 8 w 32 byte
       raw := orStar w.bits w raw (shlStar w widened (Term.C w (8 * bytePosition a j)))
     some ⟨inputs, if isUnsigned then raw else sStar (8 * a.bytes) w w.bits raw⟩
@@ -357,50 +317,30 @@ theorem PacketAccess.read_byte (a : PacketAccess) (Eg : List Expr) (w : Width)
     (h : a.read Eg w true = some result) :
     ∃ stored, result.value =
       orStar w.bits w (Term.C w 0) (shlStar w (zStar 8 w 32 stored) (Term.C w 0)) := by
-  cases he : Eg.lookupEq (a.byteReg 0) with
-  | some byte =>
-    by_cases hw : byte.width = .w32
-    · simp [PacketAccess.read, hb, List.range_succ, bytePosition, he, hw] at h
-      obtain ⟨_, hr⟩ := h
-      cases hr
-      exact ⟨byte, rfl⟩
-    · simp [PacketAccess.read, hb, List.range_succ, bytePosition, he, hw] at h
+  cases hs : a.readStored Eg 0 with
   | none =>
-    by_cases hempty : Eg.forReg (a.byteReg 0) = []
-    · cases hi : a.inputBase with
-      | none =>
-        simp [PacketAccess.read, hb, List.range_succ, bytePosition, he, hi] at h
-      | some base =>
-        cases hc : a.compound with
-        | none =>
-          by_cases hbound : a.offset < 1 <<< base.width.bits
-          · simp [PacketAccess.read, hb, List.range_succ, bytePosition,
-              he, hempty, hi, hc, Nat.not_le.mpr hbound] at h
-            obtain ⟨_, hr⟩ := h
-            cases hr
-            exact ⟨_, rfl⟩
-          · simp [PacketAccess.read, hb, List.range_succ, bytePosition,
-              he, hempty, hi, hc, Nat.le_of_not_gt hbound] at h
-        | some p =>
-          cases ho : p.offset.toTerm Eg base.width with
-          | none =>
-            simp [PacketAccess.read, hb, List.range_succ, bytePosition,
-              he, hi, hc, ho] at h
-          | some off =>
-            simp [PacketAccess.read, hb, List.range_succ, bytePosition,
-              he, hempty, hi, hc, ho] at h
-            obtain ⟨_, hr⟩ := h
-            cases hr
-            exact ⟨_, rfl⟩
-    · simp [PacketAccess.read, hb, List.range_succ, bytePosition, he, hempty] at h
+    simp [PacketAccess.read, hb, List.range_succ, bytePosition, hs] at h
+  | some stored =>
+    simp [PacketAccess.read, hb, List.range_succ, bytePosition, hs] at h
+    obtain ⟨_, hr⟩ := h
+    cases hr
+    exact ⟨stored.2, rfl⟩
 
-def PacketAccess.write (a : PacketAccess) (Eg : List Expr) (source : Term) : Option (List Expr) := do
+def PacketAccess.write (a : PacketAccess) (Eg : List Expr) (source : Term) :
+    Option (List Expr) := do
   if !Eg.keysUnique || !Eg.wellTyped || !a.valid source.width then none
   else
-    let mut updates := Expr.nil
-    for j in List.range a.bytes do
-      let byte := star .w32 (.extract (8 * bytePosition a j) 8 source.width.bits) [source]
-      updates := updates.insertEq (a.byteReg j) byte
-    some updates
+    match a.displacement with
+    | .c o =>
+      let mut updates : List Expr := Expr.nil
+      let mut state := Eg
+      for j in List.range a.bytes do
+        let reg := Reg.packet (8 * (o + j)) (8 * (o + j) + 8)
+        let byte := star .w32 (.extract (8 * bytePosition a j) 8 source.width.bits) [source]
+        let delta ← writeUpdates state reg byte
+        state ← writeInterval state reg byte
+        updates := updates.override delta
+      some updates
+    | _ => some Expr.nil
 
 end Core

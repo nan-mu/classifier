@@ -15,13 +15,13 @@ structure HelperCall where
 
 def parseHelperCall (Eg : List Expr) : Except RejectReason HelperCall := do
   if !guardEg Eg then throw .localReject
-  let some idTerm := Eg.lookupEq (Reg.real32 10) | throw .undefinedSrc
+  let some idTerm := readInterval Eg (Reg.real32 10) | throw .undefinedSrc
   if idTerm.width != .w32 then throw .undefinedSrc
   let some id := eval (solve idTerm) | throw .unsupported
   let kind := helperKind id
   let mut args := []
   for j in [:helperArity kind] do
-    match Eg.lookupEq (Reg.real32 (11 + j)) with
+    match readInterval Eg (Reg.real32 (11 + j)) with
     | some t =>
       if t.width != .w32 then throw .undefinedSrc
       args := args ++ [solve t]
@@ -38,25 +38,25 @@ private def frozenTailOk (tail : List Term) : Bool :=
       | _ => true
 
 /-- Resolve layout and every required buffer before appending any frozen bytes. -/
-private def freezeMapTail (mem : Mem) (Eg : List Expr) (boundCtx : Option Term)
+private def freezeMapTail (Eg : List Expr) (boundCtx : Option Term)
     (preds : List Predicate) (kind : HelperKind) (args : List Term) : Option (List Term) := do
   let map ← args.head?
   let layout ← Anchor.layout? Eg map
   match kind, args with
   | .lookup, [_, keyPtr] | .delete, [_, keyPtr] =>
-      readBufferBytes mem Eg keyPtr layout.keySize boundCtx preds
+      readBufferBytes Eg keyPtr layout.keySize boundCtx preds
   | .update, [_, keyPtr, valuePtr, _] => do
-      let key ← readBufferBytes mem Eg keyPtr layout.keySize boundCtx preds
-      let value ← readBufferBytes mem Eg valuePtr layout.valueSize boundCtx preds
+      let key ← readBufferBytes Eg keyPtr layout.keySize boundCtx preds
+      let value ← readBufferBytes Eg valuePtr layout.valueSize boundCtx preds
       some (key ++ value)
   | _, _ => none
 
 /-- ABI observation survives an undefined complete-buffer refinement unchanged. -/
 def helperPredicate (event : NodeId) (Eg : List Expr)
-    (boundCtx : Option Term := none) (mem : Mem := .empty)
+    (boundCtx : Option Term := none)
     (preds : List Predicate := []) : Except RejectReason Predicate := do
   let call ← parseHelperCall Eg
-  let args := match freezeMapTail mem Eg boundCtx preds call.kind call.args with
+  let args := match freezeMapTail Eg boundCtx preds call.kind call.args with
     | some tail => if frozenTailOk tail then call.args ++ tail else call.args
     | none => call.args
   pure (.helper event call.kind args)
@@ -83,7 +83,7 @@ private def callReturnTerm (p : Predicate) : Except RejectReason Term := do
   pure result
 
 /-- Lookup anchors the return at value offset zero when the frozen key is complete. -/
-def helperMapWrites (E : List Expr) (p : Predicate) : Except RejectReason (List MemWrite) := do
+def helperMapWrites (E : List Expr) (p : Predicate) : Except RejectReason (List Expr) := do
   let (event, call) ← helperCallOfPredicate p
   if call.kind != .lookup then return []
   match p with
@@ -91,13 +91,11 @@ def helperMapWrites (E : List Expr) (p : Predicate) : Except RejectReason (List 
     match Anchor.layout? E map, eval (solve map) with
     | some layout, some id =>
       if key.length != layout.keySize || layout.valueSize < 4 then return []
-      let key ← match keyTile key with
-        | .ok tile => pure tile
-        | .error _ => return []
-      let value ← match Tile.ofTerm (.regVar event (Reg.real32 10)) 32 with
-        | .ok tile => pure tile
-        | .error _ => throw .localReject
-      pure [⟨.map id key, 0, value⟩]
+      let some key := key.mapM mapKeyByte | return []
+      let value := Term.regVar event (Reg.real32 10)
+      match writeUpdates Expr.nil (.map id key 0 32) value with
+      | some rows => pure rows
+      | none => throw .localReject
     | _, _ => pure []
   | _ => pure []
 
@@ -115,10 +113,14 @@ def helperExpr (p : Predicate) : Except RejectReason (List Expr) := do
   | .error .unsupported => true
   | _ => false
 
-private def putTerm (mem : Mem) (slot : BitSlot) (start : Nat) (t : Term) (bits : Nat) :
-    Option Mem := do
-  let tile ← (Tile.ofTerm t bits).toOption
-  (mem.write slot start tile).toOption
+private def putXdp (E : List Expr) (fields : List Term) : Option (List Expr) := do
+  let mut out := E
+  for (j, t) in xdpFields.zip fields do
+    out ← putContext out j t
+  some out
+
+private def byteTerm (c : Nat) : Term :=
+  star .w32 (.low 8 32) [Term.C32 c]
 
 private def completeMapBuffersCheck : Bool := Id.run do
   let key := addStar .w32 (Term.V32 0) (Term.C32 3)
@@ -126,15 +128,12 @@ private def completeMapBuffersCheck : Bool := Id.run do
   let data := Term.V32 4
   let fields := [data, addStar .w32 data (Term.C32 8), Term.C32 0, Term.C32 0,
     Term.C32 0, Term.C32 0]
-  let mut built : Mem := .empty
-  for (j, t) in (List.range 6).zip fields do
-    let some next := putTerm built (.context j) 0 t 32 | return false
-    built := next
-  let some mem := putTerm built .stack 0 (Term.C32 0x04030201) 32 | return false
-  let some mem := putTerm mem .stack 32 (Term.C32 0x08070605) 32 | return false
-  let some mem := putTerm mem .packet 8 (Term.C32 0xaa) 8 | return false
-  let some mem := putTerm mem .packet 16 (Term.C32 0xbb) 8 | return false
-  let some E := Anchor.installMaps (Expr.nil
+  let some built := putXdp Expr.nil fields | return false
+  let some built := writeInterval built (.stack 0 32) (Term.C32 0x04030201) | return false
+  let some built := writeInterval built (.stack 32 64) (Term.C32 0x08070605) | return false
+  let some built := writeInterval built (.packet 8 16) (byteTerm 0xaa) | return false
+  let some built := writeInterval built (.packet 16 24) (byteTerm 0xbb) | return false
+  let some E := Anchor.installMaps (built
     |>.insertEq (Reg.real32 2) (Term.V32 0)
     |>.insertEq (Reg.real32 11) (Term.C32 42)
     |>.insertEq (Reg.real32 12) key
@@ -147,33 +146,24 @@ private def completeMapBuffersCheck : Bool := Id.run do
       (2, HelperKind.update, [Term.C32 42, key, value, Term.C32 0],
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 0xaa, Term.C32 0xbb])] do
     let state := E.insertEq (Reg.real32 10) (Term.C32 id)
-    let .ok p := helperPredicate 70 state (mem := mem) | return false
+    let .ok p := helperPredicate 70 state | return false
     if p != .helper 70 kind (abi ++ tail) then return false
     let .ok result := helperExpr p | return false
     if result.lookupEq (Reg.real32 10) !=
         some (star .w32 (.externalResult 70 0) (Term.C32 id :: abi)) then return false
-    let some changed := putTerm mem .stack 32 (Term.C32 0) 32 | return false
-    let .ok fresh := helperPredicate 71 state (mem := changed) | return false
+    let some changed := writeInterval state (.stack 32 64) (Term.C32 0) | return false
+    let .ok fresh := helperPredicate 71 changed | return false
     if fresh != .helper 71 kind
         (abi ++ [Term.C32 4, Term.C32 0, Term.C32 0] ++ tail.drop 3) then return false
   let update := E.insertEq (Reg.real32 10) (Term.C32 2)
   let abiPrefix := [Term.C32 42, key, value, Term.C32 0]
-  let some missingStack := putTerm .empty .stack 0 (Term.C32 0x04030201) 32 | return false
-  let mut missingStack := missingStack
-  for (j, t) in (List.range 6).zip fields do
-    let some next := putTerm missingStack (.context j) 0 t 32 | return false
-    missingStack := next
-  let .ok incompletePredicate := helperPredicate 70 update (mem := missingStack) | return false
-  let some openStack := putTerm .empty .stack 0 (Term.C32 0x04030201) 32 | return false
-  let some openStack := putTerm openStack .stack 32 (Term.C32 0x08070605) 32 | return false
-  let mut openPacket := openStack
-  for (j, t) in (List.range 6).zip fields do
-    let some next := putTerm openPacket (.context j) 0 t 32 | return false
-    openPacket := next
-  let .ok openPredicate := helperPredicate 70 update (mem := openPacket) | return false
-  let some openTail := readBufferBytes openPacket update value 2 | return false
+  let missingStack := update.filter fun e => e.reg != .stack 32 64
+  let .ok incompletePredicate := helperPredicate 70 missingStack | return false
+  let openPacket := update.filter fun e => match e.reg with | .packet .. => false | _ => true
+  let .ok openPredicate := helperPredicate 70 openPacket | return false
+  let some openTail := readBufferBytes openPacket value 2 | return false
   return incompletePredicate == .helper 70 .update abiPrefix &&
-    (readBufferBytes missingStack update key 3).isNone &&
+    (readBufferBytes missingStack key 3).isNone &&
     openPredicate == .helper 70 .update (abiPrefix ++ [Term.C32 4, Term.C32 5, Term.C32 6] ++ openTail) &&
     openTail.length == 2
 
@@ -188,14 +178,13 @@ private def mapBufferBoundsCheck : Bool := Id.run do
   let source : MapLayout := { mapId := 17, keySize := 8, valueSize := 6 }
   let maps := [target, source]
   let sourceKey := List.replicate 8 (Term.C32 7)
-  let .ok sourceTile := keyTile sourceKey | return false
-  let sourceSlot := BitSlot.map 17 sourceTile
-  let some mem := putTerm .empty .stack 0 (Term.C32 0x04030201) 32 | return false
-  let some mem := putTerm mem sourceSlot 0 (Term.C32 0x04030201) 32 | return false
-  let some mem := putTerm mem sourceSlot 32 (Term.C32 0x08070605) 32 | return false
+  let some sourceBytes := sourceKey.mapM mapKeyByte | return false
+  let some buffers := writeInterval Expr.nil (.stack 0 32) (Term.C32 0x04030201) | return false
+  let some buffers := writeInterval buffers (.map 17 sourceBytes 0 32) (Term.C32 0x04030201) | return false
+  let some buffers := writeInterval buffers (.map 17 sourceBytes 32 64) (Term.C32 0x08070605) | return false
   let prior : List Predicate :=
     [.helper 9 .lookup ([Term.C32 17, Term.V32 7] ++ sourceKey)]
-  let bare := Expr.nil
+  let bare := buffers
     |>.insertEq (Reg.real32 2) key
     |>.insertEq (Reg.real32 11) (Term.C32 42)
     |>.insertEq (Reg.real32 14) (Term.C32 0)
@@ -212,24 +201,24 @@ private def mapBufferBoundsCheck : Bool := Id.run do
       |>.insertEq (Reg.real32 12) (if id == 2 then key else atEnd)
       |>.insertEq (Reg.real32 13) atEnd
     let some state := Anchor.installMaps placed maps | return false
-    let .ok frozen := helperPredicate 70 state (mem := mem) (preds := prior) | return false
+    let .ok frozen := helperPredicate 70 state (preds := prior) | return false
     if frozen != .helper 70 kind (abi ++ tail) then return false
     let .ok result := helperExpr frozen | return false
     if result.lookupEq (Reg.real32 10) !=
         some (star .w32 (.externalResult 70 0) (Term.C32 id :: abi)) then return false
     for layouts in [[target], [{ source with valueSize := 5 }]] do
       let some variant := Anchor.installMaps placed layouts | return false
-      let .ok abiPrefix := helperPredicate 70 variant (mem := mem) (preds := prior) | return false
+      let .ok abiPrefix := helperPredicate 70 variant (preds := prior) | return false
       if abiPrefix != .helper 70 kind abi then return false
     for address in [beyondEnd, unknown, wrapped] do
       let changed := state.insertEq bufferReg address
       let expected := if id == 2 then [Term.C32 42, key, address, Term.C32 0]
         else [Term.C32 42, address]
-      let .ok abiPrefix := helperPredicate 70 changed (mem := mem) (preds := prior) | return false
+      let .ok abiPrefix := helperPredicate 70 changed (preds := prior) | return false
       if abiPrefix != .helper 70 kind expected then return false
     if id == 2 then
       let changed := state.insertEq (Reg.real32 12) beyondEnd
-      let .ok abiPrefix := helperPredicate 70 changed (mem := mem) (preds := prior) | return false
+      let .ok abiPrefix := helperPredicate 70 changed (preds := prior) | return false
       if abiPrefix != .helper 70 kind [Term.C32 42, beyondEnd, atEnd, Term.C32 0] then
         return false
   return true

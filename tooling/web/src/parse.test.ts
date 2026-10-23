@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  cantorUnpair,
   formatRegLabel,
   groupExprsByKind,
   parseReg,
@@ -8,44 +7,32 @@ import {
   termToPlain,
 } from "./parse";
 
-describe("cantorUnpair / packet regs", () => {
-  it("round-trips Lean Reg.packet pairing", () => {
-    for (const [kappa, offset] of [
-      [0, 0],
-      [1, 0],
-      [0, 1],
-      [7, 3],
-      [2, 40],
-    ] as const) {
-      const alpha = ((kappa + offset) * (kappa + offset + 1)) / 2 + offset;
-      expect(cantorUnpair(alpha)).toEqual({ first: kappa, second: offset });
-      const reg = parseReg(`packet32:${alpha}`);
-      expect(reg.kind).toBe("packet");
-      expect(reg.resource).toBe(kappa);
-      expect(reg.offset).toBe(offset);
-      expect(formatRegLabel(reg)).toBe(`Packet32 κ=${kappa} off=${offset}`);
-    }
-  });
-
-  it("rejects packet64 and unknown shapes", () => {
-    expect(parseReg("packet64:0").kind).toBe("unknown");
-    expect(parseReg("anchor32:0")).toMatchObject({ kind: "anchor", width: 32, alpha: "0" });
-    expect(parseReg("real32:10")).toMatchObject({
-      kind: "real",
-      width: 32,
-      alpha: "10",
-      resource: null,
-      offset: null,
+describe("interval regs", () => {
+  it("parses the five constructors", () => {
+    expect(parseReg("real:10:[0,32)")).toMatchObject({
+      kind: "real", index: "10", lo: 0, hi: 32,
     });
+    expect(parseReg("stack:[0,32)")).toMatchObject({ kind: "stack", lo: 0, hi: 32 });
+    expect(parseReg("packet:[8,16)")).toMatchObject({ kind: "packet", lo: 8, hi: 16 });
+    expect(parseReg("context:data:[0,32)")).toMatchObject({
+      kind: "context", field: "data", lo: 0, hi: 32,
+    });
+    expect(parseReg("context:lddw:3:[0,64)")).toMatchObject({
+      kind: "context", field: "lddw:3", lo: 0, hi: 64,
+    });
+    expect(parseReg("map:42:[0,32):[1;2]")).toMatchObject({
+      kind: "map", index: "42", lo: 0, hi: 32, keys: "[1;2]",
+    });
+    expect(formatRegLabel(parseReg("real:10:[0,32)"))).toBe("x10[0,32)");
+    expect(formatRegLabel(parseReg("packet:[8,16)"))).toBe("packet[8,16)");
   });
 
-  it("decodes the Map word introduced by lookup", () => {
-    const alpha = (166 * 167) / 2;
-    const row = { reg: `map32:${alpha}`, rel: "eq", term: "regVar166(real32:10)" };
-    expect(parseReg(row.reg)).toMatchObject({ kind: "map", resource: 166, offset: 0 });
-    expect(formatRegLabel(parseReg(row.reg))).toBe("Map32 κ=166 off=0");
-    expect(termToPlain(parseTerm(row.term))).toBe(row.term);
-    expect(parseReg("map64:0").resource).toBeNull();
+  it("rejects anchor and width-tagged spellings", () => {
+    expect(parseReg("anchor32:0").kind).toBe("unknown");
+    expect(parseReg("packet32:1").kind).toBe("unknown");
+    expect(parseReg("stack32:0").kind).toBe("unknown");
+    expect(parseReg("real32:10").kind).toBe("unknown");
+    expect(parseReg("map64:0").kind).toBe("unknown");
   });
 });
 
@@ -91,13 +78,13 @@ describe("parseTerm", () => {
   });
 
   it("keeps regVar event in the op and preserves the Reg arg", () => {
-    const view = parseTerm("regVar166(real32:10)");
+    const view = parseTerm("regVar166(real:10:[0,32))");
     expect(view).toEqual({
       kind: "app",
       op: "regVar166",
-      args: [{ kind: "raw", text: "real32:10" }],
+      args: [{ kind: "raw", text: "real:10:[0,32)" }],
     });
-    expect(termToPlain(view)).toBe("regVar166(real32:10)");
+    expect(termToPlain(view)).toBe("regVar166(real:10:[0,32))");
   });
 
   it("parses nested apps used by helper / packet terms", () => {
@@ -115,11 +102,11 @@ describe("parseTerm", () => {
 describe("groupExprsByKind", () => {
   it("orders Real / Stack / Map / Context / Packet groups", () => {
     const groups = groupExprsByKind([
-      { reg: "packet32:1", rel: "eq", term: "1" },
-      { reg: "real32:10", rel: "eq", term: "2" },
-      { reg: "map32:0", rel: "eq", term: "regVar1(real32:10)" },
-      { reg: "stack32:0", rel: "eq", term: "3" },
-      { reg: "context32:0", rel: "eq", term: "v32:4" },
+      { reg: "packet:[0,8)", rel: "eq", term: "1" },
+      { reg: "real:10:[0,32)", rel: "eq", term: "2" },
+      { reg: "map:0:[0,32):[]", rel: "eq", term: "regVar1(real:10:[0,32))" },
+      { reg: "stack:[0,32)", rel: "eq", term: "3" },
+      { reg: "context:data:[0,32)", rel: "eq", term: "v32:4" },
     ]);
     expect(groups.map((g) => g.kind)).toEqual([
       "real",
@@ -128,6 +115,6 @@ describe("groupExprsByKind", () => {
       "context",
       "packet",
     ]);
-    expect(groups[2]!.rows[0]!.reg).toBe("map32:0");
+    expect(groups[2]!.rows[0]!.reg).toBe("map:0:[0,32):[]");
   });
 });

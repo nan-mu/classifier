@@ -1,12 +1,22 @@
 import EBPF.Insn
+import Core.Interval
 
 namespace EBPF
 open Core
 
-private def readReg (E : List Expr) (r : Nat) : Option Term := do
-  if r > 10 then none else do
-    let t ← E.lookupEq (Reg.real64 r)
-    if t.width == .w64 then some t else none
+/-- A machine register is read through its `[0,64)` interval, so a split low and high half concatenate. -/
+def readReg (E : List Expr) (r : Nat) : Option Term := do
+  if r > 10 then none
+  readInterval E (Reg.real64 r)
+
+/-- 64-bit ALU writes `Real(r,[0,64))`. 32-bit ALU writes the result into `[0,32)` and clears `[32,64)`. -/
+def assignReal (w : Width) (dst : Nat) (value : Term) : Option (List Expr) :=
+  match w with
+  | .w64 => writeUpdates Expr.nil (Reg.real64 dst) value
+  | .w32 => do
+    let low ← writeUpdates Expr.nil (Reg.real32 dst) value
+    let high ← writeUpdates Expr.nil (.real dst 32 64) (Term.C32 0)
+    pure (low ++ high)
 
 private def sourceTerm (E : List Expr) : Source → Option Term
   | .imm bits => some (Term.C64 (M 64 (s 32 bits.toNat)))
@@ -48,7 +58,7 @@ def expr (E : List Expr) (i : Insn) : Option (List Expr) := do
     if dst ≥ 10 then none else do
       let t ← sourceTerm E src
       let value := idStar w (aluOperand w t)
-      some (Expr.nil.insertEq (Reg.real64 dst) (aluResult w value))
+      assignReal w dst value
   | .binary w op dst src =>
     if dst ≥ 10 then none else do
       if let .imm bits := src then
@@ -57,25 +67,23 @@ def expr (E : List Expr) (i : Insn) : Option (List Expr) := do
       let a ← readReg E dst
       let b ← sourceTerm E src
       let value := star w (op.toOp w) [aluOperand w a, aluOperand w b]
-      some (Expr.nil.insertEq (Reg.real64 dst) (aluResult w value))
+      assignReal w dst value
   | .neg w dst =>
     if dst ≥ 10 then none else do
       let a ← readReg E dst
-      some (Expr.nil.insertEq (Reg.real64 dst)
-        (aluResult w (negStar w (aluOperand w a))))
+      assignReal w dst (negStar w (aluOperand w a))
   | .movsx w bits dst src =>
     if dst ≥ 10 || !([8, 16].contains bits || (w == .w64 && bits == 32)) then none
     else do
       let a ← readReg E src
-      some (Expr.nil.insertEq (Reg.real64 dst)
-        (aluResult w (sStar bits w 64 a)))
+      assignReal w dst (sStar bits w 64 a)
   | .endian op bits dst =>
     if dst ≥ 10 || ![16, 32, 64].contains bits then none else do
       let a ← readReg E dst
       let value := match op with
         | .little => star .w64 (.low bits 64) [a]
         | .big | .swap => star .w64 (.bswap bits 64) [a]
-      some (Expr.nil.insertEq (Reg.real64 dst) value)
+      assignReal .w64 dst (idStar .w64 value)
   | _ => none
 
 private def alu32FamilyCheck : Bool :=
@@ -87,8 +95,9 @@ private def alu32FamilyCheck : Bool :=
       (.lsh, 60), (.rsh, 3), (.arsh, 3)]
   cases.all fun (op, expected) =>
     match expr E (.binary .w32 op 1 (.reg 2)) with
-    | some updates => updates.lookupEq (Reg.real64 1) == some (Term.C64 expected) &&
-        updates.length == 1
+    | some updates => updates.lookupEq (Reg.real32 1) == some (Term.C32 expected) &&
+        updates.lookupEq (.real 1 32 64) == some (Term.C32 0) &&
+        updates.length == 2
     | none => false
 
 private def unaryAndDivisionCheck : Bool :=
@@ -107,16 +116,25 @@ private def unaryAndDivisionCheck : Bool :=
   cases.all fun (i, expected) =>
     let dst := match i with | .endian _ _ r => r | _ => 1
     match expr E i with
-    | some updates => updates.lookupEq (Reg.real64 dst) == some (Term.C64 expected)
+    | some updates =>
+      match i with
+      | .binary .w64 _ _ _ | .movsx .w64 _ _ _ | .endian _ _ _ =>
+        updates.lookupEq (Reg.real64 dst) == some (Term.C64 expected) &&
+          updates.length == 1
+      | _ =>
+        updates.lookupEq (Reg.real32 dst) == some (Term.C32 expected) &&
+          updates.lookupEq (.real dst 32 64) == some (Term.C32 0) &&
+          updates.length == 2
     | none => false
 
 #guard alu32FamilyCheck
 #guard unaryAndDivisionCheck
 #guard match expr (Expr.nil.insertEq (Reg.real64 1) (Term.V64 9)
     |>.insertEq (Reg.real64 2) (Term.V64 10)) (.binary .w32 .sdiv 1 (.reg 2)) with
-  | some updates => updates.lookupEq (Reg.real64 1) ==
-      some (zStar 32 .w64 32 (star .w32 (.sdiv .w32 0)
-        [zStar 32 .w32 64 (Term.V64 9), zStar 32 .w32 64 (Term.V64 10)]))
+  | some updates => updates.lookupEq (Reg.real32 1) ==
+      some (star .w32 (.sdiv .w32 0)
+        [zStar 32 .w32 64 (Term.V64 9), zStar 32 .w32 64 (Term.V64 10)]) &&
+      updates.lookupEq (.real 1 32 64) == some (Term.C32 0)
   | none => false
 #guard (expr (Expr.nil.insertEq (Reg.real64 1) (Term.C64 1))
   (.binary .w32 .lsh 1 (.imm 32))).isNone

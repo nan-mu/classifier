@@ -7,6 +7,16 @@ import Core.Reg
 
 namespace Core
 
+mutual
+/-- Storage named by an expression. Each constructor carries only the fields in its grammar. -/
+inductive Reg where
+  | real (r b e : Nat)
+  | stack (b e : Nat)
+  | map (m : Nat) (key : List Term) (b e : Nat)
+  | packet (b e : Nat)
+  | context (field : ContextField) (b e : Nat)
+  deriving Repr, Inhabited
+
 inductive Term where
   | const (w : Width) (c : Nat)
   | var (w : Width) (ξ : Nat)
@@ -14,19 +24,42 @@ inductive Term where
   | regVar (event : Nat) (reg : Reg)
   | app (w : Width) (op : Op) (args : List Term)
   deriving Repr, Inhabited
+end
 
 mutual
+  private def regDecEq : (a b : Reg) → Decidable (a = b)
+    | .real r1 b1 e1, .real r2 b2 e2 =>
+      decidable_of_iff (r1 = r2 ∧ b1 = b2 ∧ e1 = e2) (by simp)
+    | .stack b1 e1, .stack b2 e2 =>
+      decidable_of_iff (b1 = b2 ∧ e1 = e2) (by simp)
+    | .map m1 k1 b1 e1, .map m2 k2 b2 e2 =>
+      letI := termListDecEq k1 k2
+      decidable_of_iff (m1 = m2 ∧ k1 = k2 ∧ b1 = b2 ∧ e1 = e2) (by simp)
+    | .packet b1 e1, .packet b2 e2 =>
+      decidable_of_iff (b1 = b2 ∧ e1 = e2) (by simp)
+    | .context j1 b1 e1, .context j2 b2 e2 =>
+      decidable_of_iff (j1 = j2 ∧ b1 = b2 ∧ e1 = e2) (by simp)
+    | .real .., .stack .. | .real .., .map .. | .real .., .packet .. | .real .., .context ..
+    | .stack .., .real .. | .stack .., .map .. | .stack .., .packet .. | .stack .., .context ..
+    | .map .., .real .. | .map .., .stack .. | .map .., .packet .. | .map .., .context ..
+    | .packet .., .real .. | .packet .., .stack .. | .packet .., .map .. | .packet .., .context ..
+    | .context .., .real .. | .context .., .stack .. | .context .., .map .. | .context .., .packet .. =>
+      .isFalse (by intro h; cases h)
+  termination_by a b => sizeOf a + sizeOf b
+
   private def termDecEq : (a b : Term) → Decidable (a = b)
     | .const w c, .const v d => decidable_of_iff (w = v ∧ c = d) (by simp)
     | .var w n, .var v m => decidable_of_iff (w = v ∧ n = m) (by simp)
-    | .regVar e r, .regVar f s => decidable_of_iff (e = f ∧ r = s) (by simp)
+    | .regVar e r, .regVar f s =>
+      letI := regDecEq r s
+      decidable_of_iff (e = f ∧ r = s) (by simp)
     | .app w f xs, .app v g ys =>
       letI := termListDecEq xs ys
       decidable_of_iff (w = v ∧ f = g ∧ xs = ys) (by simp)
-    | .const _ _, .var _ _ | .const _ _, .regVar _ _ | .const _ _, .app _ _ _
-    | .var _ _, .const _ _ | .var _ _, .regVar _ _ | .var _ _, .app _ _ _
-    | .regVar _ _, .const _ _ | .regVar _ _, .var _ _ | .regVar _ _, .app _ _ _
-    | .app _ _ _, .const _ _ | .app _ _ _, .var _ _ | .app _ _ _, .regVar _ _ =>
+    | .const .., .var .. | .const .., .regVar .. | .const .., .app ..
+    | .var .., .const .. | .var .., .regVar .. | .var .., .app ..
+    | .regVar .., .const .. | .regVar .., .var .. | .regVar .., .app ..
+    | .app .., .const .. | .app .., .var .. | .app .., .regVar .. =>
       .isFalse (by intro h; cases h)
   termination_by a b => sizeOf a + sizeOf b
 
@@ -40,18 +73,103 @@ mutual
   termination_by xs ys => sizeOf xs + sizeOf ys
 end
 
+instance : DecidableEq Reg := regDecEq
 instance : DecidableEq Term := termDecEq
+instance : BEq Reg := ⟨fun a b => decide (a = b)⟩
 instance : BEq Term := ⟨fun a b => decide (a = b)⟩
+instance : LawfulBEq Reg where
+  eq_of_beq := of_decide_eq_true
+  rfl := of_decide_eq_self_eq_true _
 instance : LawfulBEq Term where
   eq_of_beq := of_decide_eq_true
   rfl := of_decide_eq_self_eq_true _
+
+namespace Reg
+
+def lo : Reg → Nat
+  | .real _ b _ => b
+  | .stack b _ => b
+  | .map _ _ b _ => b
+  | .packet b _ => b
+  | .context _ b _ => b
+
+def hi : Reg → Nat
+  | .real _ _ e => e
+  | .stack _ e => e
+  | .map _ _ _ e => e
+  | .packet _ e => e
+  | .context _ _ e => e
+
+def bits (r : Reg) : Nat := r.hi - r.lo
+
+def valid (r : Reg) : Bool :=
+  decide (r.lo < r.hi) &&
+    match r with
+    | .context j _ e => decide (e ≤ j.cap)
+    | _ => true
+
+def index : Reg → Nat
+  | .real r _ _ => r
+  | .map m _ _ _ => m
+  | .context (.lddw slot) _ _ => slot
+  | .context (.mapKeyBytes id) _ _ => id
+  | .context (.mapValueBytes id) _ _ => id
+  | _ => 0
+
+def withInterval (r : Reg) (b e : Nat) : Reg :=
+  match r with
+  | .real id _ _ => .real id b e
+  | .stack _ _ => .stack b e
+  | .map m key _ _ => .map m key b e
+  | .packet _ _ => .packet b e
+  | .context j _ _ => .context j b e
+
+def sameResource : Reg → Reg → Bool
+  | .real a .., .real c .. => a == c
+  | .stack .., .stack .. => true
+  | .map a ka .., .map c kc .. => a == c && ka == kc
+  | .packet .., .packet .. => true
+  | .context a .., .context c .. => a == c
+  | _, _ => false
+
+def overlaps (a b : Reg) : Bool :=
+  a.sameResource b && decide (a.lo < b.hi && b.lo < a.hi)
+
+def r32 (r : Nat) : Reg := .real r 0 32
+def r64 (r : Nat) : Reg := .real r 0 64
+
+end Reg
+
+/-- Full machine register. RV32 uses `real32`. eBPF's 64-bit view uses `real64`. -/
+def Reg.real32 : Nat → Reg := Reg.r32
+def Reg.real64 : Nat → Reg := Reg.r64
 
 
 def Term.width : Term → Width
   | .const w _ => w
   | .var w _ => w
-  | .regVar _ r => r.width
+  | .regVar _ r => Width.ofBits r.bits
   | .app w _ _ => w
+
+/-- Bits constrained by the term. Narrow `low` and `extract` keep their own length. -/
+def Term.semanticBits : Term → Nat
+  | .const w _ => w.bits
+  | .var w _ => w.bits
+  | .regVar _ r => r.bits
+  | .app w op _ =>
+    match op with
+    | .low q _ => q
+    | .extract _ len _ => len
+    | .zext q _ _ => q
+    | .sext q _ _ => q
+    | .and q | .or q | .xor q => q
+    | .bswap q _ => q
+    | .mergeLow _ n => n
+    | .inputByte _ => 8
+    | .add u | .sub u | .mullo u | .udiv u _ | .urem u | .sdiv u _ | .srem u
+    | .mulh u | .mulhu u | .mulhsu u | .selectEq u | .neg u | .id u
+    | .shl u | .lshr u | .ashr u | .ltu u | .lts u => u.bits
+    | .externalResult _ _ | .packetRead _ _ => w.bits
 
 def Term.C (w : Width) (c : Nat) : Term := .const w (MNat w.bits c)
 def Term.C32 (c : Nat) : Term := .C .w32 c
@@ -69,7 +187,7 @@ structure Var where
 def FV : Term → List Var
   | .const _ _ => []
   | .var w ξ => [⟨w, ξ, none⟩]
-  | .regVar event r => [⟨r.width, r.alpha, some (event, r)⟩]
+  | .regVar event r => [⟨Width.ofBits r.bits, r.index, some (event, r)⟩]
   | .app _ _ args => args.foldl (fun acc t => acc ++ FV t) []
 
 def FV.isEmpty (t : Term) : Bool := (FV t).isEmpty
@@ -77,7 +195,7 @@ mutual
   def Term.wellFormed : Term → Bool
     | .const w c => c < 2 ^ w.bits
     | .var _ _ => true
-    | .regVar _ reg => reg.valid && reg.kind == .real
+    | .regVar _ reg => reg.valid
     | .app w op args => op.validSignature w (args.map Term.width) && termsWellFormed args
   termination_by t => sizeOf t
 
@@ -108,8 +226,9 @@ mutual
     | .const w c => if c < 2 ^ w.bits then some c else none
     | .var w ξ => some (MNat w.bits (ν ⟨w, ξ, none⟩))
     | .regVar event r =>
-      if r.valid && r.kind == .real then
-        some (MNat r.width.bits (ν ⟨r.width, r.alpha, some (event, r)⟩))
+      if r.valid then
+        some (MNat (Width.ofBits r.bits).bits
+          (MNat r.bits (ν ⟨Width.ofBits r.bits, r.index, some (event, r)⟩)))
       else none
     | .app w op args => do
       if !op.validSignature w (args.map Term.width) then none else
@@ -150,20 +269,12 @@ mutual
   termination_by ts => sizeOf ts
 end
 
-private def regKindCode : RegKind → Nat
-  | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4 | .anchor => 5
-
 mutual
   /-- Prefix encoding for the raw structural order. Zero delimits argument lists. -/
   def Term.orderKey : Term → List Nat
     | .const w c => [w.bits + 1, 1, c + 1]
     | .var w n => [w.bits + 1, 2, n + 1]
-    | .regVar event r =>
-      [r.width.bits + 1, 3, event + 1, regKindCode r.kind + 1, r.alpha + 1] ++
-        (match r.compound with
-        | none => [0]
-        | some p => [1, p.κ, p.bytes, p.endCtx, if p.strict then 1 else 0,
-            p.byteIndex, p.offset.orderKey.length] ++ p.offset.orderKey ++ p.checkedEnd.orderKey)
+    | .regVar event r => [3, event + 1] ++ regOrderKey r
     | .app w op args =>
       [w.bits + 1, 4] ++ op.orderKey.map (· + 1) ++ [0] ++ termOrderKeys args ++ [0]
   termination_by t => sizeOf t
@@ -172,6 +283,31 @@ mutual
     | [] => []
     | t :: ts => t.orderKey ++ termOrderKeys ts
   termination_by ts => sizeOf ts
+
+  private def regOrderKey : Reg → List Nat
+    | .real r b e => [0, r + 1, b + 1, e + 1]
+    | .stack b e => [1, b + 1, e + 1]
+    | .map m key b e => [2, m + 1, b + 1, e + 1] ++ termOrderKeys key ++ [0]
+    | .packet b e => [3, b + 1, e + 1]
+    | .context j b e => [4, contextCode j + 1, b + 1, e + 1]
+  termination_by r => sizeOf r
+
+  private def contextCode : ContextField → Nat
+    | .data => 0
+    | .dataEnd => 1
+    | .dataMeta => 2
+    | .ingressIfindex => 3
+    | .rxQueueIndex => 4
+    | .egressIfindex => 5
+    | .ctx => 6
+    | .sp => 7
+    | .packetBytes => 8
+    | .imageBase => 9
+    | .helper => 10
+    | .wrapperReturn => 11
+    | .lddw slot => (12 <<< 32) + slot
+    | .mapKeyBytes id => (13 <<< 32) + id
+    | .mapValueBytes id => (14 <<< 32) + id
 end
 
 def Term.rawLE (a b : Term) : Bool := (compare a.orderKey b.orderKey).isLE

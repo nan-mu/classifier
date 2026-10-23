@@ -41,14 +41,14 @@ private def prepareCandidate (σ : SemState) (c : Candidate) (progLen : Nat) :
   match c.loc with
   | .exit =>
       do
-        let state ← Node.applyLocal σ c.E_k c.P_k c.memWrites
+        let state ← Node.applyLocal σ c.E_k c.P_k
         pure (c.dir, .exit, state)
   | .pos k =>
       if k ≥ progLen then
         Except.error .unboundTarget
       else
         do
-          let state ← Node.applyLocal σ c.E_k c.P_k c.memWrites
+          let state ← Node.applyLocal σ c.E_k c.P_k
           pure (c.dir, .pos k, state)
 
 def prepareAll (σ : SemState) (progLen : Nat) :
@@ -132,9 +132,9 @@ partial def expand (progLen : Nat) (step : Nat → SemState → StepResult) (ws 
 private def loopVisitCheck : Bool :=
   let step (_j : Nat) (_σ : SemState) : StepResult :=
     .candidates [
-      ⟨.taken, .pos 0, Expr.nil, [], []⟩,
-      ⟨.notTaken, .exit, Expr.nil, [.ret (Term.C32 1)], []⟩]
-  match expandInit 1 0 ⟨Expr.nil, [], .empty⟩ 100 with
+      ⟨.taken, .pos 0, Expr.nil, []⟩,
+      ⟨.notTaken, .exit, Expr.nil, [.ret (Term.C32 1)]⟩]
+  match expandInit 1 0 ⟨Expr.nil, []⟩ 100 with
   | .error _ => false
   | .ok ws =>
     match expand 1 step ws with

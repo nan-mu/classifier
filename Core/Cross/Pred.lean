@@ -30,7 +30,7 @@ inductive CrossOp where
 inductive CrossTerm where
   | c (z : Int)
   | var (name : Nat)
-  | reg (kind : RegKind) (alpha : Nat)
+  | reg (r : Reg)
   | app (op : CrossOp) (args : List CrossTerm)
   | external (lane : Nat) (args : List CrossTerm)
   deriving Repr
@@ -39,19 +39,19 @@ mutual
   private def crossTermDecEq : (a b : CrossTerm) → Decidable (a = b)
     | .c x, .c y => decidable_of_iff (x = y) (by simp)
     | .var x, .var y => decidable_of_iff (x = y) (by simp)
-    | .reg k x, .reg l y => decidable_of_iff (k = l ∧ x = y) (by simp)
+    | .reg x, .reg y => decidable_of_iff (x = y) (by simp)
     | .app f xs, .app g ys =>
       letI := crossListDecEq xs ys
       decidable_of_iff (f = g ∧ xs = ys) (by simp)
     | .external x xs, .external y ys =>
       letI := crossListDecEq xs ys
       decidable_of_iff (x = y ∧ xs = ys) (by simp)
-    | .c _, .var _ | .c _, .reg _ _ | .c _, .app _ _ | .c _, .external _ _
-    | .var _, .c _ | .var _, .reg _ _ | .var _, .app _ _ | .var _, .external _ _
-    | .reg _ _, .c _ | .reg _ _, .var _ | .reg _ _, .app _ _ | .reg _ _, .external _ _
-    | .app _ _, .c _ | .app _ _, .var _ | .app _ _, .reg _ _ | .app _ _, .external _ _
+    | .c _, .var _ | .c _, .reg _ | .c _, .app _ _ | .c _, .external _ _
+    | .var _, .c _ | .var _, .reg _ | .var _, .app _ _ | .var _, .external _ _
+    | .reg _, .c _ | .reg _, .var _ | .reg _, .app _ _ | .reg _, .external _ _
+    | .app _ _, .c _ | .app _ _, .var _ | .app _ _, .reg _ | .app _ _, .external _ _
     | .external _ _, .c _ | .external _ _, .var _
-    | .external _ _, .reg _ _ | .external _ _, .app _ _ => .isFalse (by intro h; cases h)
+    | .external _ _, .reg _ | .external _ _, .app _ _ => .isFalse (by intro h; cases h)
   termination_by a b => sizeOf a + sizeOf b
 
   private def crossListDecEq : (xs ys : List CrossTerm) → Decidable (xs = ys)
@@ -94,147 +94,6 @@ private def identityCast : Op → Bool
   | .sext q w v => q == v && v == w.bits
   | .bswap q v => q == 8 && v == 8
   | _ => false
-
-private def triangle (n : Nat) : Nat := n * (n + 1) / 2
-
-/-- Largest pairing diagonal below n, by bounded binary search. -/
-private def pairDiagonal (n lo hi : Nat) : Nat :=
-  if h : lo < hi then
-    let mid := (lo + hi + 1) / 2
-    if triangle mid ≤ n then pairDiagonal n mid hi
-    else pairDiagonal n lo (mid - 1)
-  else lo
-termination_by hi - lo
-decreasing_by all_goals omega
-
-/-- Map alpha pairs a dynamic lookup namespace with a byte offset.
-Retain the offset, not the namespace; other kinds keep their static alpha. -/
-private def crossRegAlpha (r : Reg) : Nat :=
-  if r.kind == .map then r.alpha - triangle (pairDiagonal r.alpha 0 r.alpha)
-  else r.alpha
-
-private theorem triangle_mono {a b : Nat} (h : a ≤ b) :
-    triangle a ≤ triangle b :=
-  Nat.div_le_div_right (Nat.mul_le_mul h (Nat.add_le_add_right h 1))
-
-private theorem triangle_succ (n : Nat) :
-    triangle (n + 1) = triangle n + (n + 1) := by
-  have h : (n + 1) * (n + 1 + 1) = n * (n + 1) + 2 * (n + 1) := by
-    simp only [Nat.add_mul, Nat.mul_add, Nat.one_mul, Nat.mul_one]
-    omega
-  unfold triangle
-  rw [h, Nat.add_mul_div_left _ _ (by decide)]
-
-private theorem triangle_ge (n : Nat) : n ≤ triangle n := by
-  induction n with
-  | zero => simp [triangle]
-  | succ n ih => rw [triangle_succ]; omega
-
-private theorem pairDiagonal_eq_of_interval (n lo hi d : Nat)
-    (hlo : lo ≤ d) (hhi : d ≤ hi)
-    (hbelow : triangle d ≤ n) (habove : n < triangle (d + 1)) :
-    pairDiagonal n lo hi = d := by
-  unfold pairDiagonal
-  split
-  · rename_i h
-    dsimp only
-    split
-    · rename_i hm
-      have hd : (lo + hi + 1) / 2 ≤ d := by
-        by_cases hn : (lo + hi + 1) / 2 ≤ d
-        · exact hn
-        · have ht := triangle_mono (a := d + 1) (b := (lo + hi + 1) / 2)
-            (by omega)
-          omega
-      exact pairDiagonal_eq_of_interval n _ hi d hd hhi hbelow habove
-    · rename_i hm
-      have hd : d ≤ (lo + hi + 1) / 2 - 1 := by
-        by_cases hn : d ≤ (lo + hi + 1) / 2 - 1
-        · exact hn
-        · have ht := triangle_mono (a := (lo + hi + 1) / 2) (b := d)
-            (by omega)
-          omega
-      exact pairDiagonal_eq_of_interval n lo _ d hlo hd hbelow habove
-  · omega
-termination_by hi - lo
-decreasing_by all_goals omega
-
-private theorem pairDiagonal_pair (resource offset : Nat) :
-    pairDiagonal (triangle (resource + offset) + offset) 0
-      (triangle (resource + offset) + offset) = resource + offset := by
-  apply pairDiagonal_eq_of_interval
-  · omega
-  · have h := triangle_ge (resource + offset); omega
-  · omega
-  · rw [triangle_succ]; omega
-
-/-- Arithmetic offset recovery only: no Map identity or frozen-key correspondence
-is inferred from erasing the lookup namespace. -/
-theorem crossRegAlpha_mapWord (resource offset : Nat) :
-    crossRegAlpha (Reg.mapWord resource offset) = offset := by
-  change triangle (resource + offset) + offset -
-    triangle (pairDiagonal (triangle (resource + offset) + offset) 0
-      (triangle (resource + offset) + offset)) = offset
-  rw [pairDiagonal_pair]
-  omega
-
-theorem crossRegAlpha_mapDword (resource offset : Nat) :
-    crossRegAlpha (Reg.mapDword resource offset) = offset := by
-  change triangle (resource + offset) + offset -
-    triangle (pairDiagonal (triangle (resource + offset) + offset) 0
-      (triangle (resource + offset) + offset)) = offset
-  rw [pairDiagonal_pair]
-  omega
-
-/-- Generation-side lookup witness, before query namespaces are erased. -/
-def MapRegisterTie (Pg : List Predicate) (r : Reg) (map : Term)
-    (key : List Term) (offset : Nat) : Prop :=
-  ∃ event, (r = Reg.mapWord event offset ∨ r = Reg.mapDword event offset) ∧
-    LookupTie Pg event map key
-
-theorem mapRegisterTie_offset (Pg : List Predicate) (r : Reg) (map : Term)
-    (key : List Term) (offset : Nat) (h : MapRegisterTie Pg r map key offset) :
-    crossRegAlpha r = offset := by
-  rcases h with ⟨event, hw | hd, _⟩
-  · rw [hw, crossRegAlpha_mapWord]
-  · rw [hd, crossRegAlpha_mapDword]
-
-theorem mapRegisterTie_same_slot (Pg₁ Pg₂ : List Predicate) (r₁ r₂ : Reg)
-    (map : Term) (key : List Term) (offset₁ offset₂ : Nat)
-    (h₁ : MapRegisterTie Pg₁ r₁ map key offset₁)
-    (h₂ : MapRegisterTie Pg₂ r₂ map key offset₂)
-    (he : crossRegAlpha r₁ = crossRegAlpha r₂) :
-    (map, key, offset₁) = (map, key, offset₂) := by
-  have ho : offset₁ = offset₂ :=
-    (mapRegisterTie_offset Pg₁ r₁ map key offset₁ h₁).symm.trans
-      (he.trans (mapRegisterTie_offset Pg₂ r₂ map key offset₂ h₂))
-  rw [ho]
-
-theorem mapRegisterTie_distinct_slots (Pg₁ Pg₂ : List Predicate) (r₁ r₂ : Reg)
-    (map : Term) (key : List Term) (offset₁ offset₂ : Nat)
-    (h₁ : MapRegisterTie Pg₁ r₁ map key offset₁)
-    (h₂ : MapRegisterTie Pg₂ r₂ map key offset₂)
-    (he : crossRegAlpha r₁ ≠ crossRegAlpha r₂) :
-    (map, key, offset₁) ≠ (map, key, offset₂) := by
-  intro hs
-  have ho : offset₁ = offset₂ := congrArg (fun s : Term × List Term × Nat => s.2.2) hs
-  exact he ((mapRegisterTie_offset Pg₁ r₁ map key offset₁ h₁).trans
-    (ho.trans (mapRegisterTie_offset Pg₂ r₂ map key offset₂ h₂).symm))
-
-theorem crossRegAlpha_static (r : Reg)
-    (h : r.kind = .real ∨ r.kind = .stack ∨ r.kind = .context) :
-    crossRegAlpha r = r.alpha := by
-  rcases h with h | h | h <;> simp [crossRegAlpha, h]
-
-theorem crossRegAlpha_static_injective (r₁ r₂ : Reg)
-    (h₁ : r₁.kind = .real ∨ r₁.kind = .stack ∨ r₁.kind = .context)
-    (h₂ : r₂.kind = r₁.kind) (he : crossRegAlpha r₁ = crossRegAlpha r₂) :
-    r₁.alpha = r₂.alpha := by
-  have hk₂ : r₂.kind = .real ∨ r₂.kind = .stack ∨ r₂.kind = .context := by
-    rw [h₂]
-    exact h₁
-  rw [crossRegAlpha_static r₁ h₁, crossRegAlpha_static r₂ hk₂] at he
-  exact he
 
 /-- Lane zero keeps at most the first two ABI arguments; for Map helpers these
 are the helper id and Map term. Other helper kinds need not share that meaning. -/
@@ -289,16 +148,69 @@ theorem abiPrefix_idempotent (lane : Nat) (args : List Term) :
 
 /-- Total structural order: constructor rank, then constructor fields in order. -/
 private def crossRank : CrossTerm → Nat
-  | .c _ => 0 | .var _ => 1 | .reg _ _ => 2 | .app _ _ => 3 | .external _ _ => 4
+  | .c _ => 0 | .var _ => 1 | .reg _ => 2 | .app _ _ => 3 | .external _ _ => 4
+
+private def listNatCmp : List Nat → List Nat → Ordering
+  | [], [] => .eq
+  | [], _ => .lt
+  | _, [] => .gt
+  | x :: xs, y :: ys => (compare x y).then (listNatCmp xs ys)
+
+private def opCmp (a b : Op) : Ordering := listNatCmp (Op.orderKey a) (Op.orderKey b)
+
+private def fieldTag : ContextField → Nat
+  | .data => 0 | .dataEnd => 1 | .dataMeta => 2
+  | .ingressIfindex => 3 | .rxQueueIndex => 4 | .egressIfindex => 5
+  | .ctx => 6 | .sp => 7 | .packetBytes => 8 | .imageBase => 9
+  | .helper => 10 | .wrapperReturn => 11
+  | .lddw _ => 12 | .mapKeyBytes _ => 13 | .mapValueBytes _ => 14
+
+private def fieldArg : ContextField → Nat
+  | .lddw n | .mapKeyBytes n | .mapValueBytes n => n
+  | _ => 0
+
+private def regTag : Reg → Nat
+  | .real .. => 0 | .stack .. => 1 | .map .. => 2 | .packet .. => 3 | .context .. => 4
+
+private def termTag : Term → Nat
+  | .const .. => 0 | .var .. => 1 | .regVar .. => 2 | .app .. => 3
+
+mutual
+  private def termCmp : Term → Term → Ordering
+    | .const w c, .const v d => (compare w.bits v.bits).then (compare c d)
+    | .var w n, .var v m => (compare w.bits v.bits).then (compare n m)
+    | .regVar e r, .regVar f s => (compare e f).then (regCmp r s)
+    | .app w op xs, .app v g ys =>
+      (compare w.bits v.bits).then ((opCmp op g).then (termListCmp xs ys))
+    | a, b => compare (termTag a) (termTag b)
+  termination_by t => sizeOf t
+
+  private def termListCmp : List Term → List Term → Ordering
+    | [], [] => .eq
+    | [], _ => .lt
+    | _, [] => .gt
+    | x :: xs, y :: ys => (termCmp x y).then (termListCmp xs ys)
+  termination_by ts => sizeOf ts
+
+  private def regCmp : Reg → Reg → Ordering
+    | .real r b e, .real s c f => (compare r s).then ((compare b c).then (compare e f))
+    | .stack b e, .stack c f => (compare b c).then (compare e f)
+    | .map m k b e, .map n q c f =>
+      (compare m n).then ((termListCmp k q).then ((compare b c).then (compare e f)))
+    | .packet b e, .packet c f => (compare b c).then (compare e f)
+    | .context j b e, .context i c f =>
+      (compare (fieldTag j) (fieldTag i)).then
+        ((compare (fieldArg j) (fieldArg i)).then ((compare b c).then (compare e f)))
+    | a, b => compare (regTag a) (regTag b)
+  termination_by r => sizeOf r
+end
 
 mutual
   private def crossCompare (a b : CrossTerm) : Ordering :=
     match a, b with
     | .c x, .c y => compare x y
     | .var x, .var y => compare x y
-    | .reg k x, .reg l y =>
-      match compare (regRank k) (regRank l) with
-      | .eq => compare x y | o => o
+    | .reg x, .reg y => regCmp x y
     | .app f xs, .app g ys =>
       match compare f g with
       | .eq => crossCompareList xs ys | o => o
@@ -315,9 +227,6 @@ mutual
       match crossCompare x y with
       | .eq => crossCompareList xs ys | o => o
   termination_by sizeOf xs + sizeOf ys
-
-  private def regRank : RegKind → Nat
-    | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4 | .anchor => 5
 end
 
 /- Width of the represented observation, not of its original carrier.
@@ -325,7 +234,7 @@ Variables require the generation-side common 32-bit value premise (CP-Q). -/
 mutual
   def CrossTerm.compareBits : CrossTerm → Nat
     | .c z => if -(2^31 : Int) ≤ z && z < 2^31 then 32 else 64
-    | .var _ | .reg _ _ => 32
+    | .var _ | .reg _ => 32
     | .app op args =>
       match op with
       | .low q | .extract _ q | .zext q _ | .sext q _ | .bswap q _ => q
@@ -615,7 +524,7 @@ private def crossBinary (op : Op) (x y : CrossTerm) : CrossTerm :=
 
 def PacketOffset.toCross : PacketOffset → CrossTerm
   | .c n => .c n
-  | .packet alpha => .reg .packet alpha
+  | .packet n => .reg (.packet (8 * n) (8 * n + 8))
   | .add a b => normalizeCrossAdd 32 (.app .add [a.toCross, b.toCross])
   | .low q a => .app (.low q) [a.toCross]
   | .shl a b => .app .shl [a.toCross, b.toCross]
@@ -626,10 +535,6 @@ def PacketOffset.toCross : PacketOffset → CrossTerm
   | .or a b => .app .or [a.toCross, b.toCross]
   | .mask a n => .app .and [a.toCross, .c (Int.ofNat n)]
   | .lshr a n => .app .lshr [a.toCross, .c (Int.ofNat n)]
-
-def CompoundPacketReg.toCross (p : CompoundPacketReg) : CrossTerm :=
-  .app (.packetReg p.bytes) [.c p.κ, p.offset.toCross, .reg .context p.endCtx,
-    .c (if p.strict then 1 else 0), .c p.byteIndex, p.checkedEnd.toCross]
 
 /-- Mathematical natural-number valuation: address sums do not wrap. -/
 def PacketOffset.value (leaf : Nat → Nat) : PacketOffset → Nat
@@ -646,33 +551,7 @@ def PacketOffset.value (leaf : Nat → Nat) : PacketOffset → Nat
   | .mask a n => Nat.land (a.value leaf) n
   | .lshr a n => Nat.shiftRight (a.value leaf) n
 
-theorem CompoundPacketReg.bounds (p : CompoundPacketReg) (leaf : Nat → Nat)
-    (base ending : Nat)
-    (passed : base + p.checkedEnd.value leaf ≤ ending)
-    (covered : p.offset.value leaf + p.bytes ≤ p.checkedEnd.value leaf) :
-    base + p.offset.value leaf + p.bytes ≤ ending := by omega
-
-theorem CompoundPacketReg.bounds_strict (p : CompoundPacketReg) (leaf : Nat → Nat)
-    (base ending : Nat)
-    (passed : base + p.checkedEnd.value leaf < ending)
-    (covered : p.offset.value leaf + p.bytes ≤ p.checkedEnd.value leaf) :
-    base + p.offset.value leaf + p.bytes < ending := by omega
-
-theorem CompoundPacketReg.bounds_passed (p : CompoundPacketReg) (leaf : Nat → Nat)
-    (base ending : Nat)
-    (passed : if p.strict then base + p.checkedEnd.value leaf < ending
-      else base + p.checkedEnd.value leaf ≤ ending)
-    (covered : p.offset.value leaf + p.bytes ≤ p.checkedEnd.value leaf) :
-    if p.strict then base + p.offset.value leaf + p.bytes < ending
-      else base + p.offset.value leaf + p.bytes ≤ ending := by
-  cases hs : p.strict <;> simp only [hs, Bool.false_eq_true, ↓reduceIte] at passed ⊢
-  · exact p.bounds leaf base ending passed covered
-  · exact p.bounds_strict leaf base ending passed covered
-
-def Reg.toCross (r : Reg) : CrossTerm :=
-  match r.compound with
-  | none => .reg r.kind (crossRegAlpha r)
-  | some p => p.toCross
+def Reg.toCross (r : Reg) : CrossTerm := .reg r
 
 mutual
   def toCrossTerm : Term → CrossTerm
@@ -680,10 +559,6 @@ mutual
     | .var _ name => .var name
     | .regVar _ r => r.toCross
     | .app _ (.externalResult _ lane) args => .external lane (crossTerms (abiPrefix lane args))
-    | .app _ (.packetRead bytes ending) (value :: metadata) =>
-      match compoundPacketFromMetadata bytes ending metadata with
-      | some p => p.toCross
-      | none => .app (.packetRead bytes ending) (crossTerms (value :: metadata))
     | .app _ (.add w) [t] => normalizeCrossAdd w.bits (.app .add [toCrossTerm t])
     | .app _ op [t] => crossUnary op (toCrossTerm t)
     | .app _ op [a,b] => crossBinary op (toCrossTerm a) (toCrossTerm b)
@@ -727,6 +602,9 @@ def Term.AllAddWidth (w : Nat) : Term → Prop
   | .app output (.add carrier) args =>
     output.bits = w ∧ carrier.bits = w ∧ ∀ u ∈ args, u.AllAddWidth w
   | .const carrier _ => carrier.bits = w
+  | .regVar _ r =>
+    (Width.ofBits r.bits).bits = w ∧ (CrossTerm.reg r).IsAddAtom ∧
+      r.bits ≤ (Width.ofBits r.bits).bits
   | t => t.width.bits = w ∧ (toCrossTerm t).IsAddAtom
 termination_by t => sizeOf t
 
@@ -879,9 +757,7 @@ private theorem addTree_regular (w : Nat) (t : Term) (ht : t.AllAddWidth w)
   | const carrier c => simp [toCrossAddTree, toCrossTerm, RegularAdd, addParts]
   | var carrier name => simp [toCrossAddTree, toCrossTerm, RegularAdd, addParts, CrossTerm.IsAddAtom]
   | regVar event r =>
-    simp only [Term.AllAddWidth] at ht
-    have ha := ht.2
-    simpa [toCrossAddTree, RegularAdd, atom_parts _ ha] using ha
+    simp [toCrossAddTree, toCrossTerm, Reg.toCross, RegularAdd, addParts, CrossTerm.IsAddAtom]
   | app output op args =>
     by_cases hadd : ∃ carrier, op = .add carrier
     · obtain ⟨carrier, rfl⟩ := hadd
@@ -924,21 +800,37 @@ private theorem addTree_regular (w : Nat) (t : Term) (ht : t.AllAddWidth w)
       simpa [he, RegularAdd, atom_parts _ ht'.2] using ht'.2
 termination_by sizeOf t
 
+private def valueBits : Term → Nat
+  | .regVar _ r => r.bits
+  | .const w _ => w.bits
+  | .var w _ => w.bits
+  | .app w _ _ => w.bits
+
 private theorem interpretTerm_bound (ν : Var → Nat) (θ : ExternalInterpretation)
     (t : Term) (v : Nat) (h : interpretTerm ν θ t = some v) :
-    v < 2 ^ t.width.bits := by
+    v < 2 ^ valueBits t := by
   cases t with
   | const w c =>
-    simp only [interpretTerm] at h
-    split at h <;> simp_all [Term.width]
+    simp only [interpretTerm, valueBits] at h ⊢
+    split at h
+    · rename_i hc
+      cases h
+      exact hc
+    · contradiction
   | var w name =>
     simp only [interpretTerm, Option.some.injEq] at h
     exact h ▸ MNat_lt w.bits _
   | regVar event r =>
-    simp only [interpretTerm] at h
+    simp only [interpretTerm, valueBits] at h ⊢
     split at h
     · simp only [Option.some.injEq] at h
-      exact h ▸ MNat_lt r.width.bits _
+      subst h
+      by_cases hle : r.bits ≤ (Width.ofBits r.bits).bits
+      · rw [MNat_of_lt (Nat.lt_of_lt_of_le (MNat_lt r.bits _)
+          (Nat.pow_le_pow_right (by decide) hle))]
+        exact MNat_lt r.bits _
+      · exact Nat.lt_of_lt_of_le (MNat_lt (Width.ofBits r.bits).bits _)
+          (Nat.pow_le_pow_right (by decide) (Nat.le_of_not_ge hle))
     · contradiction
   | app output op args =>
     simp only [interpretTerm] at h
@@ -987,14 +879,18 @@ private theorem addTree_interpret (w : Nat) (hw : 0 < w)
       congrArg Int.ofNat (MNat_of_lt (interpretTerm_bound ν θ _ _ hv))
   | regVar event r =>
     have hr := hρ (.regVar event r) (by simp [Term.addAtoms])
-    simp only [hv, Option.getD_some] at hr
-    simp only [Term.AllAddWidth, Term.width] at ht
+    simp only [hv, Option.getD_some, toCrossTerm, Reg.toCross] at hr
+    simp only [Term.AllAddWidth] at ht
     have ht' := ht
-    simp only [toCrossAddTree, CrossTerm.addDenote, atom_value ρ _ ht'.2, hr]
+    simp only [toCrossAddTree, toCrossTerm, Reg.toCross, CrossTerm.addDenote]
+    unfold CrossTerm.addValue
+    simp only [hr]
     rw [← ht'.1]
     rw [ofNat_add_mod]
-    simpa only [Term.width] using
-      congrArg Int.ofNat (MNat_of_lt (interpretTerm_bound ν θ _ _ hv))
+    have hvb := interpretTerm_bound ν θ _ _ hv
+    have hlt : v < 2 ^ (Width.ofBits r.bits).bits :=
+      Nat.lt_of_lt_of_le hvb (Nat.pow_le_pow_right (by decide) ht'.2.2)
+    exact congrArg Int.ofNat (MNat_of_lt hlt)
   | app output op args =>
     by_cases hadd : ∃ carrier, op = .add carrier
     · obtain ⟨carrier, rfl⟩ := hadd
@@ -1285,12 +1181,14 @@ theorem cross_carry_value (h l k : Nat) (hl : l < 2^32) (hk : k < 2^32) :
 /-- One lookup event, words 0/1 at offsets 0/4, and that element's double word.
 The source equation is a word-content premise, not a program/sltu premise. -/
 theorem cross_carry_interpret (values : Nat × Reg → Nat) (event element k : Nat)
-    (hl : values (event, Reg.mapWord element 0) < 2^32) (hk : k < 2^32)
-    (sameElement : values (event, Reg.mapDword element 0) =
-      values (event, Reg.mapWord element 4) * 2^32 + values (event, Reg.mapWord element 0)) :
-    MNat 32 (LTU .w32 (ADD .w32 (values (event, Reg.mapWord element 0)) k) k +
-      values (event, Reg.mapWord element 4)) =
-    EXTRACT 32 32 64 (ADD .w64 (values (event, Reg.mapDword element 0)) k) := by
+    (key : List Term)
+    (hl : values (event, .map element key 0 32) < 2^32) (hk : k < 2^32)
+    (sameElement : values (event, .map element key 0 64) =
+      values (event, .map element key 32 64) * 2^32 +
+        values (event, .map element key 0 32)) :
+    MNat 32 (LTU .w32 (ADD .w32 (values (event, .map element key 0 32)) k) k +
+      values (event, .map element key 32 64)) =
+    EXTRACT 32 32 64 (ADD .w64 (values (event, .map element key 0 64)) k) := by
   rw [sameElement]
   exact cross_carry_value _ _ k hl hk
 
@@ -1664,7 +1562,6 @@ structure CrossBranch where
 abbrev CrossMapWrite := CrossMutation
 
 structure CrossPacketWrite where
-  packet : Nat
   offset : CrossTerm
   value : CrossValue
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr
@@ -1677,10 +1574,9 @@ inductive CrossPred where
   | packetWrite (observation : CrossPacketWrite)
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr
 
-/-- Access byte count comes from the predicate, including compound destinations. -/
+/-- Access byte count comes from the predicate width. -/
 def Predicate.storeBytes? : Predicate → Option Nat
-  | .packetWrite _ _ _ bits _ compound =>
-    some (match compound with | some p => p.bytes | none => bits / 8)
+  | .packetWrite _ _ bits _ => some (bits / 8)
   | .mapWrite _ _ _ _ bits _ => some (bits / 8)
   | _ => none
 
@@ -1734,9 +1630,8 @@ def toCross (env : CrossEnv) (predicate : Predicate) : CrossPred :=
   | .ret term => .ret ⟨toCrossTerm term⟩
   | .mapWrite _ map key offset _ source =>
     .mapWrite ⟨.write, toCrossTerm map, crossTerms key, offset, storeValue bytes source⟩
-  | .packetWrite _ packet offset _ source compound =>
-    .packetWrite ⟨packet, (match compound with | none => .c offset | some p => p.toCross),
-      storeValue bytes source⟩
+  | .packetWrite _ offset _ source =>
+    .packetWrite ⟨.c offset, storeValue bytes source⟩
 
 /-- The value component of a write observation. -/
 def CrossPred.writeValue? : CrossPred → Option CrossValue
@@ -1759,16 +1654,10 @@ theorem toCross_mapWrite_bytes (env : CrossEnv) (event : Nat) (map : Term)
       some (.bytes (storeByteTerms (bits / 8) source)) := by
   rfl
 
-theorem toCross_packetWrite_bytes (env : CrossEnv) (event packet offset bits : Nat)
+theorem toCross_packetWrite_bytes (env : CrossEnv) (event offset bits : Nat)
     (source : Term) :
-    (toCross env (.packetWrite event packet offset bits source none)).writeValue? =
+    (toCross env (.packetWrite event offset bits source)).writeValue? =
       some (.bytes (storeByteTerms (bits / 8) source)) := by
-  rfl
-
-theorem toCross_compoundPacketWrite_bytes (env : CrossEnv)
-    (event packet offset bits : Nat) (source : Term) (p : CompoundPacketReg) :
-    (toCross env (.packetWrite event packet offset bits source (some p))).writeValue? =
-      some (.bytes (storeByteTerms p.bytes source)) := by
   rfl
 
 /-- Every sized write constructs exactly the byte count saved in that predicate. -/
@@ -1783,14 +1672,9 @@ theorem toCross_write_width (env : CrossEnv) (predicate : Predicate) (bytes : Na
   | mapWrite event map key offset bits source =>
     cases h
     exact ⟨_, toCross_mapWrite_bytes .., storeByteTerms_length ..⟩
-  | packetWrite event packet offset bits source compound =>
-    cases compound with
-    | none =>
-      cases h
-      exact ⟨_, toCross_packetWrite_bytes .., storeByteTerms_length ..⟩
-    | some p =>
-      cases h
-      exact ⟨_, toCross_compoundPacketWrite_bytes .., storeByteTerms_length ..⟩
+  | packetWrite event offset bits source =>
+    cases h
+    exact ⟨_, toCross_packetWrite_bytes .., storeByteTerms_length ..⟩
 
 /-- The fallback cannot affect any write with a predicate-owned width. -/
 theorem toCross_write_storeBytes_irrelevant (env : CrossEnv) (predicate : Predicate)
@@ -2017,7 +1901,7 @@ mutual
   def renderCrossTermJson : CrossTerm → String
     | .c z => s!"\{\"kind\":\"c\",\"value\":\"{z}\"}"
     | .var name => s!"\{\"kind\":\"var\",\"name\":{name}}"
-    | .reg kind alpha => s!"\{\"kind\":\"reg\",\"class\":{regRank kind},\"alpha\":{alpha}}"
+    | .reg r => s!"\{\"kind\":\"reg\",\"reg\":\"{renderReg r}\"}"
     | .app op args =>
       let params := String.intercalate "," ((crossOpParams op).map toString)
       s!"\{\"kind\":\"app\",\"op\":\"{crossOpName op}\",\"params\":[{params}],\"args\":[{renderCrossTerms args}]}"
@@ -2070,7 +1954,7 @@ def renderCrossPredJson : CrossPred → String
     let offset := match p.offset with
       | .c n => s!"\"offset\":{n}"
       | t => s!"\"offsetTerm\":{renderCrossTermJson t}"
-    s!"\{\"kind\":\"packetWrite\",\"packet\":{p.packet},{offset},\"value\":{renderCrossValueJson p.value}}"
+    s!"\{\"kind\":\"packetWrite\",{offset},\"value\":{renderCrossValueJson p.value}}"
 
 /-! General proofs. Finite fixture checks below are not semantic equivalence proofs. -/
 
@@ -2200,15 +2084,175 @@ private theorem crossOp_compare_eq (a b : CrossOp) (h : compare a b = .eq) : a =
     | (congr 1; exact nat_one_eq _ _ h)
     | (obtain ⟨rfl, rfl⟩ := nat_two_eq _ _ _ _ h; rfl)
 
+private theorem listNatCmp_swap (xs ys : List Nat) :
+    (listNatCmp xs ys).swap = listNatCmp ys xs := by
+  induction xs generalizing ys with
+  | nil => cases ys <;> simp [listNatCmp]
+  | cons x xs ih =>
+    cases ys with
+    | nil => simp [listNatCmp]
+    | cons y ys =>
+      simp only [listNatCmp]
+      rw [ordering_swap_then, Nat.compare_swap, ih]
+
+private theorem listNatCmp_eq (xs ys : List Nat) (h : listNatCmp xs ys = .eq) : xs = ys := by
+  induction xs generalizing ys with
+  | nil => cases ys <;> simp_all [listNatCmp]
+  | cons x xs ih =>
+    cases ys with
+    | nil => simp [listNatCmp] at h
+    | cons y ys =>
+      simp only [listNatCmp] at h
+      have hh := (ordering_then_eq _ _).mp h
+      have hx := Nat.compare_eq_eq.mp hh.1
+      subst hx
+      have hxs := ih _ hh.2
+      subst hxs
+      rfl
+
+private theorem width_bits_inj {w v : Width} (h : w.bits = v.bits) : w = v := by
+  cases w <;> cases v <;> simp [Width.bits] at h <;> first | rfl | contradiction
+
+private theorem orderKey_inj (a b : Op) (h : Op.orderKey a = Op.orderKey b) : a = b := by
+  have ha := Op.orderKey_round a
+  rw [h] at ha
+  have hb := Op.orderKey_round b
+  rw [hb] at ha
+  cases ha
+  rfl
+
+private theorem field_eq (j i : ContextField)
+    (ht : fieldTag j = fieldTag i) (ha : fieldArg j = fieldArg i) : j = i := by
+  cases j <;> cases i <;> simp [fieldTag, fieldArg] at ht ha <;> try contradiction
+  all_goals first | rfl | (subst ha; rfl) | (subst ht; rfl)
+
+mutual
+  private theorem termListCmp_swap (xs ys : List Term) :
+      (termListCmp xs ys).swap = termListCmp ys xs := by
+    cases xs with
+    | nil => cases ys <;> simp [termListCmp]
+    | cons x xs =>
+      cases ys with
+      | nil => simp [termListCmp]
+      | cons y ys =>
+        simp only [termListCmp]
+        rw [ordering_swap_then, termCmp_swap, termListCmp_swap]
+  termination_by sizeOf xs + sizeOf ys
+
+  private theorem termCmp_swap (a b : Term) : (termCmp a b).swap = termCmp b a := by
+    cases a <;> cases b <;> simp only [termCmp, termTag]
+    case const.const | var.var =>
+      rw [ordering_swap_then, Nat.compare_swap, Nat.compare_swap]
+    case regVar.regVar =>
+      rw [ordering_swap_then, Nat.compare_swap, regCmp_swap]
+    case app.app =>
+      simp only [opCmp]
+      rw [ordering_swap_then, ordering_swap_then, Nat.compare_swap, listNatCmp_swap, termListCmp_swap]
+    all_goals exact Nat.compare_swap _ _
+  termination_by sizeOf a + sizeOf b
+
+  private theorem regCmp_swap (a b : Reg) : (regCmp a b).swap = regCmp b a := by
+    cases a <;> cases b <;> simp only [regCmp, regTag]
+    case real.real =>
+      rw [ordering_swap_then, ordering_swap_then, Nat.compare_swap, Nat.compare_swap, Nat.compare_swap]
+    case stack.stack | packet.packet =>
+      rw [ordering_swap_then, Nat.compare_swap, Nat.compare_swap]
+    case map.map =>
+      rw [ordering_swap_then, ordering_swap_then, ordering_swap_then, Nat.compare_swap,
+        termListCmp_swap, Nat.compare_swap, Nat.compare_swap]
+    case context.context =>
+      rw [ordering_swap_then, ordering_swap_then, ordering_swap_then, Nat.compare_swap,
+        Nat.compare_swap, Nat.compare_swap, Nat.compare_swap]
+    all_goals exact Nat.compare_swap _ _
+  termination_by sizeOf a + sizeOf b
+end
+
+mutual
+  private theorem termListCmp_eq (xs ys : List Term) (h : termListCmp xs ys = .eq) : xs = ys := by
+    cases xs with
+    | nil => cases ys <;> simp_all [termListCmp]
+    | cons x xs =>
+      cases ys with
+      | nil => simp [termListCmp] at h
+      | cons y ys =>
+        simp only [termListCmp] at h
+        have hh := (ordering_then_eq _ _).mp h
+        have hx := termCmp_eq _ _ hh.1
+        have hxs := termListCmp_eq _ _ hh.2
+        subst hx; subst hxs; rfl
+  termination_by sizeOf xs + sizeOf ys
+
+  private theorem termCmp_eq (a b : Term) (h : termCmp a b = .eq) : a = b := by
+    cases a <;> cases b <;> simp only [termCmp, termTag] at h <;> try contradiction
+    case const.const =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hw := width_bits_inj (Nat.compare_eq_eq.mp hh.1)
+      have hc := Nat.compare_eq_eq.mp hh.2
+      subst hw; subst hc; rfl
+    case var.var =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hw := width_bits_inj (Nat.compare_eq_eq.mp hh.1)
+      have hn := Nat.compare_eq_eq.mp hh.2
+      subst hw; subst hn; rfl
+    case regVar.regVar =>
+      have hh := (ordering_then_eq _ _).mp h
+      have he := Nat.compare_eq_eq.mp hh.1
+      have hr := regCmp_eq _ _ hh.2
+      subst he; subst hr; rfl
+    case app.app w op xs v g ys =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hw := Nat.compare_eq_eq.mp hh.1
+      have hop := (ordering_then_eq _ _).mp hh.2
+      have ho := orderKey_inj _ _ (listNatCmp_eq _ _ hop.1)
+      have hxs := termListCmp_eq _ _ hop.2
+      have hw' := width_bits_inj hw
+      subst hw'; subst ho; subst hxs; rfl
+  termination_by sizeOf a + sizeOf b
+
+  private theorem regCmp_eq (a b : Reg) (h : regCmp a b = .eq) : a = b := by
+    cases a <;> cases b <;> simp only [regCmp, regTag] at h <;> try contradiction
+    case real.real =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hr := Nat.compare_eq_eq.mp hh.1
+      have hb := (ordering_then_eq _ _).mp hh.2
+      have hlo := Nat.compare_eq_eq.mp hb.1
+      have hhi := Nat.compare_eq_eq.mp hb.2
+      subst hr; subst hlo; subst hhi; rfl
+    case stack.stack | packet.packet =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hlo := Nat.compare_eq_eq.mp hh.1
+      have hhi := Nat.compare_eq_eq.mp hh.2
+      subst hlo; subst hhi; rfl
+    case map.map =>
+      have hh := (ordering_then_eq _ _).mp h
+      have hm := Nat.compare_eq_eq.mp hh.1
+      have hk := (ordering_then_eq _ _).mp hh.2
+      have hkey := termListCmp_eq _ _ hk.1
+      have hb := (ordering_then_eq _ _).mp hk.2
+      have hlo := Nat.compare_eq_eq.mp hb.1
+      have hhi := Nat.compare_eq_eq.mp hb.2
+      subst hm; subst hkey; subst hlo; subst hhi; rfl
+    case context.context =>
+      rename_i j b e i c f
+      have hh := (ordering_then_eq _ _).mp h
+      have ht := Nat.compare_eq_eq.mp hh.1
+      have ha := (ordering_then_eq _ _).mp hh.2
+      have harg := Nat.compare_eq_eq.mp ha.1
+      have hb := (ordering_then_eq _ _).mp ha.2
+      have hlo := Nat.compare_eq_eq.mp hb.1
+      have hhi := Nat.compare_eq_eq.mp hb.2
+      have hf := field_eq j i ht harg
+      subst hf; subst hlo; subst hhi; rfl
+  termination_by sizeOf a + sizeOf b
+end
+
 mutual
   private theorem crossCompare_swap (a b : CrossTerm) :
       (crossCompare a b).swap = crossCompare b a := by
     cases a <;> cases b <;> simp only [crossCompare, crossRank] <;>
       try first | rfl | exact Int.compare_swap _ _ | exact Nat.compare_swap _ _
-    case reg.reg k x l y =>
-      change ((compare (regRank k) (regRank l)).then (compare x y)).swap = _
-      rw [ordering_swap_then, Nat.compare_swap, Nat.compare_swap]
-      rfl
+    case reg.reg =>
+      exact regCmp_swap _ _
     case app.app f xs g ys =>
       change ((compare f g).then (crossCompareList xs ys)).swap = _
       rw [ordering_swap_then, crossOp_compare_swap, crossCompareList_swap]
@@ -2234,22 +2278,14 @@ mutual
   termination_by sizeOf xs + sizeOf ys
 end
 
-private theorem regRank_compare_eq (k l : RegKind)
-    (h : compare (regRank k) (regRank l) = .eq) : k = l := by
-  have heq := Nat.compare_eq_eq.mp h
-  cases k <;> cases l <;> simp_all [regRank]
-
 mutual
   private theorem crossCompare_eq (a b : CrossTerm) (h : crossCompare a b = .eq) :
       a = b := by
     cases a <;> cases b <;> simp only [crossCompare, crossRank] at h <;> try contradiction
     case c.c x y => exact congrArg CrossTerm.c (Int.compare_eq_eq.mp h)
     case var.var x y => exact congrArg CrossTerm.var (Nat.compare_eq_eq.mp h)
-    case reg.reg k x l y =>
-      have hh := (ordering_then_eq _ _).mp h
-      have hk := regRank_compare_eq _ _ hh.1
-      have hx := Nat.compare_eq_eq.mp hh.2
-      subst l; subst y; rfl
+    case reg.reg =>
+      exact congrArg CrossTerm.reg (regCmp_eq _ _ h)
     case app.app f xs g ys =>
       have hh := (ordering_then_eq _ _).mp h
       have hf := crossOp_compare_eq _ _ hh.1
@@ -2431,8 +2467,12 @@ private def mutationEnv : CrossEnv :=
     [.C64 42, .V64 100, .V64 101, .C64 0, .C64 9, .C64 1, .C64 2, .C64 3, .C64 4])
 #guard toCross mutationEnv (.helper 7 .lookup [.C32 42, .V32 100, .C32 9]) ==
   toCross mutationEnv (.helper 8 .lookup [.C64 42, .V64 200, .C64 9])
-#guard toCrossTerm (.regVar 7 (Reg.mapWord 7 4)) ==
-  toCrossTerm (.regVar 8 (Reg.mapDword 8 4))
+#guard toCrossTerm (.regVar 7 (.map 3 [.C32 1] 0 32)) ==
+  .reg (.map 3 [.C32 1] 0 32)
+#guard toCrossTerm (.regVar 7 (.map 3 [.C32 1] 0 32)) ==
+  toCrossTerm (.regVar 8 (.map 3 [.C32 1] 0 32))
+#guard toCrossTerm (.regVar 7 (.map 3 [.C32 1] 0 32)) !=
+  toCrossTerm (.regVar 7 (.map 3 [.C32 1] 32 64))
 
 /-! ## Normalization ABI -/
 
@@ -2667,9 +2707,9 @@ private def liveNode15HelperE : String :=
   "{\"kind\":\"helper\",\"args\":[\"c64:1077412584\",\"t64(id64(add64(id64(v64:0),18446744073709551612)))\",\"t64(zext8/64/32(extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))))\",\"t64(or64(0,shl64(zext8/64/32(extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))),0)))\",\"t64(or64(0,shl64(zext8/64/32(extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))),0)))\",\"t64(or64(0,shl64(zext8/64/32(extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))),0)))\"],\"event\":386,\"helperId\":1}"
 -- Node 46 write at offset 0: RV loc65 / eBPF loc47.
 private def liveNode46WriteR : String :=
-  "{\"kind\":\"packetWrite\",\"event\":849,\"offset\":0,\"packet\":0,\"source\":\"sext16/32(or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,6)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,7)))),8)))\",\"width\":16}"
+  "{\"kind\":\"packetWrite\",\"event\":849,\"offset\":0,\"source\":\"sext16/32(or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,6)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,7)))),8)))\",\"width\":16}"
 private def liveNode46WriteE : String :=
-  "{\"kind\":\"packetWrite\",\"event\":495,\"offset\":0,\"packet\":0,\"source\":\"t64(or64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,6)))),0)),shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,7)))),8)))\",\"width\":16}"
+  "{\"kind\":\"packetWrite\",\"event\":495,\"offset\":0,\"source\":\"t64(or64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,6)))),0)),shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,7)))),8)))\",\"width\":16}"
 -- Node 3 ethertype: RV loc16 / eBPF loc10, different VLAN disjuncts.
 private def liveNode3EthertypeR : String :=
   "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"or32(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,12)))),0)),shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,13)))),8))\",\"rel\":\"eq\",\"rhs\":\"43144\"},\"dir\":\"taken\",\"position\":14,\"width\":32}"
@@ -2764,30 +2804,30 @@ private def liveNode46WriteBytesNormalize : Bool :=
   let r := exportCrossPredNormalize liveEnvRJson liveNode46WriteR
   let e := exportCrossPredNormalize liveEnvEJson liveNode46WriteE
   r != "null" && e != "null" && r == e &&
-    r == "{\"kind\":\"packetWrite\",\"packet\":0,\"offset\":0,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"mullo\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"7\"}]}]}]},{\"kind\":\"c\",\"value\":\"256\"}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"6\"}]}]}]}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"mullo\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"7\"}]}]}]},{\"kind\":\"c\",\"value\":\"256\"}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"6\"}]}]}]}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[]}]}]}]}}"
+    r == "{\"kind\":\"packetWrite\",\"offset\":0,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"mullo\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"7\"}]}]}]},{\"kind\":\"c\",\"value\":\"256\"}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"6\"}]}]}]}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"mullo\",\"params\":[],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"7\"}]}]}]},{\"kind\":\"c\",\"value\":\"256\"}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[{\"kind\":\"c\",\"value\":\"1\"},{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"6\"}]}]}]}]}]},{\"kind\":\"app\",\"op\":\"linear\",\"params\":[],\"args\":[]}]}]}]}}"
 #guard liveNode46WriteBytesNormalize
 
 -- A predicate's access width controls the byte count even without an env override.
 private def predicateStoreWidthCheck : Bool :=
   let source := Term.C32 0x44332211
-  let narrow := toCross {} (.packetWrite 0 0 0 16 source)
-  let wide := toCross {} (.packetWrite 0 0 0 32 source)
-  narrow == .packetWrite ⟨0, .c 0, .bytes [.c 0x11, .c 0x22]⟩ &&
-    wide == .packetWrite ⟨0, .c 0, .bytes [.c 0x11, .c 0x22, .c 0x33, .c 0x44]⟩ &&
+  let narrow := toCross {} (.packetWrite 0 0 16 source)
+  let wide := toCross {} (.packetWrite 0 0 32 source)
+  narrow == .packetWrite ⟨.c 0, .bytes [.c 0x11, .c 0x22]⟩ &&
+    wide == .packetWrite ⟨.c 0, .bytes [.c 0x11, .c 0x22, .c 0x33, .c 0x44]⟩ &&
     narrow != wide &&
-    toCross { storeBytes := some 8 } (.packetWrite 0 0 0 16 source) == narrow &&
+    toCross { storeBytes := some 8 } (.packetWrite 0 0 16 source) == narrow &&
     toCross { storeBytes := some 1 } (.mapWrite 0 (.C32 42) [] 0 32 source) ==
       .mapWrite ⟨.write, .c 42, [], 0, .bytes [.c 0x11, .c 0x22, .c 0x33, .c 0x44]⟩
 #guard predicateStoreWidthCheck
 
-#guard toCross {} (.packetWrite 0 0 0 16 (.C64 0x8877665544332211)) ==
-  .packetWrite ⟨0, .c 0, .bytes [.c 0x11, .c 0x22]⟩
+#guard toCross {} (.packetWrite 0 0 16 (.C64 0x8877665544332211)) ==
+  .packetWrite ⟨.c 0, .bytes [.c 0x11, .c 0x22]⟩
 #guard (Predicate.ret (.C32 0)).storeBytes? == none
 
 #guard exportCrossPredNormalize "{\"storeBigEndian\":true}"
-    (renderPredicateJson (.packetWrite 0 0 0 16 (.C64 0x44332211))) ==
+    (renderPredicateJson (.packetWrite 0 0 16 (.C64 0x44332211))) ==
   exportCrossPredNormalize "{}"
-    (renderPredicateJson (.packetWrite 0 0 0 16 (.C64 0x44332211)))
+    (renderPredicateJson (.packetWrite 0 0 16 (.C64 0x44332211)))
 
 -- just_tx.c: ETH_P_8021Q=0x8100 and ETH_P_8021AD=0x88A8 occur in one ||.
 -- Both trees read byte12 into bits 0..7 and byte13 into bits 8..15.
@@ -2814,42 +2854,42 @@ def envE : String :=
 def node26BranchR : String :=
   "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"id32(externalResult747_0(1,1077412584,id32(add32(v32:0,4294967280))))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":48,\"width\":32}"
 def node26LowR : String :=
-  "{\"kind\":\"mapWrite\",\"event\":771,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":0,\"source\":\"add32(regVar747(real32:10),1)\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":771,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":0,\"source\":\"add32(regVar747(real:10:[0,32)),1)\",\"sourceWidth\":32}"
 def node26HighR : String :=
-  "{\"kind\":\"mapWrite\",\"event\":773,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":4,\"source\":\"add32(externalResult747_2(1),ltu32(add32(regVar747(real32:10),1),1))\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":773,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":4,\"source\":\"add32(externalResult747_2(1),ltu32(add32(regVar747(real:10:[0,32)),1),1))\",\"sourceWidth\":32}"
 def node26PredsR : List String :=
   [node26BranchR, node26LowR, node26HighR]
 
 def node26BranchE : String :=
   "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"externalResult386_0(1,1077412584,id64(add64(id64(v64:0),18446744073709551612)))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":38,\"width\":64}"
 def node26LowE : String :=
-  "{\"kind\":\"mapWrite\",\"event\":418,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":0,\"source\":\"extract0,32/64(id64(add64(regVar386(real64:0),1)))\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":418,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":0,\"source\":\"extract0,32/64(id64(add64(regVar386(real:0:[0,64)),1)))\",\"sourceWidth\":32}"
 def node26HighE : String :=
-  "{\"kind\":\"mapWrite\",\"event\":418,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":4,\"source\":\"extract32,32/64(id64(add64(regVar386(real64:0),1)))\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":418,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,24)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":4,\"source\":\"extract32,32/64(id64(add64(regVar386(real:0:[0,64)),1)))\",\"sourceWidth\":32}"
 def node26PredsE : List String :=
   [node26BranchE, node26LowE, node26HighE]
 
 def node34BranchR : String :=
   "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"id32(externalResult737_0(1,1077412584,id32(add32(v32:0,4294967280))))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":48,\"width\":32}"
 def node34LowR : String :=
-  "{\"kind\":\"mapWrite\",\"event\":766,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":0,\"source\":\"add32(regVar737(real32:10),1)\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":766,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":0,\"source\":\"add32(regVar737(real:10:[0,32)),1)\",\"sourceWidth\":32}"
 def node34HighR : String :=
-  "{\"kind\":\"mapWrite\",\"event\":768,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":4,\"source\":\"add32(externalResult737_2(1),ltu32(add32(regVar737(real32:10),1),1))\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":768,\"key\":[\"extract0,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract8,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract16,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\",\"extract24,8(or32(0,shl32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0)))\"],\"map\":\"1077412584\",\"mapWidth\":32,\"offset\":4,\"source\":\"add32(externalResult737_2(1),ltu32(add32(regVar737(real:10:[0,32)),1),1))\",\"sourceWidth\":32}"
 def node34PredsR : List String :=
   [node34BranchR, node34LowR, node34HighR]
 
 def node34BranchE : String :=
   "{\"kind\":\"branch\",\"cond\":{\"lhs\":\"externalResult336_0(1,1077412584,id64(add64(id64(v64:0),18446744073709551612)))\",\"rel\":\"ne\",\"rhs\":\"0\"},\"dir\":\"notTaken\",\"position\":38,\"width\":64}"
 def node34LowE : String :=
-  "{\"kind\":\"mapWrite\",\"event\":381,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":0,\"source\":\"extract0,32/64(id64(add64(regVar336(real64:0),1)))\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":381,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":0,\"source\":\"extract0,32/64(id64(add64(regVar336(real:0:[0,64)),1)))\",\"sourceWidth\":32}"
 def node34HighE : String :=
-  "{\"kind\":\"mapWrite\",\"event\":381,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":4,\"source\":\"extract32,32/64(id64(add64(regVar336(real64:0),1)))\",\"sourceWidth\":32}"
+  "{\"kind\":\"mapWrite\",\"event\":381,\"key\":[\"extract0,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract8,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract16,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\",\"extract24,8(zext32/32/64(or64(0,shl64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,20)))),0))))\"],\"map\":\"1077412584\",\"mapWidth\":64,\"offset\":4,\"source\":\"extract32,32/64(id64(add64(regVar336(real:0:[0,64)),1)))\",\"sourceWidth\":32}"
 def node34PredsE : List String :=
   [node34BranchE, node34LowE, node34HighE]
 
 private def liveNode26HighCanonical : Bool :=
   let r := exportCrossPredNormalize envR node26HighR
-  r != "null" && r == "{\"kind\":\"mapWrite\",\"mutation\":{\"action\":\"write\",\"map\":{\"kind\":\"c\",\"value\":\"1077412584\"},\"key\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]}],\"offset\":4,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"class\":0,\"alpha\":10},{\"kind\":\"c\",\"value\":\"1\"}]}]}]}]}}}"
+  r != "null" && r == "{\"kind\":\"mapWrite\",\"mutation\":{\"action\":\"write\",\"map\":{\"kind\":\"c\",\"value\":\"1077412584\"},\"key\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"low\",\"params\":[8],\"args\":[{\"kind\":\"app\",\"op\":\"inputByte\",\"params\":[0],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"var\",\"name\":4},{\"kind\":\"c\",\"value\":\"24\"}]}]}]}]}],\"offset\":4,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[0,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"reg\":\"real:10:[0,32)\"},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"reg\":\"real:10:[0,32)\"},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[16,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"reg\":\"real:10:[0,32)\"},{\"kind\":\"c\",\"value\":\"1\"}]}]}]},{\"kind\":\"app\",\"op\":\"extract\",\"params\":[24,8],\"args\":[{\"kind\":\"app\",\"op\":\"extract\",\"params\":[32,32],\"args\":[{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[{\"kind\":\"reg\",\"reg\":\"real:10:[0,32)\"},{\"kind\":\"c\",\"value\":\"1\"}]}]}]}]}}}"
 #guard liveNode26HighCanonical
 
 end MapWriteCarryFixtures

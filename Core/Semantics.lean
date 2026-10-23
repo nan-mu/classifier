@@ -63,9 +63,10 @@ mutual
       exact ⟨c, by simp [interpretTerm, hc]⟩
     | var w n => exact ⟨MNat w.bits (ν ⟨w, n, none⟩), by simp [interpretTerm]⟩
     | regVar event r =>
-      have hr : (r.valid && r.kind == .real) = true := by
+      have hr : r.valid = true := by
         simpa only [Term.wellFormed] using ht
-      exact ⟨MNat r.width.bits (ν ⟨r.width, r.alpha, some (event, r)⟩),
+      exact ⟨MNat (Width.ofBits r.bits).bits
+          (MNat r.bits (ν ⟨Width.ofBits r.bits, r.index, some (event, r)⟩)),
         by simp [interpretTerm, hr]⟩
     | app w op args =>
       have hvalid : op.validSignature w (args.map Term.width) = true ∧

@@ -116,9 +116,9 @@ private def snapshot (label : String) (j : Lean.Json) :
     pure predicate
   let some state := parseSemStateJson (Lean.Json.arr exprs).compress "[]" |
     throw ("InvalidSnapshot:" ++ label)
-  if !state.exprs.all (fun e => validRel e.reg.width e.rel && validTerm e.term) then
+  if !state.exprs.all (fun e => validRel (Width.ofBits e.reg.bits) e.rel && validTerm e.term) then
     throw ("InvalidTerm:" ++ label)
-  pure (id, ⟨loc, { exprs := state.exprs, predicates := parsedPredicates, mem := state.mem }⟩)
+  pure (id, ⟨loc, { exprs := state.exprs, predicates := parsedPredicates }⟩)
 
 /-- Validate all evidence before selecting the first exactly equal ordered suffix entry.
 Snapshots are already-applied global states. Position validity, common origin, history,
@@ -218,7 +218,7 @@ private def mergeEqualCheck : Bool :=
       Lean.Json.getNat?).toOption == some 42)
 
 private def mergeExprFixture (term : String := "4") (role : String := "") : String :=
-  s!"\{\"reg\":\"real32:10\",\"rel\":\"eq\",\"term\":\"{term}\"{role}}"
+  s!"\{\"reg\":\"real:10:[0,32)\",\"rel\":\"eq\",\"term\":\"{term}\"{role}}"
 
 private def mergePredicateFixture (event : Nat := 7) (id : Nat := 5)
     (args : String := "[]") : String :=
@@ -228,7 +228,7 @@ private def mergeSetOrderCheck : Bool :=
   let value := mergeExprFixture
   let constraint := mergeExprFixture "9" ",\"role\":\"constraint\""
   let secondConstraint := mergeExprFixture "8" ",\"role\":\"constraint\""
-  let other := "{\"reg\":\"real32:11\",\"rel\":\"eq\",\"term\":\"v32:11\"}"
+  let other := "{\"reg\":\"real:11:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:11\"}"
   let p := mergePredicateFixture 7
   let q := mergePredicateFixture 8
   let taken := mergeSnapshotFixture 42 "1"
@@ -253,7 +253,7 @@ private def mergeStateBoundaryCheck : Bool :=
     mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "add32(2,2)" ++ "]"),
     mergeSnapshotFixture 17 "1"
       ("[" ++ mergeExprFixture ++ "," ++ mergeExprFixture "9" ",\"role\":\"constraint\"" ++ "]"),
-    mergeSnapshotFixture 17 "1" "[{\"reg\":\"real64:10\",\"rel\":\"eq\",\"term\":\"4\"}]",
+    mergeSnapshotFixture 17 "1" "[{\"reg\":\"real:10:[0,64)\",\"rel\":\"eq\",\"term\":\"4\"}]",
     mergeSnapshotFixture 17 "1" value ("[" ++ mergePredicateFixture ++ "]")].all
     (fun candidate => mergeRejects (mergeRequestFixture taken candidate) "NoExactConfigMatch") &&
   mergeRejects (mergeRequestFixture
@@ -302,7 +302,7 @@ private def mergeMalformedCases : List (String × String) :=
     ("mixedCarrierValue", withInvalidCandidate
       (mergeSnapshotFixture 17 "1" ("[" ++ mergeExprFixture "add32(v64:1,2)" ++ "]"))),
     ("relationBeyondCarrier", withInvalidCandidate
-      (mergeSnapshotFixture 17 "1" "[{\"reg\":\"real32:10\",\"rel\":\"eqN33\",\"term\":\"1\"}]")),
+      (mergeSnapshotFixture 17 "1" "[{\"reg\":\"real:10:[0,32)\",\"rel\":\"eqN33\",\"term\":\"1\"}]")),
     ("mixedCarrierHelperArgs", withInvalidCandidate
       (mergeSnapshotFixture 17 "1" "[]" ("[" ++ mergePredicateFixture 7 1 "[\"v64:1\",\"2\"]" ++ "]"))),
     ("mixedCarrierHelperTerm", withInvalidCandidate
@@ -344,8 +344,8 @@ private def mergeOpaqueIdsCheck : Bool :=
       Lean.Json.getNat?).toOption == some 4294967298)
 
 private def mergeSharedRepresentationCheck : Bool :=
-  let state := "[{\"reg\":\"real64:10\",\"rel\":\"eq\",\"term\":\"v64:1\"}," ++
-    "{\"reg\":\"real32:0\",\"rel\":\"eq\",\"term\":\"1\"}]"
+  let state := "[{\"reg\":\"real:10:[0,64)\",\"rel\":\"eq\",\"term\":\"v64:1\"}," ++
+    "{\"reg\":\"real:0:[0,32)\",\"rel\":\"eq\",\"term\":\"1\"}]"
   ["0", "4294967297", "exit"].all fun loc =>
     let taken := mergeSnapshotFixture 42 loc state
     let candidate := mergeSnapshotFixture 17 loc state
@@ -381,11 +381,11 @@ private def mergeMixedPredicates : List Predicate :=
    .branch 1 .taken ⟨Term.V32 1, .ltu, Term.C32 4⟩,
    .ret (Term.V64 2),
    .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 4),
-   .packetWrite 9 2 0 32 (Term.V32 5)]
+   .packetWrite 9 0 32 (Term.V32 5)]
 
 private def mergeMixedRequest (a b : List Predicate) (model : String := "FiveClass") : String :=
-  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨Expr.nil, a, .empty⟩)
-    (mergeStateSnapshotFixture 17 "1" ⟨Expr.nil, b, .empty⟩)
+  mergeRequestFixture (mergeStateSnapshotFixture 42 "1" ⟨Expr.nil, a⟩)
+    (mergeStateSnapshotFixture 17 "1" ⟨Expr.nil, b⟩)
     (if model == "HelperOnly" then "[\"Helper\"]" else mergeFiveClassRequirements) model
 
 private def mergeMixedSetCheck : Bool :=
@@ -394,8 +394,8 @@ private def mergeMixedSetCheck : Bool :=
     mergeReuses (mergeMixedRequest ps ps.reverse "HelperOnly") 17 42 &&
     match mergePredicate [ps[0]!, ps[1]!] (ps.reverse ++ ps) with
     | .ok result => result == [ps[0]!, ps[1]!, ps[4]!, ps[3]!, ps[2]!] &&
-      ExactMerge.sameConfig ⟨.pos 1, ⟨Expr.nil, result, .empty⟩⟩
-        ⟨.pos 1, ⟨Expr.nil, ps, .empty⟩⟩
+      ExactMerge.sameConfig ⟨.pos 1, ⟨Expr.nil, result⟩⟩
+        ⟨.pos 1, ⟨Expr.nil, ps⟩⟩
     | .error _ => false
 
 private def mergeChangedClassFieldCheck : Bool :=
@@ -424,12 +424,11 @@ private def mergeChangedClassFieldCheck : Bool :=
       .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 6),
       .mapWrite 8 (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V64 4)]),
     (packetWrite, [
-      .packetWrite 10 2 0 32 (Term.V32 5),
-      .packetWrite 9 3 0 32 (Term.V32 5),
-      .packetWrite 9 2 1 32 (Term.V32 5),
-      .packetWrite 9 2 0 16 (Term.V32 5),
-      .packetWrite 9 2 0 32 (Term.V32 6),
-      .packetWrite 9 2 0 32 (Term.V64 5)])]
+      .packetWrite 10 0 32 (Term.V32 5),
+      .packetWrite 9 1 32 (Term.V32 5),
+      .packetWrite 9 0 16 (Term.V32 5),
+      .packetWrite 9 0 32 (Term.V32 6),
+      .packetWrite 9 0 32 (Term.V64 5)])]
   cases.all fun (original, variants) =>
     variants.all fun changed =>
       let a := mergeMixedPredicates ++ [original]
@@ -455,9 +454,9 @@ private def mergeMalformedMixedCases : List (String × String) :=
     ("mapKeyByteOverflow",
       "{\"kind\":\"mapWrite\",\"event\":8,\"mapWidth\":32,\"map\":\"1\",\"key\":[\"256\"],\"offset\":0,\"sourceWidth\":32,\"source\":\"1\"}"),
     ("packetSourceMixedCarrier",
-      "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32,\"source\":\"add32(v64:1,2)\"}"),
+      "{\"kind\":\"packetWrite\",\"event\":9,\"offset\":0,\"width\":32,\"source\":\"add32(v64:1,2)\"}"),
     ("packetMissingSource",
-      "{\"kind\":\"packetWrite\",\"event\":9,\"packet\":2,\"offset\":0,\"width\":32}")]
+      "{\"kind\":\"packetWrite\",\"event\":9,\"offset\":0,\"width\":32}")]
   badRows.map fun (name, row) =>
     let invalid := mergeSnapshotFixture 18 "1" "[]" ("[" ++ row ++ "]")
     -- All snapshots validate, even after an earlier equal candidate.
@@ -479,8 +478,8 @@ private def mergeJustDropOverwriteCheck : Bool :=
       (addStar .w32 (Term.V32 4) (Term.C32 14)))
     |>.insertConstraint (Expr.mkRel (Reg.real32 10) .geu
       (addStar .w32 (Term.V32 4) (Term.C32 18)))
-  let taken : SemState := ⟨common.insertEq a3 (Term.C32 43144), [], .empty⟩
-  let notTaken : SemState := ⟨common.insertEq a3 (Term.C32 129), [], .empty⟩
+  let taken : SemState := ⟨common.insertEq a3 (Term.C32 43144), []⟩
+  let notTaken : SemState := ⟨common.insertEq a3 (Term.C32 129), []⟩
   -- ADDI a3,zero,18 at wire loc17 contributes this local value effect.
   let localExprs := Expr.nil.insertEq a3 (Term.C32 18)
   match Node.applyLocal taken localExprs [], Node.applyLocal notTaken localExprs [] with
@@ -511,8 +510,8 @@ private def mergeComplementaryOverwriteCheck : Bool :=
   [Rel.eq, .ltu].all fun rel =>
     let condition := Expr.mkRel compared rel (Term.C32 10)
     let complement := Expr.mkRel compared rel.compl (Term.C32 10)
-    let taken : SemState := ⟨common.insertConstraint condition, [], .empty⟩
-    let notTaken : SemState := ⟨common.insertConstraint complement, [], .empty⟩
+    let taken : SemState := ⟨common.insertConstraint condition, []⟩
+    let notTaken : SemState := ⟨common.insertConstraint complement, []⟩
     let request (a b : SemState) := mergeRequestFixture (mergeStateSnapshotFixture 42 "17" a)
       (mergeStateSnapshotFixture 17 "17" b)
     let overwrite := Expr.nil.insertEq compared (Term.C32 18)

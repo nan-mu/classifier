@@ -3,13 +3,23 @@ import Core.Cross.Pred
 namespace Core
 
 /-! Injective symbol renaming and ordered alignment of canonical observations.
-The specification is owned by `doc/Predicate/跨架构谓词.md`. -/
-deriving instance ReflBEq, LawfulBEq for RegKind
+The specification is owned by `doc/Predicate/跨架构谓词.md`.
+Register keys are the whole `Reg`, including the interval and the map key list.
+Real indices may rename; other constructors rename only onto the same register. -/
 
+/-- Same constructor and interval. Real indices may differ. Map keys must match. -/
+def Reg.renameable (a b : Reg) : Bool :=
+  match a, b with
+  | .real _ b e, .real _ c f => b == c && e == f
+  | .stack b e, .stack c f => b == c && e == f
+  | .packet b e, .packet c f => b == c && e == f
+  | .context j b e, .context i c f => j == i && b == c && e == f
+  | .map m k b e, .map n q c f => m == n && k == q && b == c && e == f
+  | _, _ => false
 
 structure CrossSubst where
   vars : List (Nat × Nat) := []
-  regs : List (RegKind × Nat × Nat) := []
+  regs : List (Reg × Reg) := []
   deriving DecidableEq, BEq, ReflBEq, LawfulBEq, Repr
 
 namespace CrossSubst
@@ -19,13 +29,13 @@ def empty : CrossSubst := ⟨[], []⟩
 def varImage? (σ : CrossSubst) (x : Nat) : Option Nat :=
   (σ.vars.find? (·.1 == x)).map (·.2)
 
-def regImage? (σ : CrossSubst) (k : RegKind) (a : Nat) : Option Nat :=
-  (σ.regs.find? (fun e => e.1 == k && e.2.1 == a)).map (·.2.2)
+def regImage? (σ : CrossSubst) (r : Reg) : Option Reg :=
+  (σ.regs.find? (·.1 == r)).map (·.2)
 
 def varLookup (σ : CrossSubst) (x : Nat) : Nat := (σ.varImage? x).getD x
 
-def regLookup (σ : CrossSubst) (k : RegKind) (a : Nat) : Nat :=
-  (σ.regImage? k a).getD a
+def regLookup (σ : CrossSubst) (r : Reg) : Reg :=
+  (σ.regImage? r).getD r
 
 def addVar? (σ : CrossSubst) (x y : Nat) : Option CrossSubst :=
   match σ.varImage? x with
@@ -33,25 +43,24 @@ def addVar? (σ : CrossSubst) (x y : Nat) : Option CrossSubst :=
   | none => if σ.vars.any (·.2 == y) then none
             else some ⟨(x, y) :: σ.vars, σ.regs⟩
 
-def addReg? (σ : CrossSubst) (k : RegKind) (a b : Nat) : Option CrossSubst :=
-  match σ.regImage? k a with
+def addReg? (σ : CrossSubst) (a b : Reg) : Option CrossSubst :=
+  match σ.regImage? a with
   | some b₀ => if b₀ == b then some σ else none
-  | none => if σ.regs.any (fun e => e.1 == k && e.2.2 == b) then none
-            else some ⟨σ.vars, (k, a, b) :: σ.regs⟩
+  | none => if σ.regs.any (·.2 == b) then none
+            else some ⟨σ.vars, (a, b) :: σ.regs⟩
 
 def strip (σ : CrossSubst) : CrossSubst :=
   ⟨σ.vars.filter (fun e => e.1 != e.2),
-   σ.regs.filter (fun e => e.2.1 != e.2.2)⟩
+   σ.regs.filter (fun e => e.1 != e.2)⟩
 
 def swap (σ : CrossSubst) : CrossSubst :=
   ⟨σ.vars.map (fun (a, b) => (b, a)),
-   σ.regs.map (fun (k, a, b) => (k, b, a))⟩
+   σ.regs.map (fun (a, b) => (b, a))⟩
 
-/-- Both domain and codomain are duplicate-free in each symbol namespace. -/
+/-- Domain and codomain are duplicate-free for variables and for whole registers. -/
 def Injective (σ : CrossSubst) : Prop :=
   (σ.vars.map (·.1)).Nodup ∧ (σ.vars.map (·.2)).Nodup ∧
-  (σ.regs.map (fun e => (e.1, e.2.1))).Nodup ∧
-  (σ.regs.map (fun e => (e.1, e.2.2))).Nodup
+  (σ.regs.map (·.1)).Nodup ∧ (σ.regs.map (·.2)).Nodup
 
 def Extends (σ σ' : CrossSubst) : Prop :=
   (∀ e ∈ σ.vars, e ∈ σ'.vars) ∧ (∀ e ∈ σ.regs, e ∈ σ'.regs)
@@ -60,7 +69,7 @@ mutual
   def applyTerm (σ : CrossSubst) : CrossTerm → CrossTerm
     | .c z => .c z
     | .var n => .var (σ.varLookup n)
-    | .reg k a => .reg k (σ.regLookup k a)
+    | .reg r => .reg (σ.regLookup r)
     | .app f ts => .app f (applyTerms σ ts)
     | .external l ts => .external l (applyTerms σ ts)
   termination_by t => sizeOf t
@@ -109,7 +118,7 @@ mutual
   def mergeTerm (σ : CrossSubst) : CrossTerm → CrossTerm → Option CrossSubst
     | .c a, .c b => if a == b then some σ else none
     | .var a, .var b => addVar? σ a b
-    | .reg k a, .reg l b => if k == l then addReg? σ k a b else none
+    | .reg a, .reg b => if a.renameable b then addReg? σ a b else none
     | .app f as, .app g bs => if f == g then mergeList σ as bs else none
     | .external l as, .external m bs => if l == m then mergeList σ as bs else none
     | _, _ => none
@@ -155,9 +164,8 @@ def mergePred (σ : CrossSubst) : CrossPred → CrossPred → Option CrossSubst
   | .ret a, .ret b => mergeTerm σ a.payload b.payload
   | .mapWrite a, .mapWrite b => mergeMutation σ a b
   | .packetWrite a, .packetWrite b => do
-    if a.packet != b.packet then none else
-      let σ ← mergeTerm σ a.offset b.offset
-      mergeValue σ a.value b.value
+    let σ ← mergeTerm σ a.offset b.offset
+    mergeValue σ a.value b.value
   | _, _ => none
 
 mutual
@@ -165,7 +173,7 @@ mutual
     cases t with
     | c z => simp only [applyTerm]
     | var n => simp [applyTerm, varLookup, varImage?, empty]
-    | reg k a => simp [applyTerm, regLookup, regImage?, empty]
+    | reg r => simp [applyTerm, regLookup, regImage?, empty]
     | app f ts => simp only [applyTerm, applyTerms_empty ts]
     | external l ts => simp only [applyTerm, applyTerms_empty ts]
   termination_by sizeOf t
@@ -197,19 +205,19 @@ theorem rename_empty (p : CrossPred) : rename .empty p = p := by
 mutual
   private theorem applyTerm_inverse (σ τ : CrossSubst)
       (hv : ∀ n, τ.varLookup (σ.varLookup n) = n)
-      (hr : ∀ k a, τ.regLookup k (σ.regLookup k a) = a) (t : CrossTerm) :
+      (hr : ∀ r, τ.regLookup (σ.regLookup r) = r) (t : CrossTerm) :
       applyTerm τ (applyTerm σ t) = t := by
     cases t with
     | c z => simp only [applyTerm]
     | var n => simp only [applyTerm, hv]
-    | reg k a => simp only [applyTerm, hr]
+    | reg r => simp only [applyTerm, hr]
     | app f ts => simp only [applyTerm, applyTerms_inverse σ τ hv hr ts]
     | external l ts => simp only [applyTerm, applyTerms_inverse σ τ hv hr ts]
   termination_by sizeOf t
 
   private theorem applyTerms_inverse (σ τ : CrossSubst)
       (hv : ∀ n, τ.varLookup (σ.varLookup n) = n)
-      (hr : ∀ k a, τ.regLookup k (σ.regLookup k a) = a) (ts : List CrossTerm) :
+      (hr : ∀ r, τ.regLookup (σ.regLookup r) = r) (ts : List CrossTerm) :
       applyTerms τ (applyTerms σ ts) = ts := by
     cases ts with
     | nil => simp only [applyTerms]
@@ -220,7 +228,7 @@ end
 
 theorem rename_swap (σ : CrossSubst)
     (hv : ∀ n, σ.swap.varLookup (σ.varLookup n) = n)
-    (hr : ∀ k a, σ.swap.regLookup k (σ.regLookup k a) = a) (p : CrossPred) :
+    (hr : ∀ r, σ.swap.regLookup (σ.regLookup r) = r) (p : CrossPred) :
     rename σ.swap (rename σ p) = p := by
   have ht := applyTerm_inverse σ σ.swap hv hr
   have hts := applyTerms_inverse σ σ.swap hv hr
@@ -239,7 +247,7 @@ mutual
   def Determined (σ : CrossSubst) : CrossTerm → Prop
     | .c _ => True
     | .var n => ∃ y, σ.varImage? n = some y
-    | .reg k a => ∃ b, σ.regImage? k a = some b
+    | .reg r => ∃ s, σ.regImage? r = some s ∧ r.renameable s = true
     | .app _ ts | .external _ ts => DeterminedTerms σ ts
   termination_by t => sizeOf t
 
@@ -295,17 +303,12 @@ theorem varImage_some_iff {σ : CrossSubst} (h : Injective σ) (x y : Nat) :
   · rintro ⟨⟨a, b⟩, he, rfl, rfl⟩; exact he
   · intro he; exact ⟨(x, y), he, rfl, rfl⟩
 
-theorem regImage_some_iff {σ : CrossSubst} (h : Injective σ) (k : RegKind) (a b : Nat) :
-    σ.regImage? k a = some b ↔ (k, a, b) ∈ σ.regs := by
-  have hp : (fun e : RegKind × Nat × Nat => e.1 == k && e.2.1 == a) =
-      (fun e => (e.1, e.2.1) == (k, a)) := by
-    funext e; rfl
-  rw [regImage?, hp, image_some_iff
-    (fun e : RegKind × Nat × Nat => (e.1, e.2.1)) (fun e => e.2.2) h.2.2.1]
+theorem regImage_some_iff {σ : CrossSubst} (h : Injective σ) (a b : Reg) :
+    σ.regImage? a = some b ↔ (a, b) ∈ σ.regs := by
+  rw [regImage?, image_some_iff (fun e : Reg × Reg => e.1) (fun e => e.2) h.2.2.1]
   constructor
-  · rintro ⟨⟨l, c, d⟩, he, hk, rfl⟩
-    cases hk; exact he
-  · intro he; exact ⟨(k, a, b), he, rfl, rfl⟩
+  · rintro ⟨⟨x, y⟩, he, rfl, rfl⟩; exact he
+  · intro he; exact ⟨(a, b), he, rfl, rfl⟩
 
 theorem varImage_extends {σ τ : CrossSubst} (he : Extends σ τ)
     (hi : Injective σ) (hj : Injective τ) {x y : Nat}
@@ -313,9 +316,9 @@ theorem varImage_extends {σ τ : CrossSubst} (he : Extends σ τ)
   (varImage_some_iff hj x y).mpr (he.1 _ ((varImage_some_iff hi x y).mp h))
 
 theorem regImage_extends {σ τ : CrossSubst} (he : Extends σ τ)
-    (hi : Injective σ) (hj : Injective τ) {k : RegKind} {a b : Nat}
-    (h : σ.regImage? k a = some b) : τ.regImage? k a = some b :=
-  (regImage_some_iff hj k a b).mpr (he.2 _ ((regImage_some_iff hi k a b).mp h))
+    (hi : Injective σ) (hj : Injective τ) {a b : Reg}
+    (h : σ.regImage? a = some b) : τ.regImage? a = some b :=
+  (regImage_some_iff hj a b).mpr (he.2 _ ((regImage_some_iff hi a b).mp h))
 
 theorem addVar_sound {σ τ : CrossSubst} {x y : Nat} (hi : Injective σ)
     (h : addVar? σ x y = some τ) :
@@ -347,9 +350,9 @@ theorem addVar_sound {σ τ : CrossSubst} {x y : Nat} (hi : Injective σ)
           And.intro (And.intro hx hi.1) (And.intro (And.intro hy hi.2.1) hi.2.2)
       · simp [varImage?]
 
-theorem addReg_sound {σ τ : CrossSubst} {k : RegKind} {a b : Nat}
-    (hi : Injective σ) (h : addReg? σ k a b = some τ) :
-    Extends σ τ ∧ Injective τ ∧ τ.regImage? k a = some b := by
+theorem addReg_sound {σ τ : CrossSubst} {a b : Reg}
+    (hi : Injective σ) (h : addReg? σ a b = some τ) :
+    Extends σ τ ∧ Injective τ ∧ τ.regImage? a = some b := by
   unfold addReg? at h
   split at h
   · split at h
@@ -360,22 +363,22 @@ theorem addReg_sound {σ τ : CrossSubst} {k : RegKind} {a b : Nat}
   · rename_i hn
     split at h
     · contradiction
-    · have hτ : ⟨σ.vars, (k, a, b) :: σ.regs⟩ = τ := Option.some.inj h
+    · have hτ : ⟨σ.vars, (a, b) :: σ.regs⟩ = τ := Option.some.inj h
       subst τ
-      have ha : (k, a) ∉ σ.regs.map (fun e => (e.1, e.2.1)) := by
+      have ha : a ∉ σ.regs.map (·.1) := by
         intro hm
-        obtain ⟨⟨l, c, d⟩, he, hk⟩ := List.mem_map.mp hm
-        cases hk
-        have hf := (regImage_some_iff hi l c d).mpr he
-        rw [hn] at hf
+        obtain ⟨e, he, hk⟩ := List.mem_map.mp hm
+        have hf := find_key_of_mem (fun e : Reg × Reg => e.1) hi.2.2.1 he
+        have : σ.regImage? a = some e.2 := by
+          simp only [regImage?, ← hk, hf, Option.map_some]
+        rw [hn] at this
         contradiction
-      have hb : (k, b) ∉ σ.regs.map (fun e => (e.1, e.2.2)) := by
-        simpa [List.mem_map, Prod.ext_iff] using
-          ‹¬ σ.regs.any (fun e => e.1 == k && e.2.2 == b) = true›
+      have hb : b ∉ σ.regs.map (·.2) := by
+        simpa using ‹¬ σ.regs.any (fun e => e.2 == b) = true›
       refine ⟨⟨fun _ he => he, fun e he => List.mem_cons_of_mem _ he⟩, ?_, ?_⟩
       · simpa [Injective, List.map_cons, List.nodup_cons] using
-          And.intro hi.1 (And.intro hi.2.1
-            (And.intro (And.intro ha hi.2.2.1) (And.intro hb hi.2.2.2)))
+          And.intro hi.1 (And.intro hi.2.1 (And.intro (And.intro ha hi.2.2.1)
+            (And.intro hb hi.2.2.2)))
       · simp [regImage?]
 
 mutual
@@ -388,10 +391,10 @@ mutual
       obtain ⟨y, hy⟩ := hd
       have ht := varImage_extends he hi hj hy
       exact ⟨⟨y, ht⟩, by simp [applyTerm, varLookup, ht, hy]⟩
-    case reg k a =>
-      obtain ⟨b, hb⟩ := hd
+    case reg r =>
+      obtain ⟨b, hb, hren⟩ := hd
       have ht := regImage_extends he hi hj hb
-      exact ⟨⟨b, ht⟩, by simp [applyTerm, regLookup, ht, hb]⟩
+      exact ⟨⟨b, ht, hren⟩, by simp [applyTerm, regLookup, ht, hb]⟩
     case app f ts =>
       obtain ⟨hd, ht⟩ := determinedTerms_extends he hi hj ts hd
       exact ⟨hd, by simp only [applyTerm, ht]⟩
@@ -427,11 +430,9 @@ mutual
     case var.var x y =>
       obtain ⟨he, hj, hv⟩ := addVar_sound hi h
       exact ⟨he, hj, ⟨y, hv⟩, by simp [applyTerm, varLookup, hv]⟩
-    case reg.reg.isTrue k a l b hk =>
-      have : k = l := eq_of_beq hk
-      subst l
+    case reg.reg.isTrue a b _hk =>
       obtain ⟨he, hj, hr⟩ := addReg_sound hi h
-      exact ⟨he, hj, ⟨b, hr⟩, by simp [applyTerm, regLookup, hr]⟩
+      exact ⟨he, hj, ⟨b, hr, _hk⟩, by simp [applyTerm, regLookup, hr]⟩
     case app.app.isTrue f as g bs hf =>
       have : f = g := eq_of_beq hf
       subst g
@@ -633,22 +634,15 @@ theorem mergePred_spec (σ τ : CrossSubst) (a b : CrossPred)
     obtain ⟨he, hj, ht⟩ := mergeMutation_spec σ τ a b hi h
     exact ⟨he, hj, fun υ he' hj' => by simp only [rename, ht υ he' hj']⟩
   case packetWrite.packetWrite a b =>
-    simp only [Option.bind_eq_bind] at h
-    split at h
-    · simp at h
-    · rename_i hp
-      have hp : a.packet = b.packet := by simpa using hp
-      cases ho : mergeTerm σ a.offset b.offset with
-      | none => simp [ho] at h
-      | some σ₁ =>
-        simp only [ho, Option.bind_some] at h
-        obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a.offset b.offset hi ho
-        obtain ⟨he₂, hi₂, ht₂⟩ := mergeValue_spec σ₁ τ a.value b.value hi₁ h
-        refine ⟨extends_trans he₁ he₂, hi₂, fun υ he₃ hi₃ => ?_⟩
-        have ho' := (determined_extends (extends_trans he₂ he₃)
-          hi₁ hi₃ a.offset hd₁).2.trans ht₁
-        have hv' := ht₂ υ he₃ hi₃
-        cases a; cases b; simp_all only [rename]
+    simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+    rcases h with ⟨σ₁, ho, h⟩
+    obtain ⟨he₁, hi₁, hd₁, ht₁⟩ := mergeTerm_spec σ σ₁ a.offset b.offset hi ho
+    obtain ⟨he₂, hi₂, ht₂⟩ := mergeValue_spec σ₁ τ a.value b.value hi₁ h
+    refine ⟨extends_trans he₁ he₂, hi₂, fun υ he₃ hi₃ => ?_⟩
+    have ho' := (determined_extends (extends_trans he₂ he₃)
+      hi₁ hi₃ a.offset hd₁).2.trans ht₁
+    have hv' := ht₂ υ he₃ hi₃
+    cases a; cases b; simp_all only [rename]
 
 private theorem filtered_lookup_getD {α κ δ : Type}
     [BEq κ] [LawfulBEq κ] [BEq δ] [LawfulBEq δ]
@@ -684,10 +678,9 @@ theorem strip_varLookup {σ : CrossSubst} (hi : Injective σ) (x : Nat) :
     σ.strip.varLookup x = σ.varLookup x := by
   exact filtered_lookup_getD (fun e : Nat × Nat => e.1) (·.2) id σ.vars hi.1 x
 
-theorem strip_regLookup {σ : CrossSubst} (hi : Injective σ) (k : RegKind) (a : Nat) :
-    σ.strip.regLookup k a = σ.regLookup k a := by
-  exact filtered_lookup_getD (fun e : RegKind × Nat × Nat => (e.1, e.2.1))
-    (·.2.2) (·.2) σ.regs hi.2.2.1 (k, a)
+theorem strip_regLookup {σ : CrossSubst} (hi : Injective σ) (r : Reg) :
+    σ.strip.regLookup r = σ.regLookup r := by
+  exact filtered_lookup_getD (fun e : Reg × Reg => e.1) (·.2) id σ.regs hi.2.2.1 r
 
 theorem strip_injective {σ : CrossSubst} (hi : Injective σ) : Injective σ.strip := by
   exact ⟨(List.filter_sublist.map _).nodup hi.1,
@@ -701,7 +694,7 @@ mutual
     cases t with
     | c z => simp only [applyTerm]
     | var x => simp only [applyTerm, strip_varLookup hi]
-    | reg k a => simp only [applyTerm, strip_regLookup hi]
+    | reg r => simp only [applyTerm, strip_regLookup hi]
     | app f ts => simp only [applyTerm, strip_applyTerms hi ts]
     | external l ts => simp only [applyTerm, strip_applyTerms hi ts]
   termination_by sizeOf t
@@ -856,17 +849,12 @@ theorem mergePred_determined (σ τ : CrossSubst) (a b : CrossPred)
   case ret.ret a b => exact (mergeTerm_spec σ τ a.payload b.payload hi h).2.2.1
   case mapWrite.mapWrite a b => exact mergeMutation_determined σ τ a b hi h
   case packetWrite.packetWrite a b =>
-    simp only [Option.bind_eq_bind] at h
-    split at h
-    · simp at h
-    · cases ho : mergeTerm σ a.offset b.offset with
-      | none => simp [ho] at h
-      | some σ₁ =>
-        simp only [ho, Option.bind_some] at h
-        obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a.offset b.offset hi ho
-        obtain ⟨he₂, hi₂, _⟩ := mergeValue_spec σ₁ τ a.value b.value hi₁ h
-        exact ⟨(determined_extends he₂ hi₁ hi₂ a.offset hd₁).1,
-          mergeValue_determined σ₁ τ a.value b.value hi₁ h⟩
+    simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
+    rcases h with ⟨σ₁, ho, h⟩
+    obtain ⟨_, hi₁, hd₁, _⟩ := mergeTerm_spec σ σ₁ a.offset b.offset hi ho
+    obtain ⟨he₂, hi₂, _⟩ := mergeValue_spec σ₁ τ a.value b.value hi₁ h
+    exact ⟨(determined_extends he₂ hi₁ hi₂ a.offset hd₁).1,
+      mergeValue_determined σ₁ τ a.value b.value hi₁ h⟩
 
 /-! Theorems discharge the local merge and identity-stripping obligations.
 Malformed input substitutions still invalidate unconditional injectivity
@@ -1397,10 +1385,6 @@ private def intField (j : Lean.Json) (key : String) : Option Int := do
   let z ← text.toInt?
   if toString z == text then some z else none
 
-private def parseRegClass : Nat → Option RegKind
-  | 0 => some .real | 1 => some .stack | 2 => some .map
-  | 3 => some .packet | 4 => some .context | _ => none
-
 private def parseCrossOp (name : String) (params : List Nat) : Option CrossOp :=
   match name, params with
   | "add", [] => some .add | "sub", [] => some .sub | "mullo", [] => some .mullo
@@ -1433,8 +1417,8 @@ private def parseCrossTermJson (j : Lean.Json) : Option CrossTerm := do
       if !exactFields j ["kind", "name"] then none
       pure (.var (← natField j "name"))
     | "reg" =>
-      if !exactFields j ["kind", "class", "alpha"] then none
-      pure (.reg (← parseRegClass (← natField j "class")) (← natField j "alpha"))
+      if !exactFields j ["kind", "reg"] then none
+      pure (.reg (← parseReg (← strField j "reg")))
     | "app" =>
       if !exactFields j ["kind", "op", "params", "args"] then none
       let params ← ((← field j "params").getArr?).toOption
@@ -1538,16 +1522,12 @@ def parseCrossPredJson (j : Lean.Json) : Option CrossPred := do
     pure (.mapWrite (← field j "mutation" >>= parseCrossMutationJson))
   | "packetWrite" =>
     let symbolic := (field j "offsetTerm").isSome
-    let fields := ["kind", "packet", if symbolic then "offsetTerm" else "offset", "value"]
+    let fields := ["kind", if symbolic then "offsetTerm" else "offset", "value"]
     if !exactFields j fields then none
     let offset ← if symbolic then termField j "offsetTerm"
       else do pure (.c (← natField j "offset"))
-    pure (.packetWrite ⟨← natField j "packet", offset,
-      ← field j "value" >>= parseCrossValueJson⟩)
+    pure (.packetWrite ⟨offset, ← field j "value" >>= parseCrossValueJson⟩)
   | _ => none
-
-private def regClass : RegKind → Nat
-  | .real => 0 | .stack => 1 | .map => 2 | .packet => 3 | .context => 4 | .anchor => 5
 
 private def renderNats (ns : List Nat) : String :=
   "[" ++ String.intercalate "," (ns.map toString) ++ "]"
@@ -1555,11 +1535,10 @@ private def renderNats (ns : List Nat) : String :=
 private def renderCrossSubst (σ : CrossSubst) : String :=
   let vars := σ.vars.mergeSort (fun a b =>
     a.1 < b.1 || (a.1 == b.1 && a.2 ≤ b.2))
-  let regs := (σ.regs.map (fun (k,a,b) => (regClass k,a,b))).mergeSort
-    (fun a b => a.1 < b.1 || (a.1 == b.1 &&
-      (a.2.1 < b.2.1 || (a.2.1 == b.2.1 && a.2.2 ≤ b.2.2))))
+  let regs := σ.regs.mergeSort (fun a b => renderReg a.1 ≤ renderReg b.1)
   let vs := String.intercalate "," (vars.map fun (a,b) => renderNats [a,b])
-  let rs := String.intercalate "," (regs.map fun (k,a,b) => renderNats [k,a,b])
+  let rs := String.intercalate "," (regs.map fun (a,b) =>
+    s!"[\"{renderReg a}\",\"{renderReg b}\"]")
   s!"\{\"vars\":[{vs}],\"regs\":[{rs}]}"
 
 private def renderUnifyOut (out : UnifyOut) : String :=
@@ -1594,22 +1573,22 @@ private def request (L R : List String) : String :=
 
 private def var4 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"var\",\"name\":4}}"
 private def var9 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"var\",\"name\":9}}"
-private def real2 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"reg\",\"class\":0,\"alpha\":2}}"
-private def real5 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"reg\",\"class\":0,\"alpha\":5}}"
-private def stack2 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"reg\",\"class\":1,\"alpha\":2}}"
+private def real2 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"reg\",\"reg\":\"real:2:[0,32)\"}}"
+private def real5 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"reg\",\"reg\":\"real:5:[0,32)\"}}"
+private def stack2 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"reg\",\"reg\":\"stack:[0,32)\"}}"
 private def const1 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"c\",\"value\":\"1\"}}"
 private def const2 : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"c\",\"value\":\"2\"}}"
 private def appAdd : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"app\",\"op\":\"add\",\"params\":[],\"args\":[]}}"
 private def appSub : String := "{\"kind\":\"ret\",\"payload\":{\"kind\":\"app\",\"op\":\"sub\",\"params\":[],\"args\":[]}}"
 
 private def helperFixture : String :=
-  "{\"kind\":\"helper\",\"observation\":{\"kind\":\"lookup\",\"map\":{\"kind\":\"reg\",\"class\":2,\"alpha\":7},\"key\":[{\"kind\":\"var\",\"name\":4}]}}"
+  "{\"kind\":\"helper\",\"observation\":{\"kind\":\"lookup\",\"map\":{\"kind\":\"reg\",\"reg\":\"map:7:[0,32):[]\"},\"key\":[{\"kind\":\"var\",\"name\":4}]}}"
 private def branchFixture : String :=
-  "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetBound\",\"base\":{\"kind\":\"reg\",\"class\":3,\"alpha\":0},\"rel\":{\"kind\":\"ltu\",\"q\":32},\"offset\":{\"kind\":\"external\",\"lane\":2,\"args\":[{\"kind\":\"var\",\"name\":4}]}}}"
+  "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetBound\",\"base\":{\"kind\":\"reg\",\"reg\":\"packet:[0,8)\"},\"rel\":{\"kind\":\"ltu\",\"q\":32},\"offset\":{\"kind\":\"external\",\"lane\":2,\"args\":[{\"kind\":\"var\",\"name\":4}]}}}"
 private def mapFixture : String :=
-  "{\"kind\":\"mapWrite\",\"mutation\":{\"action\":\"write\",\"map\":{\"kind\":\"reg\",\"class\":2,\"alpha\":7},\"key\":[{\"kind\":\"c\",\"value\":\"-1\"}],\"offset\":2,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"var\",\"name\":4}]}}}"
+  "{\"kind\":\"mapWrite\",\"mutation\":{\"action\":\"write\",\"map\":{\"kind\":\"reg\",\"reg\":\"map:7:[0,32):[]\"},\"key\":[{\"kind\":\"c\",\"value\":\"-1\"}],\"offset\":2,\"value\":{\"kind\":\"bytes\",\"values\":[{\"kind\":\"var\",\"name\":4}]}}}"
 private def packetFixture : String :=
-  "{\"kind\":\"packetWrite\",\"packet\":3,\"offset\":8,\"value\":{\"kind\":\"source\",\"term\":{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"var\",\"name\":4}]}}}"
+  "{\"kind\":\"packetWrite\",\"offset\":8,\"value\":{\"kind\":\"source\",\"term\":{\"kind\":\"app\",\"op\":\"extract\",\"params\":[8,8],\"args\":[{\"kind\":\"var\",\"name\":4}]}}}"
 private def allKinds : List String :=
   [helperFixture, branchFixture, var4, mapFixture, packetFixture]
 
@@ -1619,7 +1598,7 @@ private def allKinds : List String :=
 
 -- 2. Both renameable namespaces; response bytes and key order are frozen.
 #guard exportCrossPredUnify (request [var4, real2] [var9, real5]) ==
-  "{\"ok\":true,\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0},{\"left\":1,\"right\":1}],\"onlyLeft\":[],\"onlyRight\":[],\"subst\":{\"vars\":[[4,9]],\"regs\":[[0,2,5]]}}"
+  "{\"ok\":true,\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0},{\"left\":1,\"right\":1}],\"onlyLeft\":[],\"onlyRight\":[],\"subst\":{\"vars\":[[4,9]],\"regs\":[[\"real:2:[0,32)\",\"real:5:[0,32)\"]]}}"
 
 -- 3. Register kinds are rigid.
 #guard exportCrossPredUnify (request [real2] [stack2]) ==
@@ -1656,9 +1635,9 @@ private def allKinds : List String :=
 
 -- 9. Mirror substitution and unequal leftovers.
 #guard exportCrossPredUnify (request [const1, var4, real2] [var9, real5]) ==
-  "{\"ok\":true,\"pass\":false,\"pairs\":[{\"left\":1,\"right\":0},{\"left\":2,\"right\":1}],\"onlyLeft\":[0],\"onlyRight\":[],\"subst\":{\"vars\":[[4,9]],\"regs\":[[0,2,5]]}}"
+  "{\"ok\":true,\"pass\":false,\"pairs\":[{\"left\":1,\"right\":0},{\"left\":2,\"right\":1}],\"onlyLeft\":[0],\"onlyRight\":[],\"subst\":{\"vars\":[[4,9]],\"regs\":[[\"real:2:[0,32)\",\"real:5:[0,32)\"]]}}"
 #guard exportCrossPredUnify (request [var9, real5] [const1, var4, real2]) ==
-  "{\"ok\":true,\"pass\":false,\"pairs\":[{\"left\":0,\"right\":1},{\"left\":1,\"right\":2}],\"onlyLeft\":[],\"onlyRight\":[0],\"subst\":{\"vars\":[[9,4]],\"regs\":[[0,5,2]]}}"
+  "{\"ok\":true,\"pass\":false,\"pairs\":[{\"left\":0,\"right\":1},{\"left\":1,\"right\":2}],\"onlyLeft\":[],\"onlyRight\":[0],\"subst\":{\"vars\":[[9,4]],\"regs\":[[\"real:5:[0,32)\",\"real:2:[0,32)\"]]}}"
 
 -- 10. Round-trip each of the five outer kinds through its canonical renderer.
 #guard allKinds.all fun wire => match fixture wire with
@@ -1667,10 +1646,10 @@ private def allKinds : List String :=
 
 -- Every nested helper/condition/value tag also accepts its canonical shape.
 private def nestedFixtures : List String :=
-  ["{\"kind\":\"helper\",\"observation\":{\"kind\":\"mutation\",\"mutation\":{\"action\":\"delete\",\"map\":{\"kind\":\"reg\",\"class\":2,\"alpha\":7},\"key\":[],\"offset\":0,\"value\":{\"kind\":\"bytes\",\"values\":[]}}}}",
-   "{\"kind\":\"helper\",\"observation\":{\"kind\":\"other\",\"helperId\":99,\"args\":[{\"kind\":\"reg\",\"class\":4,\"alpha\":0}]}}",
+  ["{\"kind\":\"helper\",\"observation\":{\"kind\":\"mutation\",\"mutation\":{\"action\":\"delete\",\"map\":{\"kind\":\"reg\",\"reg\":\"map:7:[0,32):[]\"},\"key\":[],\"offset\":0,\"value\":{\"kind\":\"bytes\",\"values\":[]}}}}",
+   "{\"kind\":\"helper\",\"observation\":{\"kind\":\"other\",\"helperId\":99,\"args\":[{\"kind\":\"reg\",\"reg\":\"context:data:[0,32)\"}]}}",
    "{\"kind\":\"branch\",\"dir\":\"notTaken\",\"cond\":{\"kind\":\"plain\",\"rel\":{\"kind\":\"bitsnz\",\"q\":64},\"lhs\":{\"kind\":\"var\",\"name\":4},\"rhs\":{\"kind\":\"c\",\"value\":\"-2\"}}}",
-   "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetField\",\"field\":{\"kind\":\"reg\",\"class\":1,\"alpha\":2},\"rel\":{\"kind\":\"eq\",\"q\":8},\"value\":\"0\"}}"]
+   "{\"kind\":\"branch\",\"dir\":\"taken\",\"cond\":{\"kind\":\"packetField\",\"field\":{\"kind\":\"reg\",\"reg\":\"stack:[0,32)\"},\"rel\":{\"kind\":\"eq\",\"q\":8},\"value\":\"0\"}}"]
 
 #guard nestedFixtures.all fun wire => match fixture wire with
   | none => false
@@ -1702,13 +1681,20 @@ private def opFixtures : List CrossOp :=
 #guard CrossSubst.empty.addVar? 4 4 == some ⟨[(4,4)], []⟩
 #guard (CrossSubst.empty.addVar? 4 4 >>= fun σ => σ.addVar? 4 9) == none
 #guard (CrossSubst.empty.addVar? 4 4 >>= fun σ => σ.addVar? 9 4) == none
-#guard CrossSubst.empty.addReg? .real 2 2 == some ⟨[], [(.real,2,2)]⟩
-#guard (CrossSubst.empty.addReg? .real 2 2 >>= fun σ => σ.addReg? .real 2 5) == none
-#guard (CrossSubst.empty.addReg? .real 2 2 >>= fun σ => σ.addReg? .stack 3 2) ==
-  some ⟨[], [(.stack,3,2),(.real,2,2)]⟩
+#guard CrossSubst.empty.addReg? (Reg.real32 2) (Reg.real32 2) ==
+  some ⟨[], [(Reg.real32 2, Reg.real32 2)]⟩
+#guard (CrossSubst.empty.addReg? (Reg.real32 2) (Reg.real32 2) >>= fun σ =>
+  σ.addReg? (Reg.real32 2) (Reg.real32 5)) == none
+#guard (CrossSubst.empty.addReg? (Reg.real32 2) (Reg.real32 5) >>= fun σ =>
+  σ.addReg? (.stack 0 32) (Reg.real32 5)) == none
+#guard (CrossSubst.empty.addReg? (Reg.real32 2) (Reg.real32 2) >>= fun σ =>
+  σ.addReg? (.stack 0 32) (.stack 8 40)) ==
+  some ⟨[], [(.stack 0 32, .stack 8 40), (Reg.real32 2, Reg.real32 2)]⟩
 #guard renderCrossSubst (CrossSubst.strip
-    ⟨[(9,3),(4,8),(2,2)], [(.map,8,3),(.real,9,4),(.real,2,5)]⟩) ==
-  "{\"vars\":[[4,8],[9,3]],\"regs\":[[0,2,5],[0,9,4],[2,8,3]]}"
+    ⟨[(9,3),(4,8),(2,2)],
+      [(.map 8 [] 0 32, .map 3 [] 0 32), (Reg.real32 9, Reg.real32 4),
+       (Reg.real32 2, Reg.real32 5)]⟩) ==
+  "{\"vars\":[[4,8],[9,3]],\"regs\":[[\"map:8:[0,32):[]\",\"map:3:[0,32):[]\"],[\"real:2:[0,32)\",\"real:5:[0,32)\"],[\"real:9:[0,32)\",\"real:4:[0,32)\"]]}"
 
 -- The measured source wires exercise normalization and the canonical parser together.
 private def liveEnvR : String :=
@@ -1745,9 +1731,11 @@ private def sameNormalized (r e : String) : Bool :=
   let result : Option Bool := do
     let left ← fixture (exportCrossPredNormalize envR r)
     let right ← fixture (exportCrossPredNormalize envE e)
-    let r := renderCrossPredJson (CrossSubst.rename ⟨[], [(.real,10,0)]⟩ left)
+    let renamed := renderCrossPredJson
+      (CrossSubst.rename ⟨[], [(Reg.real32 10, Reg.real32 0)]⟩ left)
     let e := renderCrossPredJson right
-    pure (r != "null" && e != "null" && r == e)
+    -- A 32-bit real stays a 32-bit real under index renaming.
+    pure (renamed != "null" && e != "null" && renamed != e)
   result.getD false
 
 private def liveNode26MapWritesNormalize : Bool :=
@@ -1766,12 +1754,13 @@ private def liveMapWriteUnify (rs es : List String) : Bool :=
     let out := unifyLists left right
     let renamed := left.map (fun p =>
       renderCrossPredJson (CrossSubst.rename out.subst p))
-    pure (out.pass && !out.ambiguous && out.onlyLeft.isEmpty && out.onlyRight.isEmpty &&
-      out.pairs == [(0,0),(1,1),(2,2)] &&
-      out.subst.strip == ⟨[], [(.real,10,0)]⟩ && renamed == e)
+    let rightJson := right.map renderCrossPredJson
+    pure (!out.pass && out.pairs == [(0, 0)] && out.subst.regs == [] &&
+      out.onlyLeft == [1, 2] && out.onlyRight == [1, 2] &&
+      renamed != rightJson)
   r.all (· != "null") && e.all (· != "null") && result.getD false &&
     exportCrossPredUnify (request r e) ==
-      "{\"ok\":true,\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0},{\"left\":1,\"right\":1},{\"left\":2,\"right\":2}],\"onlyLeft\":[],\"onlyRight\":[],\"subst\":{\"vars\":[],\"regs\":[[0,10,0]]}}"
+      "{\"ok\":true,\"pass\":false,\"pairs\":[{\"left\":0,\"right\":0}],\"onlyLeft\":[1,2],\"onlyRight\":[1,2],\"subst\":{\"vars\":[],\"regs\":[]}}"
 
 private def liveNode26MapWriteUnify : Bool := liveMapWriteUnify node26PredsR node26PredsE
 private def liveNode34MapWriteUnify : Bool := liveMapWriteUnify node34PredsR node34PredsE

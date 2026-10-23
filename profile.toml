@@ -36,7 +36,7 @@ expect = "weak"
 name = "firewall"
 elf = "firewall/firewall.elf"
 bpf = "firewall/bpf.o"
-expect = "weak"
+expect = "strict"
 
 [[program]]
 name = "fletcher32"
@@ -72,7 +72,7 @@ expect = "weak"
 name = "merge_try"
 elf = "merge_try/merge_try.elf"
 bpf = "merge_try/bpf.o"
-expect = "weak"
+expect = "strict"
 
 [[program]]
 name = "square"

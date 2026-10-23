@@ -43,7 +43,7 @@ private def parseRun (label : String) (j : Json) : Except String Run := do
     let predicates ← arrayField row "predicates" path
     let some state := parseSemStateJson (Json.arr exprs).compress (Json.arr predicates).compress
       | throw ("InvalidSnapshot:" ++ path)
-    if !state.exprs.all (fun e => ExactMerge.validRel e.reg.width e.rel && ExactMerge.validTerm e.term) then
+    if !state.exprs.all (fun e => ExactMerge.validRel (Width.ofBits e.reg.bits) e.rel && ExactMerge.validTerm e.term) then
       throw ("InvalidSnapshot:" ++ path)
     nodes := (id, ⟨loc, state⟩) :: nodes
   let mut edges := []

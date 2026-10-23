@@ -55,25 +55,16 @@ const REL_SYM: Record<string, string> = {
 };
 
 function shortReg(reg: ParsedReg): string {
-  if (reg.kind === "real" && reg.alpha != null) {
-    const n = Number(reg.alpha);
-    if (Number.isInteger(n) && RV32_ABI[n]) return RV32_ABI[n]!;
-    return `x${reg.alpha}`;
+  const iv = reg.lo != null && reg.hi != null ? `[${reg.lo},${reg.hi})` : "";
+  if (reg.kind === "real" && reg.index != null) {
+    const n = Number(reg.index);
+    const name = Number.isInteger(n) && RV32_ABI[n] ? RV32_ABI[n]! : `x${reg.index}`;
+    return `${name}${iv}`;
   }
-  if (reg.kind === "stack" && reg.alpha != null) return `sw${reg.alpha}`;
-  if (reg.kind === "context" && reg.alpha != null) {
-    const n = Number(reg.alpha);
-    // Default αCtx=0: six xdp_md cells at create (data, end, meta, ifindex, rxq, egress).
-    const ctxField = ["data", "end", "meta", "ifindex", "rxq", "egress"] as const;
-    if (Number.isInteger(n) && n >= 0 && n < ctxField.length) return `ctx.${ctxField[n]}`;
-    return `ctx${reg.alpha}`;
-  }
-  if ((reg.kind === "map" || reg.kind === "packet") && reg.resource != null && reg.offset != null) {
-    const tag = reg.kind === "map" ? "M" : "P";
-    return `${tag}[${reg.resource}+${reg.offset}]`;
-  }
-  if (reg.kind === "map" && reg.alpha != null) return `M:${reg.alpha}`;
-  if (reg.kind === "packet" && reg.alpha != null) return `P:${reg.alpha}`;
+  if (reg.kind === "stack") return `stack${iv}`;
+  if (reg.kind === "context" && reg.field != null) return `ctx.${reg.field}${iv}`;
+  if (reg.kind === "map" && reg.index != null) return `M${reg.index}${iv}`;
+  if (reg.kind === "packet") return `packet${iv}`;
   return reg.raw;
 }
 

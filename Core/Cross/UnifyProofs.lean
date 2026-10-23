@@ -220,8 +220,8 @@ theorem swap_swap (σ : CrossSubst) : σ.swap.swap = σ := by
   simp [swap, List.map_map, Function.comp_def]
 
 theorem swap_strip (σ : CrossSubst) : σ.strip.swap = σ.swap.strip := by
-  have hneq (a b : Nat) : (a != b) = (b != a) := by
-    exact bne_comm
+  have hneq {α : Type} [BEq α] [LawfulBEq α] (a b : α) : (a != b) = (b != a) :=
+    bne_comm
   cases σ
   simp [swap, strip, List.filter_map, Function.comp_def, hneq]
 
@@ -231,10 +231,56 @@ theorem swap_varImage_some {σ : CrossSubst} (hi : Injective σ) {x y : Nat}
   exact List.mem_map.mpr ⟨(x, y), (varImage_some_iff hi x y).mp h, rfl⟩
 
 theorem swap_regImage_some {σ : CrossSubst} (hi : Injective σ)
-    {k : RegKind} {a b : Nat} (h : σ.regImage? k a = some b) :
-    σ.swap.regImage? k b = some a := by
-  apply (regImage_some_iff (swap_injective hi) k b a).mpr
-  exact List.mem_map.mpr ⟨(k, a, b), (regImage_some_iff hi k a b).mp h, rfl⟩
+    {a b : Reg} (h : σ.regImage? a = some b) :
+    σ.swap.regImage? b = some a := by
+  apply (regImage_some_iff (swap_injective hi) b a).mpr
+  exact List.mem_map.mpr ⟨(a, b), (regImage_some_iff hi a b).mp h, rfl⟩
+
+private theorem renameable_symm {a b : Reg} (h : a.renameable b = true) :
+    b.renameable a = true := by
+  match a, b with
+  | .real _ b e, .real _ c f =>
+    simp [Reg.renameable, Bool.and_eq_true] at h ⊢
+    exact ⟨by simpa [beq_iff_eq, eq_comm] using h.1,
+      by simpa [beq_iff_eq, eq_comm] using h.2⟩
+  | .stack b e, .stack c f =>
+    simp [Reg.renameable, Bool.and_eq_true] at h ⊢
+    exact ⟨by simpa [beq_iff_eq, eq_comm] using h.1,
+      by simpa [beq_iff_eq, eq_comm] using h.2⟩
+  | .packet b e, .packet c f =>
+    simp [Reg.renameable, Bool.and_eq_true] at h ⊢
+    exact ⟨by simpa [beq_iff_eq, eq_comm] using h.1,
+      by simpa [beq_iff_eq, eq_comm] using h.2⟩
+  | .context j b e, .context i c f =>
+    simp only [Reg.renameable, Bool.and_eq_true] at h ⊢
+    exact ⟨⟨ContextField.beq_comm j i ▸ h.1.1, Nat.beq_comm b c ▸ h.1.2⟩,
+      Nat.beq_comm e f ▸ h.2⟩
+  | .map m k b e, .map n q c f =>
+    simp only [Reg.renameable, Bool.and_eq_true] at h ⊢
+    have hk : (q == k) = true := (beq_iff_eq).mpr (((beq_iff_eq).mp h.1.1.2).symm)
+    exact ⟨⟨⟨Nat.beq_comm m n ▸ h.1.1.1, hk⟩, Nat.beq_comm b c ▸ h.1.2⟩,
+      Nat.beq_comm e f ▸ h.2⟩
+  | .real _ _ _, .stack _ _
+  | .real _ _ _, .packet _ _
+  | .real _ _ _, .context _ _ _
+  | .real _ _ _, .map _ _ _ _
+  | .stack _ _, .real _ _ _
+  | .stack _ _, .packet _ _
+  | .stack _ _, .context _ _ _
+  | .stack _ _, .map _ _ _ _
+  | .packet _ _, .real _ _ _
+  | .packet _ _, .stack _ _
+  | .packet _ _, .context _ _ _
+  | .packet _ _, .map _ _ _ _
+  | .context _ _ _, .real _ _ _
+  | .context _ _ _, .stack _ _
+  | .context _ _ _, .packet _ _
+  | .context _ _ _, .map _ _ _ _
+  | .map _ _ _ _, .real _ _ _
+  | .map _ _ _ _, .stack _ _
+  | .map _ _ _ _, .packet _ _
+  | .map _ _ _ _, .context _ _ _ =>
+    exact False.elim (Bool.false_ne_true (by simpa [Reg.renameable] using h))
 
 mutual
   theorem determined_swap (σ : CrossSubst) (hi : Injective σ) (t : CrossTerm)
@@ -250,13 +296,14 @@ mutual
       · simpa only [applyTerm, varLookup, hy, Option.getD_some, Determined] using
           (show ∃ z, σ.swap.varImage? y = some z from ⟨x, hs⟩)
       · simp only [applyTerm, varLookup, hy, hs, Option.getD_some]
-    | reg k a =>
+    | reg r =>
       simp only [Determined] at hd
-      obtain ⟨b, hb⟩ := hd
+      obtain ⟨b, hb, hren⟩ := hd
       have hs := swap_regImage_some hi hb
       refine ⟨?_, ?_⟩
       · simpa only [applyTerm, regLookup, hb, Option.getD_some, Determined] using
-          (show ∃ c, σ.swap.regImage? k b = some c from ⟨a, hs⟩)
+          (show ∃ c, σ.swap.regImage? b = some c ∧ b.renameable c = true from
+            ⟨r, hs, renameable_symm hren⟩)
       · simp only [applyTerm, regLookup, hb, hs, Option.getD_some]
     | app f ts =>
       simp only [Determined] at hd
@@ -509,37 +556,38 @@ theorem addVar_complete (σ υ : CrossSubst) (hi : Injective σ) (hj : Injective
     · exact he.2
 
 theorem addReg_complete (σ υ : CrossSubst) (hi : Injective σ) (hj : Injective υ)
-    (he : Extends σ υ) (k : RegKind) (a b : Nat)
-    (hb : υ.regImage? k a = some b) :
-    ∃ τ, addReg? σ k a b = some τ ∧ Extends τ υ := by
-  cases ha : σ.regImage? k a with
+    (he : Extends σ υ) (a b : Reg)
+    (hb : υ.regImage? a = some b) :
+    ∃ τ, addReg? σ a b = some τ ∧ Extends τ υ := by
+  cases ha : σ.regImage? a with
   | some c =>
     have hc := regImage_extends he hi hj ha
     have hcb : c = b := Option.some.inj (hc.symm.trans hb)
     subst c
     exact ⟨σ, by simp [addReg?, ha], he⟩
   | none =>
-    have hf : σ.regs.any (fun e => e.1 == k && e.2.2 == b) = false := by
+    have hf : σ.regs.any (·.2 == b) = false := by
       apply List.any_eq_false.mpr
-      intro e hm htarget
-      obtain ⟨hk, ht⟩ : e.1 = k ∧ e.2.2 = b := by simpa using htarget
-      obtain ⟨l, c, d⟩ := e
-      dsimp at hk ht
-      subst l; subst d
-      have hc := (regImage_some_iff hj k c b).mpr (he.2 _ hm)
+      intro e hm
+      intro htarget
+      have htarget : e.2 = b := eq_of_beq htarget
+      obtain ⟨x, y⟩ := e
+      dsimp at htarget
+      subst y
+      have hx := (regImage_some_iff hj x b).mpr (he.2 _ hm)
       have hback := swap_regImage_some hj hb
-      have hback' := swap_regImage_some hj hc
-      have hca : c = a := Option.some.inj (hback'.symm.trans hback)
-      subst c
-      have hσ := (regImage_some_iff hi k a b).mpr hm
+      have hback' := swap_regImage_some hj hx
+      have hxa : x = a := Option.some.inj (hback'.symm.trans hback)
+      subst x
+      have hσ := (regImage_some_iff hi a b).mpr hm
       simp [ha] at hσ
-    refine ⟨⟨σ.vars, (k, a, b) :: σ.regs⟩, by simp [addReg?, ha, hf], ?_⟩
+    refine ⟨⟨σ.vars, (a, b) :: σ.regs⟩, by simp [addReg?, ha, hf], ?_⟩
     constructor
     · exact he.1
     · intro e hm
       rcases List.mem_cons.mp hm with hm | hm
       · subst e
-        exact (regImage_some_iff hj k a b).mp hb
+        exact (regImage_some_iff hj a b).mp hb
       · exact he.2 _ hm
 
 mutual
@@ -555,11 +603,11 @@ mutual
       obtain ⟨y, hy⟩ := hd
       obtain ⟨τ, hm, he'⟩ := addVar_complete σ υ hi hj he x y hy
       exact ⟨τ, by simpa [mergeTerm, applyTerm, varLookup, hy] using hm, he'⟩
-    | reg k a =>
+    | reg r =>
       simp only [Determined] at hd
-      obtain ⟨b, hb⟩ := hd
-      obtain ⟨τ, hm, he'⟩ := addReg_complete σ υ hi hj he k a b hb
-      exact ⟨τ, by simpa [mergeTerm, applyTerm, regLookup, hb] using hm, he'⟩
+      obtain ⟨b, hb, hren⟩ := hd
+      obtain ⟨τ, hm, he'⟩ := addReg_complete σ υ hi hj he r b hb
+      exact ⟨τ, by simp [mergeTerm, applyTerm, regLookup, hb, hren, hm], he'⟩
     | app f as =>
       simp only [Determined] at hd
       obtain ⟨τ, hm, he'⟩ := mergeList_complete σ υ as hi hj he hd
@@ -1399,37 +1447,6 @@ theorem unify_ambiguous_pairs_need_not_swap :
       (unifyLists R L).pairs = [(1, 0)] ∧
       (unifyLists R L).pairs ≠ (unifyLists L R).pairs.map Prod.swap := by
   decide +kernel
-
-/-- Compound keys use the ordinary recursive app case: packet-offset leaves and
-the bound context cell participate in renaming; width, packet id and strictness do not. -/
-theorem compoundPacket_apply (σ : CrossSubst) (p : CompoundPacketReg) :
-    CrossSubst.applyTerm σ p.toCross =
-      .app (.packetReg p.bytes) [.c p.κ, CrossSubst.applyTerm σ p.offset.toCross,
-        .reg .context (σ.regLookup .context p.endCtx),
-        .c (if p.strict then 1 else 0), .c p.byteIndex,
-        CrossSubst.applyTerm σ p.checkedEnd.toCross] := by
-  simp only [CompoundPacketReg.toCross, CrossSubst.applyTerm, CrossSubst.applyTerms]
-
-theorem compoundPacket_determined (σ : CrossSubst) (p : CompoundPacketReg) :
-    CrossSubst.Determined σ p.toCross ↔
-      CrossSubst.Determined σ p.offset.toCross ∧
-        (∃ b, σ.regImage? .context p.endCtx = some b) ∧
-        CrossSubst.Determined σ p.checkedEnd.toCross := by
-  simp [CompoundPacketReg.toCross, CrossSubst.Determined, CrossSubst.DeterminedTerms]
-
-theorem compoundPacket_merge (σ τ : CrossSubst) (a b : CompoundPacketReg)
-    (hi : σ.Injective) (h : CrossSubst.mergeTerm σ a.toCross b.toCross = some τ) :
-    CrossSubst.Extends σ τ ∧ τ.Injective ∧
-      CrossSubst.Determined τ a.toCross ∧ CrossSubst.applyTerm τ a.toCross = b.toCross :=
-  CrossSubst.mergeTerm_spec σ τ a.toCross b.toCross hi h
-
-theorem compoundPacket_determinedCond (σ : CrossSubst) (p : CompoundPacketReg)
-    (r : CrossRel) (z : Int) :
-    CrossSubst.DeterminedCond σ (.packetField p.toCross r z) ↔
-      CrossSubst.Determined σ p.offset.toCross ∧
-        (∃ b, σ.regImage? .context p.endCtx = some b) ∧
-        CrossSubst.Determined σ p.checkedEnd.toCross :=
-  compoundPacket_determined σ p
 
 end ObservationEqProofObligations
 end Core

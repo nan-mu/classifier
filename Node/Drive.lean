@@ -49,7 +49,7 @@ private def predRegs : Predicate → List Reg
   | .ret term => termRegs term
   | .mapWrite _ map key _ _ source =>
       termRegs map ++ key.flatMap termRegs ++ termRegs source
-  | .packetWrite _ _ _ _ source _ => termRegs source
+  | .packetWrite _ _ _ source => termRegs source
 
 /-- Registers overwritten again later in the interval, or present in some
 `E_i` and absent from every `O_i`. -/
@@ -77,7 +77,7 @@ private def place (progLen : Nat) (σ : SemState) (c : Candidate) :
       if k ≥ progLen then
         .error .unboundTarget
       else do
-        let state ← applyLocal σ c.E_k c.P_k c.memWrites
+        let state ← applyLocal σ c.E_k c.P_k
         pure (some (k, state))
 
 private def asStandard (loopsLeft : Option Nat) (placed : Option (Nat × SemState)) : DriveResult :=
@@ -154,7 +154,7 @@ private def eq0 (n : Nat) : List Expr :=
   [Expr.mkEq r0 (.const .w32 n)]
 
 private def state (n : Nat) : SemState :=
-  ⟨eq0 n, [], .empty⟩
+  ⟨eq0 n, []⟩
 
 private def go (j : Nat) (dir : Direction) : Candidate :=
   { dir, loc := .pos j, E_k := [], P_k := [] }

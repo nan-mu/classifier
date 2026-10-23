@@ -30,9 +30,6 @@ def justTxEntry : EntryParams := {
   tSp := Term.V64 0
   tData := Term.V32 4
   packetBytes := 128
-  αCtx := 0
-  κPacket := 0
-  φStack := 0
 }
 
 end EBPF

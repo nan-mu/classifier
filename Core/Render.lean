@@ -13,21 +13,24 @@ def renderWidth : Width → String
   | .w32 => "32"
   | .w64 => "64"
 
-def renderRegKind : RegKind → String
-  | .real => "real"
-  | .stack => "stack"
-  | .map => "map"
-  | .packet => "packet"
-  | .context => "context"
-  | .anchor => "anchor"
+def renderContextField : ContextField → String
+  | .data => "data"
+  | .dataEnd => "dataEnd"
+  | .dataMeta => "dataMeta"
+  | .ingressIfindex => "ingressIfindex"
+  | .rxQueueIndex => "rxQueueIndex"
+  | .egressIfindex => "egressIfindex"
+  | .ctx => "ctx"
+  | .sp => "sp"
+  | .packetBytes => "packetBytes"
+  | .imageBase => "imageBase"
+  | .helper => "helper"
+  | .wrapperReturn => "wrapperReturn"
+  | .lddw slot => s!"lddw:{slot}"
+  | .mapKeyBytes id => s!"mapKeyBytes:{id}"
+  | .mapValueBytes id => s!"mapValueBytes:{id}"
 
-def renderReg (r : Reg) : String :=
-  match r.compound with
-  | none => s!"{renderRegKind r.kind}{renderWidth r.width}:{r.alpha}"
-  | some p =>
-    let code := String.intercalate "." (p.offset.code.map toString)
-    let checked := String.intercalate "." (p.checkedEnd.code.map toString)
-    s!"packetCompound:{p.κ}:{p.bytes}:{p.endCtx}:{if p.strict then 1 else 0}:{p.byteIndex}:{code}:{checked}"
+def renderInterval (b e : Nat) : String := s!"[{b},{e})"
 
 def renderRel : Rel → String
   | .eq => "eq" | .ne => "ne"
@@ -72,8 +75,8 @@ def renderOp : Op → String
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
   | .packetRead bytes ending => s!"packetRead{bytes}_{ending}"
 
-/-- Shared term rendering preserves mixed-width constants and operator input carriers. -/
-private partial def renderTermAt (context : Width) : Term → String
+mutual
+private def renderTermAt (context : Width) : Term → String
   | .const w c =>
     if w == context then toString c else s!"c{renderWidth w}:{c}"
   | .var w ξ => s!"v{renderWidth w}:{ξ}"
@@ -93,6 +96,19 @@ private partial def renderTermAt (context : Width) : Term → String
     let body := String.intercalate "," (args.map (renderTermAt input))
     let body := s!"{name}({body})"
     if w == context then body else s!"t{renderWidth w}({body})"
+  termination_by t => sizeOf t
+
+def renderReg (r : Reg) : String :=
+  match r with
+  | .real idx b e => s!"real:{idx}:{renderInterval b e}"
+  | .stack b e => s!"stack:{renderInterval b e}"
+  | .packet b e => s!"packet:{renderInterval b e}"
+  | .context j b e => s!"context:{renderContextField j}:{renderInterval b e}"
+  | .map m key b e =>
+    let keys := String.intercalate ";" (key.map (renderTermAt .w32))
+    s!"map:{m}:{renderInterval b e}:[{keys}]"
+  termination_by sizeOf r
+end
 
 def renderTerm (t : Term) : String := renderTermAt t.width t
 def renderExprJson (e : Expr) : String :=
@@ -111,11 +127,8 @@ def renderPredicateJson : Predicate → String
   | .mapWrite event map key offset bits source =>
     let keys := String.intercalate "," (key.map fun t => s!"\"{renderTermAt .w32 t}\"")
     s!"\{\"kind\":\"mapWrite\",\"event\":{event},\"mapWidth\":{map.width.bits},\"map\":\"{renderTermAt map.width map}\",\"key\":[{keys}],\"offset\":{offset},\"sourceWidth\":{bits},\"source\":\"{renderTermAt .w32 source}\"}"
-  | .packetWrite event packet offset bits source compound =>
-    let destination := match compound with
-      | none => ""
-      | some p => s!",\"compound\":\"{renderReg (Reg.compoundPacket p)}\""
-    s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"packet\":{packet},\"offset\":{offset},\"width\":{bits},\"source\":\"{renderTermAt .w32 source}\"{destination}}"
+  | .packetWrite event offset bits source =>
+    s!"\{\"kind\":\"packetWrite\",\"event\":{event},\"offset\":{offset},\"width\":{bits},\"source\":\"{renderTermAt .w32 source}\"}"
 def renderConstraintExprJson (e : Expr) : String :=
   s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\",\"role\":\"constraint\"}"
 
@@ -126,33 +139,7 @@ def renderExprsJson (E : List Expr) : String :=
 def renderPredicatesJson (ps : List Predicate) : String :=
   String.intercalate "," (ps.map renderPredicateJson)
 
-def renderSliceJson : Slice → String
-  | .const w v => s!"\{\"k\":\"c\",\"w\":{w},\"v\":{v}}"
-  | .proj w source shift =>
-      s!"\{\"k\":\"p\",\"w\":{w},\"tw\":{source.width.bits},\"t\":\"{renderTermAt source.width source}\",\"s\":{shift}}"
-
-def renderSlotJson : BitSlot → String
-  | .stack => "\"slot\":\"stack\""
-  | .packet => "\"slot\":\"packet\""
-  | .context field => s!"\"slot\":\"context\",\"field\":{field}"
-  | .map id key =>
-      let keys := String.intercalate "," (key.slices.map renderSliceJson)
-      s!"\"slot\":\"map\",\"map\":{id},\"key\":[{keys}]"
-
-def renderMemJson (mem : Mem) : String :=
-  let cells := mem.canonical.cells
-  String.intercalate "," (cells.map fun (slot, ps) =>
-    let pieces := String.intercalate "," (ps.map fun (start, s) =>
-      s!"\{\"start\":{start},\"slice\":{renderSliceJson s}}")
-    s!"\{\"role\":\"mem\",{renderSlotJson slot},\"pieces\":[{pieces}]}")
-
 def renderSemStateJson (σ : SemState) : String × String :=
-  let exprs := renderExprsJson σ.exprs
-  let mem := renderMemJson σ.mem
-  let body :=
-    if exprs.isEmpty then mem
-    else if mem.isEmpty then exprs
-    else exprs ++ "," ++ mem
-  (body, renderPredicatesJson σ.predicates)
+  (renderExprsJson σ.exprs, renderPredicatesJson σ.predicates)
 
 end Core

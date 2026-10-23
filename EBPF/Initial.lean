@@ -14,9 +14,6 @@ structure EntryParams where
   tSp : Term
   tData : Term
   packetBytes : Nat
-  αCtx : Nat
-  κPacket : Nat
-  φStack : Nat
   deriving Repr, Inhabited
 
 private def leaf (w : Width) : Term → Bool
@@ -24,63 +21,61 @@ private def leaf (w : Width) : Term → Bool
   | .var v _ => v == w
   | _ => false
 
+private def put (E : List Expr) (j : ContextField) (t : Term) : Except RejectReason (List Expr) :=
+  match putContext E j t with
+  | some E => pure E
+  | none => throw .invalidEntry
+
 def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if !leaf .w64 p.tCtx || !leaf .w64 p.tSp || !leaf .w32 p.tData ||
       p.packetBytes ≥ (1 <<< 32) then throw .invalidEntry
-  let data ← match Tile.ofTerm p.tData 32 with
-    | .ok tile => pure tile
-    | .error _ => throw .invalidEntry
-  let ending ← match Tile.ofTerm (addStar .w32 p.tData (Term.C32 p.packetBytes)) 32 with
-    | .ok tile => pure tile
-    | .error _ => throw .invalidEntry
-  let mem ← match Mem.write .empty (.context 0) 0 data with
-    | .ok mem => pure mem
-    | .error _ => throw .invalidEntry
-  let mem ← match mem.write (.context 1) 0 ending with
-    | .ok mem => pure mem
-    | .error _ => throw .invalidEntry
-  pure ⟨Expr.nil.insertEq (Reg.real64 1) p.tCtx
-    |>.insertEq (Reg.real64 10) p.tSp, [], mem⟩
+  let E ← put Expr.nil .ctx p.tCtx
+  let E ← put E .sp p.tSp
+  let E ← put E .data p.tData
+  let E ← put E .dataEnd (addStar .w32 p.tData (Term.C32 p.packetBytes))
+  let E ← put E .packetBytes (Term.C32 p.packetBytes)
+  let E := E.insertEq (Reg.real64 1) p.tCtx |>.insertEq (Reg.real64 10) p.tSp
+  pure ⟨E, []⟩
 
 def entrySemState := buildE0
 
-def entryRows (p : EntryParams) : List (Anchor × Term) :=
-  [(.entry (.ctx .w64), p.tCtx), (.entry (.sp .w64), p.tSp), (.entry (.data .w32), p.tData),
-    (.entry .packetBytes, Term.C32 p.packetBytes), (.entry .alphaCtx, Term.C32 p.αCtx),
-    (.entry .packetId, Term.C32 p.κPacket), (.entry .stackId, Term.C32 p.φStack)]
-
 def entryParams? (E : List Expr) : Option EntryParams := do
-  let tCtx ← E.lookupEq (Reg.anchor (.entry (.ctx .w64)))
-  let tSp ← E.lookupEq (Reg.anchor (.entry (.sp .w64)))
-  let tData ← E.lookupEq (Reg.anchor (.entry (.data .w32)))
-  let packetBytes ← anchorNat E (.entry .packetBytes)
-  let αCtx ← anchorNat E (.entry .alphaCtx)
-  let κPacket ← anchorNat E (.entry .packetId)
-  let φStack ← anchorNat E (.entry .stackId)
-  if packetBytes ≥ (1 <<< 32) || αCtx ≥ (1 <<< 32) || κPacket ≥ (1 <<< 32) ||
-      φStack ≥ (1 <<< 32) then none
-  else some { tCtx, tSp, tData, packetBytes, αCtx, κPacket, φStack }
+  let tCtx ← contextValue E .ctx
+  let tSp ← contextValue E .sp
+  let tData ← contextValue E .data
+  let packetBytes ← contextNat E .packetBytes
+  if packetBytes ≥ (1 <<< 32) then none
+  else some { tCtx, tSp, tData, packetBytes }
 
-/-- Install entry anchors, then map layouts. A failed map install keeps the entry anchors. -/
+/-- Install the frozen entry facts, then map layouts. A failed map install keeps the entry facts. -/
 def host (p : EntryParams) (E : List Expr) (maps : List MapLayout := []) : List Expr :=
-  let withEntry := (Anchor.install E (entryRows p)).getD E
-  match Anchor.mapRows (maps.map (·.mapId)) (maps.map (·.keySize)) (maps.map (·.valueSize)) with
-  | some rows => (Anchor.install withEntry rows).getD withEntry
-  | none => withEntry
+  let withEntry := match buildE0 p with
+    | .ok σ =>
+      let fresh := σ.exprs.filter fun e =>
+        match e.reg with
+        | .real .. => !(E.bindings.any fun old => old.reg.overlaps e.reg)
+        | _ => true
+      E.override fresh
+    | .error _ => E
+  (Anchor.installMaps withEntry maps).getD withEntry
 
-#guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64, 3, 4, 5⟩ with
+#guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64⟩ with
   | .ok σ =>
-      match σ.mem.read (.context 0) 0 32, σ.mem.read (.context 1) 0 32 with
-      | .ok data, .ok ending =>
-          data == ⟨[.proj 32 (Term.V32 2) 0]⟩ &&
-            ending == ⟨[.proj 32 (addStar .w32 (Term.V32 2) (Term.C32 64)) 0]⟩ &&
-            (σ.exprs.lookupEq (Reg.ctx32 3)).isNone && σ.predicates.isEmpty
-      | _, _ => false
+      contextValue σ.exprs .data == some (Term.V32 2) &&
+        contextValue σ.exprs .dataEnd ==
+          some (addStar .w32 (Term.V32 2) (Term.C32 64)) &&
+        contextValue σ.exprs .ctx == some (Term.V64 1) &&
+        contextValue σ.exprs .sp == some (Term.V64 0) &&
+        contextNat σ.exprs .packetBytes == some 64 &&
+        σ.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1) &&
+        σ.exprs.lookupEq (Reg.real64 10) == some (Term.V64 0) &&
+        (contextValue σ.exprs .dataMeta).isNone &&
+        σ.predicates.isEmpty
   | _ => false
-#guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V64 2, 64, 3, 4, 5⟩ with
+#guard match buildE0 ⟨Term.V64 1, Term.V64 0, Term.V64 2, 64⟩ with
   | .error .invalidEntry => true
   | _ => false
-#guard match buildE0 ⟨Term.V64 1, Term.V64 0, .const .w32 (1 <<< 32), 64, 3, 4, 5⟩ with
+#guard match buildE0 ⟨Term.V64 1, Term.V64 0, .const .w32 (1 <<< 32), 64⟩ with
   | .error .invalidEntry => true
   | _ => false
 
