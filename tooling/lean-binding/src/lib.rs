@@ -662,7 +662,7 @@ pub mod cross_pred {
 
         #[test]
         fn cross_pred_unify_var_rename_passes() {
-            let request = r#"{"left":[{"kind":"ret","payload":{"kind":"var","name":4}},{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":2}}],"right":[{"kind":"ret","payload":{"kind":"var","name":9}},{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":5}}]}"#;
+            let request = r#"{"left":[{"kind":"ret","payload":{"kind":"var","name":4}},{"kind":"ret","payload":{"kind":"reg","reg":"real:2:[0,32)"}}],"right":[{"kind":"ret","payload":{"kind":"var","name":9}},{"kind":"ret","payload":{"kind":"reg","reg":"real:5:[0,32)"}}]}"#;
             assert_eq!(
                 unify(request),
                 Some(UnifyResult {

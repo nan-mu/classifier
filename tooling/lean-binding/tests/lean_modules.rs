@@ -114,15 +114,12 @@ fn rv32_expand_esp32c3_root_and_opening() {
     assert_eq!(exprs.len(), 14);
     assert!(exprs
         .iter()
-        .any(|e| e["reg"] == "real32:0" && e["term"] == "0"));
-    assert!(exprs.iter().any(|e| {
-        e["role"] == "mem"
-            && e["slot"] == "context"
-            && e["field"] == 0
-            && e["pieces"][0]["slice"]["t"] == "v32:4"
-    }));
+        .any(|e| e["reg"] == "real:0:[0,32)" && e["term"] == "0"));
+    assert!(exprs
+        .iter()
+        .any(|e| e["reg"] == "context:data:[0,32)" && e["term"] == "v32:4"));
 
-    // After first C_LW a2,0(a0): real32:12 = EntryVar.data (v32:4).
+    // After first C_LW a2,0(a0): real:12:[0,32) = EntryVar.data (v32:4).
     let step1: serde_json::Value =
         serde_json::from_str(&rv32::expand_snapshot(1, 48)).expect("json");
     assert_eq!(step1["status"], "running");
@@ -131,7 +128,7 @@ fn rv32_expand_esp32c3_root_and_opening() {
     let exprs1 = n1[1]["exprs"].as_array().expect("exprs");
     assert!(exprs1
         .iter()
-        .any(|e| e["reg"] == "real32:12" && e["term"] == "v32:4"));
+        .any(|e| e["reg"] == "real:12:[0,32)" && e["term"] == "v32:4"));
 
     // Short budget: after B successful expands fuel is 0 and work remains (running);
     // the next expand observes LimitExceeded. Exit is unreachable on 48 insns.
@@ -247,9 +244,11 @@ mod stateless_head_ffi {
             ))
             .unwrap();
             assert_eq!(again["predicates"], composed["predicates"]);
-            assert!(again["exprs"].as_array().unwrap().iter().all(
-                |e| e["role"] != "constraint" || e["reg"] != "real:10:[0,32)"
-            ));
+            assert!(again["exprs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["role"] != "constraint" || e["reg"] != "real:10:[0,32)"));
             assert_eq!(*successor, saved);
         }
         assert_eq!(
