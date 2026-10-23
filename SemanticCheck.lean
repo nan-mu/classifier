@@ -43,7 +43,7 @@ private def ebpfValue (name : String) (word : UInt64) (E : List Expr)
   let c ← one name (ebpf #[word, 0x95] E)
   let σ ← liftResult name (applyLocal ⟨E, []⟩ c.E_k c.P_k)
   expect (name ++ " successor") (c.dir, c.loc) (.ok, .pos 1)
-  expect name (σ.exprs.lookupEq (Reg.real64 r)) (some (Term.C64 expected))
+  expect name (readInterval σ.exprs (Reg.real64 r)) (some (Term.C64 expected))
 
 private def stackBit (unit : Nat) : Nat := (508 - 4 * unit) * 8
 
@@ -260,37 +260,37 @@ private def atomicChecks : Except String Unit := do
       else seedWord root.exprs 0 10
     for (imm, expected) in [(0x00, 13), (0x01, 13), (0x40, 11), (0x41, 11),
         (0x50, 2), (0x51, 2), (0xa0, 9), (0xa1, 9), (0xe1, 3)] do
-      let E := root.exprs.insertEq (Reg.real64 1) (Term.C64 3)
+      let E := seeded.insertEq (Reg.real64 1) (Term.C64 3)
       let c ← one s!"atomic/{opcode}/{imm}"
-        (ebpf #[raw opcode 10 1 off imm, 0x95] (E.override seeded))
+        (ebpf #[raw opcode 10 1 off imm, 0x95] E)
       let σ ← liftResult "atomic compose"
-        (applyLocal ⟨E.override seeded, []⟩ c.E_k c.P_k)
+        (applyLocal ⟨E, []⟩ c.E_k c.P_k)
       expect s!"atomic memory/{opcode}/{imm}"
         (readWord σ.exprs (if high then 1 else 0)) (some expected)
-      expect s!"atomic old source/{opcode}/{imm}" (σ.exprs.lookupEq (Reg.real64 1))
+      expect s!"atomic old source/{opcode}/{imm}" (readInterval σ.exprs (Reg.real64 1))
         (some (Term.C64 (if imm % 2 == 1 then 10 else 3)))
       if high then expect "atomic DW high half" (readWord σ.exprs 0) (some 0)
     for (expectedOld, next) in [(10, 3), (9, 10)] do
-      let E := root.exprs.insertEq (Reg.real64 0) (Term.C64 expectedOld)
+      let E := seeded.insertEq (Reg.real64 0) (Term.C64 expectedOld)
         |>.insertEq (Reg.real64 1) (Term.C64 3)
-      let c ← one "CMPXCHG" (ebpf #[raw opcode 10 1 off 0xf1, 0x95] (E.override seeded))
-      let σ ← liftResult "CMPXCHG compose" (applyLocal ⟨E.override seeded, []⟩ c.E_k c.P_k)
+      let c ← one "CMPXCHG" (ebpf #[raw opcode 10 1 off 0xf1, 0x95] E)
+      let σ ← liftResult "CMPXCHG compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
       expect "CMPXCHG simultaneous old memory and register"
-        (readWord σ.exprs (if high then 1 else 0), c.E_k.lookupEq (Reg.real64 0))
+        (readWord σ.exprs (if high then 1 else 0), readInterval c.E_k (Reg.real64 0))
         (some next, some (Term.C64 10))
-  let E := root.exprs.insertEq (Reg.real64 1) (Term.C64 1)
   let carried ← seedWord (← seedWord root.exprs 1 4294967295) 0 1
-  let c ← one "DW-carry" (ebpf #[raw 0xdb 10 1 (-8) 1, 0x95] (E.override carried))
-  let σ ← liftResult "DW-carry compose" (applyLocal ⟨E.override carried, []⟩ c.E_k c.P_k)
+  let E := carried.insertEq (Reg.real64 1) (Term.C64 1)
+  let c ← one "DW-carry" (ebpf #[raw 0xdb 10 1 (-8) 1, 0x95] E)
+  let σ ← liftResult "DW-carry compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
   expect "DW single 64-bit carry and old fetch"
-    (readWord σ.exprs 1, readWord σ.exprs 0, σ.exprs.lookupEq (Reg.real64 1))
+    (readWord σ.exprs 1, readWord σ.exprs 0, readInterval σ.exprs (Reg.real64 1))
     (some 0, some 2, some (Term.C64 8589934591))
-  let E := root.exprs.insertEq (Reg.real64 0) (Term.C64 10)
   let same ← seedWord root.exprs 0 10
-  let c ← one "CMPXCHG same r0 source" (ebpf #[raw 0xc3 10 0 (-4) 0xf1, 0x95] (E.override same))
-  let σ ← liftResult "CMPXCHG same compose" (applyLocal ⟨E.override same, []⟩ c.E_k c.P_k)
+  let E := same.insertEq (Reg.real64 0) (Term.C64 10)
+  let c ← one "CMPXCHG same r0 source" (ebpf #[raw 0xc3 10 0 (-4) 0xf1, 0x95] E)
+  let σ ← liftResult "CMPXCHG same compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
   expect "CMPXCHG reads source before writing r0"
-    (readWord σ.exprs 0, c.E_k.lookupEq (Reg.real64 0))
+    (readWord σ.exprs 0, readInterval c.E_k (Reg.real64 0))
     (some 10, some (Term.C64 10))
   let E := Expr.nil.insertEq (Reg.real64 2) (Term.C64 4092)
   let aliased ← seedWord Expr.nil 0 10
@@ -298,7 +298,7 @@ private def atomicChecks : Except String Unit := do
     (ebpf #[raw 0xc3 2 2 0 0xe1, 0x95] (E.override aliased) (p := { entry with tSp := Term.C64 4096 }))
   let σ ← liftResult "XCHG compose" (applyLocal ⟨E.override aliased, []⟩ c.E_k c.P_k)
   expect "XCHG address and source from one pre-state"
-    (readWord σ.exprs 0, c.E_k.lookupEq (Reg.real64 2))
+    (readWord σ.exprs 0, readInterval c.E_k (Reg.real64 2))
     (some 4092, some (Term.C64 10))
   let E := root.exprs.insertEq (Reg.real64 2) (Term.C64 1)
   reject "atomic missing old memory" (ebpf #[raw 0xc3 10 2 (-4) 1, 0x95] E) .undefinedSrc
@@ -372,10 +372,11 @@ private def helperChecks : Except String Unit := do
   let key64 : Term := .app .w64 (.add .w64) [Term.V64 0, Term.C64 18446744073709551608]
   let value64 : Term := .app .w64 (.add .w64) [Term.V64 0, Term.C64 18446744073709551612]
   let maps : List MapLayout := [⟨42, 3, 2⟩]
-  let E := root.exprs.insertEq (Reg.real64 1) (Term.C64 42)
-    |>.insertEq (Reg.real64 2) key64
-    |>.insertEq (Reg.real64 3) value64
-    |>.insertEq (Reg.real64 4) (Term.C64 0)
+  let install (base : List Expr) : List Expr :=
+    base.insertEq (Reg.real64 1) (Term.C64 42)
+      |>.insertEq (Reg.real64 2) key64
+      |>.insertEq (Reg.real64 3) value64
+      |>.insertEq (Reg.real64 4) (Term.C64 0)
   let full ← seedWord (← seedWord root.exprs 1 0x44332211) 0 0x0000bbaa
   let changed ← seedWord full 1 0x00030201
   let valueOnly ← seedWord root.exprs 0 0x0000bbaa
@@ -386,12 +387,12 @@ private def helperChecks : Except String Unit := do
       (2, HelperKind.update, [Term.C64 42, key64, value64, Term.C64 0],
         [Term.C64 17, Term.C64 34, Term.C64 51, Term.C64 170, Term.C64 187])] do
     let c ← one s!"eBPF helper/{id}"
-      (ebpf #[raw 0x85 0 0 0 id, 0x95] (E.override full) (maps := maps))
+      (ebpf #[raw 0x85 0 0 0 id, 0x95] (install full) (maps := maps))
     expect s!"eBPF helper frozen/{id}" c.P_k [.helper 70 kind (abi ++ tail)]
     expect s!"eBPF helper return ABI-only/{id}" (c.E_k.lookupEq (Reg.real64 0))
       (some (.app .w64 (.externalResult 70 0) (Term.C64 id :: abi)))
     let c' ← one "eBPF helper changed snapshot"
-      (ebpf #[raw 0x85 0 0 0 id, 0x95] (E.override changed) (maps := maps))
+      (ebpf #[raw 0x85 0 0 0 id, 0x95] (install changed) (maps := maps))
     let changedTail := [Term.C64 1, Term.C64 2, Term.C64 3] ++
       (if id == 2 then [Term.C64 170, Term.C64 187] else [])
     expect "eBPF helper current bytes" c'.P_k [.helper 70 kind (abi ++ changedTail)]
@@ -399,10 +400,10 @@ private def helperChecks : Except String Unit := do
   let prefix64 := [Term.C64 42, key64, value64, Term.C64 0]
   for incomplete in [valueOnly, keyOnly] do
     let c ← one "eBPF update incomplete"
-      (ebpf #[raw 0x85 0 0 0 2, 0x95] (E.override incomplete) (maps := maps))
+      (ebpf #[raw 0x85 0 0 0 2, 0x95] (install incomplete) (maps := maps))
     expect "eBPF update no half tail" c.P_k [.helper 70 .update prefix64]
   let c ← one "eBPF delete missing key"
-    (ebpf #[raw 0x85 0 0 0 3, 0x95] (E.override valueOnly) (maps := maps))
+    (ebpf #[raw 0x85 0 0 0 3, 0x95] (install valueOnly) (maps := maps))
   expect "eBPF delete missing key prefix" c.P_k [.helper 70 .delete [Term.C64 42, key64]]
   let key32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 3]
   let value32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 4]
@@ -673,24 +674,24 @@ private def ffiChecks : Except String Unit := do
     ("LDDW missing upper", #[raw 0x18 0 0 0 7], 0, "[]", "LocalReject"),
     ("LDDW malformed upper", #[raw 0x18 0 0 0 7, raw 0 1 0, 0x95], 0, "[]", "LocalReject"),
     ("branch all-or-nothing", #[raw 0x15 0 0 99 7, 0x95], 0,
-      "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"v64:8\"}]", "UnboundTarget"),
+      "[{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"v64:8\"}]", "UnboundTarget"),
     ("branch continuation all-or-nothing", #[raw 0x15 0 0 1 7, raw 0x18 1 0 0 0, 0, 0x95], 0,
-      "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"v64:8\"}]", "UnboundTarget")]
+      "[{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"v64:8\"}]", "UnboundTarget")]
   for (name, words, j, E, reason) in failures do
     expectFailure ("String FFI reject/" ++ name) (call words 70 j E "[]") reason
-  let E := "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"1\"},{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"2\"}]"
+  let E := "[{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"1\"},{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"2\"}]"
   let some dual := parseSemStateJson E "[]" | throw "String FFI dual eq: parse failed"
   expect "String FFI dual eq value" (dual.exprs.lookupEq (Reg.real64 0)) (some (Term.C64 1))
   expect "String FFI dual eq constraint" dual.exprs.constraints
     [⟨Reg.real64 0, .eq, Term.C64 2⟩]
   expectStep "String FFI MOV after dual eq" (call #[raw 0xb7 0 0 0 7, 0x95] 70 0 E "[]")
     "1" [(Reg.real64 0, Term.C64 7)] []
-  let E := "[{\"reg\":\"real64:0\",\"rel\":\"eq\",\"term\":\"7\"}]"
+  let E := "[{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"7\"}]"
   expectStep "String FFI EXIT frozen return" (call #[0x95] 70 0 E "[]")
     "exit" [(Reg.real64 0, Term.C64 7)] [.ret (Term.C64 7)]
   expectStep "RV String FFI actual open M"
     (RV32.exportRv32ExpandStep #[rvWord 5, 0x0001] 70 0
-      "[{\"reg\":\"real32:8\",\"rel\":\"eq\",\"term\":\"v32:41\"},{\"reg\":\"real32:9\",\"rel\":\"eq\",\"term\":\"v32:42\"}]" "[]")
+      "[{\"reg\":\"real:8:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:41\"},{\"reg\":\"real:9:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:42\"}]" "[]")
     "1" [(Reg.real32 8, Term.V32 41), (Reg.real32 9, Term.V32 42),
       (Reg.real32 10, .app .w32 (.udiv .w32 4294967295) [Term.V32 41, Term.V32 42])] []
   expectFailure "RV String FFI illegal all-or-nothing"
