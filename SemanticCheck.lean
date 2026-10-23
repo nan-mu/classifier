@@ -625,8 +625,8 @@ private def alignmentChecks : Except String Unit := do
   expect "alignment policies unmatched right"
     (← (← arrField result "onlyRight").toList.mapM Json.getNat?) [0]
 
-private def expectStep (name response location : String) (bindings : List (Reg × Term))
-    (predicates : List Predicate) : Except String Unit := do
+private def expectStep (name response parentExprs parentPreds location : String)
+    (bindings : List (Reg × Term)) (predicates : List Predicate) : Except String Unit := do
   let result ← Json.parse response
   expect (name ++ "/status") (← strField result "status") "ok"
   expectJson (name ++ "/reason") (← field result "reason") Json.null
@@ -634,10 +634,12 @@ private def expectStep (name response location : String) (bindings : List (Reg �
   let [successor] := successors.toList | throw s!"{name}: expected one successor, got {successors.size}"
   expect (name ++ "/direction") (← strField successor "dir") "OK"
   expect (name ++ "/location") (← strField successor "loc") location
-  let exprs ← field successor "exprs"
-  let preds ← field successor "predicates"
-  let some state := parseSemStateJson exprs.compress preds.compress
-    | throw s!"{name}: invalid successor state"
+  let some parent := parseSemStateJson parentExprs parentPreds
+    | throw s!"{name}: invalid parent"
+  let some step := parseSemStateJson (← field successor "writes").compress
+      (← field successor "observations").compress
+    | throw s!"{name}: invalid step increment"
+  let state := update parent step
   expect (name ++ "/binding domain") state.exprs.bindings.length bindings.length
   for (reg, term) in bindings do
     expect (name ++ s!"/{reprStr reg}") (state.exprs.lookupEq reg) (some term)
@@ -654,10 +656,10 @@ private def ffiChecks : Except String Unit := do
   let call := fun words event j E P =>
     EBPF.exportEbpfExpandStep words event j E P
   expectStep "String FFI MOV actual state" (call #[raw 0xb7 0 0 0 7, 0x95] 70 0 "[]" "[]")
-    "1" [(Reg.real64 0, Term.C64 7)] []
+    "[]" "[]" "1" [(Reg.real64 0, Term.C64 7)] []
   expectStep "String FFI LDDW value and raw-slot successor"
     (call #[raw 0x18 0 0 0 0x55667788, raw 0 0 0 0 0x11223344, 0x95] 70 0 "[]" "[]")
-    "2" [(Reg.real64 0, Term.C64 0x1122334455667788)] []
+    "[]" "[]" "2" [(Reg.real64 0, Term.C64 0x1122334455667788)] []
   let failures : List (String × Array UInt64 × UInt32 × String × String) := [
     ("illegal opcode", #[0, 0x95], 0, "[]", "LocalReject"),
     ("r10 destination", #[raw 0xb7 10 0 0 7, 0x95], 0, "[]", "LocalReject"),
@@ -682,14 +684,14 @@ private def ffiChecks : Except String Unit := do
   expect "String FFI dual eq constraint" dual.exprs.constraints
     [⟨Reg.real64 0, .eq, Term.C64 2⟩]
   expectStep "String FFI MOV after dual eq" (call #[raw 0xb7 0 0 0 7, 0x95] 70 0 E "[]")
-    "1" [(Reg.real64 0, Term.C64 7)] []
+    E "[]" "1" [(Reg.real64 0, Term.C64 7)] []
   let E := "[{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"7\"}]"
   expectStep "String FFI EXIT frozen return" (call #[0x95] 70 0 E "[]")
-    "exit" [(Reg.real64 0, Term.C64 7)] [.ret (Term.C64 7)]
+    E "[]" "exit" [(Reg.real64 0, Term.C64 7)] [.ret (Term.C64 7)]
+  let rvParent := "[{\"reg\":\"real:8:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:41\"},{\"reg\":\"real:9:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:42\"}]"
   expectStep "RV String FFI actual open M"
-    (RV32.exportRv32ExpandStep #[rvWord 5, 0x0001] 70 0
-      "[{\"reg\":\"real:8:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:41\"},{\"reg\":\"real:9:[0,32)\",\"rel\":\"eq\",\"term\":\"v32:42\"}]" "[]")
-    "1" [(Reg.real32 8, Term.V32 41), (Reg.real32 9, Term.V32 42),
+    (RV32.exportRv32ExpandStep #[rvWord 5, 0x0001] 70 0 rvParent "[]")
+    rvParent "[]" "1" [(Reg.real32 8, Term.V32 41), (Reg.real32 9, Term.V32 42),
       (Reg.real32 10, .app .w32 (.udiv .w32 4294967295) [Term.V32 41, Term.V32 42])] []
   expectFailure "RV String FFI illegal all-or-nothing"
     (RV32.exportRv32ExpandStep #[0xffffffff, 0x0001] 70 0 "[]" "[]") "LocalReject"

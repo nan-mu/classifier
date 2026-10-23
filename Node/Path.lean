@@ -1,6 +1,7 @@
 import Core.Expr
 import Core.Insn
 import Core.Direction
+import Core.Parse
 
 namespace Node
 open Core
@@ -56,5 +57,18 @@ def asPos? : Location → Option Nat
 
 def RunGraph.ofWork (nodes : Array Node) (edges : Array Edge) : RunGraph :=
   ⟨nodes, edges, 0⟩
+
+/-- Step increment. A stored node uses `exprs` and `predicates`. -/
+def renderIncrementJson (step : SemState) : String :=
+  let (writes, observations) := renderSemStateJson step
+  s!"\"writes\":[{writes}],\"observations\":[{observations}]"
+
+@[export lean_expand_update]
+def exportUpdate (localExprs localPreds stepExprs stepPreds : String) : String :=
+  match parseSemStateJson localExprs localPreds, parseSemStateJson stepExprs stepPreds with
+  | some parent, some step =>
+    let (exprs, preds) := renderSemStateJson (update parent step)
+    s!"\{\"status\":\"ok\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
+  | _, _ => "{\"status\":\"fail\",\"reason\":\"LocalReject\"}"
 
 end Node

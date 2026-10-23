@@ -80,6 +80,12 @@ pub(crate) mod ffi {
         ) -> LeanObj;
         /// HelperOnly ExactConfig merge (`Node/Merge.lean`).
         pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
+        pub fn lean_expand_update(
+            local_exprs: LeanObj,
+            local_preds: LeanObj,
+            step_exprs: LeanObj,
+            step_preds: LeanObj,
+        ) -> LeanObj;
 
         pub fn lean_ebpf_expand_create(
             t_ctx: LeanObj,
@@ -171,11 +177,50 @@ pub fn init() {
 }
 
 pub mod expand {
-    use super::rv32;
+    use super::{ffi, lean_call, rv32};
+    use std::ffi::{CStr, CString};
 
     /// HelperOnly ExactConfig merge (request JSON only).
     pub fn merge(request_json: &str) -> String {
         rv32::expand_merge(request_json)
+    }
+
+    /// Compose one step increment onto a stored node. The two JSON shapes differ.
+    pub fn update(
+        local_exprs: &str,
+        local_preds: &str,
+        step_writes: &str,
+        step_observations: &str,
+    ) -> String {
+        let local_exprs = local_exprs.to_owned();
+        let local_preds = local_preds.to_owned();
+        let step_writes = step_writes.to_owned();
+        let step_observations = step_observations.to_owned();
+        lean_call(move || unsafe {
+            let local_exprs = lean_string(&local_exprs);
+            let local_preds = lean_string(&local_preds);
+            let step_writes = lean_string(&step_writes);
+            let step_observations = lean_string(&step_observations);
+            take_string(ffi::lean_expand_update(
+                local_exprs,
+                local_preds,
+                step_writes,
+                step_observations,
+            ))
+        })
+    }
+
+    unsafe fn take_string(obj: ffi::LeanObj) -> String {
+        let s = CStr::from_ptr(ffi::lean_binding_string_cstr(obj))
+            .to_string_lossy()
+            .into_owned();
+        ffi::lean_binding_dec(obj);
+        s
+    }
+
+    unsafe fn lean_string(s: &str) -> ffi::LeanObj {
+        let c = CString::new(s).expect("JSON contains NUL");
+        ffi::lean_binding_mk_string(c.as_ptr())
     }
 }
 

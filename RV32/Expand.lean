@@ -1270,11 +1270,9 @@ def exportRv32ExpandCreate
 private def headFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"successors\":[]}"
 
-private def successorJson (row : Direction × Location × SemState) : String :=
-  let (dir, loc, state) := row
+private def successorJson (dir : Direction) (loc : Location) (step : SemState) : String :=
   let loc := match loc with | .exit => "exit" | .pos j => toString j
-  let (exprs, preds) := renderSemStateJson state
-  s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
+  s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",{renderIncrementJson step}}"
 
 /-- Stateless head inference. Anchors travel in the head exprs.
 Fuel / work-queue updates are Rust-only. -/
@@ -1293,8 +1291,9 @@ def exportRv32ExpandStep (insns : Array UInt32) (event j : UInt32)
         | .candidates cs =>
           match prepareAll state I.size cs with
           | .error reason => headFailJson reason
-          | .ok prepared =>
-            let successors := String.intercalate "," (prepared.map successorJson)
+          | .ok _ =>
+            let successors := String.intercalate ","
+              (cs.map fun c => successorJson c.dir c.loc { exprs := c.E_k, predicates := c.P_k })
             s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successors}]}"
 
 @[export lean_rv32_expand_bound_words_snapshot]
@@ -1329,8 +1328,12 @@ private def statelessStepCheck : Bool := Id.run do
   let .ok ws := expandInit I.size 0 root 3 | return false
   let (exprs, preds) := renderSemStateJson root
   let .inr next := expandOne I.size (inferStep I 0) ws | return false
+  let .candidates [c] := inferStep I 0 0 root | return false
+  let step : SemState := { exprs := c.E_k, predicates := c.P_k }
   return exportRv32ExpandStep insns 0 0 s!"[{exprs}]" s!"[{preds}]" ==
-      s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, next.nodes[1]!.loc, next.nodes[1]!.state)}]}" &&
+      s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson .ok c.loc step}]}" &&
+    (update root step).exprs == next.nodes[1]!.state.exprs &&
+    (update root step).predicates == next.nodes[1]!.state.predicates &&
     p.rEntries == savedRegs &&
     root.exprs.keysUnique && root.exprs.length == 29 &&
     (root.exprs.filter (fun e => isRealReg e.reg)).length == 19 &&

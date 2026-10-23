@@ -1021,7 +1021,7 @@ mod tests {
         assert!(snap.nodes.iter().any(|n| n
             .exprs
             .iter()
-            .any(|e| e.reg == "real32:10" && e.term.contains("externalResult"))));
+            .any(|e| e.reg == "real:10:[0,32)" && e.term.contains("externalResult"))));
         assert!(snap.nodes.iter().any(|n| {
             n.predicates
                 .iter()

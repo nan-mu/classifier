@@ -208,35 +208,48 @@ mod stateless_head_ffi {
         ] {
             assert_eq!(successor["dir"], dir);
             assert_eq!(successor["loc"], "1");
-            let exprs = successor["exprs"].as_array().unwrap();
-            let constraint = exprs.iter().find(|e| e["role"] == "constraint").unwrap();
-            assert_eq!(constraint["reg"], "real32:10");
-            assert_eq!(constraint["rel"], rel);
-            assert_eq!(constraint["term"], "0");
-            assert_eq!(
-                exprs.iter().filter(|e| e["role"] != "constraint").count(),
-                node["exprs"].as_array().unwrap().len()
-            );
-            let preds = successor["predicates"].as_array().unwrap();
+            let preds = successor["observations"].as_array().unwrap();
             assert_eq!(preds.len(), 1);
             assert_eq!(preds[0]["kind"], "branch");
             assert_eq!(preds[0]["dir"], branch_dir);
             assert_eq!(preds[0]["position"], 1);
             let saved = successor.clone();
+            let composed: Value = serde_json::from_str(&lean_binding::expand::update(
+                &node["exprs"].to_string(),
+                &empty.to_string(),
+                &successor["writes"].to_string(),
+                &successor["observations"].to_string(),
+            ))
+            .unwrap();
+            assert_eq!(composed["status"], "ok");
+            let exprs = composed["exprs"].as_array().unwrap();
+            let constraint = exprs.iter().find(|e| e["role"] == "constraint").unwrap();
+            assert_eq!(constraint["reg"], "real:10:[0,32)");
+            assert_eq!(constraint["rel"], rel);
+            assert_eq!(constraint["term"], "0");
             let assigned = step(
                 &words,
                 1,
-                &successor["exprs"].to_string(),
-                &successor["predicates"].to_string(),
+                &composed["exprs"].to_string(),
+                &composed["predicates"].to_string(),
             );
             let after = &assigned["successors"][0];
-            assert!(after["exprs"]
+            assert!(after["writes"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|e| e["role"] != "constraint" || e["reg"] != "real32:10"));
-            // ADDI keeps prior Branch observation via mergePredicate.
-            assert_eq!(after["predicates"], successor["predicates"]);
+                .all(|e| e["role"] != "constraint" || e["reg"] != "real:10:[0,32)"));
+            let again: Value = serde_json::from_str(&lean_binding::expand::update(
+                &composed["exprs"].to_string(),
+                &composed["predicates"].to_string(),
+                &after["writes"].to_string(),
+                &after["observations"].to_string(),
+            ))
+            .unwrap();
+            assert_eq!(again["predicates"], composed["predicates"]);
+            assert!(again["exprs"].as_array().unwrap().iter().all(
+                |e| e["role"] != "constraint" || e["reg"] != "real:10:[0,32)"
+            ));
             assert_eq!(*successor, saved);
         }
         assert_eq!(
@@ -298,7 +311,7 @@ mod stateless_head_ffi {
             step(
                 &words,
                 0,
-                r#"[{"reg":"real32:1","rel":"eq","term":"0"},{"reg":"real32:1","rel":"eq","term":"1"}]"#,
+                r#"[{"reg":"real:1:[0,32)","rel":"eq","term":"0"},{"reg":"real:1:[0,32)","rel":"eq","term":"1"}]"#,
                 "[]",
             ),
             json!({
@@ -307,12 +320,8 @@ mod stateless_head_ffi {
                 "successors":[{
                     "dir":"OK",
                     "loc":"1",
-                    "exprs":[
-                        {"reg":"real32:1","rel":"eq","term":"0"},
-                        {"reg":"real32:10","rel":"eq","term":"7"},
-                        {"reg":"real32:1","rel":"eq","role":"constraint","term":"1"}
-                    ],
-                    "predicates":[]
+                    "writes":[{"reg":"real:10:[0,32)","rel":"eq","term":"7"}],
+                    "observations":[]
                 }],
             })
         );

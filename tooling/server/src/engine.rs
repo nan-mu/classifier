@@ -2,6 +2,7 @@
 //! Lean FFI stays thin and stateless in `lean-binding`.
 
 use lean_binding::ebpf;
+use lean_binding::expand;
 use lean_binding::rv32::{self, MapLayout};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -74,6 +75,28 @@ impl Default for InferencePool {
 pub enum PoolError {
     Closed,
     Join,
+}
+
+/// One candidate's assigned rows. Not a stored node.
+#[derive(serde::Deserialize)]
+struct StepIncrement {
+    writes: Value,
+    observations: Value,
+}
+
+/// Local state produced by `lean_expand_update`.
+#[derive(serde::Deserialize)]
+struct NodeState {
+    exprs: Value,
+    predicates: Value,
+}
+
+#[derive(serde::Deserialize)]
+struct WireSuccessor {
+    dir: String,
+    loc: String,
+    #[serde(flatten)]
+    increment: StepIncrement,
 }
 
 /// Owns program words, applied graph snapshot, Agenda, and fuel.
@@ -273,18 +296,39 @@ impl ExpandSession {
             let parent_loc = heads[i].2.clone();
             let mut succ_meta: Vec<(Dir, u32, String)> = Vec::new();
             for successor in result["successors"].as_array().expect("successors") {
+                let successor: WireSuccessor =
+                    serde_json::from_value(successor.clone()).expect("successor increment");
+                let raw = expand::update(
+                    &heads[i].3,
+                    &heads[i].4,
+                    &successor.increment.writes.to_string(),
+                    &successor.increment.observations.to_string(),
+                );
+                let parsed: Value = serde_json::from_str(&raw).expect("update JSON");
+                if parsed["status"] != "ok" {
+                    let rest: Vec<u32> =
+                        heads[i + 1..].iter().map(|(e, _, _, _, _)| *e).collect();
+                    self.agenda.requeue_front(rest);
+                    self.snapshot["status"] = json!("fail");
+                    self.snapshot["reason"] = parsed["reason"].clone();
+                    self.snapshot["failed"] = json!(event);
+                    self.sync_work();
+                    return expanded;
+                }
+                let composed: NodeState =
+                    serde_json::from_value(parsed).expect("composed node");
                 let id = self.snapshot["nodes"].as_array().expect("nodes").len() as u32;
-                let loc = successor["loc"].as_str().unwrap_or("exit").to_string();
-                let dir = Dir::from_wire(successor["dir"].as_str().unwrap_or("Only"));
+                let loc = successor.loc.clone();
+                let dir = Dir::from_wire(&successor.dir);
                 self.snapshot["nodes"].as_array_mut().unwrap().push(json!({
                     "id": id, "loc": loc,
-                    "exprs": successor["exprs"], "predicates": successor["predicates"],
+                    "exprs": composed.exprs, "predicates": composed.predicates,
                 }));
                 self.snapshot["edges"]
                     .as_array_mut()
                     .expect("edges")
                     .push(json!({
-                        "src": event, "dir": successor["dir"], "dst": id,
+                        "src": event, "dir": successor.dir, "dst": id,
                     }));
                 succ_meta.push((dir, id, loc));
             }
@@ -488,7 +532,7 @@ mod tests {
             if steps == 6 {
                 let snapshot = snap(&session);
                 let exprs = snapshot["nodes"][6]["exprs"].as_array().unwrap();
-                for (reg, event) in [("real32:9", 1), ("real32:10", 5)] {
+                for (reg, event) in [("real:9:[0,32)", 1), ("real:10:[0,32)", 5)] {
                     let term = exprs.iter().find(|e| e["reg"] == reg).unwrap()["term"]
                         .as_str()
                         .unwrap();

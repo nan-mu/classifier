@@ -76,11 +76,9 @@ def exportEbpfExpandCreate
 private def headFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"successors\":[]}"
 
-private def successorJson (row : Direction × Location × SemState) : String :=
-  let (dir, loc, state) := row
+private def successorJson (dir : Direction) (loc : Location) (step : SemState) : String :=
   let loc := match loc with | .exit => "exit" | .pos j => toString j
-  let (exprs, preds) := renderSemStateJson state
-  s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
+  s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",{renderIncrementJson step}}"
 
 @[export lean_ebpf_expand_step]
 def exportEbpfExpandStep (insns : Array UInt64) (event j : UInt32)
@@ -96,8 +94,9 @@ def exportEbpfExpandStep (insns : Array UInt64) (event j : UInt32)
       | .candidates cs =>
         match prepareAll state I.size cs with
         | .error reason => headFailJson reason
-        | .ok prepared =>
-          let successors := String.intercalate "," (prepared.map successorJson)
+        | .ok _ =>
+          let successors := String.intercalate ","
+            (cs.map fun c => successorJson c.dir c.loc { exprs := c.E_k, predicates := c.P_k })
           s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successors}]}"
 
 @[export lean_ebpf_expand_bound_words_snapshot]
@@ -136,13 +135,17 @@ private def statelessStepCheck : Bool := Id.run do
   let .ok ws := ebpfInit I root 0 200 | return false
   let (exprs, preds) := renderSemStateJson root
   let .inr next := expandOne I.size (ebpfStep I 0) ws | return false
+  let .candidates [c] := ebpfStep I 0 0 root | return false
+  let step : SemState := { exprs := c.E_k, predicates := c.P_k }
   let response := exportEbpfExpandStep justTxProgram 0 0 s!"[{exprs}]" s!"[{preds}]"
   let some r0 := readInterval next.nodes[1]!.state.exprs (Reg.real64 0) | return false
   return next.nodes[1]!.loc == .pos 1 &&
     eval (solve r0) == some 1 &&
     next.nodes[1]!.state.exprs.lookupEq (Reg.real64 1) == some justTxEntry.tCtx &&
     lddwBind root.exprs 34 == .unbound &&
-    response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, next.nodes[1]!.loc, next.nodes[1]!.state)}]}" &&
+    (update root step).exprs == next.nodes[1]!.state.exprs &&
+    (update root step).predicates == next.nodes[1]!.state.predicates &&
+    response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson .ok c.loc step}]}" &&
     exportEbpfExpandStep #[] 0 0 "[]" "[]" == headFailJson .invalidEntry
 
 private def failedSlotCheck (response : String) (reason : String) (slot : Nat) : Bool :=
@@ -296,7 +299,7 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
     let state := update start { exprs := c.E_k, predicates := c.P_k }
     let some got := readInterval state.exprs reg | return false
     if eval (solve got) != some expected ||
-        response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
+        response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson .ok (.pos 1) { exprs := c.E_k, predicates := c.P_k }}]}" then
       return false
   let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95] 11 0 s!"[{exprs}]" "[]"
   let .candidates [c] := ebpfStep (decodeProgram #[0x00000001fffc2ac3, 0x95]) 11 0 start | return false
@@ -305,7 +308,7 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
   let some regGot := readInterval state.exprs (Reg.real64 2) | return false
   return eval (solve stackGot) == some 0x11223401 &&
     eval (solve regGot) == some 0x11223380 &&
-    response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}"
+    response == s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson .ok (.pos 1) { exprs := c.E_k, predicates := c.P_k }}]}"
 
 #guard extendedInstructionFfiCheck
 
