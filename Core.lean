@@ -7,6 +7,7 @@ import Core.MapLayout
 import Core.Expr
 import Core.Anchor
 import Core.Interval
+import Core.Update
 import Core.Semantics
 import Core.SolvePreservation
 import Core.Virtual
