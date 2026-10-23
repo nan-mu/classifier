@@ -1,4 +1,5 @@
 import Node.Path
+import Core.Update
 import Core.Render
 
 namespace Node
@@ -39,17 +40,10 @@ def expandInit (progLen j0 : Nat) (σ0 : SemState) (B : Nat) :
 private def prepareCandidate (σ : SemState) (c : Candidate) (progLen : Nat) :
     Except RejectReason (Direction × Location × SemState) :=
   match c.loc with
-  | .exit =>
-      do
-        let state ← Node.applyLocal σ c.E_k c.P_k
-        pure (c.dir, .exit, state)
+  | .exit => pure (c.dir, .exit, update σ { exprs := c.E_k, predicates := c.P_k })
   | .pos k =>
-      if k ≥ progLen then
-        Except.error .unboundTarget
-      else
-        do
-          let state ← Node.applyLocal σ c.E_k c.P_k
-          pure (c.dir, .pos k, state)
+    if k ≥ progLen then throw .unboundTarget
+    else pure (c.dir, .pos k, update σ { exprs := c.E_k, predicates := c.P_k })
 
 def prepareAll (σ : SemState) (progLen : Nat) :
     List Candidate → Except RejectReason (List (Direction × Location × SemState))

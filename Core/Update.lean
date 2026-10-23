@@ -418,6 +418,10 @@ private theorem bind_true {acc : List Expr} {x : Expr}
   rw [h]
   simp
 
+private def appendSolved (acc : List Expr) (e : Expr) : List Expr :=
+  let e := solveExpr e
+  if acc.contains e then acc else acc ++ [e]
+
 private def updateExprs (parent stepExprs : List Expr) (stepPreds : List Predicate) : List Expr :=
   match stepExprs with
   | [] => parent
@@ -430,8 +434,7 @@ private def updateExprs (parent stepExprs : List Expr) (stepPreds : List Predica
     let kept := parent.constraints.filter fun e =>
       !(writes.any fun w => w.reg.overlaps e.reg)
     let base := lives.map ofLive ++ kept
-    facts.foldl (fun acc e => acc.insertConstraint e)
-      (rest.constraints.foldl (fun acc e => acc.insertConstraint e) base)
+    facts.foldl appendSolved (rest.constraints.foldl appendSolved base)
 
 /-- Value rows whose registers share no bits. -/
 def valueSeparated (E : List Expr) : Prop :=

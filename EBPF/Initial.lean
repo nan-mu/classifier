@@ -1,4 +1,5 @@
 import Node.Path
+import Core.Update
 import Core.Anchor
 
 namespace EBPF
@@ -34,7 +35,7 @@ def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   let E ← put E .data p.tData
   let E ← put E .dataEnd (addStar .w32 p.tData (Term.C32 p.packetBytes))
   let E ← put E .packetBytes (Term.C32 p.packetBytes)
-  let E := E.insertEq (Reg.real64 1) p.tCtx |>.insertEq (Reg.real64 10) p.tSp
+  let E := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve p.tCtx)], predicates := [] }).exprs |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 10) (solve p.tSp)], predicates := [] }).exprs)
   pure ⟨E, []⟩
 
 def entrySemState := buildE0
@@ -55,7 +56,7 @@ def host (p : EntryParams) (E : List Expr) (maps : List MapLayout := []) : List 
         match e.reg with
         | .real .. => !(E.bindings.any fun old => old.reg.overlaps e.reg)
         | _ => true
-      E.override fresh
+      (update ⟨E, []⟩ { exprs := fresh, predicates := [] }).exprs
     | .error _ => E
   (Anchor.installMaps withEntry maps).getD withEntry
 

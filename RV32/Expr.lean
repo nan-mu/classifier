@@ -1,4 +1,5 @@
 import Core.Anchor
+import Core.Update
 import Core.Virtual
 import Core.MapLayout
 import RV32.Insn
@@ -40,7 +41,7 @@ def checkX0 (Eg : List Expr) : Bool :=
 
 def assign (rd : regidx) (t : Term) : List Expr :=
   if isX0 rd then Expr.nil
-  else (writeUpdates Expr.nil (xReg rd) t).getD Expr.nil
+  else (((«seal» ((xReg rd)).bits t >>= fun stored => some [Expr.mkEq (xReg rd) stored]))).getD Expr.nil
 
 def guardEg (Eg : List Expr) : Bool :=
   Eg.keysUnique && Eg.wellTyped && checkX0 Eg
@@ -399,7 +400,7 @@ private def mapMaterialize (Eg : List Expr) (preds : List Predicate) (source : T
         if within + width > 4 || wordBase == 0 || !gap then none
         else
           let content := star .w32 (.externalResult event (1 + wordBase / 4)) [Term.C32 1]
-          let rows ← writeUpdates Eg word content
+          let rows ← ((«seal» (word).bits content >>= fun stored => some [Expr.mkEq word stored]))
           some (reg, rows)
 
 def exprSizedLOADEffects (Eg : List Expr) (rs1 rd : regidx) (offset width : Nat)
@@ -415,9 +416,9 @@ def exprSizedLOADEffects (Eg : List Expr) (rs1 rd : regidx) (offset width : Nat)
       let value ← CellAccess.read ⟨reg⟩ Eg .w32 isUnsigned
       some { updates := assign rd value }
     else if let some (reg, rows) := mapMaterialize Eg preds source offset width then
-      let seeded := Eg.override rows
+      let seeded := (update ⟨Eg, []⟩ { exprs := rows, predicates := [] }).exprs
       let value ← CellAccess.read ⟨reg⟩ seeded .w32 isUnsigned
-      some { updates := rows.override (assign rd value) }
+      some { updates := (update ⟨rows, []⟩ { exprs := (assign rd value), predicates := [] }).exprs }
     else if let some o := packetOffsetAt Eg source offset width then
       let data ← contextValue Eg .data
       let access : PacketAccess :=
@@ -758,8 +759,8 @@ def step (Eg : List Expr) (i : Insn) (boundCtx : Option Term := none)
 -- ADDI replaces x1 locally; the unrelated x2 must not appear in the result.
 #guard
   (let Eg := Expr.nil
-      |>.insertEq (Reg.real32 1) (Term.C32 10)
-      |>.insertEq (Reg.real32 2) (Term.C32 20)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 10))], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.C32 20))], predicates := [] }).exprs)
    match step Eg (.ITYPE (1#12, .Regidx 1#5, .Regidx 1#5, .ADDI)) with
    | some Ei =>
        match Ei with
@@ -770,24 +771,17 @@ def step (Eg : List Expr) (i : Insn) (boundCtx : Option Term := none)
 
 -- A successful empty local result stays empty even when Eg is nonempty.
 #guard
-  (match step (Expr.nil.insertEq (Reg.real32 2) (Term.C32 20)) (.C_NOP 0#6) with
+  (match step ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.C32 20))], predicates := [] }).exprs) (.C_NOP 0#6) with
    | some Ei => Ei.isEmpty
    | none => false)
 
-private def applyLocalExprs (Eg : List Expr) (preds : List Predicate)
-    (effect : ExprEffect) : Option (List Expr) :=
-  match applyLocal ⟨Eg, preds⟩ effect.delta preds with
-  | .ok σ => some σ.exprs
-  | .error _ => none
-
 private def stackRoundTripCheck : Bool := Id.run do
   let spTerm := Term.V32 0
-  let some base := writeInterval (Expr.nil.insertEq (Reg.real32 2) spTerm)
-      (.stack 0 32) (Term.C32 99) | return false
+  let some base := (some (update ⟨((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve spTerm)], predicates := [] }).exprs), []⟩ { exprs := [Expr.mkEq (.stack 0 32) (solve (Term.C32 99))], predicates := [] }).exprs) | return false
   let some loaded := step base (.C_LWSP (0#6, .Regidx 10#5)) | return false
-  let stored := base.insertEq (Reg.real32 8) (Term.C32 99)
+  let stored := (update ⟨base, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.C32 99))], predicates := [] }).exprs
   let some spill := stepEffects stored (.C_SWSP (0#6, .Regidx 8#5)) | return false
-  let some saved := applyLocalExprs stored [] spill | return false
+  let saved := (update ⟨stored, []⟩ { exprs := spill.delta, predicates := [] }).exprs
   let some again := step saved (.C_LWSP (0#6, .Regidx 10#5)) | return false
   return loaded.lookupEq (Reg.real32 10) == some (Term.C32 99) &&
     again.lookupEq (Reg.real32 10) == some (Term.C32 99) &&
@@ -797,11 +791,11 @@ private def stackRoundTripCheck : Bool := Id.run do
 
 private def stackBytesCheck : Bool := Id.run do
   let spTerm := Term.V32 0
-  let E := Expr.nil.insertEq (Reg.real32 2) spTerm
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve spTerm)], predicates := [] }).exprs
   let addr := .app .w32 (.id .w32)
     [.app .w32 (.add .w32) [spTerm, Term.C32 (M 32 (-16))]]
   let lo := (M 32 (-16)) * 8
-  let some stored := writeInterval E (.stack lo (lo + 32)) (Term.C32 0x01020304) | return false
+  let some stored := ((«seal» (Reg.stack lo (lo + 32)).bits (Term.C32 0x01020304) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack lo (lo + 32)) stored], predicates := [] }).exprs)) | return false
   let some bytes := readBufferBytes stored addr 4 | return false
   let some values := bytes.mapM fun t => eval (solve t) | return false
   return values == [4, 3, 2, 1]
@@ -810,7 +804,7 @@ private def stackBytesCheck : Bool := Id.run do
 
 private def egEq (r : regidx) (v : Nat) : List Expr :=
   if r.toNat == 0 then Expr.nil
-  else Expr.nil.insertEq (xReg r) (Term.C32 v)
+  else (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (xReg r) (solve (Term.C32 v))], predicates := [] }).exprs
 
 private def resultRd (Ei : List Expr) (rd : regidx) : UInt32 :=
   if isX0 rd then 0
@@ -836,7 +830,7 @@ def exportExprAdd (rs1Val rs2Val rs1 rs2 rd : UInt32) : UInt32 :=
   let r1 : regidx := .Regidx (BitVec.ofNat 5 (rs1.toNat &&& 31))
   let r2 : regidx := .Regidx (BitVec.ofNat 5 (rs2.toNat &&& 31))
   let rdi : regidx := .Regidx (BitVec.ofNat 5 (rd.toNat &&& 31))
-  let Eg := (egEq r1 rs1Val.toNat).override (egEq r2 rs2Val.toNat)
+  let Eg := (update ⟨(egEq r1 rs1Val.toNat), []⟩ { exprs := (egEq r2 rs2Val.toNat), predicates := [] }).exprs
   let i : Insn := .RTYPE (r2, r1, rdi, .ADD)
   match expr Eg i with
   | none => 0xffffffff
@@ -845,7 +839,7 @@ def exportExprAdd (rs1Val rs2Val rs1 rs2 rd : UInt32) : UInt32 :=
 @[export lean_rv32_value_auipc]
 def exportExprAuipc (pcVal uimm20 rd : UInt32) : UInt32 :=
   let rdi : regidx := .Regidx (BitVec.ofNat 5 (rd.toNat &&& 31))
-  let Eg := Expr.nil.insertEq pcReg (Term.C32 pcVal.toNat)
+  let Eg := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq pcReg (solve (Term.C32 pcVal.toNat))], predicates := [] }).exprs
   let i : Insn := .UTYPE (BitVec.ofNat 20 (uimm20.toNat &&& 0xfffff), rdi, .AUIPC)
   match expr Eg i with
   | none => 0xffffffff
@@ -864,7 +858,7 @@ def exportExprDiv (rs1Val rs2Val : UInt32) : UInt32 :=
   let r1 : regidx := .Regidx 1#5
   let r2 : regidx := .Regidx 2#5
   let rd : regidx := .Regidx 3#5
-  let Eg := (egEq r1 rs1Val.toNat).override (egEq r2 rs2Val.toNat)
+  let Eg := (update ⟨(egEq r1 rs1Val.toNat), []⟩ { exprs := (egEq r2 rs2Val.toNat), predicates := [] }).exprs
   match expr Eg (.DIV (r2, r1, rd, false)) with
   | none => 0xffffffff
   | some Ei => resultRd Ei rd
@@ -879,10 +873,10 @@ def exportEcallRejects (_unused : UInt32) : UInt32 :=
 def exportOverrideKeeps (_unused : UInt32) : UInt32 :=
   let Eg :=
     Expr.nil
-      |>.insertEq (Reg.real32 1) (Term.C32 10)
-      |>.insertEq (Reg.real32 2) (Term.C32 20)
-  let Ei := Expr.nil.insertEq (Reg.real32 1) (Term.C32 11)
-  let E := Eg.override Ei
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 10))], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.C32 20))], predicates := [] }).exprs)
+  let Ei := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 11))], predicates := [] }).exprs
+  let E := (update ⟨Eg, []⟩ { exprs := Ei, predicates := [] }).exprs
   match E.lookupEq (Reg.real32 1), E.lookupEq (Reg.real32 2) with
   | some t1, some t2 =>
       match eval t1, eval t2 with
@@ -894,7 +888,7 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
   let key := [Term.C32 1, Term.C32 2, Term.C32 3]
   let some keyBytes := key.mapM mapKeyByte | return false
   let data := Term.V32 4
-  let E0 := Expr.nil.insertEq (Reg.real32 2) (Term.V32 0)
+  let E0 := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.V32 0))], predicates := [] }).exprs
   let some E := putContext E0 .data data | return false
   let some E := putContext E .dataEnd (addStar .w32 data (Term.C32 16)) | return false
   let some E := putContext E .dataMeta (Term.C32 0) | return false
@@ -907,12 +901,12 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
   let some E := putContext E (.mapKeyBytes 42) (Term.C32 3) | return false
   let some E := putContext E (.mapValueBytes 42) (Term.C32 8) | return false
   let cell := Reg.map 42 keyBytes 0 32
-  let some E := writeInterval E cell (Term.C32 0x04030201) | return false
-  let some E := writeInterval E (.stack 0 32) (Term.C32 0x04030201) | return false
-  let some E := writeInterval E (.packet 8 16) (star .w32 (.low 8 32) [Term.C32 0xaa]) | return false
-  let some E := writeInterval E (.packet 16 24) (star .w32 (.low 8 32) [Term.C32 0xbb]) | return false
+  let some E := ((«seal» (cell).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq cell stored], predicates := [] }).exprs)) | return false
+  let some E := ((«seal» (Reg.stack 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 0 32) stored], predicates := [] }).exprs)) | return false
+  let some E := ((«seal» (Reg.packet 8 16).bits (star .w32 (.low 8 32) [Term.C32 0xaa]) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.packet 8 16) stored], predicates := [] }).exprs)) | return false
+  let some E := ((«seal» (Reg.packet 16 24).bits (star .w32 (.low 8 32) [Term.C32 0xbb]) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.packet 16 24) stored], predicates := [] }).exprs)) | return false
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
-  let E := E.insertEq (Reg.real32 8) pointer
+  let E := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
   let preds : List Predicate := [.helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)]
   let some mapBytes := readBufferBytes E (addStar .w32 pointer (Term.C32 0)) 4
       (preds := preds) | return false
@@ -939,8 +933,8 @@ private def mNumericBoundariesCheck : Bool :=
     (true, true, 0xfffffff9, 0, 0xfffffff9)]
   cases.all fun (remainder, unsigned, a, b, expected) =>
     let E := Expr.nil
-      |>.insertEq (Reg.real32 8) (Term.C32 a)
-      |>.insertEq (Reg.real32 9) (Term.C32 b)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.C32 a))], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 9) (solve (Term.C32 b))], predicates := [] }).exprs)
     let result := if remainder then exprREM E r2 r1 rd unsigned
       else exprDIV E r2 r1 rd unsigned
     match result with

@@ -1,4 +1,5 @@
 import EBPF.Initial
+import Core.Update
 import EBPF.Expr
 import Core.Virtual
 import Core.MapLayout
@@ -318,7 +319,7 @@ theorem mapWriteObservation_frozen (E : List Expr) (Pg : List Predicate)
 
 theorem mapWriteKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
-    mapWriteKeyAt (SemState.mk (updateExpr E updates) Pg).predicates event =
+    mapWriteKeyAt (SemState.mk (((update ⟨E, []⟩ { exprs := updates, predicates := [] }).exprs)) Pg).predicates event =
       mapWriteKeyAt Pg event := rfl
 
 theorem mapWriteKeyAt_deterministic (Pg : List Predicate) (event : NodeId)
@@ -464,11 +465,11 @@ private def memoryEntry : EntryParams :=
   ⟨Term.V64 1, Term.V64 0, Term.V32 2, 16⟩
 
 private def applyEffect (E : List Expr) (effect : ExprEffect) : List Expr :=
-  E.override effect.delta
+  (update ⟨E, []⟩ { exprs := effect.delta, predicates := [] }).exprs
 
 private def putStackWord (E : List Expr) (unit value : Nat) : Option (List Expr) :=
   let lo := (508 - 4 * unit) * 8
-  writeInterval E (.stack lo (lo + 32)) (Term.C32 value)
+  ((«seal» (Reg.stack lo (lo + 32)).bits (Term.C32 value) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack lo (lo + 32)) stored], predicates := [] }).exprs))
 
 #guard relativeOffset memoryEntry.tSp
   (idStar .w64 (addStar .w64 memoryEntry.tSp (Term.C64 (M 64 (-4))))) == some (-4)
@@ -491,7 +492,7 @@ private def putStackWord (E : List Expr) (unit value : Nat) : Option (List Expr)
 
 private def stackRoundTripCheck : Bool := Id.run do
   let .ok σ := buildE0 memoryEntry | return false
-  let E := σ.exprs.insertEq (Reg.real64 0) (Term.C64 0x1122334455667788)
+  let E := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0x1122334455667788))], predicates := [] }).exprs
   let .ok (stored, []) := effectsAt memoryEntry 0 E (.stx 8 10 0 (-8)) | return false
   let E8 := applyEffect E stored
   let .ok (loaded, []) := effectsAt memoryEntry 0 E8 (.ldx 8 2 10 (-8)) | return false
@@ -534,9 +535,8 @@ private def packetRootAliasCheck : Bool := Id.run do
 private def partialStackCheck : Bool := Id.run do
   let .ok σ := buildE0 memoryEntry | return false
   let some stacked := putStackWord σ.exprs 0 0x11223344 | return false
-  let E := stacked.insertEq (Reg.real64 0) (Term.C64 0xaa)
-    |>.insertEq (Reg.real64 3)
-      (idStar .w64 (addStar .w64 memoryEntry.tSp (Term.C64 (M 64 (-4)))))
+  let E := (update ⟨stacked, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0xaa))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 3) (solve (idStar .w64 (addStar .w64 memoryEntry.tSp (Term.C64 (M 64 (-4))))))], predicates := [] }).exprs)
   let .ok (stored, []) := effectsAt memoryEntry 0 E (.stx 1 3 0 1) | return false
   let E2 := applyEffect E stored
   let .ok (loaded, []) := effectsAt memoryEntry 0 E2 (.ldx 4 2 10 (-4)) | return false
@@ -561,19 +561,19 @@ private def lookupMemoryCheck : Bool := Id.run do
   let lookup := Predicate.helper 7 .lookup ([Term.C64 42, Term.V64 9] ++ keyBytes)
   let held := Term.regVar 7 (Reg.real64 0)
   let cell := Reg.map 42 key 0 64
-  let some seeded := writeInterval σ.exprs cell held | return false
-  let E := seeded.insertEq (Reg.real64 0) lookupPointer
+  let some seeded := ((«seal» (cell).bits held >>= fun stored => some (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq cell stored], predicates := [] }).exprs)) | return false
+  let E := (update ⟨seeded, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve lookupPointer)], predicates := [] }).exprs
   let .ok (.cell slot) := accessAt memoryEntry E 0 0 8 false maps [lookup] | return false
   let .ok (_, value) := readAccess E (.cell slot) | return false
   let .ok writes := writeAccess E (.cell slot) (Term.C64 99) | return false
   let some nextState :=
-    writes.foldlM (fun acc e => writeInterval acc e.reg e.term) E | return false
+    writes.foldlM (fun acc e => («seal» (e.reg).bits e.term >>= fun stored => some (update ⟨acc, []⟩ { exprs := [Expr.mkEq e.reg stored], predicates := [] }).exprs)) E | return false
   let .ok (_, next) := readAccess nextState (.cell slot) | return false
   let later := Reg.map 42 key 64 128
   let .error .undefinedSrc := readAccess E (.cell later) | return false
   let .ok extended := writeAccess E (.cell later) (Term.C64 99) | return false
   let some filledState :=
-    extended.foldlM (fun acc e => writeInterval acc e.reg e.term) E | return false
+    extended.foldlM (fun acc e => («seal» (e.reg).bits e.term >>= fun stored => some (update ⟨acc, []⟩ { exprs := [Expr.mkEq e.reg stored], predicates := [] }).exprs)) E | return false
   let .ok (_, filled) := readAccess filledState (.cell later) | return false
   let .error .undefinedSrc := accessAt memoryEntry E 0 7 2 false maps [lookup] | return false
   let .error .undefinedSrc := accessAt memoryEntry E 0 (-1) 1 false maps [lookup] | return false
@@ -584,10 +584,9 @@ private def lookupMemoryCheck : Bool := Id.run do
 #guard lookupMemoryCheck
 
 private def mapStoreExprs : List Expr :=
-  Expr.nil.insertEq (Reg.real64 0)
-    (star .w64 (.externalResult 7 0)
-      [Term.C64 1, Term.C64 1077412584, Term.V64 9])
-    |>.insertEq (Reg.real64 1) (idStar .w64 (Term.V64 11))
+  (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (star .w64 (.externalResult 7 0)
+      [Term.C64 1, Term.C64 1077412584, Term.V64 9]))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (idStar .w64 (Term.V64 11)))], predicates := [] }).exprs)
 
 private def mapStoreFrozenKey : List Term :=
   [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
@@ -625,18 +624,17 @@ private def mapStoreObservationsCheck : Bool := Id.run do
 private def symbolicMapStoreFrozenKeyCheck : Bool := Id.run do
   let keyPtr := addStar .w64 memoryEntry.tSp (Term.C64 (M 64 (-4)))
   let lo := 508 * 8
-  let some original := writeInterval mapStoreExprs (.stack lo (lo + 32)) (Term.V32 12)
+  let some original := ((«seal» (Reg.stack lo (lo + 32)).bits (Term.V32 12) >>= fun stored => some (update ⟨mapStoreExprs, []⟩ { exprs := [Expr.mkEq (.stack lo (lo + 32)) stored], predicates := [] }).exprs))
     | return false
   let some frozen := bytesAt memoryEntry original keyPtr 4 | return false
   let Pg := [.helper 7 .lookup ([Term.C64 1077412584, keyPtr] ++ frozen)]
-  let E := mapStoreExprs.insertEq (Reg.real64 0)
-    (star .w64 (.externalResult 7 0) [Term.C64 1, Term.C64 1077412584, keyPtr])
+  let E := (update ⟨mapStoreExprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (star .w64 (.externalResult 7 0) [Term.C64 1, Term.C64 1077412584, keyPtr]))], predicates := [] }).exprs
   let .ok (effect, predicates) :=
     effectsAt memoryEntry 77 E (.stx 8 0 1 0) mapStoreLayouts Pg | return false
   let [.mapWrite 77 mapLo keyLo 0 32 valueLo, .mapWrite 77 mapHi keyHi 4 32 valueHi] :=
     predicates | return false
   let some stored := effect.updates.lookupEq (.map 1077412584 keyLo 0 64) | return false
-  let some live := writeInterval original (.stack lo (lo + 32)) (Term.C32 0) | return false
+  let some live := ((«seal» (Reg.stack lo (lo + 32)).bits (Term.C32 0) >>= fun stored => some (update ⟨original, []⟩ { exprs := [Expr.mkEq (.stack lo (lo + 32)) stored], predicates := [] }).exprs)) | return false
   let some liveKey := bytesAt memoryEntry live keyPtr 4 | return false
   if !effect.validFor E || !effect.inputs.isEmpty ||
       !frozen.all (fun t => t.width == .w64) ||
@@ -695,7 +693,7 @@ private def mapStoreRejectsLayoutAndBoundsCheck : Bool :=
 
 private def nonMapCellStoreObservationsCheck : Bool := Id.run do
   let .ok σ := buildE0 memoryEntry | return false
-  let E := σ.exprs.insertEq (Reg.real64 0) (Term.C64 99)
+  let E := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 99))], predicates := [] }).exprs
   let .ok (_, []) :=
     effectsAt memoryEntry 77 E (.stx 8 10 0 (-8)) mapStoreLayouts [mapStoreLookup]
     | return false
@@ -738,21 +736,21 @@ private def atomicStackSnapshotCheck : Bool := Id.run do
   let .ok σ := buildE0 memoryEntry | return false
   let some mem := putStackWord σ.exprs 1 0xffffffff | return false
   let some mem := putStackWord mem 0 1 | return false
-  let E := mem.insertEq (Reg.real64 2) (Term.C64 1)
-    |>.insertEq (Reg.real64 0) (Term.C64 0x1ffffffff)
+  let E := (update ⟨mem, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 1))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0x1ffffffff))], predicates := [] }).exprs)
   let .ok (add, []) := effectsAt memoryEntry 1 E
     (.atomic .w64 (.add true) 10 2 (-8)) | return false
   let added := applyEffect E add
   let .ok (cmp, []) := effectsAt memoryEntry 2 E
     (.atomic .w64 .cmpxchg 10 2 (-8)) | return false
   let compared := applyEffect E cmp
-  let failedCompare := E.insertEq (Reg.real64 0) (Term.C64 0)
+  let failedCompare := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0))], predicates := [] }).exprs
   let .ok (miss, []) := effectsAt memoryEntry 3 failedCompare
     (.atomic .w64 .cmpxchg 10 2 (-8)) | return false
   let missed := applyEffect failedCompare miss
   let some missingHigh := putStackWord σ.exprs 1 1 | return false
   let .error .undefinedSrc := effectsAt memoryEntry 4
-    (missingHigh.insertEq (Reg.real64 2) (Term.C64 1))
+    ((update ⟨missingHigh, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 1))], predicates := [] }).exprs)
     (.atomic .w64 (.add true) 10 2 (-8)) | return false
   let wide := Reg.stack (504 * 8) (504 * 8 + 64)
   return cellNat added wide == some 0x200000000 &&
@@ -766,9 +764,9 @@ private def atomicStackSnapshotCheck : Bool := Id.run do
 private def atomicMapFieldCheck : Bool := Id.run do
   let some key := mapStoreFrozenKey.mapM mapWriteKeyByte | return false
   let cell := Reg.map 1077412584 key 0 64
-  let some seeded := writeInterval mapStoreExprs cell (Term.C64 0x11223344ffffffff)
+  let some seeded := ((«seal» (cell).bits (Term.C64 0x11223344ffffffff) >>= fun stored => some (update ⟨mapStoreExprs, []⟩ { exprs := [Expr.mkEq cell stored], predicates := [] }).exprs))
     | return false
-  let E := seeded.insertEq (Reg.real64 2) (Term.C64 1)
+  let E := (update ⟨seeded, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 1))], predicates := [] }).exprs
   let .ok (effect, []) := effectsAt memoryEntry 9 E
     (.atomic .w32 (.add true) 0 2 0) mapStoreLayouts [mapStoreLookup] | return false
   let .error .undefinedSrc := effectsAt memoryEntry 9 E
@@ -786,7 +784,7 @@ private def immediateAndSignedMemoryCheck : Bool := Id.run do
   let mem := applyEffect σ.exprs stored
   let .ok (signed, []) := effectsAt memoryEntry 1 mem (.memsx 1 2 10 (-8)) | return false
   let .ok (unsigned, []) := effectsAt memoryEntry 2 mem (.loadAcq 1 2 10 (-8)) | return false
-  let E := mem.insertEq (Reg.real64 2) (Term.C64 0x55)
+  let E := (update ⟨mem, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 0x55))], predicates := [] }).exprs
   let .ok (released, []) := effectsAt memoryEntry 3 E (.storeRel 1 10 2 (-7)) | return false
   let releasedMem := applyEffect E released
   return signed.updates.lookupEq (Reg.real64 2) == some (Term.C64 0xffffffffffffff80) &&
@@ -806,7 +804,7 @@ private def immediateAndSignedMemoryCheck : Bool := Id.run do
   let some stacked := putStackWord initial.exprs 0 0x11223344 | return false
   let some [open0] := bufferAt p initial.exprs (Term.C64 0x2000) 1 | return false
   let byte := star .w32 (.low 8 32) [Term.C32 0x55]
-  let some mem := writeInterval stacked (.packet 0 8) byte | return false
+  let some mem := ((«seal» (Reg.packet 0 8).bits byte >>= fun stored => some (update ⟨stacked, []⟩ { exprs := [Expr.mkEq (.packet 0 8) stored], predicates := [] }).exprs)) | return false
   let some before := bufferAt p stacked (Term.C64 0x1fff) 1 | return false
   let some packetByte := bufferAt p mem (Term.C64 0x2000) 1 | return false
   let some beforeN := before.mapM fun t => eval (solve t) | return false

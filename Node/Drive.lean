@@ -1,4 +1,5 @@
 import Node.Path
+import Core.Interval
 
 namespace Node
 open Core
@@ -77,7 +78,7 @@ private def place (progLen : Nat) (σ : SemState) (c : Candidate) :
       if k ≥ progLen then
         .error .unboundTarget
       else do
-        let state ← applyLocal σ c.E_k c.P_k
+        let state ← (Except.ok (update σ { exprs := c.E_k, predicates := c.P_k }))
         pure (some (k, state))
 
 private def asStandard (loopsLeft : Option Nat) (placed : Option (Nat × SemState)) : DriveResult :=

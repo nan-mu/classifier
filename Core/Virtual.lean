@@ -11,7 +11,7 @@ structure ExprEffect where
   deriving Inhabited, Repr
 
 def ExprEffect.delta (effect : ExprEffect) : List Expr :=
-  effect.inputs.override effect.updates
+  effect.inputs ++ effect.updates
 
 def ExprEffect.validFor (effect : ExprEffect) (Eg : List Expr) : Bool :=
   Eg.keysUnique && Eg.wellTyped && effect.inputs.wellTyped && effect.updates.wellTyped &&
@@ -40,9 +40,10 @@ def CellAccess.read (a : CellAccess) (Eg : List Expr) (w : Width)
 def CellAccess.write (a : CellAccess) (Eg : List Expr) (source : Term) : Option (List Expr) := do
   if !Eg.keysUnique || !a.valid then none
   let n := a.reg.bits
-  let stored := if source.semanticBits == n then source
+  let raw := if source.semanticBits == n then source
     else zStar n (Width.ofBits n) source.width.bits source
-  writeUpdates Eg a.reg stored
+  let stored ← «seal» n raw
+  some [Expr.mkEq a.reg stored]
 
 inductive ByteOrder where
   | little | big
@@ -288,8 +289,8 @@ def PacketAccess.readStored (a : PacketAccess) (Eg : List Expr) (j : Nat) :
         else
           let rawByte := packetByteTerm base
             (addStar base.width base (Term.C base.width (o + j)))
-          let delta ← writeUpdates Eg reg rawByte
-          some (delta, rawByte)
+          let stored ← «seal» reg.bits rawByte
+          some ([Expr.mkEq reg stored], rawByte)
   | none => do
     let base ← a.inputBase
     let off ← a.displacement.toTerm Eg base.width
@@ -305,7 +306,7 @@ def PacketAccess.read (a : PacketAccess) (Eg : List Expr) (w : Width)
     let mut raw := Term.C w 0
     for j in List.range a.bytes do
       let (delta, byte) ← a.readStored Eg j
-      inputs := inputs.override delta
+      inputs := (update ⟨inputs, []⟩ { exprs := delta, predicates := [] }).exprs
       let widened := zStar 8 w 32 byte
       raw := orStar w.bits w raw (shlStar w widened (Term.C w (8 * bytePosition a j)))
     some ⟨inputs, if isUnsigned then raw else sStar (8 * a.bytes) w w.bits raw⟩
@@ -333,13 +334,11 @@ def PacketAccess.write (a : PacketAccess) (Eg : List Expr) (source : Term) :
     match a.displacement with
     | .c o =>
       let mut updates : List Expr := Expr.nil
-      let mut state := Eg
       for j in List.range a.bytes do
         let reg := Reg.packet (8 * (o + j)) (8 * (o + j) + 8)
         let byte := star .w32 (.extract (8 * bytePosition a j) 8 source.width.bits) [source]
-        let delta ← writeUpdates state reg byte
-        state ← writeInterval state reg byte
-        updates := updates.override delta
+        let stored ← «seal» reg.bits byte
+        updates := updates ++ [Expr.mkEq reg stored]
       some updates
     | _ => some Expr.nil
 

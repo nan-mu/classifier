@@ -1,4 +1,5 @@
 import Core.Expr
+import Core.Update
 
 namespace Core
 
@@ -7,10 +8,6 @@ def «seal» (n : Nat) (t : Term) : Option Term := do
   if solved.semanticBits == n then return solved
   if n == 0 || solved.width.bits < n then failure
   pure <| .app (Width.ofBits n) (.low n solved.width.bits) [solved]
-
-private def insertSealed (E : List Expr) (r : Reg) (t : Term) : Option (List Expr) := do
-  let stored ← «seal» r.bits t
-  pure <| Expr.mkEq r stored :: E.filter (fun x => x.reg != r)
 
 /-- Project `len` bits at `offset` in the carrier. A term that already has that length is unchanged. -/
 private def sliceTerm (t : Term) (offset len : Nat) : Term :=
@@ -58,30 +55,11 @@ partial def readInterval (E : List Expr) (r : Reg) : Option Term := do
       else go rest cursor acc
   «seal» r.bits (← go pieces r.lo none)
 
-/-- Drop every row of each overlapping register, install the written interval, and keep the
-untouched sides as projections. Comparisons on a split register are not rewritten. -/
-def writeInterval (E : List Expr) (r : Reg) (t : Term) : Option (List Expr) := do
-  if !r.valid || !E.wellTyped then failure
-  let t ← «seal» r.bits t
-  let victims := E.bindings.filter fun e => e.reg.overlaps r
-  let kept := E.filter fun e => !(victims.any fun v => v.reg == e.reg)
-  let mut out ← insertSealed kept r t
-  for v in victims do
-    let lo := v.reg.lo
-    let hi := v.reg.hi
-    if lo < r.lo then
-      let stop := min hi r.lo
-      out ← insertSealed out (v.reg.withInterval lo stop) (sliceTerm v.term 0 (stop - lo))
-    if r.hi < hi then
-      let start := max lo r.hi
-      out ← insertSealed out (v.reg.withInterval start hi)
-        (sliceTerm v.term (start - lo) (hi - start))
-  pure out
-
 def putContext (E : List Expr) (j : ContextField) (t : Term) : Option (List Expr) := do
   let n := t.semanticBits
   if n == 0 || j.cap < n then failure
-  writeInterval E (.context j 0 n) t
+  let stored ← «seal» n t
+  some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.context j 0 n) stored], predicates := [] }).exprs
 
 /-- The field's interval that starts at bit 0. Absence means create did not install it. -/
 def contextValue (E : List Expr) (j : ContextField) : Option Term :=
@@ -92,15 +70,6 @@ def contextValue (E : List Expr) (j : ContextField) : Option Term :=
 
 def contextNat (E : List Expr) (j : ContextField) : Option Nat := do
   eval (solve (← contextValue E j))
-
-/-- Rows `writeInterval` installed or retained as untouched sides of an overlap.
-`override` drops the old overlapping rows, so this list is the local assignment. -/
-def writeUpdates (E : List Expr) (r : Reg) (t : Term) : Option (List Expr) := do
-  let after ← writeInterval E r t
-  let touched := (E.bindings.filter (fun e => e.reg.overlaps r)).map (·.reg)
-  pure <| after.bindings.filter fun e =>
-    e.reg == r || touched.any fun v =>
-      e.reg.sameResource v && decide (v.lo ≤ e.reg.lo ∧ e.reg.hi ≤ v.hi) && e.reg != v
 
 def ContextField.ofXdp : Nat → Option ContextField
   | 0 => some .data

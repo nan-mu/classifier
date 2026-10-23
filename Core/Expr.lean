@@ -137,30 +137,6 @@ def lookupRel (E : List Expr) (r : Reg) (rel : Rel) : Option Term :=
 def lookupEq (E : List Expr) (r : Reg) : Option Term :=
   E.lookupRel r .eq
 
-/-- Append a comparison. An equality here does not replace the register's value. -/
-def insertConstraint (E : List Expr) (e : Expr) : List Expr :=
-  let e := solveExpr e
-  if E.contains e then E else E ++ [e]
-
-/-- Insert an equality as an assignment; any other relation is only a comparison. -/
-def insertExpr (E : List Expr) (e : Expr) : List Expr :=
-  if e.rel != .eq then E.insertConstraint e else
-    let e := solveExpr e
-    e :: E.filter (fun x => x.reg != e.reg)
-
-def insertEq (E : List Expr) (r : Reg) (t : Term) : List Expr :=
-  E.insertExpr (Expr.mkEq r t)
-
-/-- Override \(E_g\times E_i\). Equality rows in \(E_i\) are assignments.
-A comparison equality is not an assignment; `applyLocal` appends those from the
-branch predicate instead of passing them through this write set. -/
-def override (Eg Ei : List Expr) : List Expr :=
-  let writes := Ei.bindings
-  -- A partial interval replaces every overlapping value of the same resource.
-  let keep (e : Expr) :=
-    !(writes.any (fun w => w.reg == e.reg || w.reg.overlaps e.reg))
-  Ei.constraints.foldl insertConstraint ((Eg.filter keep) ++ writes)
-
 def forReg (E : List Expr) (r : Reg) : List Expr :=
   E.filter (fun e => e.reg == r)
 

@@ -45,18 +45,18 @@ def savedRegs : List Reg :=
 /-- The seven intentional real-register entry bindings, before the entry overwrite. -/
 def buildEBase (p : EntryParams) : List Expr :=
   Expr.nil
-    |>.insertEq (Reg.real32 0) (Term.C32 0)
-    |>.insertEq (Reg.real32 1) p.tReturn
-    |>.insertEq (Reg.real32 2) p.tSp
-    |>.insertEq (Reg.real32 5) p.tSp
-    |>.insertEq (Reg.real32 6) p.tReturn
-    |>.insertEq (Reg.real32 7) p.tFrame
-    |>.insertEq (Reg.real32 10) p.tCtx
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 0) (solve (Term.C32 0))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve p.tReturn)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve p.tSp)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 5) (solve p.tSp)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 6) (solve p.tReturn)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 7) (solve p.tFrame)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve p.tCtx)], predicates := [] }).exprs)
 
 /-- The call overwrites ra with tReturn; other entry registers retain tEntry. -/
 def buildEReal0 (p : EntryParams) : List Expr :=
   p.rEntries.foldl (fun E r =>
-    if r == Reg.real32 1 then E else E.insertEq r p.tEntry) (buildEBase p)
+    if r == Reg.real32 1 then E else (update ⟨E, []⟩ { exprs := [Expr.mkEq r (solve p.tEntry)], predicates := [] }).exprs) (buildEBase p)
 
 /-- Validate the real-register input contract. Concrete entry=0 and misaligned SP fail. -/
 def buildRealE0 (p : EntryParams) : Except RejectReason (List Expr) := do
@@ -102,7 +102,7 @@ def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   if ![p.tData, p.tLen].all leaf32 || p.ιWifi ≥ (1 <<< 32) then throw .invalidEntry
   let Ereal ← buildRealE0 p
   let Ectx ← writeContext p
-  let E := Ereal.override Ectx
+  let E := (update ⟨Ereal, []⟩ { exprs := Ectx, predicates := [] }).exprs
   if !E.keysUnique then throw .invalidEntry
   pure ⟨E, []⟩
 

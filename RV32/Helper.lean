@@ -1,4 +1,5 @@
 import Core.Anchor
+import Core.Update
 import RV32.Initial
 import RV32.Expr
 import Node.Path
@@ -93,7 +94,7 @@ def helperMapWrites (E : List Expr) (p : Predicate) : Except RejectReason (List 
       if key.length != layout.keySize || layout.valueSize < 4 then return []
       let some key := key.mapM mapKeyByte | return []
       let value := Term.regVar event (Reg.real32 10)
-      match writeUpdates Expr.nil (.map id key 0 32) value with
+      match ((«seal» (Reg.map id key 0 32).bits value >>= fun stored => some [Expr.mkEq (.map id key 0 32) stored])) with
       | some rows => pure rows
       | none => throw .localReject
     | _, _ => pure []
@@ -102,7 +103,7 @@ def helperMapWrites (E : List Expr) (p : Predicate) : Except RejectReason (List 
 /-- The helper value projection writes a0. The lookup value is a memory write. -/
 def helperExpr (p : Predicate) : Except RejectReason (List Expr) := do
   let result ← callReturnTerm p
-  pure (Expr.nil.insertEq (Reg.real32 10) result)
+  pure ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve result)], predicates := [] }).exprs)
 
 #guard [1, 2, 3, 5, 6, 28, 65].map (fun id => helperArity (helperKind id)) == [2, 4, 2, 0, 5, 5, 2]
 #guard helperArity (helperKind 999) == 0
@@ -129,33 +130,33 @@ private def completeMapBuffersCheck : Bool := Id.run do
   let fields := [data, addStar .w32 data (Term.C32 8), Term.C32 0, Term.C32 0,
     Term.C32 0, Term.C32 0]
   let some built := putXdp Expr.nil fields | return false
-  let some built := writeInterval built (.stack 0 32) (Term.C32 0x04030201) | return false
-  let some built := writeInterval built (.stack 32 64) (Term.C32 0x08070605) | return false
-  let some built := writeInterval built (.packet 8 16) (byteTerm 0xaa) | return false
-  let some built := writeInterval built (.packet 16 24) (byteTerm 0xbb) | return false
+  let some built := ((«seal» (Reg.stack 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨built, []⟩ { exprs := [Expr.mkEq (.stack 0 32) stored], predicates := [] }).exprs)) | return false
+  let some built := ((«seal» (Reg.stack 32 64).bits (Term.C32 0x08070605) >>= fun stored => some (update ⟨built, []⟩ { exprs := [Expr.mkEq (.stack 32 64) stored], predicates := [] }).exprs)) | return false
+  let some built := ((«seal» (Reg.packet 8 16).bits (byteTerm 0xaa) >>= fun stored => some (update ⟨built, []⟩ { exprs := [Expr.mkEq (.packet 8 16) stored], predicates := [] }).exprs)) | return false
+  let some built := ((«seal» (Reg.packet 16 24).bits (byteTerm 0xbb) >>= fun stored => some (update ⟨built, []⟩ { exprs := [Expr.mkEq (.packet 16 24) stored], predicates := [] }).exprs)) | return false
   let some E := Anchor.installMaps (built
-    |>.insertEq (Reg.real32 2) (Term.V32 0)
-    |>.insertEq (Reg.real32 11) (Term.C32 42)
-    |>.insertEq (Reg.real32 12) key
-    |>.insertEq (Reg.real32 13) value
-    |>.insertEq (Reg.real32 14) (Term.C32 0))
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.V32 0))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 42))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve key)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve value)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 14) (solve (Term.C32 0))], predicates := [] }).exprs))
     [{ mapId := 42, keySize := 3, valueSize := 2 }] | return false
   for (id, kind, abi, tail) in [
       (1, HelperKind.lookup, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (3, HelperKind.delete, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (2, HelperKind.update, [Term.C32 42, key, value, Term.C32 0],
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 0xaa, Term.C32 0xbb])] do
-    let state := E.insertEq (Reg.real32 10) (Term.C32 id)
+    let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 id))], predicates := [] }).exprs
     let .ok p := helperPredicate 70 state | return false
     if p != .helper 70 kind (abi ++ tail) then return false
     let .ok result := helperExpr p | return false
     if result.lookupEq (Reg.real32 10) !=
         some (star .w32 (.externalResult 70 0) (Term.C32 id :: abi)) then return false
-    let some changed := writeInterval state (.stack 32 64) (Term.C32 0) | return false
+    let some changed := ((«seal» (Reg.stack 32 64).bits (Term.C32 0) >>= fun stored => some (update ⟨state, []⟩ { exprs := [Expr.mkEq (.stack 32 64) stored], predicates := [] }).exprs)) | return false
     let .ok fresh := helperPredicate 71 changed | return false
     if fresh != .helper 71 kind
         (abi ++ [Term.C32 4, Term.C32 0, Term.C32 0] ++ tail.drop 3) then return false
-  let update := E.insertEq (Reg.real32 10) (Term.C32 2)
+  let update := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 2))], predicates := [] }).exprs
   let abiPrefix := [Term.C32 42, key, value, Term.C32 0]
   let missingStack := update.filter fun e => e.reg != .stack 32 64
   let .ok incompletePredicate := helperPredicate 70 missingStack | return false
@@ -179,15 +180,15 @@ private def mapBufferBoundsCheck : Bool := Id.run do
   let maps := [target, source]
   let sourceKey := List.replicate 8 (Term.C32 7)
   let some sourceBytes := sourceKey.mapM mapKeyByte | return false
-  let some buffers := writeInterval Expr.nil (.stack 0 32) (Term.C32 0x04030201) | return false
-  let some buffers := writeInterval buffers (.map 17 sourceBytes 0 32) (Term.C32 0x04030201) | return false
-  let some buffers := writeInterval buffers (.map 17 sourceBytes 32 64) (Term.C32 0x08070605) | return false
+  let some buffers := ((«seal» (Reg.stack 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (.stack 0 32) stored], predicates := [] }).exprs)) | return false
+  let some buffers := ((«seal» (Reg.map 17 sourceBytes 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨buffers, []⟩ { exprs := [Expr.mkEq (.map 17 sourceBytes 0 32) stored], predicates := [] }).exprs)) | return false
+  let some buffers := ((«seal» (Reg.map 17 sourceBytes 32 64).bits (Term.C32 0x08070605) >>= fun stored => some (update ⟨buffers, []⟩ { exprs := [Expr.mkEq (.map 17 sourceBytes 32 64) stored], predicates := [] }).exprs)) | return false
   let prior : List Predicate :=
     [.helper 9 .lookup ([Term.C32 17, Term.V32 7] ++ sourceKey)]
   let bare := buffers
-    |>.insertEq (Reg.real32 2) key
-    |>.insertEq (Reg.real32 11) (Term.C32 42)
-    |>.insertEq (Reg.real32 14) (Term.C32 0)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve key)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 42))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 14) (solve (Term.C32 0))], predicates := [] }).exprs)
   let unknown := star .w32 (.externalResult 9 0) [Term.C32 1, Term.V32 17, Term.V32 7]
   let wrapped := addStar .w32 pointer (Term.C32 ((1 <<< 32) - 1))
   for (id, kind) in [(1, HelperKind.lookup), (3, HelperKind.delete),
@@ -197,9 +198,9 @@ private def mapBufferBoundsCheck : Bool := Id.run do
       else [Term.C32 42, atEnd]
     let tail := if id == 2 then [Term.C32 1, Term.C32 2, Term.C32 3,
       Term.C32 4, Term.C32 5, Term.C32 6] else [Term.C32 4, Term.C32 5, Term.C32 6]
-    let placed := bare.insertEq (Reg.real32 10) (Term.C32 id)
-      |>.insertEq (Reg.real32 12) (if id == 2 then key else atEnd)
-      |>.insertEq (Reg.real32 13) atEnd
+    let placed := (update ⟨bare, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 id))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve (if id == 2 then key else atEnd))], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve atEnd)], predicates := [] }).exprs)
     let some state := Anchor.installMaps placed maps | return false
     let .ok frozen := helperPredicate 70 state (preds := prior) | return false
     if frozen != .helper 70 kind (abi ++ tail) then return false
@@ -211,13 +212,13 @@ private def mapBufferBoundsCheck : Bool := Id.run do
       let .ok abiPrefix := helperPredicate 70 variant (preds := prior) | return false
       if abiPrefix != .helper 70 kind abi then return false
     for address in [beyondEnd, unknown, wrapped] do
-      let changed := state.insertEq bufferReg address
+      let changed := (update ⟨state, []⟩ { exprs := [Expr.mkEq bufferReg (solve address)], predicates := [] }).exprs
       let expected := if id == 2 then [Term.C32 42, key, address, Term.C32 0]
         else [Term.C32 42, address]
       let .ok abiPrefix := helperPredicate 70 changed (preds := prior) | return false
       if abiPrefix != .helper 70 kind expected then return false
     if id == 2 then
-      let changed := state.insertEq (Reg.real32 12) beyondEnd
+      let changed := (update ⟨state, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve beyondEnd)], predicates := [] }).exprs
       let .ok abiPrefix := helperPredicate 70 changed (preds := prior) | return false
       if abiPrefix != .helper 70 kind [Term.C32 42, beyondEnd, atEnd, Term.C32 0] then
         return false

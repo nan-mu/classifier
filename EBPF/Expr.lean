@@ -12,10 +12,10 @@ def readReg (E : List Expr) (r : Nat) : Option Term := do
 /-- 64-bit ALU writes `Real(r,[0,64))`. 32-bit ALU writes the result into `[0,32)` and clears `[32,64)`. -/
 def assignReal (w : Width) (dst : Nat) (value : Term) : Option (List Expr) :=
   match w with
-  | .w64 => writeUpdates Expr.nil (Reg.real64 dst) value
+  | .w64 => ((«seal» ((Reg.real64 dst)).bits value >>= fun stored => some [Expr.mkEq (Reg.real64 dst) stored]))
   | .w32 => do
-    let low ← writeUpdates Expr.nil (Reg.real32 dst) value
-    let high ← writeUpdates Expr.nil (.real dst 32 64) (Term.C32 0)
+    let low ← ((«seal» ((Reg.real32 dst)).bits value >>= fun stored => some [Expr.mkEq (Reg.real32 dst) stored]))
+    let high ← («seal» (Reg.real dst 32 64).bits (Term.C32 0) >>= fun stored => some [Expr.mkEq (Reg.real dst 32 64) stored])
     pure (low ++ high)
 
 private def sourceTerm (E : List Expr) : Source → Option Term
@@ -87,8 +87,8 @@ def expr (E : List Expr) (i : Insn) : Option (List Expr) := do
   | _ => none
 
 private def alu32FamilyCheck : Bool :=
-  let E := Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
-    |>.insertEq (Reg.real64 2) (Term.C64 2)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x10000000f))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 2))], predicates := [] }).exprs)
   let cases : List (BinaryOp × Nat) :=
     [(.add, 17), (.sub, 13), (.mul, 30), (.div, 7), (.mod, 1),
       (.sdiv, 7), (.smod, 1), (.and, 2), (.or, 15), (.xor, 13),
@@ -101,8 +101,8 @@ private def alu32FamilyCheck : Bool :=
     | none => false
 
 private def unaryAndDivisionCheck : Bool :=
-  let E := Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x100000001)
-    |>.insertEq (Reg.real64 2) (Term.C64 0x80000080)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x100000001))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 0x80000080))], predicates := [] }).exprs)
   let cases : List (Insn × Nat) :=
     [(.neg .w32 1, 0xffffffff),
       (.movsx .w32 8 1 2, 0xffffff80),
@@ -129,14 +129,14 @@ private def unaryAndDivisionCheck : Bool :=
 
 #guard alu32FamilyCheck
 #guard unaryAndDivisionCheck
-#guard match expr (Expr.nil.insertEq (Reg.real64 1) (Term.V64 9)
-    |>.insertEq (Reg.real64 2) (Term.V64 10)) (.binary .w32 .sdiv 1 (.reg 2)) with
+#guard match expr ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 9))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.V64 10))], predicates := [] }).exprs)) (.binary .w32 .sdiv 1 (.reg 2)) with
   | some updates => updates.lookupEq (Reg.real32 1) ==
       some (star .w32 (.sdiv .w32 0)
         [zStar 32 .w32 64 (Term.V64 9), zStar 32 .w32 64 (Term.V64 10)]) &&
       updates.lookupEq (.real 1 32 64) == some (Term.C32 0)
   | none => false
-#guard (expr (Expr.nil.insertEq (Reg.real64 1) (Term.C64 1))
+#guard (expr ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 1))], predicates := [] }).exprs)
   (.binary .w32 .lsh 1 (.imm 32))).isNone
 
 end EBPF

@@ -126,12 +126,12 @@ structure SemState where
 
 def SemState.empty : SemState := { exprs := Expr.nil, predicates := [] }
 
-theorem savedMapKey_expr_update (p : Predicate) (E updates : List Expr) :
-    (SemState.mk (E.override updates) [p]).predicates = [p] := rfl
+theorem savedMapKey_expr_update (p : Predicate) (E _updates : List Expr) :
+    (SemState.mk E [p]).predicates = [p] := rfl
 
-theorem lookupKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
+theorem lookupKeyAt_expr_update (E _updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
-    lookupKeyAt (SemState.mk (E.override updates) Pg).predicates event =
+    lookupKeyAt (SemState.mk E Pg).predicates event =
       lookupKeyAt Pg event := rfl
 
 theorem lookupKeyAt_deterministic (Pg : List Predicate) (event : NodeId)

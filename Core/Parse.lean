@@ -448,9 +448,9 @@ private def crossCarrierRoundTripCheck : Bool :=
 #guard crossCarrierRoundTripCheck
 
 private def constraintRoundTripCheck : Bool :=
-  let E := Expr.nil.insertEq (Reg.real64 1) (Term.V64 1)
-    |>.insertConstraint (Expr.mkRel (Reg.real64 1) .eq (Term.C64 10))
-    |>.insertConstraint (Expr.mkRel (Reg.real64 1) (.ltuN 32) (Term.C64 20))
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 1))], predicates := [] }).exprs
+    |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real64 1) .eq (Term.C64 10)); if acc.contains row then acc else acc ++ [row]))
+    |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real64 1) (.ltuN 32) (Term.C64 20)); if acc.contains row then acc else acc ++ [row]))
   match parseSemStateJson ("[" ++ renderExprsJson E ++ "]") "[]" with
   | some state => state.exprs == E && state.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1)
   | none => false
@@ -581,11 +581,10 @@ private def fiveClassSemStateCheck : Bool :=
 #guard parseOpsRoundTripCheck
 #guard Id.run do
   let key := [Term.C32 1, Term.C32 2]
-  let some E := writeInterval (Expr.nil.insertEq (Reg.real64 1) (Term.V64 1))
-    (.stack 0 32) (Term.V32 7) | return false
+  let some E := ((«seal» ((Reg.real64 1)).bits (Term.V64 1) >>= fun stored => some (update ⟨((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) stored], predicates := [] }).exprs), []⟩ { exprs := [Expr.mkEq (.stack 0 32) (solve (Term.V32 7))], predicates := [] }).exprs)) | return false
   let byte (n : Nat) : Term := .app .w32 (.low 8 32) [.C32 n]
-  let some E := writeInterval E (.stack 32 40) (byte 0x11) | return false
-  let some E := writeInterval E (.map 3 key 0 8) (byte 9) | return false
+  let some E := ((«seal» (Reg.stack 32 40).bits (byte 0x11) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 32 40) stored], predicates := [] }).exprs)) | return false
+  let some E := ((«seal» (Reg.map 3 key 0 8).bits (byte 9) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.map 3 key 0 8) stored], predicates := [] }).exprs)) | return false
   let σ : SemState := ⟨E, []⟩
   let (exprs, preds) := renderSemStateJson σ
   match parseSemStateJson s!"[{exprs}]" s!"[{preds}]" with

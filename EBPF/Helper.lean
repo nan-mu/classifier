@@ -1,4 +1,5 @@
 import EBPF.Memory
+import Core.Update
 
 namespace EBPF
 open Core Node
@@ -53,7 +54,7 @@ def callReturnTerm (event : NodeId) (call : HelperCall) : Term :=
 
 /-- Lookup records r0. The value interval is a separate map equality. -/
 def helperExpr (event : NodeId) (call : HelperCall) : List Expr :=
-  Expr.nil.insertEq (Reg.real64 0) (callReturnTerm event call)
+  (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (callReturnTerm event call))], predicates := [] }).exprs
 
 /-- Anchor the lookup return at value offset zero when the frozen key is complete. -/
 def lookupAnchor (E : List Expr) (event : NodeId) (call : HelperCall)
@@ -68,7 +69,7 @@ def lookupAnchor (E : List Expr) (event : NodeId) (call : HelperCall)
       let bits := 8 * min layout.valueSize 8
       let some key := key.mapM mapWriteKeyByte | throw .undefinedSrc
       let value := Term.regVar event (Reg.real64 0)
-      match writeUpdates Expr.nil (.map id key 0 bits) value with
+      match ((«seal» (Reg.map id key 0 bits).bits value >>= fun stored => some [Expr.mkEq (.map id key 0 bits) stored])) with
       | some rows => pure rows
       | none => throw .localReject
   | _ => pure []
@@ -81,20 +82,20 @@ def lookupAnchor (E : List Expr) (event : NodeId) (call : HelperCall)
       callReturnTerm 7 call == Term.C64 18446744073709551615
   | _ => false
 #guard match parseHelperCall
-    (Expr.nil.insertEq (Reg.real64 1) (Term.V64 1)
-      |>.insertEq (Reg.real64 2) (Term.C64 10)) 6 with
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 1))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 10))], predicates := [] }).exprs)) 6 with
   | .ok call => call.kind == .printk && call.args == [Term.V64 1, Term.C64 10]
   | _ => false
 #guard match parseHelperCall
-    (Expr.nil.insertEq (Reg.real64 1) (Term.V64 1)
-      |>.insertEq (Reg.real32 2) (Term.C32 10)
-      |>.insertEq (.real 2 32 64) (Term.C32 0)) 6 with
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 1))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.C32 10))], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (.real 2 32 64) (solve (Term.C32 0))], predicates := [] }).exprs)) 6 with
   | .ok call => call.kind == .printk && call.args.length == 2 &&
       eval (solve call.args[1]!) == some 10
   | _ => false
 #guard match parseHelperCall
-    (Expr.nil.insertEq (Reg.real64 1) (Term.V64 3)
-      |>.insertEq (Reg.real64 2) (Term.V64 4)) 1 with
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 3))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.V64 4))], predicates := [] }).exprs)) 1 with
   | .ok call => call.args == [Term.V64 3, Term.V64 4] &&
       (helperExpr 7 call).lookupEq (Reg.real64 0) ==
         some (callReturnTerm 7 call) &&
@@ -102,7 +103,7 @@ def lookupAnchor (E : List Expr) (event : NodeId) (call : HelperCall)
   | _ => false
 
 private def stackWord (E : List Expr) (bit value : Nat) : Option (List Expr) :=
-  writeInterval E (.stack bit (bit + 32)) (Term.C32 value)
+  ((«seal» (Reg.stack bit (bit + 32)).bits (Term.C32 value) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack bit (bit + 32)) stored], predicates := [] }).exprs))
 
 #guard Id.run do
   let p : EntryParams := ⟨Term.V64 1, Term.V64 0, Term.V32 2, 64⟩
@@ -147,8 +148,8 @@ private def existingBufferKindsCheck : Bool := Id.run do
   let some keyBytes := key.mapM mapWriteKeyByte | return false
   let lookup := Predicate.helper 7 .lookup ([Term.C64 42, Term.V64 9] ++ key)
   let E := host p initial.exprs maps
-  let some seeded := writeInterval E (.map 42 keyBytes 0 32) (Term.C32 0x04030201) | return false
-  let some seeded := writeInterval seeded (.packet 0 32) (Term.C32 0x08070605) | return false
+  let some seeded := ((«seal» (Reg.map 42 keyBytes 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.map 42 keyBytes 0 32) stored], predicates := [] }).exprs)) | return false
+  let some seeded := ((«seal» (Reg.packet 0 32).bits (Term.C32 0x08070605) >>= fun stored => some (update ⟨seeded, []⟩ { exprs := [Expr.mkEq (.packet 0 32) stored], predicates := [] }).exprs)) | return false
   let mapCall : HelperCall := ⟨.delete, 3, [Term.C64 42, mapPtr]⟩
   let packetCall : HelperCall := ⟨.lookup, 1, [Term.C64 42, Term.C64 0x1000]⟩
   let contextCall : HelperCall := ⟨.delete, 3, [Term.C64 42, p.tCtx]⟩

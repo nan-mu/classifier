@@ -1,4 +1,5 @@
 import Core.Numeric
+import Core.Update
 import Core.Virtual
 import Core.Render
 
@@ -51,7 +52,7 @@ def exportCellAccess (kind width hasOld bitOffset bits sourceWidth isUnsigned wr
       | _ => none
     if !full.valid || !reg.valid then none
     let E ← if hasOld == 0 then some Expr.nil else
-      writeInterval Expr.nil full (Term.C w old.toNat)
+      ((«seal» (full).bits (Term.C w old.toNat) >>= fun stored => some (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq full stored], predicates := [] }).exprs))
     let access : CellAccess := ⟨reg⟩
     if write == 0 then
       let t ← access.read E v (isUnsigned != 0)
@@ -70,7 +71,7 @@ def exportPacketAccess (values : Array UInt32)
     let w ← ffiWidth width
     let mut E := Expr.nil
     for (value, j) in values.toList.zipIdx do
-      E ← writeInterval E (.packet (8 * j) (8 * j + 8)) (Term.C32 (value.toNat &&& 255))
+      E ← ((«seal» (Reg.packet (8 * j) (8 * j + 8)).bits (Term.C32 (value.toNat &&& 255)) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.packet (8 * j) (8 * j + 8)) stored], predicates := [] }).exprs))
     let access : PacketAccess := {
       displacement := .c offset.toNat
       bytes := bytes.toNat

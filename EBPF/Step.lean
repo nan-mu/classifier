@@ -1,4 +1,5 @@
 import EBPF.Encode
+import Core.Update
 import EBPF.Helper
 import Node.Path
 
@@ -67,7 +68,7 @@ private def comparisonCandidate (I : Array Insn) (j : Nat) (offset : Int)
     (dir : BranchDirection) (lhs : Term) (e : Expr) : Except RejectReason Candidate := do
   let some target := jumpTarget I j offset | throw .unboundTarget
   let direction := match dir with | .taken => Direction.taken | .notTaken => .notTaken
-  pure ⟨direction, target, Expr.nil.insertConstraint e,
+  pure ⟨direction, target, (let row := solveExpr e; if Expr.nil.contains row then Expr.nil else Expr.nil ++ [row]),
     [.branch (j + 1) dir ⟨lhs, e.rel, e.term⟩]⟩
 
 /-- An early return is still a successor. Landing on `.exit` records the branch
@@ -75,7 +76,7 @@ and does not step the `exit` instruction, so the arm has no `ret` observation.
 That matches RV `abortExit`. -/
 private def abortExit (j : Nat) (dir : BranchDirection) (lhs : Term) (e : Expr) : Candidate :=
   let direction := match dir with | .taken => Direction.taken | .notTaken => .notTaken
-  ⟨direction, .exit, Expr.nil.insertConstraint e,
+  ⟨direction, .exit, (let row := solveExpr e; if Expr.nil.contains row then Expr.nil else Expr.nil ++ [row]),
     [.branch (j + 1) dir ⟨lhs, e.rel, e.term⟩]⟩
 
 private def branchCandidates (I : Array Insn) (j : Nat) (E : List Expr)
@@ -124,7 +125,7 @@ private def wideImmediate (I : Array Insn) (E : List Expr) (j dst : Nat)
     | .unbound =>
       if srcType == 0 then pure (Term.C64 bits.toNat) else throw .unsupported
   if j + 2 ≥ I.size then throw .unboundTarget
-  pure ⟨.ok, .pos (j + 2), Expr.nil.insertEq (Reg.real64 dst) value, []⟩
+  pure ⟨.ok, .pos (j + 2), (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 dst) (solve value)], predicates := [] }).exprs, []⟩
 
 /-- All operands come from the executing pre-state. EXIT captures full-width r0;
 falling off the sequence is never a return. Native helper calls freeze full-width
@@ -176,11 +177,11 @@ private def aluExitSequenceCheck : Bool := Id.run do
   let p := checkEntry
   let .ok root := buildE0 p | return false
   let .candidates [mov] := ebpfStep I 0 0 root | return false
-  let .ok afterMov := Node.applyLocal root mov.E_k mov.P_k | return false
+  let afterMov := update root { exprs := mov.E_k, predicates := mov.P_k }
   let .candidates [add] := ebpfStep I 1 1 afterMov | return false
-  let .ok afterAdd := Node.applyLocal afterMov add.E_k add.P_k | return false
+  let afterAdd := update afterMov { exprs := add.E_k, predicates := add.P_k }
   let .candidates [exit] := ebpfStep I 2 2 afterAdd | return false
-  let .ok final := Node.applyLocal afterAdd exit.E_k exit.P_k | return false
+  let final := update afterAdd { exprs := exit.E_k, predicates := exit.P_k }
   return mov.dir == .ok && mov.loc == .pos 1 &&
     add.dir == .ok && add.loc == .pos 2 &&
     exit.dir == .ok && exit.loc == .exit &&
@@ -192,7 +193,7 @@ private def aluExitSequenceCheck : Bool := Id.run do
     final.predicates == [.ret (Term.C64 8)]
 
 #guard aluExitSequenceCheck
-#guard match expr (Expr.nil.insertEq (Reg.real64 1) (Term.V64 7))
+#guard match expr ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 7))], predicates := [] }).exprs)
     (.mov .w64 0 (.reg 1)) with
   | some E => E.lookupEq (Reg.real64 0) == some (idStar .w64 (Term.V64 7))
   | none => false
@@ -221,7 +222,7 @@ private def halves (E : List Expr) (r low high : Nat) : Bool :=
 #guard match expr Expr.nil (.mov .w32 0 (.imm 0xffffffff)) with
   | some E => halves E 0 0xffffffff 0
   | none => false
-#guard match expr (Expr.nil.insertEq (Reg.real64 0) (Term.C64 0xffffffff))
+#guard match expr ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0xffffffff))], predicates := [] }).exprs)
     (.binary .w32 .add 0 (.imm 1)) with
   | some E => halves E 0 0 0
   | none => false
@@ -245,9 +246,9 @@ private def branchCheck : Bool := Id.run do
   let I := #[.jcond .w64 .jeq 1 (.reg 2) 1, .exit, .exit]
   let lhs := Term.V64 7
   let rhs := Term.V64 8
-  let E := Expr.nil.insertEq (Reg.real64 1) lhs |>.insertEq (Reg.real64 2) rhs
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve lhs)], predicates := [] }).exprs |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve rhs)], predicates := [] }).exprs)
   let .candidates [taken, fall] := ebpfStep I 11 0 ⟨E, []⟩ | return false
-  let .ok afterTaken := applyLocal ⟨E, []⟩ taken.E_k taken.P_k | return false
+  let afterTaken := update ⟨E, []⟩ { exprs := taken.E_k, predicates := taken.P_k }
   return taken.dir == .taken && taken.loc == .pos 2 &&
     taken.E_k == [⟨Reg.real64 1, .eq, rhs⟩] &&
     taken.P_k == [.branch 1 .taken ⟨lhs, .eq, rhs⟩] &&
@@ -264,7 +265,7 @@ private def packetAbortArmCheck : Bool := Id.run do
   let byte := Term.app .w32 (.inputByte 0) [Term.C32 0, Term.C32 12]
   let lhs := idStar .w64 (Term.app .w64 (.zext 32 .w64 32) [byte])
   let I := #[.jcond .w32 .jne 1 (.imm 8) 1, .mov .w64 2 (.imm 1), .exit]
-  let E := Expr.nil.insertEq (Reg.real64 1) lhs
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve lhs)], predicates := [] }).exprs
   match ebpfStep I 0 0 ⟨E, []⟩ with
   | .candidates [abort, fall] =>
     abort.dir == .taken && abort.loc == .exit &&
@@ -276,7 +277,7 @@ private def packetLiveArmsCheck : Bool := Id.run do
   let byte := Term.app .w32 (.inputByte 0) [Term.C32 0, Term.C32 12]
   let lhs := idStar .w64 (Term.app .w64 (.zext 32 .w64 32) [byte])
   let I := #[.jcond .w32 .jne 1 (.imm 8) 1, .mov .w64 2 (.imm 1), .mov .w64 3 (.imm 1)]
-  let E := Expr.nil.insertEq (Reg.real64 1) lhs
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve lhs)], predicates := [] }).exprs
   match ebpfStep I 0 0 ⟨E, []⟩ with
   | .candidates [c] => c.dir == .notTaken && c.loc == .pos 1
   | _ => false
@@ -285,38 +286,38 @@ private def packetLiveArmsCheck : Bool := Id.run do
 #guard packetLiveArmsCheck
 #guard oneCandidateCheck
     (ebpfStep #[.jcond .w64 .jne 1 (.imm 2) 1, .exit, .exit] 0 0
-      ⟨Expr.nil.insertEq (Reg.real64 1) (Term.C64 1), []⟩)
-    .taken (.pos 2) (Expr.nil.insertConstraint ⟨Reg.real64 1, .ne, Term.C64 2⟩)
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩)
+    .taken (.pos 2) ((let row := solveExpr ⟨Reg.real64 1, .ne, Term.C64 2⟩; if Expr.nil.contains row then Expr.nil else Expr.nil ++ [row]))
     [.branch 1 .taken ⟨Term.C64 1, .ne, Term.C64 2⟩]
 -- JMP32 ignores high bits; its excluded Taken target need not be in range.
 #guard oneCandidateCheck
     (ebpfStep #[.jcond .w32 .jgt 1 (.reg 2) 99, .exit] 0 0
-      ⟨Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x100000001)
-        |>.insertEq (Reg.real64 2) (Term.C64 2), []⟩)
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x100000001))], predicates := [] }).exprs
+        |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 2))], predicates := [] }).exprs), []⟩)
     .notTaken (.pos 1)
-    (Expr.nil.insertConstraint ⟨Reg.real64 1, .leuN 32, Term.C64 2⟩)
+    ((let row := solveExpr ⟨Reg.real64 1, .leuN 32, Term.C64 2⟩; if Expr.nil.contains row then Expr.nil else Expr.nil ++ [row]))
     [.branch 1 .notTaken ⟨Term.C64 0x100000001, .leuN 32, Term.C64 2⟩]
 #guard oneCandidateCheck
     (ebpfStep #[.jcond .w32 .jeq 1 (.imm 1) 0, .exit] 0 0
-      ⟨Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x100000001), []⟩)
-    .taken (.pos 1) (Expr.nil.insertConstraint ⟨Reg.real64 1, .eqN 32, Term.C64 1⟩)
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x100000001))], predicates := [] }).exprs, []⟩)
+    .taken (.pos 1) ((let row := solveExpr ⟨Reg.real64 1, .eqN 32, Term.C64 1⟩; if Expr.nil.contains row then Expr.nil else Expr.nil ++ [row]))
     [.branch 1 .taken ⟨Term.C64 0x100000001, .eqN 32, Term.C64 1⟩]
 #guard oneCandidateCheck
     (ebpfStep #[.jcond .w64 .jeq 1 (.imm 0xffffffff) 0, .exit] 0 0
-      ⟨Expr.nil.insertEq (Reg.real64 1) (Term.C64 0xffffffffffffffff), []⟩)
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0xffffffffffffffff))], predicates := [] }).exprs, []⟩)
     .taken (.pos 1)
-    (Expr.nil.insertConstraint ⟨Reg.real64 1, .eq, Term.C64 0xffffffffffffffff⟩)
+    ((let row := solveExpr ⟨Reg.real64 1, .eq, Term.C64 0xffffffffffffffff⟩; if Expr.nil.contains row then Expr.nil else Expr.nil ++ [row]))
     [.branch 1 .taken ⟨Term.C64 0xffffffffffffffff, .eq, Term.C64 0xffffffffffffffff⟩]
 #guard match ebpfStep #[.jcond .w64 .jeq 1 (.imm 0) 1, .exit, .continuation]
-0 0 ⟨Expr.nil.insertEq (Reg.real64 1) (Term.V64 1), []⟩ with
+0 0 ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 1))], predicates := [] }).exprs, []⟩ with
   | .reject .unboundTarget => true
   | _ => false
 #guard match ebpfStep #[.jcond .w64 .jeq 1 (.imm 0) 1, .continuation, .exit]
-0 0 ⟨Expr.nil.insertEq (Reg.real64 1) (Term.V64 1), []⟩ with
+0 0 ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 1))], predicates := [] }).exprs, []⟩ with
   | .reject .unboundTarget => true
   | _ => false
 #guard match ebpfStep #[.jcond .w64 .jeq 1 (.reg 2) 0, .exit]
-0 0 ⟨Expr.nil.insertEq (Reg.real64 1) (Term.C64 1), []⟩ with
+0 0 ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep #[.jcond .w32 .jeq 1 (.imm 1) 0, .exit] 0 0
@@ -341,18 +342,18 @@ private def packetLiveArmsCheck : Bool := Id.run do
 #guard oneCandidateCheck
     (ebpfStep #[.lddw 1 0 0x1122334455667788, .continuation, .exit]
 0 0 SemState.empty)
-    .ok (.pos 2) (Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x1122334455667788)) []
+    .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x1122334455667788))], predicates := [] }).exprs) []
 #guard oneCandidateCheck
     (ebpfStep #[.lddw 1 0 0, .continuation, .exit] 0 0 SemState.empty)
-    .ok (.pos 2) (Expr.nil.insertEq (Reg.real64 1) (Term.C64 0)) []
+    .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0))], predicates := [] }).exprs) []
 #guard oneCandidateCheck
     (ebpfStep #[.lddw 1 0 0, .continuation, .exit] 0 0
       ⟨(bindField Expr.nil (.lddw 0) (Term.V64 9)).getD [], []⟩)
-    .ok (.pos 2) (Expr.nil.insertEq (Reg.real64 1) (Term.V64 9)) []
+    .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 9))], predicates := [] }).exprs) []
 #guard oneCandidateCheck
     (ebpfStep #[.lddw 1 1 0, .continuation, .exit] 0 0
       ⟨(bindField Expr.nil (.lddw 0) (Term.V64 9)).getD [], []⟩)
-    .ok (.pos 2) (Expr.nil.insertEq (Reg.real64 1) (Term.V64 9)) []
+    .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 9))], predicates := [] }).exprs) []
 #guard match ebpfStep #[.lddw 1 1 0, .continuation, .exit] 0 0 SemState.empty with
   | .reject .unsupported => true
   | _ => false
@@ -367,7 +368,7 @@ private def packetLiveArmsCheck : Bool := Id.run do
   | .reject .unboundTarget => true
   | _ => false
 #guard match ebpfStep #[.callHelper 1, .exit] 0 0
-    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
+    ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep #[.callHelper 1] 0 0 SemState.empty with
@@ -375,11 +376,11 @@ private def packetLiveArmsCheck : Bool := Id.run do
   | _ => false
 #guard oneCandidateCheck
     (ebpfStep #[.callHelper 999, .exit] 7 0 SemState.empty)
-    .ok (.pos 1) (Expr.nil.insertEq (Reg.real64 0) (Term.C64 18446744073709551615))
+    .ok (.pos 1) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 18446744073709551615))], predicates := [] }).exprs)
     [.helper 7 (.unsupported 999) []]
 #guard oneCandidateCheck
     (ebpfStep #[.exit] 0 0
-      ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩)
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩)
     .ok .exit Expr.nil [.ret (Term.C64 1)]
 #guard match ebpfStep #[.exit] 0 0
     ⟨[⟨Reg.real64 0, .eq, Term.C32 1⟩], []⟩ with
@@ -395,16 +396,16 @@ private def packetStoreObservationCheck : Bool := Id.run do
   let source := Term.C64 0x1122334455667788
   let .ok (loaded, []) := exprEffects 0 rooted (.ldx 4 2 1 0) | return false
   let some packetBase := loaded.updates.lookupEq (Reg.real64 2) | return false
-  let E := (rooted.override loaded.delta).insertEq (Reg.real64 0) source
-    |>.insertEq (Reg.real64 2) (addStar .w64 packetBase (Term.C64 2))
+  let E := (update ⟨((update ⟨rooted, []⟩ { exprs := loaded.delta, predicates := [] }).exprs), []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve source)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (addStar .w64 packetBase (Term.C64 2)))], predicates := [] }).exprs)
   let .ok (.packet access) := resolveAccess E 2 3 2 true | return false
   let .candidates [c] := ebpfStep #[.stx 2 2 0 3, .exit] 77 0 ⟨E, []⟩ | return false
   let .reject .undefinedSrc := ebpfStep #[.stx 2 2 0 61, .exit] 78 0 ⟨E, []⟩ | return false
   let .candidates [stack] := ebpfStep #[.stx 4 10 0 (-4), .exit] 79 0 ⟨E, []⟩ | return false
-  let stored := E.override c.E_k
+  let stored := (update ⟨E, []⟩ { exprs := c.E_k, predicates := [] }).exprs
   let some low := readInterval stored (.packet 40 48) | return false
   let some high := readInterval stored (.packet 48 56) | return false
-  let some stackTerm := readInterval (E.override stack.E_k) (.stack (508 * 8) (508 * 8 + 32))
+  let some stackTerm := readInterval ((update ⟨E, []⟩ { exprs := stack.E_k, predicates := [] }).exprs) (.stack (508 * 8) (508 * 8 + 32))
     | return false
   return access.constOffset? == some 5 && access.bytes == 2 &&
     eval (solve low) == some 0x88 && eval (solve high) == some 0x77 &&
@@ -422,7 +423,7 @@ private def storeObservationCategoryCheck : Bool := Id.run do
   let .ok root := buildE0 p | return false
   let rooted := host p root.exprs
   let .ok (loaded, []) := exprEffects 0 rooted (.ldx 4 2 1 0) | return false
-  let E := (rooted.override loaded.delta).insertEq (Reg.real64 0) (Term.V64 9)
+  let E := (update ⟨((update ⟨rooted, []⟩ { exprs := loaded.delta, predicates := [] }).exprs), []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.V64 9))], predicates := [] }).exprs
   let cases : List (Nat × Nat × Int) := [(2, 2, 3), (4, 10, -4), (4, 1, 0)]
   for (bytes, base, offset) in cases do
     let .ok access := resolveAccess E base offset bytes true | return false
@@ -440,9 +441,9 @@ private def storeObservationCategoryCheck : Bool := Id.run do
 #guard storeObservationCategoryCheck
 -- A map cell equality does not establish a map-address identity for STX.
 #guard match ebpfStep #[.stx 4 2 0 0, .exit] 99 0
-    ⟨Expr.nil.insertEq (Reg.real64 2) (Term.V64 99)
-      |>.insertEq (Reg.real64 0) (Term.C64 1)
-      |>.insertEq (.map 0 [] 0 32) (Term.C32 0), []⟩ with
+    ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.V64 99))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (.map 0 [] 0 32) (solve (Term.C32 0))], predicates := [] }).exprs), []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
 

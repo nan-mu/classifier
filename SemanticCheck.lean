@@ -1,4 +1,5 @@
 import EBPF.Expand
+import Core.Update
 import RV32.Expand
 import Core.Cross.Unify
 import CrossArch.CompoundPacketFixture
@@ -41,14 +42,14 @@ private def ebpf (words : Array UInt64) (E : List Expr) (j : Nat := 0)
 private def ebpfValue (name : String) (word : UInt64) (E : List Expr)
     (r expected : Nat) : Except String Unit := do
   let c ← one name (ebpf #[word, 0x95] E)
-  let σ ← liftResult name (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect (name ++ " successor") (c.dir, c.loc) (.ok, .pos 1)
   expect name (readInterval σ.exprs (Reg.real64 r)) (some (Term.C64 expected))
 
 private def stackBit (unit : Nat) : Nat := (508 - 4 * unit) * 8
 
 private def seedWord (E : List Expr) (unit value : Nat) : Except String (List Expr) :=
-  match writeInterval E (.stack (stackBit unit) (stackBit unit + 32)) (Term.C32 value) with
+  match ((«seal» (Reg.stack (stackBit unit) (stackBit unit + 32)).bits (Term.C32 value) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack (stackBit unit) (stackBit unit + 32)) stored], predicates := [] }).exprs)) with
   | some out => pure out
   | none => throw s!"seed stack {unit}"
 
@@ -73,8 +74,8 @@ private def aluChecks : Except String Unit := do
     ("SDIV", 3, 1, 17, 3, 5), ("SREM", 9, 1, 17, 3, 2)]
   for cls in [4, 7] do
     for (name, code, off, a, b, expected) in rows do
-      let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 a)
-        |>.insertEq (Reg.real64 1) (Term.C64 b)
+      let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 a))], predicates := [] }).exprs
+        |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 b))], predicates := [] }).exprs)
       ebpfValue s!"ALU{cls}/{name}/reg" (raw (16 * code + 8 + cls) 0 1 off) E 0 expected
       ebpfValue s!"ALU{cls}/{name}/imm" (raw (16 * code + cls) 0 0 off b) E 0 expected
     let max := if cls == 4 then 4294967295 else 18446744073709551615
@@ -91,25 +92,25 @@ private def aluChecks : Except String Unit := do
         ("SREM-overflow", 9, 1, min, max, 0),
         ("SDIV-negative", 3, 1, negThree, 2, max),
         ("SREM-negative", 9, 1, negThree, 2, max)] do
-      let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 a)
-        |>.insertEq (Reg.real64 1) (Term.C64 b)
+      let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 a))], predicates := [] }).exprs
+        |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 b))], predicates := [] }).exprs)
       ebpfValue s!"ALU{cls}/{name}" (raw (16 * code + 8 + cls) 0 1 off) E 0 expected
     ebpfValue s!"ALU{cls}/NEG" (raw (0x80 + cls) 0 0)
-      (Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)) 0 max
+      ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs) 0 max
     ebpfValue s!"ALU{cls}/MOV-no-old-dst" (raw (0xb0 + cls) 0 0 0 7) Expr.nil 0 7
   ebpfValue "ALU32-clears-high-half" (raw 0x04 0 0 0 1)
-    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 4294967295)) 0 0
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 4294967295))], predicates := [] }).exprs) 0 0
   ebpfValue "ALU32-shift-count-masked" (raw 0x6c 0 1)
-    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)
-      |>.insertEq (Reg.real64 1) (Term.C64 33)) 0 2
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 33))], predicates := [] }).exprs)) 0 2
   ebpfValue "ALU64-shift-count-masked" (raw 0x6f 0 1)
-    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)
-      |>.insertEq (Reg.real64 1) (Term.C64 65)) 0 2
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 65))], predicates := [] }).exprs)) 0 2
   ebpfValue "ALU32 projects both operands before division" (raw 0x3c 0 1)
-    (Expr.nil.insertEq (Reg.real64 0) (Term.C64 0x10000000f)
-      |>.insertEq (Reg.real64 1) (Term.C64 0x100000003)) 0 5
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0x10000000f))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x100000003))], predicates := [] }).exprs)) 0 5
   ebpfValue "MOV32 projects source without old destination" (raw 0xbc 0 1)
-    (Expr.nil.insertEq (Reg.real64 1) (Term.C64 0x100000001)) 0 1
+    ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x100000001))], predicates := [] }).exprs) 0 1
   ebpfValue "MOV64 sign extends immediate" (raw 0xb7 0 0 0 0xffffffff)
     Expr.nil 0 18446744073709551615
   ebpfValue "MOV32 zero extends immediate" (raw 0xb4 0 0 0 0xffffffff)
@@ -119,13 +120,13 @@ private def aluChecks : Except String Unit := do
       (7, 8, 128, 18446744073709551488), (7, 16, 32769, 18446744073709518849),
       (7, 32, 2147483649, 18446744071562067969)] do
     ebpfValue s!"MOVSX/{cls}/{bits}" (raw (0xb8 + cls) 0 1 (Int.ofNat bits))
-      (Expr.nil.insertEq (Reg.real64 1) (Term.C64 source)) 0 expected
+      ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 source))], predicates := [] }).exprs) 0 expected
   for (opcode, bits, expected) in [
       (0xd4, 16, 30600), (0xd4, 32, 1432778632), (0xd4, 64, 1234605616436508552),
       (0xdc, 16, 34935), (0xdc, 32, 2289526357), (0xdc, 64, 9833440827789222417),
       (0xd7, 16, 34935), (0xd7, 32, 2289526357), (0xd7, 64, 9833440827789222417)] do
     ebpfValue s!"END/{opcode}/{bits}" (raw opcode 0 0 0 bits)
-      (Expr.nil.insertEq (Reg.real64 0) (Term.C64 0x1122334455667788)) 0 expected
+      ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0x1122334455667788))], predicates := [] }).exprs) 0 expected
 
 private def jumpChecks : Except String Unit := do
   let rows : List (String × Nat × Rel × Rel × Bool × Bool) := [
@@ -146,8 +147,8 @@ private def jumpChecks : Except String Unit := do
           (3, 5, [4, 5, 10, 11, 12, 13].contains code)] do
         for registerSource in [false, true] do
           let opcode := 16 * code + cls + if registerSource then 8 else 0
-          let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 a)
-            |>.insertEq (Reg.real64 1) (Term.C64 b)
+          let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 a))], predicates := [] }).exprs
+            |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 b))], predicates := [] }).exprs)
           let word := raw opcode 0 (if registerSource then 1 else 0) 1
             (if registerSource then 0 else b)
           let label := s!"JMP{cls}/{name}/{a}/{registerSource}"
@@ -158,21 +159,21 @@ private def jumpChecks : Except String Unit := do
             (if taken then .taken else .notTaken, .pos (if taken then 2 else 1),
               [.branch 1 (if taken then .taken else .notTaken) ⟨Term.C64 a, rel, Term.C64 b⟩])
     for (code, taken) in [(6, false), (7, false), (12, true), (13, true)] do
-      let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 18446744073709551615)
+      let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 18446744073709551615))], predicates := [] }).exprs
       let c ← one "signed-negative-jump" (ebpf #[raw (16 * code + cls) 0 0 1 1, 0x95, 0x95] E)
       expect s!"signed-negative-jump/{cls}/{code}" (c.dir, c.loc)
         (if taken then .taken else .notTaken, .pos (if taken then 2 else 1))
-  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 4294967297)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 4294967297))], predicates := [] }).exprs
   let c ← one "JMP32-low-view" (ebpf #[raw 0x16 0 0 1 1, 0x95, 0x95] E)
   expect "JMP32-low-view" c.dir .taken
   let c ← one "JMP64-high-view" (ebpf #[raw 0x15 0 0 1 1, 0x95, 0x95] E)
   expect "JMP64-high-view" c.dir .notTaken
-  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 18446744073709551615)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 18446744073709551615))], predicates := [] }).exprs
   let c ← one "JMP64 sign extends immediate"
     (ebpf #[raw 0x15 0 0 1 0xffffffff, 0x95, 0x95] E)
   expect "JMP64 sign extends immediate" (c.dir, c.loc) (.taken, .pos 2)
-  let E := Expr.nil.insertEq (Reg.real64 0) (Term.V64 8)
-    |>.insertEq (Reg.real64 1) (Term.C64 5)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.V64 8))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 5))], predicates := [] }).exprs)
   match ebpf #[raw 0x1d 0 1 1, 0x95, 0x95] E with
   | .reject reason => throw s!"symbolic JEQ rejected {reprStr reason}"
   | .candidates cs =>
@@ -182,36 +183,35 @@ private def jumpChecks : Except String Unit := do
       let some c := cs.find? (·.dir == dir) | throw s!"symbolic JEQ missing {reprStr dir}"
       expect "symbolic JEQ location" c.loc (.pos loc)
       expect "symbolic JEQ branch observation" c.P_k [.branch 1 branchDir ⟨Term.V64 8, rel, Term.C64 5⟩]
-      let σ ← liftResult "symbolic JEQ compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+      let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
       expect "symbolic JEQ preserves full lhs binding" (σ.exprs.lookupEq (Reg.real64 0)) (some (Term.V64 8))
       expect "symbolic JEQ adds comparison constraint" σ.exprs.constraints [⟨Reg.real64 0, rel, Term.C64 5⟩]
-  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 1)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs
   let c ← one "known false prunes invalid taken target" (ebpf #[raw 0x15 0 0 99 7, 0x95] E)
   expect "known false prunes invalid taken target" (c.dir, c.loc) (.notTaken, .pos 1)
-  let E := Expr.nil.insertEq (Reg.real64 0) (Term.C64 7)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 7))], predicates := [] }).exprs
   let c ← one "known true prunes invalid fallthrough"
     (ebpf #[0x95, raw 0x15 0 0 (-2) 7] E 1)
   expect "known true prunes invalid fallthrough" (c.dir, c.loc) (.taken, .pos 0)
 
 private def memoryChecks : Except String Unit := do
   let root ← liftResult "entry" (EBPF.buildE0 entry)
-  let E := root.exprs.insertEq (Reg.real64 0) (Term.C64 0xaabbccdd)
+  let E := (update ⟨root.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 0xaabbccdd))], predicates := [] }).exprs
   let c ← one "ST-W" (ebpf #[raw 0x62 10 0 (-4) 0x11223344, 0x95] E)
-  let σ ← liftResult "ST-W compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "ST-W" (readWord σ.exprs 0) (some 0x11223344)
   let c ← one "ST-DW" (ebpf #[raw 0x7a 10 0 (-8) 0xffffffff, 0x95] E)
-  let σ ← liftResult "ST-DW compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "ST-DW low/high" (readWord σ.exprs 1, readWord σ.exprs 0)
     (some 4294967295, some 4294967295)
   let old ← seedWord Expr.nil 0 0x11223344
   for (opcode, off, imm, expected) in [
       (0x72, -3, 0xaa, 0x1122aa44), (0x6a, -4, 0xbbcc, 0x1122bbcc)] do
-    let c ← one "ST-partial" (ebpf #[raw opcode 10 0 off imm, 0x95] (E.override old))
-    let σ ← liftResult "ST-partial compose" (applyLocal ⟨E.override old, []⟩ c.E_k c.P_k)
+    let c ← one "ST-partial" (ebpf #[raw opcode 10 0 off imm, 0x95] ((update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs))
+    let σ := update ⟨(update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs, []⟩ { exprs := c.E_k, predicates := c.P_k }
     expect "ST-partial preserves old lanes" (readWord σ.exprs 0) (some expected)
   let c ← one "ST-partial into undefined" (ebpf #[raw 0x72 10 0 (-3) 0xaa, 0x95] E)
-  let σ ← liftResult "ST-partial undefined compose"
-    (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "ST-partial defines only the written byte"
     (readBits σ.exprs (509 * 8) (509 * 8 + 8)) (some 0xaa)
   expect "ST-partial leaves the rest of the word undefined"
@@ -221,27 +221,26 @@ private def memoryChecks : Except String Unit := do
       (0x91, -4, 18446744073709551615),
       (0x89, -4, 18446744073709519103),
       (0x81, -4, 18446744071562166527)] do
-    ebpfValue s!"MEMSX/{opcode}" (raw opcode 2 10 off) (E.override old) 2 expected
+    ebpfValue s!"MEMSX/{opcode}" (raw opcode 2 10 off) ((update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs) 2 expected
   for (opcode, off, expected) in [(0xc3, -4, 2147582207), (0xcb, -4, 33023), (0xd3, -4, 255)] do
-    ebpfValue s!"LOAD_ACQ/{opcode}" (raw opcode 2 10 off 0x100) (E.override old) 2 expected
-  let c ← one "STORE_REL" (ebpf #[raw 0xc3 10 0 (-4) 0x110, 0x95] (E.override old))
-  let σ ← liftResult "STORE_REL compose" (applyLocal ⟨E.override old, []⟩ c.E_k c.P_k)
+    ebpfValue s!"LOAD_ACQ/{opcode}" (raw opcode 2 10 off 0x100) ((update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs) 2 expected
+  let c ← one "STORE_REL" (ebpf #[raw 0xc3 10 0 (-4) 0x110, 0x95] ((update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs))
+  let σ := update ⟨(update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "STORE_REL" (readWord σ.exprs 0) (some 0xaabbccdd)
   for (opcode, expected) in [(0xcb, 0x8001ccdd), (0xd3, 0x800180dd)] do
-    let c ← one "STORE_REL narrow" (ebpf #[raw opcode 10 0 (-4) 0x110, 0x95] (E.override old))
-    let σ ← liftResult "STORE_REL narrow compose"
-      (applyLocal ⟨E.override old, []⟩ c.E_k c.P_k)
+    let c ← one "STORE_REL narrow" (ebpf #[raw opcode 10 0 (-4) 0x110, 0x95] ((update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs))
+    let σ := update ⟨(update ⟨E, []⟩ { exprs := old, predicates := [] }).exprs, []⟩ { exprs := c.E_k, predicates := c.P_k }
     expect "STORE_REL narrow preserves untouched lanes" (readWord σ.exprs 0) (some expected)
   let wide ← seedWord old 1 0x11223344
-  ebpfValue "LOAD_ACQ DW" (raw 0xdb 2 10 (-8) 0x100) (E.override wide) 2 0x800180ff11223344
-  let c ← one "STORE_REL DW" (ebpf #[raw 0xdb 10 0 (-8) 0x110, 0x95] (E.override wide))
-  let σ ← liftResult "STORE_REL DW compose" (applyLocal ⟨E.override wide, []⟩ c.E_k c.P_k)
+  ebpfValue "LOAD_ACQ DW" (raw 0xdb 2 10 (-8) 0x100) ((update ⟨E, []⟩ { exprs := wide, predicates := [] }).exprs) 2 0x800180ff11223344
+  let c ← one "STORE_REL DW" (ebpf #[raw 0xdb 10 0 (-8) 0x110, 0x95] ((update ⟨E, []⟩ { exprs := wide, predicates := [] }).exprs))
+  let σ := update ⟨(update ⟨E, []⟩ { exprs := wide, predicates := [] }).exprs, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "STORE_REL DW simultaneous halves" (readWord σ.exprs 1, readWord σ.exprs 0)
     (some 0xaabbccdd, some 0)
   let c ← one "LOAD-context-data" (ebpf #[raw 0x61 2 1, 0x95] root.exprs)
-  let loaded ← liftResult "LOAD-context compose" (applyLocal root c.E_k c.P_k)
+  let loaded := update root { exprs := c.E_k, predicates := c.P_k }
   let c ← one "ST-packet" (ebpf #[raw 0x6a 2 0 3 0x7788, 0x95] loaded.exprs)
-  let stored ← liftResult "ST-packet compose" (applyLocal loaded c.E_k c.P_k)
+  let stored := update loaded { exprs := c.E_k, predicates := c.P_k }
   expect "ST-packet byte values"
     (match readInterval stored.exprs (.packet 24 32), readInterval stored.exprs (.packet 32 40) with
       | some lo, some hi =>
@@ -260,59 +259,57 @@ private def atomicChecks : Except String Unit := do
       else seedWord root.exprs 0 10
     for (imm, expected) in [(0x00, 13), (0x01, 13), (0x40, 11), (0x41, 11),
         (0x50, 2), (0x51, 2), (0xa0, 9), (0xa1, 9), (0xe1, 3)] do
-      let E := seeded.insertEq (Reg.real64 1) (Term.C64 3)
+      let E := (update ⟨seeded, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 3))], predicates := [] }).exprs
       let c ← one s!"atomic/{opcode}/{imm}"
         (ebpf #[raw opcode 10 1 off imm, 0x95] E)
-      let σ ← liftResult "atomic compose"
-        (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+      let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
       expect s!"atomic memory/{opcode}/{imm}"
         (readWord σ.exprs (if high then 1 else 0)) (some expected)
       expect s!"atomic old source/{opcode}/{imm}" (readInterval σ.exprs (Reg.real64 1))
         (some (Term.C64 (if imm % 2 == 1 then 10 else 3)))
       if high then expect "atomic DW high half" (readWord σ.exprs 0) (some 0)
     for (expectedOld, next) in [(10, 3), (9, 10)] do
-      let E := seeded.insertEq (Reg.real64 0) (Term.C64 expectedOld)
-        |>.insertEq (Reg.real64 1) (Term.C64 3)
+      let E := (update ⟨seeded, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 expectedOld))], predicates := [] }).exprs
+        |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 3))], predicates := [] }).exprs)
       let c ← one "CMPXCHG" (ebpf #[raw opcode 10 1 off 0xf1, 0x95] E)
-      let σ ← liftResult "CMPXCHG compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+      let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
       expect "CMPXCHG simultaneous old memory and register"
         (readWord σ.exprs (if high then 1 else 0), readInterval c.E_k (Reg.real64 0))
         (some next, some (Term.C64 10))
   let carried ← seedWord (← seedWord root.exprs 1 4294967295) 0 1
-  let E := carried.insertEq (Reg.real64 1) (Term.C64 1)
+  let E := (update ⟨carried, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 1))], predicates := [] }).exprs
   let c ← one "DW-carry" (ebpf #[raw 0xdb 10 1 (-8) 1, 0x95] E)
-  let σ ← liftResult "DW-carry compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "DW single 64-bit carry and old fetch"
     (readWord σ.exprs 1, readWord σ.exprs 0, readInterval σ.exprs (Reg.real64 1))
     (some 0, some 2, some (Term.C64 8589934591))
   let same ← seedWord root.exprs 0 10
-  let E := same.insertEq (Reg.real64 0) (Term.C64 10)
+  let E := (update ⟨same, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 10))], predicates := [] }).exprs
   let c ← one "CMPXCHG same r0 source" (ebpf #[raw 0xc3 10 0 (-4) 0xf1, 0x95] E)
-  let σ ← liftResult "CMPXCHG same compose" (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let σ := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "CMPXCHG reads source before writing r0"
     (readWord σ.exprs 0, readInterval c.E_k (Reg.real64 0))
     (some 10, some (Term.C64 10))
-  let E := Expr.nil.insertEq (Reg.real64 2) (Term.C64 4092)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 4092))], predicates := [] }).exprs
   let aliased ← seedWord Expr.nil 0 10
   let c ← one "XCHG base/source alias"
-    (ebpf #[raw 0xc3 2 2 0 0xe1, 0x95] (E.override aliased) (p := { entry with tSp := Term.C64 4096 }))
-  let σ ← liftResult "XCHG compose" (applyLocal ⟨E.override aliased, []⟩ c.E_k c.P_k)
+    (ebpf #[raw 0xc3 2 2 0 0xe1, 0x95] ((update ⟨E, []⟩ { exprs := aliased, predicates := [] }).exprs) (p := { entry with tSp := Term.C64 4096 }))
+  let σ := update ⟨(update ⟨E, []⟩ { exprs := aliased, predicates := [] }).exprs, []⟩ { exprs := c.E_k, predicates := c.P_k }
   expect "XCHG address and source from one pre-state"
     (readWord σ.exprs 0, readInterval c.E_k (Reg.real64 2))
     (some 4092, some (Term.C64 10))
-  let E := root.exprs.insertEq (Reg.real64 2) (Term.C64 1)
+  let E := (update ⟨root.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 1))], predicates := [] }).exprs
   reject "atomic missing old memory" (ebpf #[raw 0xc3 10 2 (-4) 1, 0x95] E) .undefinedSrc
   let lowOnly ← seedWord root.exprs 1 1
-  reject "atomic missing high half" (ebpf #[raw 0xdb 10 2 (-8) 1, 0x95] (E.override lowOnly))
+  reject "atomic missing high half" (ebpf #[raw 0xdb 10 2 (-8) 1, 0x95] ((update ⟨E, []⟩ { exprs := lowOnly, predicates := [] }).exprs))
     .undefinedSrc
   let present ← seedWord root.exprs 0 1
-  reject "CMPXCHG missing r0" (ebpf #[raw 0xc3 10 2 (-4) 0xf1, 0x95] (E.override present))
+  reject "CMPXCHG missing r0" (ebpf #[raw 0xc3 10 2 (-4) 0xf1, 0x95] ((update ⟨E, []⟩ { exprs := present, predicates := [] }).exprs))
     .undefinedSrc
   reject "atomic context forbidden" (ebpf #[raw 0xc3 1 2 0 1, 0x95] E) .unsupported
   reject "atomic unaligned forbidden" (ebpf #[raw 0xc3 10 2 (-3) 1, 0x95] E) .undefinedSrc
   let c ← one "packet-base" (ebpf #[raw 0x61 3 1, 0x95] E)
-  let loaded ← liftResult "packet-base compose"
-    (applyLocal ⟨E, []⟩ c.E_k c.P_k)
+  let loaded := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
   reject "atomic packet forbidden"
     (ebpf #[raw 0xc3 3 2 0 1, 0x95] loaded.exprs) .unsupported
 
@@ -344,12 +341,12 @@ private def rvMChecks : Except String Unit := do
     (4, .sdiv .w32 4294967295, 0), (5, .udiv .w32 4294967295, 1431655765),
     (6, .srem .w32, 4294967295), (7, .urem .w32, 0)]
   for (funct, op, expected) in rows do
-    let E := Expr.nil.insertEq (Reg.real32 8) (Term.C32 4294967295)
-      |>.insertEq (Reg.real32 9) (Term.C32 3)
+    let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.C32 4294967295))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 9) (solve (Term.C32 3))], predicates := [] }).exprs)
     let c ← one s!"RV32-M/{funct}" (rv #[rvWord funct, 0x0001] E)
     expect s!"RV32-M/{funct}" (c.E_k.lookupEq (Reg.real32 10)) (some (Term.C32 expected))
-    let E := Expr.nil.insertEq (Reg.real32 8) (Term.V32 41)
-      |>.insertEq (Reg.real32 9) (Term.V32 42)
+    let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.V32 41))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 9) (solve (Term.V32 42))], predicates := [] }).exprs)
     let c ← one s!"RV32-open-M/{funct}" (rv #[rvWord funct, 0x0001] E)
     expect s!"RV32-open-M/{funct}" (c.E_k.lookupEq (Reg.real32 10))
       (some (.app .w32 op [Term.V32 41, Term.V32 42]))
@@ -359,8 +356,8 @@ private def rvMChecks : Except String Unit := do
       (4, 2147483648, 4294967295, 2147483648),
       (6, 2147483648, 4294967295, 0),
       (4, 4294967293, 2, 4294967295), (6, 4294967293, 2, 4294967295)] do
-    let E := Expr.nil.insertEq (Reg.real32 8) (Term.C32 a)
-      |>.insertEq (Reg.real32 9) (Term.C32 b)
+    let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.C32 a))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 9) (solve (Term.C32 b))], predicates := [] }).exprs)
     let c ← one "RV32-M boundary" (rv #[rvWord funct, 0x0001] E)
     expect s!"RV32-M boundary/{funct}/{a}/{b}" (c.E_k.lookupEq (Reg.real32 10))
       (some (Term.C32 expected))
@@ -373,10 +370,10 @@ private def helperChecks : Except String Unit := do
   let value64 : Term := .app .w64 (.add .w64) [Term.V64 0, Term.C64 18446744073709551612]
   let maps : List MapLayout := [⟨42, 3, 2⟩]
   let install (base : List Expr) : List Expr :=
-    base.insertEq (Reg.real64 1) (Term.C64 42)
-      |>.insertEq (Reg.real64 2) key64
-      |>.insertEq (Reg.real64 3) value64
-      |>.insertEq (Reg.real64 4) (Term.C64 0)
+    (update ⟨base, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 42))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve key64)], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 3) (solve value64)], predicates := [] }).exprs)
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 4) (solve (Term.C64 0))], predicates := [] }).exprs)
   let full ← seedWord (← seedWord root.exprs 1 0x44332211) 0 0x0000bbaa
   let changed ← seedWord full 1 0x00030201
   let valueOnly ← seedWord root.exprs 0 0x0000bbaa
@@ -407,25 +404,25 @@ private def helperChecks : Except String Unit := do
   expect "eBPF delete missing key prefix" c.P_k [.helper 70 .delete [Term.C64 42, key64]]
   let key32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 3]
   let value32 : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 4]
-  let E := Expr.nil.insertEq (Reg.real32 2) (Term.V32 0)
-    |>.insertEq (Reg.real32 11) (Term.C32 42)
-    |>.insertEq (Reg.real32 12) key32
-    |>.insertEq (Reg.real32 13) value32
-    |>.insertEq (Reg.real32 14) (Term.C32 0)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.V32 0))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 42))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve key32)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve value32)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 14) (solve (Term.C32 0))], predicates := [] }).exprs)
   let seedStack (E : List Expr) (start value : Nat) : Except String (List Expr) :=
-    match writeInterval E (.stack start (start + 32)) (Term.C32 value) with
+    match ((«seal» (Reg.stack start (start + 32)).bits (Term.C32 value) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack start (start + 32)) stored], predicates := [] }).exprs)) with
     | some out => pure out
     | none => throw s!"RV helper stack"
   let full ← seedStack (← seedStack Expr.nil 0 0x04030201) 32 0x08070605
   let missingWord ← seedStack Expr.nil 0 0x04030201
   let rvCall (state : List Expr) (stack : List Expr) :=
-    rv #[0x100000ef, 0x0001] (state.override stack) (some 0x1000) (some 0x1100) maps
+    rv #[0x100000ef, 0x0001] ((update ⟨state, []⟩ { exprs := stack, predicates := [] }).exprs) (some 0x1000) (some 0x1100) maps
   for (id, kind, abi, tail) in [
       (1, HelperKind.lookup, [Term.C32 42, key32], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (3, HelperKind.delete, [Term.C32 42, key32], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (2, HelperKind.update, [Term.C32 42, key32, value32, Term.C32 0],
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 5, Term.C32 6])] do
-    let state := E.insertEq (Reg.real32 10) (Term.C32 id)
+    let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 id))], predicates := [] }).exprs
     let c ← one s!"RV helper/{id}" (rvCall state full)
     expect s!"RV helper full tail/{id}" c.P_k [.helper 70 kind (abi ++ tail)]
     expect s!"RV helper return ABI-only/{id}" (c.E_k.lookupEq (Reg.real32 10))
@@ -433,8 +430,8 @@ private def helperChecks : Except String Unit := do
     let c ← one "RV helper incomplete" (rvCall state missingWord)
     expect "RV helper no partial tail" c.P_k [.helper 70 kind abi]
   let missingValue : Term := .app .w32 (.add .w32) [Term.V32 0, Term.C32 7]
-  let state := E.insertEq (Reg.real32 10) (Term.C32 2)
-    |>.insertEq (Reg.real32 13) missingValue
+  let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 2))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve missingValue)], predicates := [] }).exprs)
   let c ← one "RV update missing final byte" (rvCall state full)
   expect "RV update missing final byte no half tail" c.P_k
     [.helper 70 .update [Term.C32 42, key32, missingValue, Term.C32 0]]

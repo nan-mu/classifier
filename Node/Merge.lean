@@ -1,4 +1,5 @@
 import Node.Path
+import Core.Update
 import Core.Parse
 
 namespace Node.ExactMerge
@@ -392,11 +393,10 @@ private def mergeMixedSetCheck : Bool :=
   let ps := mergeMixedPredicates
   mergeReuses (mergeMixedRequest ps (ps.reverse ++ ps)) 17 42 &&
     mergeReuses (mergeMixedRequest ps ps.reverse "HelperOnly") 17 42 &&
-    match mergePredicate [ps[0]!, ps[1]!] (ps.reverse ++ ps) with
-    | .ok result => result == [ps[0]!, ps[1]!, ps[4]!, ps[3]!, ps[2]!] &&
+    let result := (update { exprs := [], predicates := [ps[0]!, ps[1]!] } { exprs := [], predicates := (ps.reverse ++ ps) }).predicates
+    result == [ps[0]!, ps[1]!, ps[4]!, ps[3]!, ps[2]!] &&
       ExactMerge.sameConfig ⟨.pos 1, ⟨Expr.nil, result⟩⟩
         ⟨.pos 1, ⟨Expr.nil, ps⟩⟩
-    | .error _ => false
 
 private def mergeChangedClassFieldCheck : Bool :=
   let branch := mergeMixedPredicates[1]!
@@ -473,18 +473,18 @@ private def mergeMalformedMixedCheck : Bool :=
 -- This diagnoses oracle behavior, not runtime scheduling or full-observation reuse.
 private def mergeJustDropOverwriteCheck : Bool :=
   let a3 := Reg.real32 13
-  let common := (Expr.nil.insertEq (Reg.real32 27) (Term.V32 59))
-    |>.insertConstraint (Expr.mkRel (Reg.real32 10) .geu
-      (addStar .w32 (Term.V32 4) (Term.C32 14)))
-    |>.insertConstraint (Expr.mkRel (Reg.real32 10) .geu
-      (addStar .w32 (Term.V32 4) (Term.C32 18)))
-  let taken : SemState := ⟨common.insertEq a3 (Term.C32 43144), []⟩
-  let notTaken : SemState := ⟨common.insertEq a3 (Term.C32 129), []⟩
+  let common := ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 27) (solve (Term.V32 59))], predicates := [] }).exprs)
+    |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real32 10) .geu
+      (addStar .w32 (Term.V32 4) (Term.C32 14))); if acc.contains row then acc else acc ++ [row]))
+    |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real32 10) .geu
+      (addStar .w32 (Term.V32 4) (Term.C32 18))); if acc.contains row then acc else acc ++ [row]))
+  let taken : SemState := ⟨(update ⟨common, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 43144))], predicates := [] }).exprs, []⟩
+  let notTaken : SemState := ⟨(update ⟨common, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 129))], predicates := [] }).exprs, []⟩
   -- ADDI a3,zero,18 at wire loc17 contributes this local value effect.
-  let localExprs := Expr.nil.insertEq a3 (Term.C32 18)
-  match Node.applyLocal taken localExprs [], Node.applyLocal notTaken localExprs [] with
-  | .ok takenAfter, .ok notTakenAfter =>
-    let beforeRequest := mergeRequestFixture (mergeStateSnapshotFixture 27 "17" taken)
+  let localExprs := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 18))], predicates := [] }).exprs
+  let takenAfter := update taken { exprs := localExprs, predicates := [] }
+  let notTakenAfter := update notTaken { exprs := localExprs, predicates := [] }
+  let beforeRequest := mergeRequestFixture (mergeStateSnapshotFixture 27 "17" taken)
       (mergeStateSnapshotFixture 28 "17" notTaken)
     let afterRequest := mergeRequestFixture (mergeStateSnapshotFixture 30 "18" takenAfter)
       (mergeStateSnapshotFixture 31 "18" notTakenAfter)
@@ -497,31 +497,31 @@ private def mergeJustDropOverwriteCheck : Bool :=
       notTakenAfter.exprs.lookupEq (Reg.real32 27) == some (Term.V32 59) &&
       takenAfter.predicates.isEmpty && notTakenAfter.predicates.isEmpty &&
       mergeReuses afterRequest 31 30
-  | _, _ => false
 
 -- Equal values and empty Helper sets do not erase complementary constraints.
 -- Only an actual local assignment to the compared register invalidates them.
 private def mergeComplementaryOverwriteCheck : Bool :=
   let compared := Reg.real32 13
   let other := Reg.real32 27
-  let common := (Expr.nil.insertEq compared (Term.V32 13))
-    |>.insertEq other (Term.V32 59)
-    |>.insertConstraint (Expr.mkRel other .geu (Term.C32 1))
+  let common := ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq compared (solve (Term.V32 13))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq other (solve (Term.V32 59))], predicates := [] }).exprs)
+    |> (fun acc => (let row := solveExpr (Expr.mkRel other .geu (Term.C32 1)); if acc.contains row then acc else acc ++ [row]))
   [Rel.eq, .ltu].all fun rel =>
     let condition := Expr.mkRel compared rel (Term.C32 10)
     let complement := Expr.mkRel compared rel.compl (Term.C32 10)
-    let taken : SemState := ⟨common.insertConstraint condition, []⟩
-    let notTaken : SemState := ⟨common.insertConstraint complement, []⟩
+    let taken : SemState := ⟨(let row := solveExpr condition; if common.contains row then common else common ++ [row]), []⟩
+    let notTaken : SemState := ⟨(let row := solveExpr complement; if common.contains row then common else common ++ [row]), []⟩
     let request (a b : SemState) := mergeRequestFixture (mergeStateSnapshotFixture 42 "17" a)
       (mergeStateSnapshotFixture 17 "17" b)
-    let overwrite := Expr.nil.insertEq compared (Term.C32 18)
-    let unrelated := Expr.nil.insertEq other (Term.C32 0)
-    match Node.applyLocal taken overwrite [], Node.applyLocal notTaken overwrite [],
-        Node.applyLocal taken unrelated [], Node.applyLocal notTaken unrelated [] with
-    | .ok takenAfter, .ok notTakenAfter, .ok takenUnrelated, .ok notTakenUnrelated =>
-      let afterRequest := mergeRequestFixture (mergeStateSnapshotFixture 43 "18" takenAfter)
+    let overwrite := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq compared (solve (Term.C32 18))], predicates := [] }).exprs
+    let unrelated := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq other (solve (Term.C32 0))], predicates := [] }).exprs
+    let takenAfter := update taken { exprs := overwrite, predicates := [] }
+    let notTakenAfter := update notTaken { exprs := overwrite, predicates := [] }
+    let takenUnrelated := update taken { exprs := unrelated, predicates := [] }
+    let notTakenUnrelated := update notTaken { exprs := unrelated, predicates := [] }
+    let afterRequest := mergeRequestFixture (mergeStateSnapshotFixture 43 "18" takenAfter)
         (mergeStateSnapshotFixture 18 "18" notTakenAfter)
-      taken.exprs.bindings == notTaken.exprs.bindings &&
+    taken.exprs.bindings == notTaken.exprs.bindings &&
         taken.predicates.isEmpty && notTaken.predicates.isEmpty &&
         mergeRejects (request taken notTaken) "NoExactConfigMatch" &&
         mergeRejects (request takenUnrelated notTakenUnrelated) "NoExactConfigMatch" &&
@@ -530,7 +530,6 @@ private def mergeComplementaryOverwriteCheck : Bool :=
         takenAfter.exprs.lookupEq compared == some (Term.C32 18) &&
         notTakenAfter.exprs.lookupEq compared == some (Term.C32 18) &&
         mergeReuses afterRequest 18 43
-    | _, _, _, _ => false
 
 -- Consumer-visible wire regressions; finite guards are not general semantic proofs.
 #guard mergeEqualCheck

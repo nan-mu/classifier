@@ -1,4 +1,5 @@
 import EBPF.JustTxProgram
+import Core.Update
 import EBPF.Step
 import Node.Budget
 import Core.Parse
@@ -256,7 +257,7 @@ private def budgetCheck : Bool := Id.run do
   | .reject .undefinedSrc => true
   | _ => false
 #guard match ebpfStep (decodeProgram justTxProgram) 57 57
-    ⟨Expr.nil.insertEq (Reg.real64 0) (Term.C64 1), []⟩ with
+    ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩ with
   | .candidates [c] => c.dir == .ok && c.loc == .exit &&
       c.E_k == Expr.nil && c.P_k == [.ret (Term.C64 1)]
   | _ => false
@@ -270,13 +271,13 @@ private def budgetCheck : Bool := Id.run do
 
 private def putWord (E : List Expr) (r : Reg) (value : Nat) : Option (List Expr) :=
   let term := if r.bits ≤ 32 then Term.C32 value else Term.C64 value
-  writeInterval E r term
+  ((«seal» (r).bits term >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq r stored], predicates := [] }).exprs))
 
 private def extendedInstructionFfiCheck : Bool := Id.run do
   let .ok initial := buildE0 justTxEntry | return false
   let stack : Reg := .stack (508 * 8) (508 * 8 + 32)
-  let E0 := host justTxEntry (initial.exprs.insertEq (Reg.real64 1) (Term.C64 0x10000000f)
-    |>.insertEq (Reg.real64 2) (Term.C64 0x81))
+  let E0 := host justTxEntry ((update ⟨initial.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x10000000f))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 0x81))], predicates := [] }).exprs))
   let some E := putWord E0 stack 0x11223380 | return false
   let start : SemState := { exprs := E, predicates := [] }
   let (exprs, preds) := renderSemStateJson start
@@ -292,14 +293,14 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
     let response := exportEbpfExpandStep #[word, 0x95] 11 0
       s!"[{exprs}]" s!"[{preds}]"
     let .candidates [c] := ebpfStep (decodeProgram #[word, 0x95]) 11 0 start | return false
-    let .ok state := Node.applyLocal start c.E_k c.P_k | return false
+    let state := update start { exprs := c.E_k, predicates := c.P_k }
     let some got := readInterval state.exprs reg | return false
     if eval (solve got) != some expected ||
         response != s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson (.ok, .pos 1, state)}]}" then
       return false
   let response := exportEbpfExpandStep #[0x00000001fffc2ac3, 0x95] 11 0 s!"[{exprs}]" "[]"
   let .candidates [c] := ebpfStep (decodeProgram #[0x00000001fffc2ac3, 0x95]) 11 0 start | return false
-  let .ok state := Node.applyLocal start c.E_k c.P_k | return false
+  let state := update start { exprs := c.E_k, predicates := c.P_k }
   let some stackGot := readInterval state.exprs stack | return false
   let some regGot := readInterval state.exprs (Reg.real64 2) | return false
   return eval (solve stackGot) == some 0x11223401 &&

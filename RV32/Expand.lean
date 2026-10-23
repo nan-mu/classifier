@@ -1,4 +1,5 @@
 import Core.Anchor
+import Core.Update
 import RV32.Initial
 import RV32.Expr
 import RV32.Helper
@@ -73,7 +74,7 @@ private def emitComparison (dir : BranchDirection) (loc : Option Location) (Ei :
     (e : Expr) (position : Nat) (lhs : Term) : StepResult :=
   let direction := match dir with | .taken => Direction.taken | .notTaken => .notTaken
   match loc with
-  | some k => .candidates [⟨direction, k, Ei.insertConstraint e,
+  | some k => .candidates [⟨direction, k, (let row := solveExpr e; if Ei.contains row then Ei else Ei ++ [row]),
       [.branch position dir ⟨lhs, e.rel, e.term⟩]⟩]
   | none => .reject .unboundTarget
 
@@ -250,27 +251,27 @@ private def undecidedBranch (I : Array Insn) (j : Nat) (Ei : List Expr) (t1 : Te
   -- A pruned abort arm is still a successor: it joins the shared exit.
   -- Omitting it leaves a branch with only `taken` or only `not_taken`.
   let abortExit (dir : Direction) (bdir : BranchDirection) (e : Expr) : Candidate :=
-    ⟨dir, .exit, Ei.insertConstraint e, [.branch (j + 1) bdir ⟨t1, e.rel, e.term⟩]⟩
+    ⟨dir, .exit, (let row := solveExpr e; if Ei.contains row then Ei else Ei ++ [row]), [.branch (j + 1) bdir ⟨t1, e.rel, e.term⟩]⟩
   match takenLoc, fallLoc with
   | some taken, some fall =>
     if keepTaken then
       .candidates [
-        ⟨.taken, taken, Ei.insertConstraint takenE,
+        ⟨.taken, taken, (let row := solveExpr takenE; if Ei.contains row then Ei else Ei ++ [row]),
           [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
         abortExit .notTaken .notTaken fallE]
     else if fallOnly && abortLoc I takenLoc then
       .candidates [
         abortExit .taken .taken takenE,
-        ⟨.notTaken, fall, Ei.insertConstraint fallE,
+        ⟨.notTaken, fall, (let row := solveExpr fallE; if Ei.contains row then Ei else Ei ++ [row]),
           [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
     else if fallOnly then
-      .candidates [⟨.notTaken, fall, Ei.insertConstraint fallE,
+      .candidates [⟨.notTaken, fall, (let row := solveExpr fallE; if Ei.contains row then Ei else Ei ++ [row]),
         [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
     else
       .candidates [
-        ⟨.taken, taken, Ei.insertConstraint takenE,
+        ⟨.taken, taken, (let row := solveExpr takenE; if Ei.contains row then Ei else Ei ++ [row]),
           [.branch (j + 1) .taken ⟨t1, rel, t2⟩]⟩,
-        ⟨.notTaken, fall, Ei.insertConstraint fallE,
+        ⟨.notTaken, fall, (let row := solveExpr fallE; if Ei.contains row then Ei else Ei ++ [row]),
           [.branch (j + 1) .notTaken ⟨t1, rel.compl, t2⟩]⟩]
   | _, _ => .reject .unboundTarget
 
@@ -284,7 +285,7 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
     else
       let offsets := programOffsets I
       let Eg := match base, offsets[j]? with
-        | some b, some offset => σ.exprs.insertEq (Reg.real32 32) (Term.C32 (b + offset))
+        | some b, some offset => (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 32) (solve (Term.C32 (b + offset)))], predicates := [] }).exprs
         | _, _ => σ.exprs
       if needsPC i && (readPC Eg).isNone then .reject .unboundTarget
       else
@@ -585,11 +586,10 @@ private def smokeEmptyPredicateMergeCheck : Bool :=
   match buildE0 smokeEntryParams with
   | .error _ => false
   | .ok σ =>
-    match mergePredicate σ.predicates [], Node.applyLocal σ Expr.nil [] with
-    | .ok predicates, .ok unchanged =>
-      predicates.isEmpty && unchanged.predicates.isEmpty &&
-        reprStr unchanged.exprs == reprStr σ.exprs
-    | _, _ => false
+    let predicates := (update { exprs := [], predicates := σ.predicates } { exprs := [], predicates := [] }).predicates
+    let unchanged := update σ { exprs := Expr.nil, predicates := [] }
+    predicates.isEmpty && unchanged.predicates.isEmpty &&
+      reprStr unchanged.exprs == reprStr σ.exprs
 
 #guard smokeE0RealCheck
 #guard smokeE0CtxCheck
@@ -657,7 +657,7 @@ private def contextShiftedBaseCheck : Bool :=
   | .error _ => false
   | .ok σ =>
     -- A real-register alias of the context root reads the same field.
-    let Eg := σ.exprs.insertEq (Reg.real32 15) p.tCtx
+    let Eg := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 15) (solve p.tCtx)], predicates := [] }).exprs
     match exprLOAD Eg (.Regidx 15#5) (.Regidx 12#5) 4 with
     | some Ei => Ei.length == 1 &&
         initialEqCheck Ei (Reg.real32 12) (addStar .w32 p.tData p.tLen)
@@ -675,8 +675,8 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
   let I := decodeProgram #[0x0020e463, 0x00100513, 0x00008067]
   let lhs := Term.V32 101
   let rhs := Term.V32 102
-  let E := Expr.nil.insertEq (Reg.real32 1) lhs
-    |>.insertEq (Reg.real32 2) rhs
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve lhs)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve rhs)], predicates := [] }).exprs)
   match rv32StepBound I none none 0 ⟨E, []⟩ with
   | .candidates [taken, fall] =>
     taken.dir == .taken && taken.loc == .pos 2 &&
@@ -685,24 +685,21 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
       fall.E_k == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
       taken.P_k == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
       fall.P_k == [.branch 1 .notTaken ⟨lhs, .geu, rhs⟩] &&
-      match Node.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
-      | .ok child =>
-        match Node.applyLocal child (Expr.nil.insertEq (Reg.real32 1) (Term.C32 0)) [] with
-        | .ok overwritten => overwritten.exprs.constraints.isEmpty &&
-            child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
-            child.exprs.lookupEq (Reg.real32 1) == some lhs &&
-            overwritten.predicates == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
-            overwritten.exprs.lookupEq (Reg.real32 1) == some (Term.C32 0)
-        | _ => false
-      | _ => false
+      let child := update (SemState.mk E []) { exprs := taken.E_k, predicates := taken.P_k }
+      let overwritten := update child { exprs := ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 0))], predicates := [] }).exprs), predicates := [] }
+      overwritten.exprs.constraints.isEmpty &&
+        child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
+        child.exprs.lookupEq (Reg.real32 1) == some lhs &&
+        overwritten.predicates == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
+        overwritten.exprs.lookupEq (Reg.real32 1) == some (Term.C32 0)
   | _ => false
 
 /-- All six full-width branch operations use the required relation/complement. -/
 private def symbolicBtypeRelationsCheck : Bool :=
   let lhs := Term.V32 101
   let rhs := Term.V32 102
-  let E := Expr.nil.insertEq (Reg.real32 1) lhs
-    |>.insertEq (Reg.real32 2) rhs
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve lhs)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve rhs)], predicates := [] }).exprs)
   let cases : List (bop × Rel) := [(.BEQ, .eq), (.BNE, .ne),
     (.BLT, .lts), (.BGE, .ges), (.BLTU, .ltu), (.BGEU, .geu)]
   cases.all fun (op, rel) =>
@@ -714,9 +711,8 @@ private def symbolicBtypeRelationsCheck : Bool :=
         fall.E_k == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
         taken.P_k == [.branch 1 .taken ⟨lhs, rel, rhs⟩] &&
         fall.P_k == [.branch 1 .notTaken ⟨lhs, rel.compl, rhs⟩] &&
-        match Node.applyLocal (SemState.mk E []) taken.E_k taken.P_k with
-        | .ok child => child.exprs.lookupEq (Reg.real32 1) == some lhs && child.exprs.keysUnique
-        | _ => false
+        let child := update (SemState.mk E []) { exprs := taken.E_k, predicates := taken.P_k }
+        child.exprs.lookupEq (Reg.real32 1) == some lhs && child.exprs.keysUnique
     | _ => false
 
 /-- Concrete evaluation retains just the feasible side and its comparison. -/
@@ -725,8 +721,8 @@ private def concreteBltuFeasibleSideCheck : Bool :=
   [(1, 2, Direction.taken, Location.pos 2, Rel.ltu),
    (2, 1, Direction.notTaken, Location.pos 1, Rel.geu),
    (2, 2, Direction.notTaken, Location.pos 1, Rel.geu)].all fun (a, b, dir, loc, rel) =>
-    let E := Expr.nil.insertEq (Reg.real32 1) (Term.C32 a)
-      |>.insertEq (Reg.real32 2) (Term.C32 b)
+    let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 a))], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.C32 b))], predicates := [] }).exprs)
     match rv32StepBound I none none 0 ⟨E, []⟩ with
     | .candidates [c] => c.dir == dir && c.loc == loc &&
         c.E_k == [Expr.mkRel (Reg.real32 1) rel (Term.C32 b)] &&
@@ -738,8 +734,8 @@ private def concreteBltuFeasibleSideCheck : Bool :=
 private def symbolicBltuUnboundTargetCheck : Bool :=
   let I := #[Insn.BTYPE (2#13, .Regidx 2#5, .Regidx 1#5, .BLTU),
     decodeInsnWord 0x00008067]
-  let E := Expr.nil.insertEq (Reg.real32 1) (Term.V32 101)
-    |>.insertEq (Reg.real32 2) (Term.V32 102)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.V32 101))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.V32 102))], predicates := [] }).exprs)
   match rv32StepBound I none none 0 ⟨E, []⟩ with
   | .reject .unboundTarget => true
   | _ => false
@@ -837,8 +833,8 @@ private def esp32c3BltuContinuationsCheck : Bool :=
 private def symbolicBranchesCheck : Bool :=
   let ta := Term.V32 1
   let tb := Term.V32 2
-  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real32 11) ta
-    |>.insertEq (Reg.real32 13) tb, []⟩
+  let σ : SemState := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve ta)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve tb)], predicates := [] }).exprs), []⟩
   [bop.BEQ, .BNE, .BLT, .BGE, .BLTU, .BGEU].all fun op =>
     let I := #[Insn.BTYPE (8#13, .Regidx 13#5, .Regidx 11#5, op),
       decodeInsnWord 0x00100513, decodeInsnWord 0x00008067]
@@ -853,7 +849,7 @@ private def symbolicBranchesCheck : Bool :=
     | _ => false
 
 private def compressedBranchesCheck : Bool :=
-  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real32 8) (Term.V32 3), []⟩
+  let σ : SemState := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.V32 3))], predicates := [] }).exprs, []⟩
   [0xc011, 0xe011].all fun word =>
     let I := decodeProgram #[UInt32.ofNat word, 0x0001, 0x0001]
     match rv32Step I 0 σ with
@@ -874,8 +870,8 @@ private def sharedReturnKeepsBody : Bool :=
   match «seal» 32 (Term.app .w32 (.inputByte 0) [Term.C32 0, Term.C32 12]) with
   | none => false
   | some pkt =>
-  let σ : SemState := ⟨Expr.nil.insertEq (Reg.real32 12) pkt
-      |>.insertEq (Reg.real32 14) (Term.C32 8), []⟩
+  let σ : SemState := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve pkt)], predicates := [] }).exprs
+      |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 14) (solve (Term.C32 8))], predicates := [] }).exprs), []⟩
   let jump := match encodeCompressed 0xa011#16 with
     | .C_J imm => Insn.C_J imm
     | other => other
@@ -937,23 +933,21 @@ private def esp32c3DeepFrontierCheck : Bool :=
 private def helperObservationMergeCheck : Bool :=
   let p := Predicate.helper 8 .clock []
   let q := Predicate.helper 7 .clock []
-  (match mergePredicate [q] [p, p, q] with
-    | .ok ps => ps == [q, p]
-    | _ => false) &&
+  ((update { exprs := [], predicates := [q] } { exprs := [], predicates := [p, p, q] }).predicates == [q, p]) &&
   renderPredicateJson p == "{\"kind\":\"helper\",\"event\":8,\"helperId\":5,\"args\":[]}"
 
 /-- C.JR and full JALR freeze the complete symbolic pre-return a0 on wrapper Exit. -/
 private def boundReturnExprCheck : Bool :=
-  let E := Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x2000)
-    |>.insertEq (Reg.real32 10) (Term.V32 123)
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 0x2000))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.V32 123))], predicates := [] }).exprs)
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
     match rv32StepBound I (some 0x1000) (some 0x2000) 0 ⟨E, []⟩ with
     | .candidates [c] => c.loc == .exit && c.P_k == [.ret (Term.V32 123)] &&
-        initialEqCheck (updateExpr E c.E_k) (Reg.real32 10) (Term.V32 123)
+        initialEqCheck (((update ⟨E, []⟩ { exprs := c.E_k, predicates := [] }).exprs)) (Reg.real32 10) (Term.V32 123)
     | _ => false) &&
   [decodeProgram #[0x00008067], decodeProgram #[0x8082]].all (fun I =>
     match rv32StepBound I (some 0x1000) (some 0x2000) 0
-        ⟨Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x2000), []⟩ with
+        ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 0x2000))], predicates := [] }).exprs, []⟩ with
     | .reject .undefinedSrc => true
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067]) (some 0x1000) (some 0x2002)
@@ -962,14 +956,14 @@ private def boundReturnExprCheck : Bool :=
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067, 0x0001])
       (some 0x1000) (some 0x2000) 0
-      ⟨Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x1004), []⟩ with
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 0x1004))], predicates := [] }).exprs, []⟩ with
     | .candidates [c] => c.loc == .pos 1 && c.P_k.isEmpty
     | _ => false) &&
   (match rv32StepBound (decodeProgram #[0x00008067])
       (some 0x1000) (some 0x2000) 0
-      ⟨Expr.nil.insertEq (Reg.real32 1) (Term.C32 0x2000)
-        |>.insertEq (Reg.real32 10) (Term.V32 7)
-        |>.insertConstraint (Expr.mkRel (Reg.real32 10) .eq (Term.V32 123)), []⟩ with
+      ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 0x2000))], predicates := [] }).exprs
+        |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.V32 7))], predicates := [] }).exprs)
+        |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real32 10) .eq (Term.V32 123)); if acc.contains row then acc else acc ++ [row])), []⟩ with
     | .candidates [c] => c.loc == .exit && c.P_k == [.ret (Term.V32 7)]
     | _ => false)
 
@@ -978,7 +972,7 @@ private def packetLoadsCheck : Bool :=
   match buildE0 smokeEntryParams with
   | .error _ => false
   | .ok σ =>
-    let E := σ.exprs.insertEq (Reg.real32 12) smokeEntryParams.tData
+    let E := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve smokeEntryParams.tData)], predicates := [] }).exprs
     [1, 2, 4].all (fun width =>
       [false, true].all fun unsigned =>
         let i := Insn.LOAD (12#12, .Regidx 12#5, .Regidx 14#5, unsigned, width)
@@ -1044,13 +1038,13 @@ def inferStep (I : Array Insn) (event : NodeId) (j : Nat) (σ : SemState) : Step
     else match nextPosition I j with
       | none => .reject .unboundTarget
       | some loc =>
-        let Eg := σ.exprs.insertEq (Reg.real32 32) (Term.C32 (b + offset))
+        let Eg := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 32) (solve (Term.C32 (b + offset)))], predicates := [] }).exprs
         match RV32.step Eg i bound σ.predicates,
             helperPredicate event σ.exprs bound σ.predicates with
         | some link, .ok predicate =>
           match helperExpr predicate, helperMapWrites σ.exprs predicate with
           | .ok result, .ok mapRows =>
-            let Ei := (updateExpr link result).override mapRows
+            let Ei := (update ⟨(((update ⟨link, []⟩ { exprs := result, predicates := [] }).exprs)), []⟩ { exprs := mapRows, predicates := [] }).exprs
             .candidates [⟨.ok, loc, Ei, [predicate]⟩]
           | .error reason, _ | _, .error reason => .reject reason
         | _, .error reason => .reject reason
@@ -1067,10 +1061,11 @@ private def packetStoreObservationsCheck : Bool := Id.run do
   let p := { smokeEntryParams with tData := Term.C32 0x4000, tLen := Term.C32 64 }
   let .ok σ := buildE0 p | return false
   let value := Term.C32 0xaabbccdd
-  let some E := writeInterval (σ.exprs.insertEq (Reg.real32 12) p.tData
-    |>.insertEq (Reg.real32 2) (Term.C32 0x4001)
-    |>.insertEq (Reg.real32 11) value) (.packet (20 * 8) (20 * 8 + 8)) (Term.C32 99)
-    | return false
+  let regs := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve p.tData)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.C32 0x4001))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve value)], predicates := [] }).exprs)
+  let some stored := «seal» (Reg.packet (20 * 8) (20 * 8 + 8)).bits (Term.C32 99) | return false
+  let E := (update ⟨regs, []⟩ { exprs := [Expr.mkEq (Reg.packet (20 * 8) (20 * 8 + 8)) stored], predicates := [] }).exprs
   let cases : List (Insn × Nat × Nat) := [
     (.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 1), 2, 1),
     (.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 2), 2, 2),
@@ -1083,34 +1078,33 @@ private def packetStoreObservationsCheck : Bool := Id.run do
     let kept := 0xaabbccdd &&& ((1 <<< (8 * bytes)) - 1)
     if c.P_k != [.packetWrite 77 offset (8 * bytes) value] ||
         c.E_k.isEmpty || c.loc != .pos 1 then return false
-    let .ok child := Node.applyLocal ⟨E, []⟩ c.E_k c.P_k | return false
+    let child := update ⟨E, []⟩ { exprs := c.E_k, predicates := c.P_k }
     if packetNat child.exprs offset bytes != some kept ||
         packetNat child.exprs 20 1 != some 99 then return false
     let .candidates [again] := inferStep I 78 0 child | return false
-    let .ok repeated := Node.applyLocal child again.E_k again.P_k | return false
+    let repeated := update child { exprs := again.E_k, predicates := again.P_k }
     if repeated.predicates != [.packetWrite 77 offset (8 * bytes) value,
         .packetWrite 78 offset (8 * bytes) value] then return false
   let I := #[Insn.STORE (2#12, .Regidx 11#5, .Regidx 12#5, 2), decodeInsnWord 0x0001]
   let symbolic := Term.V32 900
-  let symbolicE := E.insertEq (Reg.real32 11) symbolic
+  let symbolicE := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve symbolic)], predicates := [] }).exprs
   let .candidates [c] := inferStep I 77 0 ⟨symbolicE, []⟩ | return false
   if c.P_k != [.packetWrite 77 2 16 symbolic] ||
       (c.E_k.lookupEq (.packet 16 24)).isNone ||
       (c.E_k.lookupEq (.packet 24 32)).isNone then return false
-  let .ok child := Node.applyLocal ⟨symbolicE, []⟩ c.E_k c.P_k | return false
-  let .ok overwritten := Node.applyLocal child
-    (Expr.nil.insertEq (Reg.real32 11) (Term.C32 0)) [] | return false
+  let child := update ⟨symbolicE, []⟩ { exprs := c.E_k, predicates := c.P_k }
+  let overwritten := update child { exprs := ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 0))], predicates := [] }).exprs), predicates := [] }
   if overwritten.predicates != [.packetWrite 77 2 16 symbolic] then return false
   let zeroI := #[Insn.STORE (0#12, zreg, .Regidx 12#5, 1), decodeInsnWord 0x0001]
   let .candidates [zero] := inferStep zeroI 79 0 ⟨E, []⟩ | return false
-  let .ok zeroState := Node.applyLocal ⟨E, []⟩ zero.E_k zero.P_k | return false
+  let zeroState := update ⟨E, []⟩ { exprs := zero.E_k, predicates := zero.P_k }
   return zero.P_k == [.packetWrite 79 0 8 (Term.C32 0)] &&
     packetNat zeroState.exprs 0 1 == some 0
 
 private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
   let .ok σ := buildE0 smokeEntryParams | return false
-  let E := σ.exprs.insertEq (Reg.real32 12) smokeEntryParams.tData
-    |>.insertEq (Reg.real32 11) (Term.C32 7)
+  let E := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve smokeEntryParams.tData)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 7))], predicates := [] }).exprs)
   let store := Insn.STORE (0#12, .Regidx 11#5, .Regidx 12#5, 4)
   let I := #[store, decodeInsnWord 0x0001]
   let missing : List Expr := E.filter (fun e => e.reg != Reg.real32 11)
@@ -1124,9 +1118,9 @@ private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
 /-- Without a frozen key the map slot cannot be named, so the local step rejects too. -/
 private def mapStoreObservationGapCheck : Bool :=
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
-  let E := Expr.nil.insertEq (Reg.real32 8) pointer
-    |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd)
-    |>.insertEq (Reg.real32 2) pointer
+  let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 0xaabbccdd))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve pointer)], predicates := [] }).exprs)
   let stores := [1, 2, 4].map (fun width =>
     Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, width)) ++
     [.C_SW (0#5, .Cregidx 0#3, .Cregidx 3#3), .C_SWSP (0#6, .Regidx 11#5)]
@@ -1141,11 +1135,11 @@ private def mapStoreObservationsCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
   let lookup : Predicate := .helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)
-  let some E := Anchor.installMaps (Expr.nil.insertEq (Reg.real32 8) pointer
-    |>.insertEq (Reg.real32 11) (Term.C32 0xaabbccdd))
+  let some E := Anchor.installMaps ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 0xaabbccdd))], predicates := [] }).exprs))
     [{ mapId := 42, keySize := 4, valueSize := 16 }] | return false
   let some keyBytes := key.mapM mapKeyByte | return false
-  let some seeded := writeInterval E (.map 42 keyBytes 0 32) (Term.C32 0) | return false
+  let some seeded := ((«seal» (Reg.map 42 keyBytes 0 32).bits (Term.C32 0) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.map 42 keyBytes 0 32) stored], predicates := [] }).exprs)) | return false
   let stores : List (Insn × Nat) := [
     (.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 1), 1),
     (.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 2), 2),
@@ -1158,13 +1152,13 @@ private def mapStoreObservationsCheck : Bool := Id.run do
     if c.P_k != [want] || c.loc != .pos 1 ||
         !(c.E_k.any fun e => match e.reg with | .map .. => true | _ => false) then
       return false
-    let .ok child := Node.applyLocal ⟨seeded, [lookup]⟩ c.E_k c.P_k | return false
+    let child := update ⟨seeded, [lookup]⟩ { exprs := c.E_k, predicates := c.P_k }
     if !child.predicates.contains lookup || !child.predicates.contains want then return false
     if width == 0 then return false
   let prior := [lookup, .mapWrite 77 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd)]
   let .candidates [again] := inferStep #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4),
       decodeInsnWord 0x0001] 78 0 ⟨seeded, prior⟩ | return false
-  let .ok kept := Node.applyLocal ⟨seeded, prior⟩ again.E_k again.P_k | return false
+  let kept := update ⟨seeded, prior⟩ { exprs := again.E_k, predicates := again.P_k }
   return kept.predicates.contains (.mapWrite 77 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd)) &&
     kept.predicates.contains (.mapWrite 78 (Term.C32 42) key 0 32 (Term.C32 0xaabbccdd))
 
@@ -1184,11 +1178,11 @@ private def mapWriteProvenanceMatchCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
   let lookup : Predicate := .helper 9 .lookup ([Term.C32 42, Term.V32 0] ++ key)
-  let some E := Anchor.installMaps (Expr.nil.insertEq (Reg.real32 8) pointer
-    |>.insertEq (Reg.real32 11) (Term.C32 123))
+  let some E := Anchor.installMaps ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 123))], predicates := [] }).exprs))
     [{ mapId := 42, keySize := 4, valueSize := 16 }] | return false
   let some keyBytes := key.mapM mapKeyByte | return false
-  let some seeded := writeInterval E (.map 42 keyBytes 0 32) (Term.C32 0) | return false
+  let some seeded := ((«seal» (Reg.map 42 keyBytes 0 32).bits (Term.C32 0) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.map 42 keyBytes 0 32) stored], predicates := [] }).exprs)) | return false
   let I := #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4), decodeInsnWord 0x0001]
   match inferStep I 77 0 ⟨seeded, [lookup]⟩ with
   | .candidates [c] =>
@@ -1201,8 +1195,8 @@ private def mapWriteProvenanceMismatchCheck : Bool := Id.run do
   let pointer := star .w32 (.externalResult 9 0) [Term.C32 1, Term.C32 42, Term.V32 7]
   let key := [Term.C32 1]
   let lookup : Predicate := .helper 9 .lookup ([Term.C32 17, Term.V32 7] ++ key)
-  let base := Expr.nil.insertEq (Reg.real32 8) pointer
-    |>.insertEq (Reg.real32 11) (Term.C32 123)
+  let base := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 123))], predicates := [] }).exprs)
   let some keyBytes := key.mapM mapKeyByte | return false
   let mapsOnly17 : List MapLayout := [{ mapId := 17, keySize := 1, valueSize := 8 }]
   let mapsBoth : List MapLayout :=
@@ -1210,7 +1204,7 @@ private def mapWriteProvenanceMismatchCheck : Bool := Id.run do
   let I := #[Insn.STORE (0#12, .Regidx 11#5, .Regidx 8#5, 4), decodeInsnWord 0x0001]
   for maps in [mapsOnly17, mapsBoth] do
     let some E := Anchor.installMaps base maps | return false
-    let some E := writeInterval E (.map 17 keyBytes 0 32) (Term.C32 0) | return false
+    let some E := ((«seal» (Reg.map 17 keyBytes 0 32).bits (Term.C32 0) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.map 17 keyBytes 0 32) stored], predicates := [] }).exprs)) | return false
     match inferStep I 80 0 ⟨E, [lookup]⟩ with
     | .reject .undefinedSrc => pure ()
     | _ => return false
@@ -1352,8 +1346,8 @@ private def statelessStepCheck : Bool := Id.run do
 
 private def encodedOpenMCheck : Bool :=
   let E := Expr.nil
-    |>.insertEq (Reg.real32 8) (Term.V32 41)
-    |>.insertEq (Reg.real32 9) (Term.V32 42)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.V32 41))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 9) (solve (Term.V32 42))], predicates := [] }).exprs)
   let fixtures : List (UInt32 × Op) := [
     (0x02940533, .mullo .w32), (0x02941533, .mulh .w32),
     (0x02942533, .mulhsu .w32), (0x02943533, .mulhu .w32),
@@ -1370,25 +1364,25 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
   let key := addStar .w32 (Term.V32 0) (Term.C32 3)
   let value := addStar .w32 (Term.V32 0) (Term.C32 4)
   let some E := Anchor.installMaps (Expr.nil
-    |>.insertEq (Reg.real32 2) (Term.V32 0)
-    |>.insertEq (Reg.real32 5) (Term.C32 0x100)
-    |>.insertEq (Reg.real32 11) (Term.C32 42)
-    |>.insertEq (Reg.real32 12) key
-    |>.insertEq (Reg.real32 13) value
-    |>.insertEq (Reg.real32 14) (Term.C32 0))
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve (Term.V32 0))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 5) (solve (Term.C32 0x100))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 42))], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve key)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve value)], predicates := [] }).exprs)
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 14) (solve (Term.C32 0))], predicates := [] }).exprs))
     [{ mapId := 42, keySize := 3, valueSize := 2 }] | return false
   let some E := bindField E .imageBase (Term.C32 1024) | return false
   let some E := bindField E .helper (Term.C32 256) | return false
   let some E := bindField E .wrapperReturn (Term.C32 8192) | return false
-  let some E := writeInterval E (.stack 0 32) (Term.C32 0x04030201) | return false
-  let some E := writeInterval E (.stack 32 64) (Term.C32 0x08070605) | return false
+  let some E := ((«seal» (Reg.stack 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 0 32) stored], predicates := [] }).exprs)) | return false
+  let some E := ((«seal» (Reg.stack 32 64).bits (Term.C32 0x08070605) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 32 64) stored], predicates := [] }).exprs)) | return false
   let (body, _) := renderSemStateJson ⟨E, []⟩
   for (id, kind, abi, tail) in [
       (1, HelperKind.lookup, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (3, HelperKind.delete, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (2, HelperKind.update, [Term.C32 42, key, value, Term.C32 0],
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 5, Term.C32 6])] do
-    let state := E.insertEq (Reg.real32 10) (Term.C32 id)
+    let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 id))], predicates := [] }).exprs
     let (row, _) := renderSemStateJson ⟨state, []⟩
     let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] 80 0 s!"[{row}]" "[]"
     if !json.contains "\"status\":\"ok\"" ||
@@ -1396,8 +1390,8 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
         !json.contains (renderExprJson (Expr.mkEq (Reg.real32 10)
           (star .w32 (.externalResult 80 0) (Term.C32 id :: abi)))) then return false
   let missingValue := addStar .w32 (Term.V32 0) (Term.C32 7)
-  let state := E.insertEq (Reg.real32 10) (Term.C32 2)
-    |>.insertEq (Reg.real32 13) missingValue
+  let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 2))], predicates := [] }).exprs
+    |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve missingValue)], predicates := [] }).exprs)
   let (row, _) := renderSemStateJson ⟨state, []⟩
   let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] 80 0 s!"[{row}]" "[]"
   return !body.isEmpty && json.contains "\"status\":\"ok\"" &&
