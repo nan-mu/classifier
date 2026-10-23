@@ -639,7 +639,10 @@ mod tests {
         assert_eq!(snap.nodes[0].loc, "0");
         assert_eq!(eq_term(&snap.nodes[0], "real:0:[0,32)"), Some("0"));
         // 19 real regs, six xdp fields, imageBase/helper/wrapperReturn/ctx, and one map's key and value sizes.
-        assert_eq!(eq_term(&snap.nodes[0], "context:data:[0,32)"), Some("v32:4"));
+        assert_eq!(
+            eq_term(&snap.nodes[0], "context:data:[0,32)"),
+            Some("v32:4")
+        );
         assert_eq!(
             eq_term(&snap.nodes[0], "real:8:[0,32)"),
             eq_term(&snap.nodes[0], "real:9:[0,32)")
@@ -757,8 +760,14 @@ mod tests {
                 .unwrap()
                 .to_string()
         };
-        assert_eq!(term("context:imageBase:[0,32)"), program.base_address.to_string());
-        assert_eq!(term("context:helper:[0,32)"), program.helper_address.to_string());
+        assert_eq!(
+            term("context:imageBase:[0,32)"),
+            program.base_address.to_string()
+        );
+        assert_eq!(
+            term("context:helper:[0,32)"),
+            program.helper_address.to_string()
+        );
         assert_eq!(
             term("context:wrapperReturn:[0,32)"),
             rv32_image::WRAPPER_RETURN.to_string()
