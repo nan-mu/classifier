@@ -179,8 +179,3 @@ built Lean libs, and vendored `tooling/vendor/xpost-elf`.
 Before reporting done: `git status` / `git diff`, preserve unrelated dirty
 files, run checks that match what you edited. Do not commit unless asked.
 Never commit `.codex/` or leftover `.omp/` directories.
-
-## Model policy
-
-Follow `~/.cursor/rules/model-access.mdc`. Cursor parent and Task subagents use
-**Auto** only. Do not pin paid Task model slugs.
