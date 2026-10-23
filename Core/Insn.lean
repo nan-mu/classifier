@@ -13,10 +13,6 @@ structure Insn where
   bits  : Nat
   deriving DecidableEq, BEq, Repr, Inhabited
 
-def Insn.mk16 (b : Nat) : Insn := ⟨.w16, MNat 16 b⟩
-def Insn.mk32 (b : Nat) : Insn := ⟨.w32, MNat 32 b⟩
-def Insn.mk64 (b : Nat) : Insn := ⟨.w64, MNat 64 b⟩
-
 inductive HelperKind where
   | lookup | update | delete | clock | printk | checksum | adjustTail
   | unsupported (id : Nat)

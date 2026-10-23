@@ -2,10 +2,6 @@ import RV32.Insn
 
 namespace RV32
 
-/-- Low 2 bits ≠ 0b11 ⇒ compressed. -/
-def isRVC (h : BitVec 16) : Bool :=
-  h &&& 3#16 != 3#16
-
 private def slice16 (h : BitVec 16) (hi lo : Nat) : Nat :=
   (h >>> lo).toNat &&& ((1 <<< (hi - lo + 1)) - 1)
 

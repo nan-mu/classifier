@@ -161,12 +161,6 @@ def override (Eg Ei : List Expr) : List Expr :=
     !(writes.any (fun w => w.reg == e.reg || w.reg.overlaps e.reg))
   Ei.constraints.foldl insertConstraint ((Eg.filter keep) ++ writes)
 
-def mapTerms (E : List Expr) (f : Term → Term) : List Expr :=
-  (E.map fun e => { e with term := f e.term }).eraseDups
-
-def solveAll (E : List Expr) : List Expr :=
-  E.mapTerms solve
-
 def forReg (E : List Expr) (r : Reg) : List Expr :=
   E.filter (fun e => e.reg == r)
 

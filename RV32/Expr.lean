@@ -245,12 +245,6 @@ def exprStackLOAD (Eg : List Expr) (rs1 rd : regidx) (offset : Nat) : Option (Li
     let t ← CellAccess.read ⟨reg⟩ Eg .w32 true
     some (assign rd t)
 
-def exprWordLOAD (Eg : List Expr) (rs1 rd : regidx) (offset : Nat)
-    (boundCtx : Option Term := none) : Option (List Expr) :=
-  match exprStackLOAD Eg rs1 rd offset with
-  | some Ei => some Ei
-  | none => exprLOAD Eg rs1 rd offset boundCtx
-
 /-- Byte offset of a numeric packet access. One packet, no resource id. -/
 private def packetOffsetAt (Eg : List Expr) (source : Term) (offset width : Nat) : Option Nat := do
   if !contextReady Eg || !(width == 1 || width == 2 || width == 4 || width == 8) then none
@@ -407,12 +401,6 @@ private def mapMaterialize (Eg : List Expr) (preds : List Predicate) (source : T
           let content := star .w32 (.externalResult event (1 + wordBase / 4)) [Term.C32 1]
           let rows ← writeUpdates Eg word content
           some (reg, rows)
-
-/-- Address resolution alone does not materialize missing content. -/
-def mapAccess (Eg : List Expr) (preds : List Predicate)
-    (rs1 : regidx) (offset width : Nat) : Option Reg := do
-  let source ← readReg Eg rs1
-  mapReg Eg preds source offset width
 
 def exprSizedLOADEffects (Eg : List Expr) (rs1 rd : regidx) (offset width : Nat)
     (isUnsigned : Bool) (boundCtx : Option Term := none)

@@ -118,11 +118,4 @@ def xdpFields : List ContextField :=
 def contextReady (E : List Expr) : Bool :=
   xdpFields.all fun j => (E.lookupEq (.context j 0 32)).isSome
 
-/-- Low `n` bits, keeping a term that already has that length. -/
-def narrowTo (n : Nat) (t : Term) : Term :=
-  if t.semanticBits == n then t
-  else
-    let carrier := max n t.width.bits
-    .app (Width.ofBits n) (.extract 0 n carrier) [t]
-
 end Core
