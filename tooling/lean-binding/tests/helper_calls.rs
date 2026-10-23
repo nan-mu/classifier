@@ -114,15 +114,49 @@ fn has_map_write(s: &Value) -> bool {
             .any(|p| p["kind"] == "mapWrite")
     })
 }
+fn real(reg: u32) -> String {
+    format!("real:{reg}:[0,32)")
+}
+
 fn term(node: &Value, reg: u32) -> &str {
     node["exprs"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["reg"] == format!("real32:{reg}") && e["rel"] == "eq")
-        .unwrap()["term"]
+        .find(|e| e["reg"] == real(reg) && e["rel"] == "eq")
+        .unwrap_or_else(|| panic!("missing {}", real(reg)))["term"]
         .as_str()
         .unwrap()
+}
+
+fn context<'a>(node: &'a Value, field: &str) -> &'a Value {
+    let reg = format!("context:{field}:[0,32)");
+    node["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["reg"] == reg)
+        .unwrap_or_else(|| panic!("missing {reg}"))
+}
+
+fn term_at<'a>(node: &'a Value, reg: &str) -> &'a str {
+    node["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["reg"] == reg && e["rel"] == "eq")
+        .unwrap_or_else(|| panic!("missing {reg}"))["term"]
+        .as_str()
+        .unwrap()
+}
+
+fn map_rows(node: &Value) -> Vec<&Value> {
+    node["exprs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["rel"] == "eq" && e["reg"].as_str().unwrap_or("").starts_with("map:"))
+        .collect()
 }
 
 fn helper_pred(node: &Value) -> &Value {
@@ -132,15 +166,6 @@ fn helper_pred(node: &Value) -> &Value {
         .iter()
         .find(|p| p["kind"] == "helper")
         .expect("helper Predicate")
-}
-
-fn map_slots(node: &Value) -> Vec<&Value> {
-    node["exprs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|e| e["role"] == "mem" && e["slot"] == "map")
-        .collect()
 }
 
 fn call_program(id: u32, form: usize) -> (Vec<u32>, usize, u32) {
@@ -182,12 +207,12 @@ fn all_link_call_forms_resume_and_preserve_abi() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|e| e["reg"] == format!("real32:{r}") && e["rel"] == "eq");
+                .find(|e| e["reg"] == real(r) && e["rel"] == "eq");
             let after_t = after["exprs"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .find(|e| e["reg"] == format!("real32:{r}") && e["rel"] == "eq");
+                .find(|e| e["reg"] == real(r) && e["rel"] == "eq");
             match (before_t, after_t) {
                 (Some(b), Some(a)) => assert_eq!(a["term"], b["term"], "form {form} r{r}"),
                 (None, None) => {}
@@ -283,18 +308,9 @@ fn context_identity_survives_returns_and_adjust_tail_keeps_data_end() {
     let before = snapshot(&words, pos as u32);
     let s = snapshot(&words, pos as u32 + 1);
     assert!(term(&s["nodes"][pos + 1], 10).contains(&format!("externalResult{pos}_0")));
-    let context = |node: &Value, field: u64| {
-        node["exprs"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|e| e["role"] == "mem" && e["slot"] == "context" && e["field"] == field)
-            .unwrap()
-            .clone()
-    };
     assert_eq!(
-        context(&s["nodes"][pos + 1], 1),
-        context(&before["nodes"][pos], 1)
+        context(&s["nodes"][pos + 1], "dataEnd"),
+        context(&before["nodes"][pos], "dataEnd")
     );
 }
 
@@ -317,8 +333,8 @@ fn a_loop_revisiting_the_same_helper_gets_new_events() {
 fn saved_context_is_used_by_compressed_and_narrow_loads() {
     for (load, reg, expected) in [
         (0x408c, 11, "v32:4"),
-        (0x0004c603, 12, "zext8/32(low8(v32:4))"),
-        (0x0004d603, 12, "zext16/32(low16(v32:4))"),
+        (0x0004c603, 12, "low32(zext8/32(extract0,8(v32:4)))"),
+        (0x0004d603, 12, "low32(zext16/32(extract0,16(v32:4)))"),
     ] {
         let words = vec![
             addi(9, 10, 0),
@@ -371,13 +387,13 @@ fn branch_constraints_are_overwritten_while_old_snapshots_and_helper_observation
         let historical = s["nodes"][branch]["exprs"].as_array().unwrap();
         assert!(historical
             .iter()
-            .any(|e| e["role"] == "constraint" && e["reg"] == "real32:10" && e["rel"] == rel));
+            .any(|e| e["role"] == "constraint" && e["reg"] == "real:10:[0,32)" && e["rel"] == rel));
         for id in [before, after] {
             assert!(s["nodes"][id]["exprs"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|e| e["role"] != "constraint" || e["reg"] != "real32:10"));
+                .all(|e| e["role"] != "constraint" || e["reg"] != "real:10:[0,32)"));
             assert!(s["nodes"][id]["predicates"]
                 .as_array()
                 .unwrap()
@@ -405,13 +421,11 @@ fn lookup_introduces_helper_predicate_and_map_regvar() {
     let pred = helper_pred(after);
     assert_eq!(pred["helperId"], 1);
     assert_eq!(pred["event"], pos);
-    let slots = map_slots(after);
+    let slots = map_rows(after);
     assert_eq!(slots.len(), 1);
-    assert_eq!(slots[0]["map"], 11);
-    let piece = &slots[0]["pieces"][0];
-    assert_eq!(piece["start"], 0);
-    let original = piece["slice"]["t"].as_str().unwrap().to_owned();
-    assert!(original.starts_with(&format!("regVar{pos}(")), "{original}");
+    assert_eq!(slots[0]["reg"], "map:11:[0,32):[1;1;0;0]");
+    let original = slots[0]["term"].as_str().unwrap().to_owned();
+    assert_eq!(original, format!("regVar{pos}(real:10:[0,32))"));
     words.splice(
         pos + 1..pos + 1,
         [addi(9, 10, 0), addi(10, 0, 5), load(12, 9, 0, 4, true)],
@@ -421,9 +435,9 @@ fn lookup_introduces_helper_predicate_and_map_regvar() {
     let after = &s["nodes"][pos + 4];
     assert_eq!(term(after, 12), original);
     assert_eq!(term(after, 10), "5");
-    let slots = map_slots(after);
+    let slots = map_rows(after);
     assert_eq!(slots.len(), 1);
-    assert_eq!(slots[0]["pieces"][0]["slice"]["t"], original);
+    assert_eq!(slots[0]["term"], original);
     assert_eq!(snapshot_maps(&words, 100, maps)["status"], "complete");
 }
 
@@ -462,12 +476,15 @@ fn lookup_map_stores_and_alias_subword_loads_share_the_first_word() {
     assert_eq!(term(exit, 15), "32768");
     assert_eq!(term(exit, 12), "2147483939"); // 0x80000123
     assert_eq!(term(exit, 16), "72745251"); // 0x04560123
-    let slots = map_slots(exit);
-    assert_eq!(slots.len(), 1);
-    assert_eq!(slots[0]["map"], 11);
-    assert_eq!(slots[0]["pieces"].as_array().unwrap().len(), 1);
-    assert_eq!(slots[0]["pieces"][0]["start"], 0);
-    assert_eq!(slots[0]["pieces"][0]["slice"]["v"], 72745251);
+    let key = "[1;1;0;0]";
+    assert_eq!(
+        term_at(exit, &format!("map:11:[0,16):{key}")),
+        "extract0,16(extract0,24(291))"
+    );
+    assert_eq!(
+        term_at(exit, &format!("map:11:[16,32):{key}")),
+        "low16(1110)"
+    );
 }
 
 #[test]
@@ -540,20 +557,20 @@ fn lookup_later_words_materialize_once_and_preserve_writes_through_aliases() {
     assert_eq!(term(exit, 16), "128");
     assert_eq!(term(exit, 17), "128");
     assert_eq!(term(exit, 18), "128");
-    let slots = map_slots(exit);
-    assert_eq!(slots.len(), 1);
-    let pieces = slots[0]["pieces"].as_array().unwrap();
-    let at = |start: u64| pieces.iter().find(|p| p["start"] == start).unwrap();
-    assert_eq!(at(0)["slice"]["t"], format!("regVar{pos}(real32:10)"));
-    assert_eq!(at(32)["slice"]["v"], 128);
-    assert_eq!(at(32)["slice"]["w"], 32);
-    assert_eq!(at(72)["slice"]["v"], 128);
-    assert_eq!(at(72)["slice"]["w"], 8);
-    assert_eq!(at(96)["slice"]["v"], 128);
-    assert_eq!(at(96)["slice"]["w"], 32);
-    assert!(!pieces
-        .iter()
-        .any(|p| p.to_string().contains("externalResult")));
+    let key = "[1;1;0;0]";
+    assert_eq!(map_rows(exit).len(), 4);
+    assert_eq!(
+        term_at(exit, &format!("map:11:[0,32):{key}")),
+        format!("regVar{pos}(real:10:[0,32))")
+    );
+    assert_eq!(term_at(exit, &format!("map:11:[32,64):{key}")), "128");
+    assert_eq!(term_at(exit, &format!("map:11:[72,80):{key}")), "low8(128)");
+    assert_eq!(term_at(exit, &format!("map:11:[96,128):{key}")), "128");
+    assert!(!exit["exprs"].as_array().unwrap().iter().any(|e| e["reg"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("map:")
+        && e["term"].as_str().unwrap_or("").contains("externalResult")));
 }
 
 #[test]
