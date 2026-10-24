@@ -23,6 +23,15 @@ lean_lib EBPF where
 /-- Dual-arch fixtures; not linked into the server shared libs. -/
 lean_lib CrossArch
 
+/-- Sorry-free semantic statements. `lake build Verification`. -/
+lean_lib Verification where
+  roots := #[`Verification]
+
+/-- Required obligations (`sorry`) and external-premise candidates.
+Not imported by `Verification`. `lake build VerificationGaps`. -/
+lean_lib VerificationGaps where
+  roots := #[`Verification.Unverified.Required, `Verification.Unverified.Assumed]
+
 lean_exe semanticCheck where
   root := `SemanticCheck
 
