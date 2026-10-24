@@ -115,7 +115,7 @@ private def snapshot (label : String) (j : Lean.Json) :
     -- parsePredicateJson applies predicateWellFormed for every recognized class.
     let some predicate := parsePredicateJson p | throw ("InvalidPredicate:" ++ label)
     pure predicate
-  let some state := parseSemStateJson (Lean.Json.arr exprs).compress "[]" |
+  let some state := parseStateJson (Lean.Json.arr exprs).compress "[]" |
     throw ("InvalidSnapshot:" ++ label)
   if !state.exprs.all (fun e => validRel (Width.ofBits e.reg.bits) e.rel && validTerm e.term) then
     throw ("InvalidTerm:" ++ label)
@@ -370,7 +370,7 @@ private def mergeReuses (request : String) (reuseFrom taken : Nat) : Bool :=
     (((Lean.Json.parse response) >>= (fun j => j.getObjVal? "taken") >>=
       Lean.Json.getNat?).toOption == some taken)
 
-private def mergeStateSnapshotFixture (id : Nat) (loc : String) (state : SemState) : String :=
+private def mergeStateSnapshotFixture (id : Nat) (loc : String) (state : State) : String :=
   mergeSnapshotFixture id loc ("[" ++ renderExprsJson state.exprs ++ "]")
     ("[" ++ renderPredicatesJson state.predicates ++ "]")
 
@@ -478,8 +478,8 @@ private def mergeJustDropOverwriteCheck : Bool :=
       (addStar .w32 (Term.V32 4) (Term.C32 14))); if acc.contains row then acc else acc ++ [row]))
     |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real32 10) .geu
       (addStar .w32 (Term.V32 4) (Term.C32 18))); if acc.contains row then acc else acc ++ [row]))
-  let taken : SemState := ⟨(update ⟨common, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 43144))], predicates := [] }).exprs, []⟩
-  let notTaken : SemState := ⟨(update ⟨common, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 129))], predicates := [] }).exprs, []⟩
+  let taken : State := ⟨(update ⟨common, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 43144))], predicates := [] }).exprs, []⟩
+  let notTaken : State := ⟨(update ⟨common, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 129))], predicates := [] }).exprs, []⟩
   -- ADDI a3,zero,18 at wire loc17 contributes this local value effect.
   let localExprs := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq a3 (solve (Term.C32 18))], predicates := [] }).exprs
   let takenAfter := update taken { exprs := localExprs, predicates := [] }
@@ -509,9 +509,9 @@ private def mergeComplementaryOverwriteCheck : Bool :=
   [Rel.eq, .ltu].all fun rel =>
     let condition := Expr.mkRel compared rel (Term.C32 10)
     let complement := Expr.mkRel compared rel.compl (Term.C32 10)
-    let taken : SemState := ⟨(let row := solveExpr condition; if common.contains row then common else common ++ [row]), []⟩
-    let notTaken : SemState := ⟨(let row := solveExpr complement; if common.contains row then common else common ++ [row]), []⟩
-    let request (a b : SemState) := mergeRequestFixture (mergeStateSnapshotFixture 42 "17" a)
+    let taken : State := ⟨(let row := solveExpr condition; if common.contains row then common else common ++ [row]), []⟩
+    let notTaken : State := ⟨(let row := solveExpr complement; if common.contains row then common else common ++ [row]), []⟩
+    let request (a b : State) := mergeRequestFixture (mergeStateSnapshotFixture 42 "17" a)
       (mergeStateSnapshotFixture 17 "17" b)
     let overwrite := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq compared (solve (Term.C32 18))], predicates := [] }).exprs
     let unrelated := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq other (solve (Term.C32 0))], predicates := [] }).exprs

@@ -7,7 +7,7 @@ import Core.Insn
 
 namespace Core
 
-/-! ## Compact string renderers for SemState JSON (`doc/NodeInference/step.md#语义状态与节点状态`) -/
+/-! ## Compact string renderers for State JSON (`doc/NodeInference/step.md#语义状态与节点状态`) -/
 
 def renderWidth : Width → String
   | .w32 => "32"
@@ -139,7 +139,7 @@ def renderExprsJson (E : List Expr) : String :=
 def renderPredicatesJson (ps : List Predicate) : String :=
   String.intercalate "," (ps.map renderPredicateJson)
 
-def renderSemStateJson (σ : SemState) : String × String :=
+def renderStateJson (σ : State) : String × String :=
   (renderExprsJson σ.exprs, renderPredicatesJson σ.predicates)
 
 end Core

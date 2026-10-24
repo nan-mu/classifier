@@ -1,5 +1,5 @@
 //! Expand-driver domain types: Agenda schedule, History shells, loc boundary.
-//! SemState bytes stay in the applied graph snapshot. Exact-config merge is not
+//! State bytes stay in the applied graph snapshot. Exact-config merge is not
 //! called from the schedule.
 
 pub mod history;

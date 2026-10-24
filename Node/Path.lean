@@ -11,7 +11,7 @@ open Core
 /-- Pre-execution snapshot (Exit holds the final post-return state). -/
 structure Node where
   loc   : Location
-  state : SemState
+  state : State
   deriving Repr, Inhabited
 
 structure Edge where
@@ -59,15 +59,15 @@ def RunGraph.ofWork (nodes : Array Node) (edges : Array Edge) : RunGraph :=
   ⟨nodes, edges, 0⟩
 
 /-- Step increment. A stored node uses `exprs` and `predicates`. -/
-def renderIncrementJson (step : SemState) : String :=
-  let (writes, observations) := renderSemStateJson step
+def renderIncrementJson (step : State) : String :=
+  let (writes, observations) := renderStateJson step
   s!"\"writes\":[{writes}],\"observations\":[{observations}]"
 
 @[export lean_expand_update]
 def exportUpdate (localExprs localPreds stepExprs stepPreds : String) : String :=
-  match parseSemStateJson localExprs localPreds, parseSemStateJson stepExprs stepPreds with
+  match parseStateJson localExprs localPreds, parseStateJson stepExprs stepPreds with
   | some parent, some step =>
-    let (exprs, preds) := renderSemStateJson (update parent step)
+    let (exprs, preds) := renderStateJson (update parent step)
     s!"\{\"status\":\"ok\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}"
   | _, _ => "{\"status\":\"fail\",\"reason\":\"LocalReject\"}"
 

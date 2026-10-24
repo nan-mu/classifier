@@ -65,7 +65,7 @@ theorem rv32_ignorable_step
 
 /-- Branching steps are excluded by `StepPreserves`. Both directions still
 need the same observation agreement on the history-covered set. -/
-def BranchPreserves (step : Nat → SemState → StepResult)
+def BranchPreserves (step : Nat → State → StepResult)
     (steps : List (List Expr × List Predicate)) (entry : List Expr) : Prop :=
   ∀ j σ τ cσ dσ cτ dτ,
     ExprIgnorable (history steps entry) σ τ →
@@ -89,7 +89,7 @@ theorem ebpf_linear_trace_agrees
     (I : Array EBPF.Insn) (event : Nat)
     (steps : List (List Expr × List Predicate)) (entry : List Expr)
     (h : IgnorablePreservesEbpf I event steps entry)
-    (fuel j : Nat) (σ τ : SemState)
+    (fuel j : Nat) (σ τ : State)
     (hign : ExprIgnorable (history steps entry) σ τ) :
     linearTrace (fun j σ => EBPF.ebpfStep I event j σ) fuel j σ =
       linearTrace (fun j σ => EBPF.ebpfStep I event j σ) fuel j τ :=

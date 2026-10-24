@@ -460,7 +460,7 @@ fn parse_predicates(n: &Value) -> Vec<PredOut> {
         .collect()
 }
 
-/// Parent ids from Lean edges. Lean node `predicates` are SemState tags, not parents.
+/// Parent ids from Lean edges. Lean node `predicates` are State tags, not parents.
 /// Positions are omitted; the web canvas owns force layout.
 fn graph_from_lean(lean: &Value) -> (Vec<NodeOut>, Vec<EdgeOut>) {
     let lean_nodes = lean["nodes"].as_array().cloned().unwrap_or_default();

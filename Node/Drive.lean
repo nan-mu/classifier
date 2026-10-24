@@ -17,11 +17,11 @@ instructions from 1.
 def loopLimit : Nat := 128
 
 inductive DriveLabel where
-  | standard (j : Nat) (state : SemState)
+  | standard (j : Nat) (state : State)
   | taken
-      (parent : Nat) (parentState : SemState)
-      (here : Nat) (hereState : SemState)
-      (oldNotTaken : SemState)
+      (parent : Nat) (parentState : State)
+      (here : Nat) (hereState : State)
+      (oldNotTaken : State)
       (interval : List (List Expr × List Predicate))
       (loopsLeft : Nat)
   deriving Repr
@@ -139,8 +139,8 @@ def valueDiffRegs (oldExprs newExprs : List Expr) : List Reg :=
 def diffCovered (oldExprs newExprs : List Expr) (covered : List Reg) : Bool :=
   (valueDiffRegs oldExprs newExprs).all (covered.contains ·)
 
-private def place (progLen : Nat) (σ : SemState) (c : Candidate) :
-    Except RejectReason (Option (Nat × SemState)) :=
+private def place (progLen : Nat) (σ : State) (c : Candidate) :
+    Except RejectReason (Option (Nat × State)) :=
   match c.loc with
   | .exit => .ok none
   | .pos k =>
@@ -150,13 +150,13 @@ private def place (progLen : Nat) (σ : SemState) (c : Candidate) :
         let state ← (Except.ok (update σ { exprs := c.E_k, predicates := c.P_k }))
         pure (some (k, state))
 
-private def asStandard (loopsLeft : Option Nat) (placed : Option (Nat × SemState)) : DriveResult :=
+private def asStandard (loopsLeft : Option Nat) (placed : Option (Nat × State)) : DriveResult :=
   match placed with
   | none => .stop .reachedExit
   | some (k, state) => .labels loopsLeft [.standard k state]
 
-def driveStandard (step : Nat → SemState → StepResult) (progLen j : Nat)
-    (σ : SemState) : DriveResult :=
+def driveStandard (step : Nat → State → StepResult) (progLen j : Nat)
+    (σ : State) : DriveResult :=
   match step j σ with
   | .reject reason => .stop (.reject reason)
   | .candidates [] => .stop .end
@@ -181,8 +181,8 @@ def driveStandard (step : Nat → SemState → StepResult) (progLen j : Nat)
             | _, _ => .stop .end
       | _, _ => .stop .end
 
-def driveTaken (step : Nat → SemState → StepResult) (progLen : Nat)
-    (parent : Nat) (_parentState hereState oldNotTaken : SemState)
+def driveTaken (step : Nat → State → StepResult) (progLen : Nat)
+    (parent : Nat) (_parentState hereState oldNotTaken : State)
     (here : Nat) (interval : List (List Expr × List Predicate)) (loopsLeft : Nat) : DriveResult :=
   if here != parent then
     .labels (some loopsLeft) [.standard here hereState]
@@ -223,13 +223,13 @@ private def r0 : Reg := .real32 0
 private def eq0 (n : Nat) : List Expr :=
   [Expr.mkEq r0 (.const .w32 n)]
 
-private def state (n : Nat) : SemState :=
+private def state (n : Nat) : State :=
   ⟨eq0 n, []⟩
 
 private def go (j : Nat) (dir : Direction) : Candidate :=
   { dir, loc := .pos j, E_k := [], P_k := [] }
 
-private def demo (j : Nat) (_ : SemState) : StepResult :=
+private def demo (j : Nat) (_ : State) : StepResult :=
   if j == 0 then
     .candidates [go 1 .notTaken, go 2 .taken]
   else if j == 2 then
@@ -252,7 +252,7 @@ private def demo (j : Nat) (_ : SemState) : StepResult :=
   | .labels (some 128) [.standard 2 _] => true
   | _ => false
 
-private def backBoth (_ : Nat) (_ : SemState) : StepResult :=
+private def backBoth (_ : Nat) (_ : State) : StepResult :=
   .candidates [go 1 .notTaken, go 2 .taken]
 
 #guard
@@ -260,7 +260,7 @@ private def backBoth (_ : Nat) (_ : SemState) : StepResult :=
   | .stop (.reject .localReject) => true
   | _ => false
 
-private def backNot (j : Nat) (_ : SemState) : StepResult :=
+private def backNot (j : Nat) (_ : State) : StepResult :=
   .candidates [{
     dir := .notTaken
     loc := .pos (j + 1)
@@ -281,7 +281,7 @@ private def backNot (j : Nat) (_ : SemState) : StepResult :=
   | .labels (some 128) [.standard 1 _] => true
   | _ => false
 
-private def backTaken (j : Nat) (_ : SemState) : StepResult :=
+private def backTaken (j : Nat) (_ : State) : StepResult :=
   .candidates [go (j + 1) .taken]
 
 #guard
@@ -319,7 +319,7 @@ private def killedBeforeUse : List (List Expr × List Predicate) :=
 #guard r0 ∉ history derivedHelper entryX
 #guard (history killedBeforeUse entryX).contains r0
 
-private def backConst (j : Nat) (_ : SemState) : StepResult :=
+private def backConst (j : Nat) (_ : State) : StepResult :=
   .candidates [{
     dir := .notTaken
     loc := .pos (j + 1)

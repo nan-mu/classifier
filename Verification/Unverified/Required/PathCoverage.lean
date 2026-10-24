@@ -12,7 +12,7 @@ open Core Node Verification.Obligation Verification.Verified.HistoryAndPath
 `sameObservation` stops the taken walk. The ordered observations of the
 unexpanded suffix are `linearTrace_of_step_preservation` once
 `History.ebpf_ignorable_step` is proved, including repetitions.
-`duplicate_observation_is_dropped` is why the final `SemState.predicates`
+`duplicate_observation_is_dropped` is why the final `State.predicates`
 list is not that record.
 
 `CoveredSelection` is a premise on a particular `Accepts`. It is not true for
@@ -27,7 +27,7 @@ def CoveredSelection (a : Accepts) : Prop :=
     ListsFromRuns a gL gR cL cR
 
 theorem accumulated_predicates_drop_repeats
-    (parent : SemState) (p : Predicate) (h : parent.predicates.contains p = true) :
+    (parent : State) (p : Predicate) (h : parent.predicates.contains p = true) :
     (update parent { exprs := [], predicates := [p] }).predicates = parent.predicates :=
   duplicate_observation_is_dropped parent p h
 

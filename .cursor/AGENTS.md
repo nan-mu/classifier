@@ -90,10 +90,10 @@ Rust must not reimplement instruction semantics. Against Lean, tooling's
 supported expand contract is three stateless String FFI calls (via
 `lean-binding`):
 
-- `expand_create(metaJson)` → root SemState snapshot JSON (no `fuel` field).
+- `expand_create(metaJson)` → root State snapshot JSON (no `fuel` field).
   **Arch-specific** today (`lean_rv32_expand_create`).
 - `expand_step(insns, metaJson, event, j, exprsJson, predsJson)` →
-  `{status, reason, successors}` (applied SemStates) or a rejection.
+  `{status, reason, successors}` (applied States) or a rejection.
   Step remains RV32-exported (`lean_rv32_expand_step`) until a neutral step
   export exists; treat the JSON contract as arch-neutral at the boundary.
 - `expand_merge(requestJson)` → exact-config merge verdict JSON

@@ -183,7 +183,7 @@ private def emitStore (I : Array Insn) (j : Nat) (Eg Ei : List Expr)
     | _, _, _ => .reject .undefinedSrc
   | _, _ => emit .ok (nextPosition I j) Ei
 
-/-- Static layout/return bindings are captured by the Step closure, never stored in SemState.
+/-- Static layout/return bindings are captured by the Step closure, never stored in State.
 PC is derived solely for the value call. Without a dynamic event, resource writes reject;
 ordinary value, Branch, and Return callers need no event identity. -/
 private partial def containsInputByte : Term → Bool
@@ -276,7 +276,7 @@ private def undecidedBranch (I : Array Insn) (j : Nat) (Ei : List Expr) (t1 : Te
   | _, _ => .reject .unboundTarget
 
 def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
-    (j : Nat) (σ : SemState) (boundCtx : Option Term := none)
+    (j : Nat) (σ : State) (boundCtx : Option Term := none)
     (event : Option NodeId := none) : StepResult :=
   match I[j]? with
   | none => .reject .unboundTarget
@@ -362,13 +362,13 @@ def rv32StepBound (I : Array Insn) (base returnAddr : Option Nat)
 
 /-- Unbound adapter: sequential effects and relative RV32 direct targets work;
 PC-dependent effects and indirect targets require rv32StepBound's static bindings. -/
-def rv32Step (I : Array Insn) (j : Nat) (σ : SemState) : StepResult :=
+def rv32Step (I : Array Insn) (j : Nat) (σ : State) : StepResult :=
   rv32StepBound I none none j σ none none
 
 /-- The root is the actual pre-instruction wrapper entry state. -/
 def rv32Init (I : Array Insn) (p : EntryParams) (j0 budget : Nat) :
     Except RejectReason WorkState := do
-  let σ0 ← entrySemState p
+  let σ0 ← entryState p
   expandInit I.size j0 σ0 budget
 
 private def const32? : Term → Option Nat
@@ -685,7 +685,7 @@ private def symbolicBltuDualSuccessorCheck : Bool :=
       fall.E_k == [Expr.mkRel (Reg.real32 1) .geu rhs] &&
       taken.P_k == [.branch 1 .taken ⟨lhs, .ltu, rhs⟩] &&
       fall.P_k == [.branch 1 .notTaken ⟨lhs, .geu, rhs⟩] &&
-      let child := update (SemState.mk E []) { exprs := taken.E_k, predicates := taken.P_k }
+      let child := update (State.mk E []) { exprs := taken.E_k, predicates := taken.P_k }
       let overwritten := update child { exprs := ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 1) (solve (Term.C32 0))], predicates := [] }).exprs), predicates := [] }
       overwritten.exprs.constraints.isEmpty &&
         child.exprs.constraints == [Expr.mkRel (Reg.real32 1) .ltu rhs] &&
@@ -711,7 +711,7 @@ private def symbolicBtypeRelationsCheck : Bool :=
         fall.E_k == [Expr.mkRel (Reg.real32 1) rel.compl rhs] &&
         taken.P_k == [.branch 1 .taken ⟨lhs, rel, rhs⟩] &&
         fall.P_k == [.branch 1 .notTaken ⟨lhs, rel.compl, rhs⟩] &&
-        let child := update (SemState.mk E []) { exprs := taken.E_k, predicates := taken.P_k }
+        let child := update (State.mk E []) { exprs := taken.E_k, predicates := taken.P_k }
         child.exprs.lookupEq (Reg.real32 1) == some lhs && child.exprs.keysUnique
     | _ => false
 
@@ -833,7 +833,7 @@ private def esp32c3BltuContinuationsCheck : Bool :=
 private def symbolicBranchesCheck : Bool :=
   let ta := Term.V32 1
   let tb := Term.V32 2
-  let σ : SemState := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve ta)], predicates := [] }).exprs
+  let σ : State := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve ta)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve tb)], predicates := [] }).exprs), []⟩
   [bop.BEQ, .BNE, .BLT, .BGE, .BLTU, .BGEU].all fun op =>
     let I := #[Insn.BTYPE (8#13, .Regidx 13#5, .Regidx 11#5, op),
@@ -849,7 +849,7 @@ private def symbolicBranchesCheck : Bool :=
     | _ => false
 
 private def compressedBranchesCheck : Bool :=
-  let σ : SemState := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.V32 3))], predicates := [] }).exprs, []⟩
+  let σ : State := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve (Term.V32 3))], predicates := [] }).exprs, []⟩
   [0xc011, 0xe011].all fun word =>
     let I := decodeProgram #[UInt32.ofNat word, 0x0001, 0x0001]
     match rv32Step I 0 σ with
@@ -870,7 +870,7 @@ private def sharedReturnKeepsBody : Bool :=
   match «seal» 32 (Term.app .w32 (.inputByte 0) [Term.C32 0, Term.C32 12]) with
   | none => false
   | some pkt =>
-  let σ : SemState := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve pkt)], predicates := [] }).exprs
+  let σ : State := ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 12) (solve pkt)], predicates := [] }).exprs
       |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 14) (solve (Term.C32 8))], predicates := [] }).exprs), []⟩
   let jump := match encodeCompressed 0xa011#16 with
     | .C_J imm => Insn.C_J imm
@@ -1025,7 +1025,7 @@ private def helperTarget (i : Insn) (pc : Nat) (Eg : List Expr) : Option Nat :=
 
 /-- One ISA step. Image base, helper, return, and the context root are anchors in `σ.exprs`.
 A later write to x1 does not move the return label. -/
-def inferStep (I : Array Insn) (event : NodeId) (j : Nat) (σ : SemState) : StepResult :=
+def inferStep (I : Array Insn) (event : NodeId) (j : Nat) (σ : State) : StepResult :=
   let base := contextNat σ.exprs .imageBase
   let ret := contextNat σ.exprs .wrapperReturn
   let helper := contextNat σ.exprs .helper
@@ -1236,7 +1236,7 @@ private def imageOk (I : Array Insn) (E : List Expr) : Bool :=
 private def createFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"failed\":null,\"work\":[],\"nodes\":[],\"edges\":[]}"
 
-/-- Entry SemState plus anchors. No fuel — Rust binding owns the expansion budget. -/
+/-- Entry State plus anchors. No fuel — Rust binding owns the expansion budget. -/
 @[export lean_rv32_expand_create]
 def exportRv32ExpandCreate
     (base helper wrapperReturn : UInt32)
@@ -1249,7 +1249,7 @@ def exportRv32ExpandCreate
     let p := { smokeEntryParams with
       tEntry := Term.C32 base.toNat, tReturn := Term.C32 wrapperReturn.toNat,
       rEntries := savedRegs }
-    match entrySemState p with
+    match entryState p with
     | .error reason => createFailJson reason
     | .ok σ0 =>
       let layouts := (mapIds.toList.zip (keySizes.toList.zip valueSizes.toList)).map
@@ -1264,13 +1264,13 @@ def exportRv32ExpandCreate
       match installed with
       | none => createFailJson .invalidEntry
       | some exprs =>
-        let (ej, pj) := renderSemStateJson { σ0 with exprs }
+        let (ej, pj) := renderStateJson { σ0 with exprs }
         s!"\{\"status\":\"running\",\"reason\":null,\"failed\":null,\"work\":[0],\"nodes\":[\{\"id\":0,\"loc\":\"0\",\"exprs\":[{ej}],\"predicates\":[{pj}]}],\"edges\":[]}"
 
 private def headFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"successors\":[]}"
 
-private def successorJson (dir : Direction) (loc : Location) (step : SemState) : String :=
+private def successorJson (dir : Direction) (loc : Location) (step : State) : String :=
   let loc := match loc with | .exit => "exit" | .pos j => toString j
   s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",{renderIncrementJson step}}"
 
@@ -1282,7 +1282,7 @@ def exportRv32ExpandStep (insns : Array UInt32) (event j : UInt32)
   if insns.isEmpty then headFailJson .invalidEntry
   else
     let I := decodeProgram insns
-    match parseSemStateJson exprsJson predsJson with
+    match parseStateJson exprsJson predsJson with
     | none => headFailJson .localReject
     | some state =>
       if !imageOk I state.exprs then headFailJson .invalidEntry
@@ -1302,7 +1302,7 @@ def exportRv32BoundWordsSnapshot (insns : Array UInt32) (exprsJson predsJson : S
   if insns.isEmpty then snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
   else
     let I := decodeProgram insns
-    match parseSemStateJson exprsJson predsJson with
+    match parseStateJson exprsJson predsJson with
     | none => snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
     | some σ0 =>
       if !imageOk I σ0.exprs then snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
@@ -1310,13 +1310,13 @@ def exportRv32BoundWordsSnapshot (insns : Array UInt32) (exprsJson predsJson : S
         | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
         | .ok ws => snapshotAfter I.size (inferStep I) ws steps.toNat
 
-private def rootOf (response : String) : Option SemState := do
+private def rootOf (response : String) : Option State := do
   let value ← (Lean.Json.parse response).toOption
   let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
   let node ← nodes[0]?
   let exprs ← (node.getObjVal? "exprs").toOption
   let preds ← (node.getObjVal? "predicates").toOption
-  parseSemStateJson exprs.compress preds.compress
+  parseStateJson exprs.compress preds.compress
 
 private def statelessStepCheck : Bool := Id.run do
   let insns := #[0x00700513, 0x00150513, 0x00008067]
@@ -1326,10 +1326,10 @@ private def statelessStepCheck : Bool := Id.run do
   let p := { smokeEntryParams with
     tEntry := Term.C32 0x400, tReturn := Term.C32 0x2000, rEntries := savedRegs }
   let .ok ws := expandInit I.size 0 root 3 | return false
-  let (exprs, preds) := renderSemStateJson root
+  let (exprs, preds) := renderStateJson root
   let .inr next := expandOne I.size (inferStep I 0) ws | return false
   let .candidates [c] := inferStep I 0 0 root | return false
-  let step : SemState := { exprs := c.E_k, predicates := c.P_k }
+  let step : State := { exprs := c.E_k, predicates := c.P_k }
   return exportRv32ExpandStep insns 0 0 s!"[{exprs}]" s!"[{preds}]" ==
       s!"\{\"status\":\"ok\",\"reason\":null,\"successors\":[{successorJson .ok c.loc step}]}" &&
     (update root step).exprs == next.nodes[1]!.state.exprs &&
@@ -1379,14 +1379,14 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
   let some E := bindField E .wrapperReturn (Term.C32 8192) | return false
   let some E := ((«seal» (Reg.stack 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 0 32) stored], predicates := [] }).exprs)) | return false
   let some E := ((«seal» (Reg.stack 32 64).bits (Term.C32 0x08070605) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 32 64) stored], predicates := [] }).exprs)) | return false
-  let (body, _) := renderSemStateJson ⟨E, []⟩
+  let (body, _) := renderStateJson ⟨E, []⟩
   for (id, kind, abi, tail) in [
       (1, HelperKind.lookup, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (3, HelperKind.delete, [Term.C32 42, key], [Term.C32 4, Term.C32 5, Term.C32 6]),
       (2, HelperKind.update, [Term.C32 42, key, value, Term.C32 0],
         [Term.C32 4, Term.C32 5, Term.C32 6, Term.C32 5, Term.C32 6])] do
     let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 id))], predicates := [] }).exprs
-    let (row, _) := renderSemStateJson ⟨state, []⟩
+    let (row, _) := renderStateJson ⟨state, []⟩
     let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] 80 0 s!"[{row}]" "[]"
     if !json.contains "\"status\":\"ok\"" ||
         !json.contains (renderPredicateJson (.helper 80 kind (abi ++ tail))) ||
@@ -1395,7 +1395,7 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
   let missingValue := addStar .w32 (Term.V32 0) (Term.C32 7)
   let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 2))], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve missingValue)], predicates := [] }).exprs)
-  let (row, _) := renderSemStateJson ⟨state, []⟩
+  let (row, _) := renderStateJson ⟨state, []⟩
   let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] 80 0 s!"[{row}]" "[]"
   return !body.isEmpty && json.contains "\"status\":\"ok\"" &&
     json.contains (renderPredicateJson

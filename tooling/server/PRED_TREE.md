@@ -6,7 +6,7 @@
 
 ## Domain
 
-The response is a tree of nodes. These are not expand/step SemState nodes.
+The response is a tree of nodes. These are not expand/step State nodes.
 
 Each node has:
 

@@ -27,7 +27,7 @@ private def put (E : List Expr) (j : ContextField) (t : Term) : Except RejectRea
   | some E => pure E
   | none => throw .invalidEntry
 
-def buildE0 (p : EntryParams) : Except RejectReason SemState := do
+def buildE0 (p : EntryParams) : Except RejectReason State := do
   if !leaf .w64 p.tCtx || !leaf .w64 p.tSp || !leaf .w32 p.tData ||
       p.packetBytes ≥ (1 <<< 32) then throw .invalidEntry
   let E ← put Expr.nil .ctx p.tCtx
@@ -38,7 +38,7 @@ def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   let E := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve p.tCtx)], predicates := [] }).exprs |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 10) (solve p.tSp)], predicates := [] }).exprs)
   pure ⟨E, []⟩
 
-def entrySemState := buildE0
+def entryState := buildE0
 
 def entryParams? (E : List Expr) : Option EntryParams := do
   let tCtx ← contextValue E .ctx

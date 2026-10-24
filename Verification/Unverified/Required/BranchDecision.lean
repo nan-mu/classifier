@@ -15,7 +15,7 @@ The missing fact is the exclusion itself, from `step`, while the row is alive.
 -/
 
 /-- While `row` is still a row of `σ`, `step` does not return both directions. -/
-def SavedRowExcludesBoth (step : Nat → SemState → StepResult) : Prop :=
+def SavedRowExcludesBoth (step : Nat → State → StepResult) : Prop :=
   ∀ j σ row cs,
     row ∈ σ.exprs →
     step j σ = .candidates cs →
@@ -23,7 +23,7 @@ def SavedRowExcludesBoth (step : Nat → SemState → StepResult) : Prop :=
     cs.any (fun c => c.dir == .notTaken) = false
 
 /-- sorry: required obligation, not a proof. -/
-theorem saved_row_excludes_both (step : Nat → SemState → StepResult) :
+theorem saved_row_excludes_both (step : Nat → State → StepResult) :
     SavedRowExcludesBoth step := by
   sorry
 

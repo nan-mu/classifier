@@ -1,4 +1,4 @@
-//! Lean-backed merge port. Exact-config oracle only; no SemState synthesis in Rust.
+//! Lean-backed merge port. Exact-config oracle only; no State synthesis in Rust.
 
 use serde_json::{json, Value};
 

@@ -167,7 +167,7 @@ pub struct RecordShell {
 
 #[derive(Clone, Debug)]
 pub struct HistoryShell {
-    /// Entry SemState = applied node id (σ0 packaging).
+    /// Entry State = applied node id (σ0 packaging).
     pub entry: NodeId,
     pub records: Vec<RecordShell>,
 }
@@ -186,7 +186,7 @@ impl RecordStore {
 }
 
 impl HistoryShell {
-    /// Package an arm from applied refs only (no SemState copy, no invented deltas).
+    /// Package an arm from applied refs only (no State copy, no invented deltas).
     pub fn from_arm(entry: NodeId, jb_doc: u32, dir: Dir, arm_root: NodeId) -> Self {
         Self {
             entry,

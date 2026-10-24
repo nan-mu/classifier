@@ -31,7 +31,7 @@ def extractWritten (w probe : Reg) (t : Term) : Term :=
 
 /-- A covered probe reads as that extract, and the extract denotes the same
 value as the corresponding bits of `t`. -/
-def CoveredRead (parent : SemState) (w : Reg) (t : Term) : Prop :=
+def CoveredRead (parent : State) (w : Reg) (t : Term) : Prop :=
   ∀ probe, Covered w probe →
     readInterval
       (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs probe =
@@ -39,7 +39,7 @@ def CoveredRead (parent : SemState) (w : Reg) (t : Term) : Prop :=
 
 /-- A probe that misses the write reads exactly as it did before, when the
 old read was defined. -/
-def MissRead (parent : SemState) (w : Reg) (t : Term) : Prop :=
+def MissRead (parent : State) (w : Reg) (t : Term) : Prop :=
   ∀ probe old, Misses w probe →
     readInterval parent.exprs probe = some old →
     readInterval
@@ -48,7 +48,7 @@ def MissRead (parent : SemState) (w : Reg) (t : Term) : Prop :=
 
 /-- sorry: required obligation, not a proof. -/
 theorem covered_probe_reads_extract
-    (parent : SemState) (w : Reg) (t : Term)
+    (parent : State) (w : Reg) (t : Term)
     (hw : w.lo < w.hi) (hp : valueSeparated parent.exprs)
     (ht : t.semanticBits = w.bits) :
     CoveredRead parent w t := by
@@ -58,7 +58,7 @@ theorem covered_probe_reads_extract
 `kept_lookup` is the special case where `probe` is already a binding and
 `lookupEq` is used instead of `readInterval`. -/
 theorem missed_probe_keeps_old_read
-    (parent : SemState) (w : Reg) (t : Term)
+    (parent : State) (w : Reg) (t : Term)
     (hw : w.lo < w.hi) (hp : valueSeparated parent.exprs) :
     MissRead parent w t := by
   sorry

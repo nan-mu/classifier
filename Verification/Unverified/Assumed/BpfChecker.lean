@@ -9,7 +9,7 @@ model, helper set, and kernel configuration.
 
 Not in scope, and not assumed here:
 
-- this repository's `SemState`, `ebpfStep`, or `rv32Step`
+- this repository's `State`, `ebpfStep`, or `rv32Step`
 - `loopLimit` or any concrete fuel being large enough
 - a saved comparison row excluding both successors
 - RV32 safety

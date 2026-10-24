@@ -98,7 +98,7 @@ def writeContext (p : EntryParams) : Except RejectReason (List Expr) := do
   | _, _ => throw .invalidEntry
 
 /-- Real registers and the six context intervals share `exprs`. -/
-def buildE0 (p : EntryParams) : Except RejectReason SemState := do
+def buildE0 (p : EntryParams) : Except RejectReason State := do
   if ![p.tData, p.tLen].all leaf32 || p.ιWifi ≥ (1 <<< 32) then throw .invalidEntry
   let Ereal ← buildRealE0 p
   let Ectx ← writeContext p
@@ -107,6 +107,6 @@ def buildE0 (p : EntryParams) : Except RejectReason SemState := do
   pure ⟨E, []⟩
 
 /-- Entry state consumed by the existing Expand adapter. -/
-def entrySemState (p : EntryParams) : Except RejectReason SemState := buildE0 p
+def entryState (p : EntryParams) : Except RejectReason State := buildE0 p
 
 end RV32

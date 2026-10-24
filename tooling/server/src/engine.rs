@@ -102,7 +102,7 @@ struct WireSuccessor {
 /// Owns program words, applied graph snapshot, Agenda, and fuel.
 pub struct ExpandSession {
     isa: IsaState,
-    /// Applied SemState graph + status/fuel. `work` is derived from Agenda.
+    /// Applied State graph + status/fuel. `work` is derived from Agenda.
     snapshot: Value,
     agenda: Agenda,
     records: RecordStore,

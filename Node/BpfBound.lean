@@ -27,14 +27,14 @@ theorem loop_limit_not_exhausted
   Nat.le_trans bound enough
 
 /-- The taken arm's comparison row is still a row of the pre-state. -/
-def constraintAlive (σ : SemState) (row : Expr) : Prop :=
+def constraintAlive (σ : State) (row : Expr) : Prop :=
   σ.exprs.contains row = true
 
 /-- If that row is still present, `step` does not return both directions.
 Current `Expr.decideWith` does not read saved rows, so this is not derived
 from the instruction step. It is the decision rule this case needs. -/
 axiom live_constraint_excludes_both
-    (step : Nat → SemState → StepResult) (j : Nat) (σ : SemState) (row : Expr) :
+    (step : Nat → State → StepResult) (j : Nat) (σ : State) (row : Expr) :
     constraintAlive σ row →
     ∀ cs, step j σ = .candidates cs →
       cs.any (fun c => c.dir == .taken) = false ∨

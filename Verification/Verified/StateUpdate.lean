@@ -123,7 +123,7 @@ private theorem lookupEq_of_unique (E : List Expr) (e : Expr)
   simp [hfind]
 
 /-- After assigning `w = t`, that exact interval's value row is `t`. -/
-theorem assign_lookup (parent : SemState) (w : Reg) (t : Term)
+theorem assign_lookup (parent : State) (w : Reg) (t : Term)
     (hw : w.lo < w.hi) (hp : valueSeparated parent.exprs) :
     (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs.lookupEq w = some t := by
   let σ := update parent { exprs := [Expr.mkEq w t], predicates := [] }
@@ -135,7 +135,7 @@ theorem assign_lookup (parent : SemState) (w : Reg) (t : Term)
   simpa [σ] using lookupEq_of_unique σ.exprs (Expr.mkEq w t) hmem huniq
 
 /-- An exact interval that does not meet the write keeps its term. -/
-theorem kept_lookup (parent : SemState) (w : Reg) (t : Term) (v : Expr)
+theorem kept_lookup (parent : State) (w : Reg) (t : Term) (v : Expr)
     (hv : v ∈ parent.exprs.bindings) (hmiss : v.reg.overlaps w = false)
     (hw : w.lo < w.hi) (hvW : v.reg.lo < v.reg.hi) (hp : valueSeparated parent.exprs) :
     (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs.lookupEq v.reg =

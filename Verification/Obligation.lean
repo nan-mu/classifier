@@ -56,7 +56,7 @@ def MeaningsAgree (c : SharedCondition) (a : Accepts) : Prop :=
 
 /-- Bindings `buildE0` must install. No cross-architecture identification. -/
 def EntryBindings (p : EBPF.EntryParams) (q : RV32.EntryParams)
-    (σL σR : SemState) : Prop :=
+    (σL σR : State) : Prop :=
   EBPF.buildE0 p = .ok σL → RV32.buildE0 q = .ok σR →
     σL.exprs.lookupEq (Reg.real64 1) = some (solve p.tCtx) ∧
     σL.exprs.lookupEq (Reg.real64 10) = some (solve p.tSp) ∧

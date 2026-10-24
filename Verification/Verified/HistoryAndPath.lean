@@ -38,35 +38,35 @@ theorem dependency_blocks_ignoring
   observation_dep_not_ignorable steps entry r h
 
 theorem drive_equal_states
-    (step : Nat → SemState → StepResult) (progLen j : Nat) {σ τ : SemState}
+    (step : Nat → State → StepResult) (progLen j : Nat) {σ τ : State}
     (h : σ = τ) :
     driveStandard step progLen j σ = driveStandard step progLen j τ := by
   subst h
   rfl
 
 theorem step_equal_states
-    (step : Nat → SemState → StepResult) (j : Nat) {σ τ : SemState} (h : σ = τ) :
+    (step : Nat → State → StepResult) (j : Nat) {σ τ : State} (h : σ = τ) :
     step j σ = step j τ := by
   subst h
   rfl
 
 /-- Accumulated predicate lists drop a repeated observation. Repetition counts
-have to come from the per-step record, not from `SemState.predicates`. -/
+have to come from the per-step record, not from `State.predicates`. -/
 theorem duplicate_observation_is_dropped
-    (parent : SemState) (p : Predicate) (h : parent.predicates.contains p = true) :
+    (parent : State) (p : Predicate) (h : parent.predicates.contains p = true) :
     (update parent { exprs := [], predicates := [p] }).predicates = parent.predicates := by
   rw [update_predicates]
   simp [h]
 
 /-- Value rows may differ only on `covered`. This is the history side condition,
 not state equality. -/
-def ExprIgnorable (covered : List Reg) (σ τ : SemState) : Prop :=
+def ExprIgnorable (covered : List Reg) (σ τ : State) : Prop :=
   diffCovered σ.exprs τ.exprs covered = true
 
 /-- One linear step, or a common rejection / empty result, preserves the
 ignorable relation. Branching steps are outside this hypothesis: two candidate
 lists make it false. -/
-def StepPreserves (step : Nat → SemState → StepResult) (covered : List Reg) : Prop :=
+def StepPreserves (step : Nat → State → StepResult) (covered : List Reg) : Prop :=
   ∀ j σ τ, ExprIgnorable covered σ τ →
     match step j σ, step j τ with
     | .reject a, .reject b => a = b
@@ -82,8 +82,8 @@ def StepPreserves (step : Nat → SemState → StepResult) (covered : List Reg) 
     | _, _ => False
 
 /-- Observations of a single linear walk, one `P_k` per step, duplicates kept. -/
-def linearTrace (step : Nat → SemState → StepResult) :
-    Nat → Nat → SemState → List (List Predicate)
+def linearTrace (step : Nat → State → StepResult) :
+    Nat → Nat → State → List (List Predicate)
   | 0, _, _ => []
   | fuel + 1, j, σ =>
       match step j σ with
@@ -96,7 +96,7 @@ def linearTrace (step : Nat → SemState → StepResult) :
       | _ => []
 
 theorem linearTrace_equal_states
-    (step : Nat → SemState → StepResult) (fuel j : Nat) {σ τ : SemState}
+    (step : Nat → State → StepResult) (fuel j : Nat) {σ τ : State}
     (h : σ = τ) :
     linearTrace step fuel j σ = linearTrace step fuel j τ := by
   subst h
@@ -106,7 +106,7 @@ theorem linearTrace_equal_states
 linear step and the successors stay ignorable. Equal-state agreement above is
 not the argument. -/
 theorem linearTrace_of_step_preservation
-    (step : Nat → SemState → StepResult) (covered : List Reg)
+    (step : Nat → State → StepResult) (covered : List Reg)
     (h : StepPreserves step covered) :
     ∀ fuel j σ τ, ExprIgnorable covered σ τ →
       linearTrace step fuel j σ = linearTrace step fuel j τ := by
@@ -178,8 +178,8 @@ theorem linearTrace_of_step_preservation
 /-- At the parent, a step that still offers both directions is rejected.
 This is the driver's reaction. It is not `live_constraint_excludes_both`. -/
 theorem both_directions_rejected
-    (step : Nat → SemState → StepResult) (progLen parent : Nat)
-    (parentState hereState old : SemState)
+    (step : Nat → State → StepResult) (progLen parent : Nat)
+    (parentState hereState old : State)
     (interval : List (List Expr × List Predicate)) (loopsLeft : Nat)
     (cs : List Candidate)
     (hstep : step parent hereState = .candidates cs)

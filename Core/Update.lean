@@ -441,7 +441,7 @@ def valueSeparated (E : List Expr) : Prop :=
   E.bindings.Pairwise fun a b => a.reg.overlaps b.reg = false
 
 /-- `step` is one increment. An empty increment leaves `parent` unchanged. -/
-def update (parent step : SemState) : SemState where
+def update (parent step : State) : State where
   exprs := updateExprs parent.exprs step.exprs step.predicates
   predicates := step.predicates.foldl
     (fun acc p => if acc.contains p then acc else acc ++ [p])
@@ -584,18 +584,18 @@ private theorem updateExprs_assign (parent : List Expr) (w : Reg) (t : Term) :
   simp only [hrest, bindings_mkEq, List.foldl_cons, List.foldl_nil, constraints_mkEq]
   simp [Expr.mkEq, List.any_cons, List.any_nil, Reg.overlaps_comm]
 
-theorem update_id (parent : SemState) :
+theorem update_id (parent : State) :
     update parent { exprs := [], predicates := [] } = parent := by
   cases parent
   simp [update, updateExprs, List.foldl_nil]
 
-theorem update_predicates (parent step : SemState) :
+theorem update_predicates (parent step : State) :
     (update parent step).predicates =
       step.predicates.foldl
         (fun acc p => if acc.contains p then acc else acc ++ [p])
         parent.predicates := rfl
 
-theorem update_installs (parent : SemState) (w : Reg) (t : Term) :
+theorem update_installs (parent : State) (w : Reg) (t : Term) :
     Expr.mkEq w t ∈
       (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs.bindings := by
   rw [update, updateExprs_assign]
@@ -626,7 +626,7 @@ theorem update_low_byte (idx : Nat) (t s : Term) :
   rw [h]
   simp [ofLive, Expr.mkEq, List.map_cons, List.map_nil]
 
-theorem update_drops (parent : SemState) (w : Reg) (t : Term) (v u : Expr)
+theorem update_drops (parent : State) (w : Reg) (t : Term) (v u : Expr)
     (hv : v ∈ parent.exprs.bindings)
     (hov : v.reg.overlaps w = true)
     (hu : u ∈ (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs.bindings)
@@ -761,7 +761,7 @@ private theorem covered_binding (parent : List Expr) (w : Reg) (t : Term) (u : E
     exact (mem_degenerate (parent.bindings.map toLive) w t (toLive b)).2
       (Or.inr (Or.inr hbL))
 
-theorem update_disjoint (parent : SemState) (w : Reg) (t : Term)
+theorem update_disjoint (parent : State) (w : Reg) (t : Term)
     (hw : w.lo < w.hi) (hp : valueSeparated parent.exprs) :
     valueSeparated
       (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs := by
@@ -865,7 +865,7 @@ private theorem mem_bindings_of_first (p s : List Expr) (e : Expr) (he : e.rel =
 
 /-- `w.lo < w.hi` and `valueSeparated` rule out a zero-width write and a side that
 copies an existing register. Without them the kept row and the write can share one register. -/
-theorem update_keeps (parent : SemState) (w : Reg) (t : Term) (v : Expr)
+theorem update_keeps (parent : State) (w : Reg) (t : Term) (v : Expr)
     (hv : v ∈ parent.exprs.bindings) (hmiss : v.reg.overlaps w = false)
     (hw : w.lo < w.hi) (hp : valueSeparated parent.exprs) :
     v ∈ (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs.bindings := by
@@ -908,7 +908,7 @@ theorem update_keeps (parent : SemState) (w : Reg) (t : Term) (v : Expr)
       have hcross := (List.pairwise_append.mp hfil).2.2
       simpa [toLive] using hcross u hu (toLive v) (by simp)
 
-private theorem update_degenerates (parent : SemState) (w : Reg) (t : Term) (v s : Expr)
+private theorem update_degenerates (parent : State) (w : Reg) (t : Term) (v s : Expr)
     (hv : v ∈ parent.exprs.bindings) (hov : v.reg.overlaps w = true)
     (hp : valueSeparated parent.exprs) (hw : w.lo < w.hi) (hs : s ∈ sides v w) :
     s ∈ (update parent { exprs := [Expr.mkEq w t], predicates := [] }).exprs.bindings := by

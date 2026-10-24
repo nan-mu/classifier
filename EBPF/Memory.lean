@@ -319,7 +319,7 @@ theorem mapWriteObservation_frozen (E : List Expr) (Pg : List Predicate)
 
 theorem mapWriteKeyAt_expr_update (E updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
-    mapWriteKeyAt (SemState.mk (((update ⟨E, []⟩ { exprs := updates, predicates := [] }).exprs)) Pg).predicates event =
+    mapWriteKeyAt (State.mk (((update ⟨E, []⟩ { exprs := updates, predicates := [] }).exprs)) Pg).predicates event =
       mapWriteKeyAt Pg event := rfl
 
 theorem mapWriteKeyAt_deterministic (Pg : List Predicate) (event : NodeId)

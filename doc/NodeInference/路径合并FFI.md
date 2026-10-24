@@ -137,7 +137,7 @@ def Node.exportExpandMerge (requestJson : String) : String
 
 `lean_expand_merge` 使用 Lean 运行时 ABI：输入为一个 Lean `String`，结果为携带 JSON 的 Lean `String`。这些字符串不直接作为 C 的空终止字符串传入。
 
-调用是无状态的精确配置比较，不接收 `insns`、`metaJson`、程序长度或 `jb`，不解码指令、不建立程序绑定、不识别条件分支。它不调用 step，不管理预算、工作队列或历史，也不生成新的语义状态。状态解析复用 [Core/Parse.lean](../../Core/Parse.lean) 的 `Core.parseSemStateJson`。
+调用是无状态的精确配置比较，不接收 `insns`、`metaJson`、程序长度或 `jb`，不解码指令、不建立程序绑定、不识别条件分支。它不调用 step，不管理预算、工作队列或历史，也不生成新的语义状态。状态解析复用 [Core/Parse.lean](../../Core/Parse.lean) 的 `Core.parseStateJson`。
 
 ## 请求对象
 

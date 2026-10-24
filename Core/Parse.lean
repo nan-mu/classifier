@@ -365,7 +365,7 @@ def parsePredicateJson (value : Lean.Json) : Option Predicate := do
     | _ => none
   if predicateWellFormed predicate then some predicate else none
 
-def parseSemStateJson (exprsJson predsJson : String) : Option SemState := do
+def parseStateJson (exprsJson predsJson : String) : Option State := do
   let exprs ← ((Lean.Json.parse exprsJson) >>= Lean.Json.getArr?).toOption
   let preds ← ((Lean.Json.parse predsJson) >>= Lean.Json.getArr?).toOption
   let mut rows : List (Expr × Bool) := []
@@ -451,7 +451,7 @@ private def constraintRoundTripCheck : Bool :=
   let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 1))], predicates := [] }).exprs
     |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real64 1) .eq (Term.C64 10)); if acc.contains row then acc else acc ++ [row]))
     |> (fun acc => (let row := solveExpr (Expr.mkRel (Reg.real64 1) (.ltuN 32) (Term.C64 20)); if acc.contains row then acc else acc ++ [row]))
-  match parseSemStateJson ("[" ++ renderExprsJson E ++ "]") "[]" with
+  match parseStateJson ("[" ++ renderExprsJson E ++ "]") "[]" with
   | some state => state.exprs == E && state.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1)
   | none => false
 
@@ -544,17 +544,17 @@ private def malformedPredicateCheck : Bool :=
     "{\"kind\":\"escape\"}"
   ].all rejected
 
-private def fiveClassSemStateCheck : Bool :=
+private def fiveClassStateCheck : Bool :=
   let ps := [Predicate.helper 1 .clock [],
     .branch 1 .notTaken ⟨Term.V32 1, .ne, Term.C32 0⟩,
     .ret (Term.C64 18446744073709551615),
     .mapWrite 2 (Term.C64 1) [Term.C32 255] 0 32 (Term.C32 3),
     .packetWrite 3 0 64 (Term.C64 4)]
-  match parseSemStateJson "[]" ("[" ++ renderPredicatesJson ps ++ "]") with
+  match parseStateJson "[]" ("[" ++ renderPredicatesJson ps ++ "]") with
   | some state => state.predicates == ps
   | none => false
 
-#guard fiveClassSemStateCheck
+#guard fiveClassStateCheck
 #guard fiveClassRoundTripCheck
 #guard branchComplementCheck
 #guard malformedPredicateCheck
@@ -575,8 +575,8 @@ private def fiveClassSemStateCheck : Bool :=
 #guard !predicateWellFormed (.ret
   (Term.app .w64 (.externalResult 42 0) [Term.C64 1, Term.V32 2]))
 #guard constraintRoundTripCheck
-#guard (parseSemStateJson "[]" "[{\"kind\":\"cmp\",\"width\":32,\"rel\":\"eq\",\"lhs\":\"0\",\"rhs\":\"0\"}]").isNone
-#guard (parseSemStateJson "[]" "[{\"kind\":\"ret\",\"term\":\"2\"}]").isNone
+#guard (parseStateJson "[]" "[{\"kind\":\"cmp\",\"width\":32,\"rel\":\"eq\",\"lhs\":\"0\",\"rhs\":\"0\"}]").isNone
+#guard (parseStateJson "[]" "[{\"kind\":\"ret\",\"term\":\"2\"}]").isNone
 #guard parseRoundTripCheck
 #guard parseOpsRoundTripCheck
 #guard Id.run do
@@ -585,9 +585,9 @@ private def fiveClassSemStateCheck : Bool :=
   let byte (n : Nat) : Term := .app .w32 (.low 8 32) [.C32 n]
   let some E := ((«seal» (Reg.stack 32 40).bits (byte 0x11) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 32 40) stored], predicates := [] }).exprs)) | return false
   let some E := ((«seal» (Reg.map 3 key 0 8).bits (byte 9) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.map 3 key 0 8) stored], predicates := [] }).exprs)) | return false
-  let σ : SemState := ⟨E, []⟩
-  let (exprs, preds) := renderSemStateJson σ
-  match parseSemStateJson s!"[{exprs}]" s!"[{preds}]" with
+  let σ : State := ⟨E, []⟩
+  let (exprs, preds) := renderStateJson σ
+  match parseStateJson s!"[{exprs}]" s!"[{preds}]" with
   | some σ' =>
       σ'.exprs == E &&
         σ'.exprs.lookupEq (Reg.real64 1) == some (Term.V64 1) &&
@@ -595,10 +595,10 @@ private def fiveClassSemStateCheck : Bool :=
         σ'.exprs.lookupEq (.stack 32 40) == E.lookupEq (.stack 32 40) &&
         σ'.exprs.lookupEq (.map 3 key 0 8) == E.lookupEq (.map 3 key 0 8)
   | none => false
-#guard (parseSemStateJson
+#guard (parseStateJson
   "[{\"role\":\"mem\",\"slot\":\"stack\",\"pieces\":[{\"start\":0,\"slice\":{\"k\":\"c\",\"w\":7,\"v\":1}}]}]"
   "[]").isNone
-#guard (parseSemStateJson "{}" "[]").isNone
+#guard (parseStateJson "{}" "[]").isNone
 #guard (parseTerm "add32(v32:1,)").isNone
 #guard (parseReg "packet64:0").isNone
 

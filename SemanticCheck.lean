@@ -634,9 +634,9 @@ private def expectStep (name response parentExprs parentPreds location : String)
   let [successor] := successors.toList | throw s!"{name}: expected one successor, got {successors.size}"
   expect (name ++ "/direction") (← strField successor "dir") "OK"
   expect (name ++ "/location") (← strField successor "loc") location
-  let some parent := parseSemStateJson parentExprs parentPreds
+  let some parent := parseStateJson parentExprs parentPreds
     | throw s!"{name}: invalid parent"
-  let some step := parseSemStateJson (← field successor "writes").compress
+  let some step := parseStateJson (← field successor "writes").compress
       (← field successor "observations").compress
     | throw s!"{name}: invalid step increment"
   let state := update parent step
@@ -679,7 +679,7 @@ private def ffiChecks : Except String Unit := do
   for (name, words, j, E, reason) in failures do
     expectFailure ("String FFI reject/" ++ name) (call words 70 j E "[]") reason
   let E := "[{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"1\"},{\"reg\":\"real:0:[0,64)\",\"rel\":\"eq\",\"term\":\"2\"}]"
-  let some dual := parseSemStateJson E "[]" | throw "String FFI dual eq: parse failed"
+  let some dual := parseStateJson E "[]" | throw "String FFI dual eq: parse failed"
   expect "String FFI dual eq value" (dual.exprs.lookupEq (Reg.real64 0)) (some (Term.C64 1))
   expect "String FFI dual eq constraint" dual.exprs.constraints
     [⟨Reg.real64 0, .eq, Term.C64 2⟩]
@@ -737,7 +737,7 @@ private def snapshotProtocolChecks : Except String Unit := do
       | throw s!"MOV/EXIT snapshot missing location {location}"
     let exprs ← field node "exprs"
     let predicates ← field node "predicates"
-    let some state := parseSemStateJson exprs.compress predicates.compress
+    let some state := parseStateJson exprs.compress predicates.compress
       | throw s!"MOV/EXIT snapshot invalid state at {location}"
     expect ("MOV/EXIT snapshot value/" ++ status)
       (state.exprs.lookupEq (Reg.real64 0)) (some (Term.C64 7))

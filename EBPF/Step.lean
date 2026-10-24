@@ -131,7 +131,7 @@ private def wideImmediate (I : Array Insn) (E : List Expr) (j dst : Nat)
 falling off the sequence is never a return. Native helper calls freeze full-width
 ABI observations and write r0, anchoring lookup Map word zero. -/
 def ebpfStep (I : Array Insn) (event : NodeId)
-    (j : Nat) (σ : SemState) : StepResult :=
+    (j : Nat) (σ : State) : StepResult :=
   match I[j]? with
   | none => .reject .unboundTarget
   | some (.illegal _) => .reject .localReject
@@ -226,13 +226,13 @@ private def halves (E : List Expr) (r low high : Nat) : Bool :=
     (.binary .w32 .add 0 (.imm 1)) with
   | some E => halves E 0 0 0
   | none => false
-#guard match ebpfStep #[.exit] 0 0 SemState.empty with
+#guard match ebpfStep #[.exit] 0 0 State.empty with
   | .reject .undefinedSrc => true
   | _ => false
-#guard match ebpfStep (decodeProgram #[0]) 0 0 SemState.empty with
+#guard match ebpfStep (decodeProgram #[0]) 0 0 State.empty with
   | .reject .localReject => true
   | _ => false
-#guard match ebpfStep #[.mov .w64 0 (.imm 1)] 0 0 SemState.empty with
+#guard match ebpfStep #[.mov .w64 0 (.imm 1)] 0 0 State.empty with
   | .reject .unboundTarget => true
   | _ => false
 
@@ -324,27 +324,27 @@ private def packetLiveArmsCheck : Bool := Id.run do
     ⟨[⟨Reg.real64 1, .eq, Term.C32 1⟩], []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
-#guard oneCandidateCheck (ebpfStep #[.ja 1, .exit, .exit] 0 0 SemState.empty)
+#guard oneCandidateCheck (ebpfStep #[.ja 1, .exit, .exit] 0 0 State.empty)
     .ok (.pos 2) Expr.nil []
-#guard match ebpfStep #[.ja (-2), .exit] 0 0 SemState.empty with
+#guard match ebpfStep #[.ja (-2), .exit] 0 0 State.empty with
   | .reject .unboundTarget => true
   | _ => false
-#guard match ebpfStep #[.ja 1, .exit, .continuation] 0 0 SemState.empty with
+#guard match ebpfStep #[.ja 1, .exit, .continuation] 0 0 State.empty with
   | .reject .unboundTarget => true
   | _ => false
-#guard match ebpfStep #[.continuation] 0 0 SemState.empty with
+#guard match ebpfStep #[.continuation] 0 0 State.empty with
   | .reject .localReject => true
   | _ => false
-#guard match ebpfStep #[] 0 0 SemState.empty with
+#guard match ebpfStep #[] 0 0 State.empty with
   | .reject .unboundTarget => true
   | _ => false
 
 #guard oneCandidateCheck
     (ebpfStep #[.lddw 1 0 0x1122334455667788, .continuation, .exit]
-0 0 SemState.empty)
+0 0 State.empty)
     .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x1122334455667788))], predicates := [] }).exprs) []
 #guard oneCandidateCheck
-    (ebpfStep #[.lddw 1 0 0, .continuation, .exit] 0 0 SemState.empty)
+    (ebpfStep #[.lddw 1 0 0, .continuation, .exit] 0 0 State.empty)
     .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0))], predicates := [] }).exprs) []
 #guard oneCandidateCheck
     (ebpfStep #[.lddw 1 0 0, .continuation, .exit] 0 0
@@ -354,28 +354,28 @@ private def packetLiveArmsCheck : Bool := Id.run do
     (ebpfStep #[.lddw 1 1 0, .continuation, .exit] 0 0
       ⟨(bindField Expr.nil (.lddw 0) (Term.V64 9)).getD [], []⟩)
     .ok (.pos 2) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.V64 9))], predicates := [] }).exprs) []
-#guard match ebpfStep #[.lddw 1 1 0, .continuation, .exit] 0 0 SemState.empty with
+#guard match ebpfStep #[.lddw 1 1 0, .continuation, .exit] 0 0 State.empty with
   | .reject .unsupported => true
   | _ => false
 #guard match ebpfStep #[.lddw 10 0 0, .continuation, .exit]
-0 0 SemState.empty with
+0 0 State.empty with
   | .reject .localReject => true
   | _ => false
-#guard match ebpfStep #[.lddw 1 0 0, .exit] 0 0 SemState.empty with
+#guard match ebpfStep #[.lddw 1 0 0, .exit] 0 0 State.empty with
   | .reject .localReject => true
   | _ => false
-#guard match ebpfStep #[.lddw 1 0 0, .continuation] 0 0 SemState.empty with
+#guard match ebpfStep #[.lddw 1 0 0, .continuation] 0 0 State.empty with
   | .reject .unboundTarget => true
   | _ => false
 #guard match ebpfStep #[.callHelper 1, .exit] 0 0
     ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩ with
   | .reject .undefinedSrc => true
   | _ => false
-#guard match ebpfStep #[.callHelper 1] 0 0 SemState.empty with
+#guard match ebpfStep #[.callHelper 1] 0 0 State.empty with
   | .reject .unboundTarget => true
   | _ => false
 #guard oneCandidateCheck
-    (ebpfStep #[.callHelper 999, .exit] 7 0 SemState.empty)
+    (ebpfStep #[.callHelper 999, .exit] 7 0 State.empty)
     .ok (.pos 1) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 18446744073709551615))], predicates := [] }).exprs)
     [.helper 7 (.unsupported 999) []]
 #guard oneCandidateCheck

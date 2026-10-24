@@ -30,13 +30,13 @@ private def mapLayouts : List Nat → List Nat → List Nat → Option (List Map
   | _, _, _ => none
 
 /-- The root contains the actual pre-instruction eBPF entry state. -/
-def ebpfInit (I : Array Insn) (σ0 : SemState) (j0 budget : Nat) :
+def ebpfInit (I : Array Insn) (σ0 : State) (j0 budget : Nat) :
     Except RejectReason WorkState :=
   expandInit I.size j0 σ0 budget
 
 /-- At most steps expansions, with composed states and source-node event IDs.
 Budget exhaustion uses the shared driver's LimitExceeded result. -/
-def ebpfSnapshot (I : Array Insn) (σ0 : SemState) (j0 steps budget : Nat) : String :=
+def ebpfSnapshot (I : Array Insn) (σ0 : State) (j0 steps budget : Nat) : String :=
   match ebpfInit I σ0 j0 budget with
   | .error reason => snapshotJson #[] #[] [] 0 "fail" (some reason)
   | .ok ws => snapshotAfter I.size (ebpfStep I) ws steps
@@ -44,8 +44,8 @@ def ebpfSnapshot (I : Array Insn) (σ0 : SemState) (j0 steps budget : Nat) : Str
 private def createFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"failed\":null,\"work\":[],\"nodes\":[],\"edges\":[]}"
 
-private def runningJson (σ0 : SemState) : String :=
-  let (exprs, preds) := renderSemStateJson σ0
+private def runningJson (σ0 : State) : String :=
+  let (exprs, preds) := renderStateJson σ0
   s!"\{\"status\":\"running\",\"reason\":null,\"failed\":null,\"work\":[0],\"nodes\":[\{\"id\":0,\"loc\":\"0\",\"exprs\":[{exprs}],\"predicates\":[{preds}]}],\"edges\":[]}"
 
 @[export lean_ebpf_expand_create]
@@ -76,7 +76,7 @@ def exportEbpfExpandCreate
 private def headFailJson (reason : RejectReason) : String :=
   s!"\{\"status\":\"fail\",\"reason\":\"{reasonTag reason}\",\"successors\":[]}"
 
-private def successorJson (dir : Direction) (loc : Location) (step : SemState) : String :=
+private def successorJson (dir : Direction) (loc : Location) (step : State) : String :=
   let loc := match loc with | .exit => "exit" | .pos j => toString j
   s!"\{\"dir\":\"{dirTag dir}\",\"loc\":\"{loc}\",{renderIncrementJson step}}"
 
@@ -86,7 +86,7 @@ def exportEbpfExpandStep (insns : Array UInt64) (event j : UInt32)
   if insns.isEmpty then headFailJson .invalidEntry
   else
     let I := decodeProgram insns
-    match parseSemStateJson exprsJson predsJson with
+    match parseStateJson exprsJson predsJson with
     | none => headFailJson .localReject
     | some state =>
       match ebpfStep I event.toNat j.toNat state with
@@ -103,17 +103,17 @@ def exportEbpfExpandStep (insns : Array UInt64) (event j : UInt32)
 def exportEbpfBoundWordsSnapshot (insns : Array UInt64) (exprsJson predsJson : String)
     (steps budget : UInt32) : String :=
   if insns.isEmpty then snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
-  else match parseSemStateJson exprsJson predsJson with
+  else match parseStateJson exprsJson predsJson with
     | none => snapshotJson #[] #[] [] 0 "fail" (some .invalidEntry)
     | some σ0 => ebpfSnapshot (decodeProgram insns) σ0 0 steps.toNat budget.toNat
 
-private def rootOf (response : String) : Option SemState := do
+private def rootOf (response : String) : Option State := do
   let value ← (Lean.Json.parse response).toOption
   let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
   let node ← nodes[0]?
   let exprs ← (node.getObjVal? "exprs").toOption
   let preds ← (node.getObjVal? "predicates").toOption
-  parseSemStateJson exprs.compress preds.compress
+  parseStateJson exprs.compress preds.compress
 
 private def fixtureCreate (slots : Array UInt32) (terms : Array UInt64)
     (mapIds keySizes valueSizes : Array UInt32) : String :=
@@ -133,10 +133,10 @@ private def statelessStepCheck : Bool := Id.run do
   let some root := rootOf (fixtureCreate #[34] #[0] #[] #[] #[]) | return false
   let I := decodeProgram justTxProgram
   let .ok ws := ebpfInit I root 0 200 | return false
-  let (exprs, preds) := renderSemStateJson root
+  let (exprs, preds) := renderStateJson root
   let .inr next := expandOne I.size (ebpfStep I 0) ws | return false
   let .candidates [c] := ebpfStep I 0 0 root | return false
-  let step : SemState := { exprs := c.E_k, predicates := c.P_k }
+  let step : State := { exprs := c.E_k, predicates := c.P_k }
   let response := exportEbpfExpandStep justTxProgram 0 0 s!"[{exprs}]" s!"[{preds}]"
   let some r0 := readInterval next.nodes[1]!.state.exprs (Reg.real64 0) | return false
   return next.nodes[1]!.loc == .pos 1 &&
@@ -163,13 +163,13 @@ private def laterStepsCheck : Bool := Id.run do
   let I := decodeProgram justTxProgram
   let .ok σ := buildE0 justTxEntry | return false
   let plainE := host justTxEntry σ.exprs
-  let plainState : SemState := { exprs := plainE, predicates := [] }
+  let plainState : State := { exprs := plainE, predicates := [] }
   let plain := ebpfSnapshot I plainState 0 200 200
-  let (pexprs, ppreds) := renderSemStateJson plainState
+  let (pexprs, ppreds) := renderStateJson plainState
   return failedSlotCheck plain "UndefinedSrc" 38 &&
     exportEbpfBoundWordsSnapshot justTxProgram s!"[{pexprs}]" s!"[{ppreds}]" 200 200 == plain
 
-private def productRoot : Option SemState :=
+private def productRoot : Option State :=
   rootOf (fixtureCreate #[34] #[42] #[42] #[4] #[8])
 
 /-- Branch observations persist through EXIT. Only the Return projection is
@@ -194,7 +194,7 @@ private def earlyExitCheck : Bool := Id.run do
 
 private def productSnapshotCheck : Bool := (do
   let some root := productRoot | none
-  let (exprs, preds) := renderSemStateJson root
+  let (exprs, preds) := renderStateJson root
   let response := exportEbpfBoundWordsSnapshot justTxProgram s!"[{exprs}]" s!"[{preds}]" 2000 1024
   let value ← (Lean.Json.parse response).toOption
   let status ← (value.getObjVal? "status" >>= Lean.Json.getStr?).toOption
@@ -241,7 +241,7 @@ private def productMapWriteCheck : Bool := Id.run do
 
 private def budgetCheck : Bool := Id.run do
   let some root := rootOf (fixtureCreate #[34] #[0] #[] #[] #[]) | return false
-  let (exprs, preds) := renderSemStateJson root
+  let (exprs, preds) := renderStateJson root
   let response := exportEbpfBoundWordsSnapshot justTxProgram s!"[{exprs}]" s!"[{preds}]" 1 0
   return response.contains "\"status\":\"fail\"" && response.contains "\"reason\":\"LimitExceeded\"" &&
     response.contains "\"fuel\":0" &&
@@ -282,8 +282,8 @@ private def extendedInstructionFfiCheck : Bool := Id.run do
   let E0 := host justTxEntry ((update ⟨initial.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 1) (solve (Term.C64 0x10000000f))], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real64 2) (solve (Term.C64 0x81))], predicates := [] }).exprs))
   let some E := putWord E0 stack 0x11223380 | return false
-  let start : SemState := { exprs := E, predicates := [] }
-  let (exprs, preds) := renderSemStateJson start
+  let start : State := { exprs := E, predicates := [] }
+  let (exprs, preds) := renderStateJson start
   let cases : List (UInt64 × Reg × Nat) :=
     [(0x0000000200000114, Reg.real64 1, 13),
       (0x00000000000821bc, Reg.real64 1, 0xffffff81),

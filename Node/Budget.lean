@@ -25,7 +25,7 @@ def WorkState.toGraph (ws : WorkState) : RunGraph :=
   RunGraph.ofWork ws.nodes ws.edges
 
 /-- Create root + Work. `progLen` is \(|\mathbf I|\). -/
-def expandInit (progLen j0 : Nat) (σ0 : SemState) (B : Nat) :
+def expandInit (progLen j0 : Nat) (σ0 : State) (B : Nat) :
     Except RejectReason WorkState :=
   if j0 ≥ progLen then
     Except.error .invalidEntry
@@ -37,16 +37,16 @@ def expandInit (progLen j0 : Nat) (σ0 : SemState) (B : Nat) :
       fuel  := B
     }
 
-private def prepareCandidate (σ : SemState) (c : Candidate) (progLen : Nat) :
-    Except RejectReason (Direction × Location × SemState) :=
+private def prepareCandidate (σ : State) (c : Candidate) (progLen : Nat) :
+    Except RejectReason (Direction × Location × State) :=
   match c.loc with
   | .exit => pure (c.dir, .exit, update σ { exprs := c.E_k, predicates := c.P_k })
   | .pos k =>
     if k ≥ progLen then throw .unboundTarget
     else pure (c.dir, .pos k, update σ { exprs := c.E_k, predicates := c.P_k })
 
-def prepareAll (σ : SemState) (progLen : Nat) :
-    List Candidate → Except RejectReason (List (Direction × Location × SemState))
+def prepareAll (σ : State) (progLen : Nat) :
+    List Candidate → Except RejectReason (List (Direction × Location × State))
   | [] => Except.ok []
   | c :: cs =>
     match prepareCandidate σ c progLen with
@@ -74,7 +74,7 @@ private def pathVisits (nodes : Array Node) (edges : Array Edge) (start : NodeId
 
 private def appendPrepared (eta : NodeId) (nodes : Array Node) (edges : Array Edge)
     (work : List NodeId) :
-    List (Direction × Location × SemState) → Array Node × Array Edge × List NodeId
+    List (Direction × Location × State) → Array Node × Array Edge × List NodeId
   | [] => (nodes, edges, work)
   | (d, loc, σ') :: rs =>
     if !Node.isExit loc && pathVisits nodes edges eta loc ≥ loopVisitLimit then
@@ -87,7 +87,7 @@ private def appendPrepared (eta : NodeId) (nodes : Array Node) (edges : Array Ed
       appendPrepared eta nodes edges work rs
 
 /-- One node expansion (`doc/NodeInference/step.md`). `progLen` bounds non-Exit targets. -/
-def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
+def expandOne (progLen : Nat) (step : Nat → State → StepResult) (ws : WorkState) :
     Sum ExpandOutcome WorkState :=
   match ws.work with
   | [] => Sum.inl (.complete ws.toGraph)
@@ -117,14 +117,14 @@ def expandOne (progLen : Nat) (step : Nat → SemState → StepResult) (ws : Wor
               }
 
 /-- Recurse on remaining fuel (`doc/NodeInference/step.md#有限预算展开的终止证明`). -/
-partial def expand (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
+partial def expand (progLen : Nat) (step : Nat → State → StepResult) (ws : WorkState) :
     ExpandOutcome :=
   match expandOne progLen step ws with
   | Sum.inl outcome => outcome
   | Sum.inr ws' => expand progLen step ws'
 
 private def loopVisitCheck : Bool :=
-  let step (_j : Nat) (_σ : SemState) : StepResult :=
+  let step (_j : Nat) (_σ : State) : StepResult :=
     .candidates [
       ⟨.taken, .pos 0, Expr.nil, []⟩,
       ⟨.notTaken, .exit, Expr.nil, [.ret (Term.C32 1)]⟩]
@@ -139,7 +139,7 @@ private def loopVisitCheck : Bool :=
 #guard loopVisitCheck
 
 /-- Run `n` successful `expandOne` calls (or stop at earlier terminal). -/
-def expandN (progLen : Nat) (step : Nat → SemState → StepResult) (ws : WorkState) :
+def expandN (progLen : Nat) (step : Nat → State → StepResult) (ws : WorkState) :
     Nat → Sum ExpandOutcome WorkState
   | 0 => Sum.inr ws
   | n + 1 =>
@@ -166,7 +166,7 @@ def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
     let mut acc : List String := []
     for id in [:nodes.size] do
       if let some n := nodes[id]? then
-        let (ej, pj) := renderSemStateJson n.state
+        let (ej, pj) := renderStateJson n.state
         let loc := match n.loc with | .exit => "exit" | .pos j => toString j
         acc := acc ++
           [s!"\{\"id\":{id},\"loc\":\"{loc}\",\"exprs\":[{ej}],\"predicates\":[{pj}]}"]
@@ -180,7 +180,7 @@ def snapshotJson (nodes : Array Node) (edges : Array Edge) (work : List NodeId)
   let failedField := match failed with | none => "null" | some id => toString id
   s!"\{\"status\":\"{status}\",\"reason\":{reasonField},\"failed\":{failedField},\"fuel\":{fuel},\"work\":[{workStr}],\"nodes\":[{nodeStrs}],\"edges\":[{edgeStrs}]}"
 
-def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → SemState → StepResult)
+def snapshotAfter (progLen : Nat) (stepFn : NodeId → Nat → State → StepResult)
     (ws : WorkState) : Nat → String
   | 0 => snapshotJson ws.nodes ws.edges ws.work ws.fuel
       (if ws.work.isEmpty then "complete" else "running") none

@@ -20,7 +20,7 @@ term is the pre-state register) are separate propositions.
 /-- Parameter correctness for one eBPF instruction: `exit` returns the pre-state
 full r0. -/
 def ExitRetTerm : Prop :=
-  ∀ (I : Array EBPF.Insn) (event j : Nat) (σ : SemState) (t : Term),
+  ∀ (I : Array EBPF.Insn) (event j : Nat) (σ : State) (t : Term),
     I[j]? = some .exit →
     readInterval σ.exprs (Reg.real64 0) = some t →
     t.width = .w64 → t.semanticBits = 64 →
@@ -34,7 +34,7 @@ theorem exit_ret_term : ExitRetTerm := by
 /-- Occurrence for the same instruction: a missing full r0 is a rejection, not
 a return of a fresh term. -/
 def ExitRetOccurrence : Prop :=
-  ∀ (I : Array EBPF.Insn) (event j : Nat) (σ : SemState),
+  ∀ (I : Array EBPF.Insn) (event j : Nat) (σ : State),
     I[j]? = some .exit →
     readInterval σ.exprs (Reg.real64 0) = none →
     EBPF.ebpfStep I event j σ = .reject .undefinedSrc
@@ -45,7 +45,7 @@ theorem exit_ret_occurrence : ExitRetOccurrence := by
 
 /-- RV32's recognized wrapper return records the pre-state term of `a0`. -/
 def Rv32RetTerm : Prop :=
-  ∀ (I : Array RV32.Insn) (j : Nat) (σ : SemState) (t : Term),
+  ∀ (I : Array RV32.Insn) (j : Nat) (σ : State) (t : Term),
     σ.exprs.lookupEq (Reg.real32 10) = some t →
     (∃ c, RV32.rv32Step I j σ = .candidates [c] ∧ c.loc = .exit ∧ .ret t ∈ c.P_k) ∨
       ∀ c, RV32.rv32Step I j σ = .candidates [c] → c.loc ≠ .exit
@@ -59,7 +59,7 @@ theorem rv32_ret_term : Rv32RetTerm := by
 does not prove this. Cross-architecture identification is `EntryIdentified`,
 which is a premise for a particular `c`, not a theorem. -/
 theorem create_installs_entry (p : EBPF.EntryParams) (q : RV32.EntryParams)
-    (σL σR : SemState) : EntryBindings p q σL σR := by
+    (σL σR : State) : EntryBindings p q σL σR := by
   sorry
 
 end Verification.Unverified.Required.Instruction

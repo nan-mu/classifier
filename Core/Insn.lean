@@ -118,20 +118,21 @@ inductive Location where
   | exit
   deriving DecidableEq, BEq, Repr, Inhabited
 
-/-- Semantic state. Register equalities, including virtual intervals, live in `exprs`. -/
-structure SemState where
+/-- State. Its mathematical notation is \(\sigma\).
+Register equalities, including virtual intervals, live in `exprs`. -/
+structure State where
   exprs      : List Expr
   predicates : List Predicate
   deriving Repr, Inhabited
 
-def SemState.empty : SemState := { exprs := Expr.nil, predicates := [] }
+def State.empty : State := { exprs := Expr.nil, predicates := [] }
 
 theorem savedMapKey_expr_update (p : Predicate) (E _updates : List Expr) :
-    (SemState.mk E [p]).predicates = [p] := rfl
+    (State.mk E [p]).predicates = [p] := rfl
 
 theorem lookupKeyAt_expr_update (E _updates : List Expr) (Pg : List Predicate)
     (event : NodeId) :
-    lookupKeyAt (SemState.mk E Pg).predicates event =
+    lookupKeyAt (State.mk E Pg).predicates event =
       lookupKeyAt Pg event := rfl
 
 theorem lookupKeyAt_deterministic (Pg : List Predicate) (event : NodeId)
@@ -147,13 +148,13 @@ structure Record where
   position : Nat
   dir : Direction
   successor : Location
-  increments : List SemState
+  increments : List State
   deriving Repr, Inhabited
 
 /-- A history consists of its entry state and ordered step records.
 Structural well-formedness is an external premise. -/
 structure History where
-  entry : SemState
+  entry : State
   records : List Record
   deriving Repr, Inhabited
 
