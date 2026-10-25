@@ -1,9 +1,10 @@
 //! Compare tree of expand segments.
 //!
-//! Each node lists the ordered local predicate arrivals (P_i) along one segment.
-//! `matchStatus` is `pass` when both sides exist, exit flags and fork shape
-//! match, and predicate kinds have the same counts. Branch condition
-//! expressions are a best-effort check recorded in `exprStatus`.
+//! A segment is a straight walk. It ends at a two-arm fork, at `exit`, or when
+//! the walk stops. A fork's closing branch is copied onto the parent end and
+//! onto each child start. `matchStatus` compares that ordered kind list, fork
+//! shape, and exit. `wire` is `same`, `cross`, or `undecided`. Branch
+//! expressions are consulted only when both wirings have the same kind order.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -32,13 +33,23 @@ pub enum MatchStatus {
     Fail,
 }
 
-/// Branch condition expressions. `incomplete` does not change `matchStatus`
-/// or successor wiring.
+/// Branch condition expressions. `incomplete` does not change `matchStatus`.
+/// It can choose `wire` only when kind order matches both ways.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ExprStatus {
     Complete,
     Incomplete,
+}
+
+/// How a fork's children are paired. `undecided` keeps same-direction links
+/// and records that the pairing is not a commitment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Wire {
+    Same,
+    Cross,
+    Undecided,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +62,9 @@ pub struct Node {
     pub match_status: MatchStatus,
     #[serde(rename = "exprStatus")]
     pub expr_status: ExprStatus,
+    /// Present on a paired fork. Absent when this node is not a two-arm fork.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wire: Option<Wire>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,11 +138,23 @@ struct Segment {
     preds: Vec<Arrival>,
     taken: Option<u32>,
     not_taken: Option<u32>,
-    fork_id: Option<u32>,
+    taken_open: Option<Arrival>,
+    not_taken_open: Option<Arrival>,
+    taken_open_local: bool,
+    not_taken_open_local: bool,
+    tip_id: u32,
     ends_exit: bool,
 }
 
-const NOTE: &str = "local P_i for helper, branch, ret, mapWrite, and packetWrite; matchStatus compares predicate kind counts between forks; branch expressions are best-effort and do not change wiring";
+struct WalkStart {
+    id: u32,
+    kind: StartKind,
+    parent: Option<u32>,
+    opening: Option<Arrival>,
+    opening_local: bool,
+}
+
+const NOTE: &str = "ordered local observations; a fork shares its closing branch with each child; matchStatus compares kind order, fork shape, and exit; wire is same, cross, or undecided; branch expressions resolve only an undecided wire";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let maps = discover_env_maps(&[left, right]);
@@ -183,28 +209,38 @@ fn segments_from_snap(
     }
     let root = find_root(&nodes, &edges);
     let mut q = VecDeque::new();
-    q.push_back((root, StartKind::Create, None));
+    q.push_back(WalkStart {
+        id: root,
+        kind: StartKind::Create,
+        parent: None,
+        opening: None,
+        opening_local: false,
+    });
     let mut seen = HashSet::new();
-    while let Some((start_id, start_kind, parent_id)) = q.pop_front() {
+    while let Some(start) = q.pop_front() {
+        let start_id = start.id;
         if !seen.insert(start_id) {
             continue;
         }
-        let seg = walk_segment(
-            &run.arch,
-            start_id,
-            start_kind,
-            parent_id,
-            &nodes,
-            &edges,
-            maps,
-            unparsed_seq,
-        );
-        let fork = seg.fork_id;
+        let seg = walk_segment(&run.arch, start, &nodes, &edges, maps, unparsed_seq);
+        let tip = seg.tip_id;
         if let Some(t) = seg.taken {
-            q.push_back((t, StartKind::Taken, fork));
+            q.push_back(WalkStart {
+                id: t,
+                kind: StartKind::Taken,
+                parent: Some(tip),
+                opening: seg.taken_open.clone(),
+                opening_local: seg.taken_open_local,
+            });
         }
         if let Some(n) = seg.not_taken {
-            q.push_back((n, StartKind::NotTaken, fork));
+            q.push_back(WalkStart {
+                id: n,
+                kind: StartKind::NotTaken,
+                parent: Some(tip),
+                opening: seg.not_taken_open.clone(),
+                opening_local: seg.not_taken_open_local,
+            });
         }
         segs.insert(start_id, seg);
     }
@@ -569,30 +605,65 @@ fn push_arrival(
     });
 }
 
+fn ends_with_branch(preds: &[Arrival]) -> bool {
+    preds.last().is_some_and(|a| a.atom.kind == "branch")
+}
+
+fn closing_branch(preds: &[Arrival]) -> Option<Arrival> {
+    preds
+        .iter()
+        .rev()
+        .find(|a| a.atom.kind == "branch")
+        .cloned()
+}
+
+fn arm_branch(
+    arch: &str,
+    nodes: &HashMap<u32, ExpandNode>,
+    child: u32,
+    parent_preds: &[PredIn],
+    maps: &[EnvMap],
+    unparsed_seq: &mut u64,
+) -> Option<Arrival> {
+    let node = nodes.get(&child)?;
+    let (index, pred) = local_rows(parent_preds, &node.predicates)
+        .into_iter()
+        .find(|(_, p)| normalize_kind(&p.kind) == "branch")?;
+    let mut built = Vec::new();
+    push_arrival(arch, node, index, pred, &mut built, maps, unparsed_seq);
+    built.pop()
+}
+
 fn walk_segment(
     arch: &str,
-    start_id: u32,
-    start: StartKind,
-    parent_id: Option<u32>,
+    start: WalkStart,
     nodes: &HashMap<u32, ExpandNode>,
     edges: &[&WireEdge],
     maps: &[EnvMap],
     unparsed_seq: &mut u64,
 ) -> Segment {
-    let mut parent_preds = parent_id
+    let mut parent_preds = start
+        .parent
         .and_then(|id| nodes.get(&id))
         .map(|n| n.predicates.clone())
         .unwrap_or_default();
     let mut preds = Vec::new();
-    let mut cur = start_id;
+    if let Some(open) = start.opening.clone() {
+        preds.push(open);
+    }
+    let mut skip_local_branch = start.opening_local;
+    let mut cur = start.id;
     let mut taken = None;
     let mut not_taken = None;
-    let mut fork_id = None;
     let mut ends_exit = false;
 
     for _ in 0..10_000 {
         let Some(n) = nodes.get(&cur) else { break };
         for (index, pred) in local_rows(&parent_preds, &n.predicates) {
+            if skip_local_branch && normalize_kind(&pred.kind) == "branch" {
+                skip_local_branch = false;
+                continue;
+            }
             push_arrival(arch, n, index, pred, &mut preds, maps, unparsed_seq);
         }
         parent_preds = n.predicates.clone();
@@ -612,7 +683,6 @@ fn walk_segment(
             (Some(next_t), Some(next_n)) => {
                 taken = Some(next_t);
                 not_taken = Some(next_n);
-                fork_id = Some(cur);
                 break;
             }
             (Some(next), None) | (None, Some(next)) => {
@@ -629,20 +699,43 @@ fn walk_segment(
         }
     }
 
+    let mut taken_open = None;
+    let mut not_taken_open = None;
+    let mut taken_open_local = false;
+    let mut not_taken_open_local = false;
+    if taken.is_some() && not_taken.is_some() {
+        taken_open =
+            taken.and_then(|id| arm_branch(arch, nodes, id, &parent_preds, maps, unparsed_seq));
+        not_taken_open =
+            not_taken.and_then(|id| arm_branch(arch, nodes, id, &parent_preds, maps, unparsed_seq));
+        taken_open_local = taken_open.is_some();
+        not_taken_open_local = not_taken_open.is_some();
+        if !ends_with_branch(&preds) {
+            if let Some(shared) = taken_open.clone().or_else(|| not_taken_open.clone()) {
+                preds.push(shared);
+            }
+        }
+        let shared = closing_branch(&preds);
+        if taken_open.is_none() {
+            taken_open = shared.clone();
+        }
+        if not_taken_open.is_none() {
+            not_taken_open = shared;
+        }
+    }
+
     Segment {
-        start,
+        start: start.kind,
         preds,
         taken,
         not_taken,
-        fork_id,
+        taken_open,
+        not_taken_open,
+        taken_open_local,
+        not_taken_open_local,
+        tip_id: cur,
         ends_exit,
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Wire {
-    Same,
-    Cross,
 }
 
 fn is_fork(seg: &Segment) -> bool {
@@ -695,15 +788,14 @@ fn branch_dir(json: &str) -> Option<String> {
     Some(v.get("dir")?.as_str()?.to_string())
 }
 
-/// First branch on a successor, and only when its direction is the entry edge.
+/// Last branch whose direction is the entry edge. The shared opening branch
+/// sits in front of the arm's own condition, so the tip is the later one.
 fn arm_json(seg: &Segment, entry: &str) -> Option<String> {
-    let arrival = seg.preds.iter().find(|p| p.atom.kind == "branch")?;
-    let json = branch_json(arrival)?;
     let want = cross_dir_for_edge(Some(entry))?;
-    if branch_dir(json)?.as_str() != want {
-        return None;
-    }
-    Some(json.to_string())
+    let arrival = seg.preds.iter().rev().find(|p| {
+        p.atom.kind == "branch" && branch_json(p).and_then(branch_dir).as_deref() == Some(want)
+    })?;
+    Some(branch_json(arrival)?.to_string())
 }
 
 fn unify_pair(left: &str, right: &str) -> bool {
@@ -736,42 +828,47 @@ fn arms_unify(
     )
 }
 
-fn arms_agree(left: &Segment, right: &Segment) -> bool {
-    match_status(Some(left), Some(right)) == MatchStatus::Pass
+fn kind_seq(seg: &Segment) -> Vec<&str> {
+    seg.preds.iter().map(|p| p.atom.kind.as_str()).collect()
 }
 
-/// EQ or EQR when exactly one wiring's arm conditions unify.
-/// When expressions do not decide, use the wiring whose children already
-/// agree on fork shape, exit, and kind counts. Ambiguous or disagreeing
-/// counts stay same-direction.
+fn shape_agrees(left: &Segment, right: &Segment) -> bool {
+    is_fork(left) == is_fork(right)
+        && left.ends_exit == right.ends_exit
+        && kind_seq(left) == kind_seq(right)
+}
+
+/// Kind order picks the wiring. Expressions are read only when both wirings
+/// have the same kind order, and only a unique unify result commits.
 fn choose_wire(
     left: &HashMap<u32, Segment>,
     right: &HashMap<u32, Segment>,
     lseg: &Segment,
     rseg: &Segment,
-) -> Option<Wire> {
+) -> Wire {
     let (Some(lt), Some(ln), Some(rt), Some(rn)) = (
         child(left, lseg.taken),
         child(left, lseg.not_taken),
         child(right, rseg.taken),
         child(right, rseg.not_taken),
     ) else {
-        return None;
+        return Wire::Undecided;
     };
-    let eq = arms_unify(lt, "taken", rt, "taken", "taken")
-        && arms_unify(ln, "not_taken", rn, "not_taken", "not_taken");
-    let eqr = arms_unify(lt, "taken", rn, "not_taken", "taken")
-        && arms_unify(ln, "not_taken", rt, "taken", "not_taken");
-    match (eq, eqr) {
-        (true, false) => Some(Wire::Same),
-        (false, true) => Some(Wire::Cross),
-        _ => {
-            let same = arms_agree(lt, rt) && arms_agree(ln, rn);
-            let cross = arms_agree(lt, rn) && arms_agree(ln, rt);
-            match (same, cross) {
-                (true, false) => Some(Wire::Same),
-                (false, true) => Some(Wire::Cross),
-                _ => None,
+    let same = shape_agrees(lt, rt) && shape_agrees(ln, rn);
+    let cross = shape_agrees(lt, rn) && shape_agrees(ln, rt);
+    match (same, cross) {
+        (true, false) => Wire::Same,
+        (false, true) => Wire::Cross,
+        (false, false) => Wire::Undecided,
+        (true, true) => {
+            let eq = arms_unify(lt, "taken", rt, "taken", "taken")
+                && arms_unify(ln, "not_taken", rn, "not_taken", "not_taken");
+            let eqr = arms_unify(lt, "taken", rn, "not_taken", "taken")
+                && arms_unify(ln, "not_taken", rt, "taken", "not_taken");
+            match (eq, eqr) {
+                (true, false) => Wire::Same,
+                (false, true) => Wire::Cross,
+                _ => Wire::Undecided,
             }
         }
     }
@@ -811,6 +908,14 @@ fn align_trees(
             .unwrap_or(StartKind::Create);
 
         let edge_dir = parent_edge.map(|(_, d)| d);
+        let lt = lseg.and_then(|s| s.taken);
+        let rt = rseg.and_then(|s| s.taken);
+        let ln = lseg.and_then(|s| s.not_taken);
+        let rn = rseg.and_then(|s| s.not_taken);
+        let wire = match (lseg, rseg) {
+            (Some(l), Some(r)) if is_fork(l) && is_fork(r) => Some(choose_wire(left, right, l, r)),
+            _ => None,
+        };
         nodes.push(Node {
             id,
             start,
@@ -818,29 +923,20 @@ fn align_trees(
             right: build_list(rseg),
             match_status: match_status(lseg, rseg),
             expr_status: expr_status(lseg, rseg, edge_dir),
+            wire,
         });
         if let Some((from, dir)) = parent_edge {
             edges.push(Edge { from, to: id, dir });
         }
 
-        let lt = lseg.and_then(|s| s.taken);
-        let rt = rseg.and_then(|s| s.taken);
-        let ln = lseg.and_then(|s| s.not_taken);
-        let rn = rseg.and_then(|s| s.not_taken);
-        let wire = match (lseg, rseg) {
-            (Some(l), Some(r)) if is_fork(l) && is_fork(r) => {
-                Some(choose_wire(left, right, l, r).unwrap_or(Wire::Same))
-            }
-            _ => None,
-        };
         match wire {
-            Some(Wire::Same) => {
-                q.push_back((lt, rt, Some((id, "taken"))));
-                q.push_back((ln, rn, Some((id, "not_taken"))));
-            }
             Some(Wire::Cross) => {
                 q.push_back((lt, rn, Some((id, "taken"))));
                 q.push_back((ln, rt, Some((id, "not_taken"))));
+            }
+            Some(Wire::Same) | Some(Wire::Undecided) => {
+                q.push_back((lt, rt, Some((id, "taken"))));
+                q.push_back((ln, rn, Some((id, "not_taken"))));
             }
             None => {
                 if lt.is_some() {
@@ -913,22 +1009,11 @@ fn branch_step(left: &str, right: &str, edge_dir: Option<&str>) -> bool {
     equal != dual
 }
 
-fn kind_counts(seg: &Segment) -> BTreeMap<&str, usize> {
-    let mut counts = BTreeMap::new();
-    for pred in &seg.preds {
-        *counts.entry(pred.atom.kind.as_str()).or_insert(0) += 1;
-    }
-    counts
-}
-
 fn match_status(left: Option<&Segment>, right: Option<&Segment>) -> MatchStatus {
     let (Some(left), Some(right)) = (left, right) else {
         return MatchStatus::Fail;
     };
-    if is_fork(left) != is_fork(right) || left.ends_exit != right.ends_exit {
-        return MatchStatus::Fail;
-    }
-    if kind_counts(left) == kind_counts(right) {
+    if shape_agrees(left, right) {
         MatchStatus::Pass
     } else {
         MatchStatus::Fail
@@ -1090,14 +1175,16 @@ mod tests {
         assert_eq!(report.behavioral_equivalence, "notEstablished");
         assert_eq!(report.phase, "local_increment");
         assert_eq!(report.note, NOTE);
-        // Unparsed arm conditions do not decide EQ/EQR, so the fork stays same-direction.
+        // Both arms are branch-then-ret and the conditions do not parse, so the
+        // fork is undecided. Links stay same-direction and are not a commitment.
         assert_eq!(report.nodes.len(), 3);
         assert_eq!(report.edges.len(), 2);
         let create = &report.nodes[0];
         assert_eq!(create.start, StartKind::Create);
         assert_eq!(create.match_status, MatchStatus::Pass);
-        assert_eq!(create.expr_status, ExprStatus::Complete);
-        assert_eq!(pred_kinds(&create.left), Vec::<&str>::new());
+        assert_eq!(create.wire, Some(Wire::Undecided));
+        assert_eq!(pred_kinds(&create.left), vec!["branch"]);
+        assert_eq!(pred_kinds(&create.right), vec!["branch"]);
         let taken = report
             .nodes
             .iter()
@@ -1450,6 +1537,38 @@ mod tests {
     }
 
     #[test]
+    fn kind_order_fails_when_counts_match() {
+        let left = run(
+            "rv32imc",
+            vec![enode(
+                0,
+                "0",
+                vec![
+                    pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]})),
+                    pred("ret", json!({"term": "1"})),
+                ],
+            )],
+            vec![],
+        );
+        let right = run(
+            "ebpf",
+            vec![enode(
+                0,
+                "0",
+                vec![
+                    pred("ret", json!({"term": "1"})),
+                    pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]})),
+                ],
+            )],
+            vec![],
+        );
+        let report = build_compare_tree(&left, &right);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "ret"]);
+        assert_eq!(pred_kinds(&report.nodes[0].right), vec!["ret", "helper"]);
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
+    }
+
+    #[test]
     fn extra_predicate_fails() {
         let left = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
         let right = run(
@@ -1633,7 +1752,11 @@ mod tests {
                 .collect(),
             taken: None,
             not_taken: None,
-            fork_id: None,
+            taken_open: None,
+            not_taken_open: None,
+            taken_open_local: false,
+            not_taken_open_local: false,
+            tip_id: 0,
             ends_exit: false,
         }
     }
@@ -1743,7 +1866,6 @@ mod tests {
             ],
         );
         let report = build_compare_tree(&snap, &snap);
-        // The fork node's branch does not normalize, so successors stay same-direction.
         assert_eq!(report.nodes.len(), 3);
         assert_eq!(report.edges.len(), 2);
         assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);

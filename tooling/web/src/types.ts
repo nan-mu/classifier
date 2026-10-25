@@ -253,6 +253,8 @@ export type TreeNode = {
   matchStatus?: "pass" | "fail";
   /** Branch expressions. Absent treats a passing node as fully agreed. */
   exprStatus?: "complete" | "incomplete";
+  /** Fork pairing. `undecided` keeps same-direction edges and is not a commitment. */
+  wire?: "same" | "cross" | "undecided";
   tipScore?: SoftScore;
 };
 

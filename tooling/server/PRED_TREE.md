@@ -14,7 +14,7 @@ Each node has:
 - `left` / `right`: ordered list entries for the two architectures
 - `matchStatus`: `pass` | `fail`
 
-`pass` means both sides are present, every arrival is normalized CrossPred JSON, the exit flags are equal, and `lean_cross_pred_unify` returns `{"ok":true,"pass":true}`. The node is `fail` when a side is missing, an arrival is unparsed, the exit flags differ, the response is `null`, or the response is `{"ok":false}` or `{"ok":true,"pass":false}`. `matchStatus` is not behavioral equivalence.
+`pass` means both sides are present, the exit flags are equal, the fork shape is equal, and the ordered observation kinds are equal. Expressions are not read for `matchStatus`. A fork node also has `wire`: `same` or `cross` when only one wiring has that kind order, `undecided` when both wirings do and the branch expressions do not pick exactly one. `undecided` still links children same-direction. `matchStatus` is not behavioral equivalence.
 
 List entries:
 
@@ -22,7 +22,7 @@ List entries:
 - `{ "tag": "pred", "atom": … }` for each local arrival
 - `{ "tag": "exit" }` when the path ends at `loc=exit` and the last arrival is not `ret`
 
-Predicate entries are the ordered local arrivals along the segment. For each expand node on the walk, an arrival is a predicate absent from the expand parent, using a `predKey`-style identity. The create root's parent list is empty. A `taken` or `not_taken` head's parent is the fork node. A branch written on a successor stays on that successor's segment. Order is walk order. Duplicate arrivals stay. The five normalize kinds are `helper`, `branch`, `ret`, `mapWrite`, and `packetWrite`. Any other kind is kept as an unparsed arrival.
+Predicate entries are the ordered local arrivals along the segment. For each expand node on the walk, an arrival is a predicate absent from the expand parent. The create root's parent list is empty. A fork that does not already end in a branch copies the taken arm's branch, or the not-taken arm's branch if the taken arm has none, onto the end of the parent. Each child starts with its own arm branch when it has one, otherwise with that shared closing branch. Straight edges stay in the same segment. Order is walk order. Duplicate arrivals stay. The five normalize kinds are `helper`, `branch`, `ret`, `mapWrite`, and `packetWrite`. Any other kind is kept as an unparsed arrival.
 
 Tree `edges` are only forks. `dir` is `taken` or `not_taken`.
 
