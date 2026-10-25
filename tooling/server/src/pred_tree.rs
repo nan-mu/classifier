@@ -3,7 +3,9 @@
 //! A segment is a straight walk of local observations. A fork branch opens each
 //! child and is absent from the parent. `matchStatus` compares kind order, fork
 //! shape, and exit. `wire` is `same`, `cross`, or `undecided`. Branch expressions
-//! resolve only when both wirings have the same kind order.
+//! resolve only when both wirings have the same kind order. Before that
+//! unify, both packet-end spellings become one marker and nested bare `or`
+//! trees are flattened and sorted.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -854,8 +856,8 @@ fn arms_unify(
         return false;
     };
     unify_pair(
-        &rewrite_branch_dir(&left_json, force_dir),
-        &rewrite_branch_dir(&right_json, force_dir),
+        &rewrite_branch_dir(&canon_branch_json(&left_json), force_dir),
+        &rewrite_branch_dir(&canon_branch_json(&right_json), force_dir),
     )
 }
 
@@ -1016,11 +1018,102 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
     list
 }
 
+const RV_PACKET_END: &str = r#"{"kind":"app","op":"add","params":[],"args":[{"kind":"app","op":"linear","params":[],"args":[{"kind":"app","op":"linear","params":[],"args":[{"kind":"c","value":"1"},{"kind":"var","name":4}]},{"kind":"app","op":"linear","params":[],"args":[{"kind":"c","value":"1"},{"kind":"var","name":5}]}]},{"kind":"app","op":"linear","params":[],"args":[]}]}"#;
+const EB_PACKET_END: &str = r#"{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"128"}]}"#;
+
+/// Shared marker for the two `packetEnd` spellings in `ENV_RV32` and `ENV_EBPF`.
+/// `900` is outside the small cross-var classes used by those environments.
+fn packet_end_marker() -> Value {
+    serde_json::json!({"kind": "var", "name": 900})
+}
+
+fn bare_or(v: &Value) -> bool {
+    v.get("kind").and_then(|k| k.as_str()) == Some("app")
+        && v.get("op").and_then(|k| k.as_str()) == Some("or")
+        && v.get("params")
+            .and_then(|p| p.as_array())
+            .is_some_and(|p| p.is_empty())
+        && v.get("args").and_then(|a| a.as_array()).is_some()
+}
+
+/// Bitwise `or` is commutative and associative. Nested bare `or` nodes become
+/// one right-associated tree with operands sorted by their JSON text.
+fn fold_or(leaves: &[Value]) -> Value {
+    let Some(last) = leaves.last() else {
+        return Value::Array(Vec::new());
+    };
+    let mut acc = last.clone();
+    for leaf in leaves[..leaves.len() - 1].iter().rev() {
+        acc = serde_json::json!({
+            "args": [leaf, acc],
+            "kind": "app",
+            "op": "or",
+            "params": [],
+        });
+    }
+    acc
+}
+
+fn canon_term(v: &Value, rv_end: &Value, eb_end: &Value, mark: &Value) -> Value {
+    if v == rv_end || v == eb_end {
+        return mark.clone();
+    }
+    if bare_or(v) {
+        let mut leaves = Vec::new();
+        collect_or(v, rv_end, eb_end, mark, &mut leaves);
+        if !leaves.is_empty() {
+            leaves.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
+            return fold_or(&leaves);
+        }
+    }
+    match v {
+        Value::Array(xs) => Value::Array(
+            xs.iter()
+                .map(|x| canon_term(x, rv_end, eb_end, mark))
+                .collect(),
+        ),
+        Value::Object(map) => {
+            let mut out = Map::new();
+            for (k, child) in map {
+                out.insert(k.clone(), canon_term(child, rv_end, eb_end, mark));
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    }
+}
+
+fn collect_or(v: &Value, rv_end: &Value, eb_end: &Value, mark: &Value, out: &mut Vec<Value>) {
+    if bare_or(v) {
+        if let Some(args) = v.get("args").and_then(|a| a.as_array()) {
+            for arg in args {
+                collect_or(arg, rv_end, eb_end, mark, out);
+            }
+            return;
+        }
+    }
+    out.push(canon_term(v, rv_end, eb_end, mark));
+}
+
+fn canon_branch_json(json: &str) -> String {
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return json.to_string();
+    };
+    let (Ok(rv_end), Ok(eb_end)) = (
+        serde_json::from_str::<Value>(RV_PACKET_END),
+        serde_json::from_str::<Value>(EB_PACKET_END),
+    ) else {
+        return json.to_string();
+    };
+    canon_term(&v, &rv_end, &eb_end, &packet_end_marker()).to_string()
+}
+
 fn prepared_branch(json: &str, edge_dir: Option<&str>, complement: bool) -> Option<String> {
+    let json = canon_branch_json(json);
     let json = if complement {
-        complement_branch_json(json)?
+        complement_branch_json(&json)?
     } else {
-        json.to_string()
+        json
     };
     match cross_dir_for_edge(edge_dir) {
         Some(dir) => Some(rewrite_branch_dir(&json, dir)),
@@ -1963,5 +2056,59 @@ mod tests {
         assert_eq!(pred_kinds(&taken.right), vec!["branch", "helper"]);
         assert_eq!(pred_kinds(&not_taken.left), vec!["branch", "helper"]);
         assert_eq!(pred_kinds(&not_taken.right), vec!["branch", "helper"]);
+    }
+
+    fn plain(dir: &str, rel: &str, lhs: &str, rhs: &str) -> String {
+        format!(
+            r#"{{"kind":"branch","dir":"{dir}","cond":{{"kind":"plain","rel":{{"kind":"{rel}","q":32}},"lhs":{lhs},"rhs":{rhs}}}}}"#
+        )
+    }
+
+    #[test]
+    fn packet_end_spellings_unify() {
+        let rhs = r#"{"kind":"c","value":"4"}"#;
+        let left = plain("taken", "geu", RV_PACKET_END, rhs);
+        let right = plain("notTaken", "geu", EB_PACKET_END, rhs);
+        assert!(branch_step(&left, &right, Some("taken")));
+    }
+
+    #[test]
+    fn or_association_unifies() {
+        let a = r#"{"kind":"var","name":1}"#;
+        let b = r#"{"kind":"var","name":2}"#;
+        let c = r#"{"kind":"var","name":3}"#;
+        let left_or = format!(
+            r#"{{"kind":"app","op":"or","params":[],"args":[{{"kind":"app","op":"or","params":[],"args":[{a},{b}]}},{c}]}}"#
+        );
+        let right_or = format!(
+            r#"{{"kind":"app","op":"or","params":[],"args":[{c},{{"kind":"app","op":"or","params":[],"args":[{a},{b}]}}]}}"#
+        );
+        let zero = r#"{"kind":"c","value":"0"}"#;
+        assert!(branch_step(
+            &plain("taken", "geu", &left_or, zero),
+            &plain("notTaken", "geu", &right_or, zero),
+            Some("taken")
+        ));
+    }
+
+    #[test]
+    fn vlan_constants_stay_apart() {
+        let field = r#"{"kind":"var","name":4}"#;
+        let arm = |value: &str| {
+            format!(
+                r#"{{"kind":"branch","dir":"taken","cond":{{"kind":"packetField","field":{field},"rel":{{"kind":"ne","q":32}},"value":"{value}"}}}}"#
+            )
+        };
+        assert!(!branch_step(&arm("43144"), &arm("129"), Some("not_taken")));
+    }
+
+    #[test]
+    fn wrapped_length_is_not_a_packet_bound() {
+        let bound = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"32"}]}}}"#;
+        let lhs = format!(
+            r#"{{"kind":"app","op":"sub","params":[],"args":[{EB_PACKET_END},{{"kind":"app","op":"add","params":[],"args":[{{"kind":"var","name":4}},{{"kind":"c","value":"8"}}]}}]}}"#
+        );
+        let plain_side = plain("taken", "ltu", &lhs, r#"{"kind":"c","value":"24"}"#);
+        assert!(!branch_step(bound, &plain_side, Some("taken")));
     }
 }

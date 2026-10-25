@@ -2,9 +2,9 @@
 # libbpf-mcu writes XDP ELF and eBPF objects under ../build/<name>/.
 #
 # expect is the dual-arch outcome `classifier test` checks:
-#   strict — both sides complete, kind counts match, branch expressions unify
-#   weak   — both sides complete, kind counts match, some branch expression does not
-#   fail   — a side does not complete, or some segment's kind counts disagree
+#   strict — both sides complete, kind order matches, branch expressions unify
+#   weak   — both sides complete, kind order matches, some branch expression does not
+#   fail   — a side does not complete, or some segment's kind order disagrees
 
 build = "../build"
 
@@ -12,13 +12,13 @@ build = "../build"
 name = "bitswap"
 elf = "bitswap/bitswap.elf"
 bpf = "bitswap/bpf.o"
-expect = "weak"
+expect = "strict"
 
 [[program]]
 name = "bsort"
 elf = "bsort/bsort.elf"
 bpf = "bsort/bpf.o"
-expect = "weak"
+expect = "strict"
 
 [[program]]
 name = "buf"
@@ -54,7 +54,7 @@ expect = "weak"
 name = "incr"
 elf = "incr/incr.elf"
 bpf = "incr/bpf.o"
-expect = "weak"
+expect = "strict"
 
 [[program]]
 name = "just_tx"
@@ -78,4 +78,4 @@ expect = "strict"
 name = "square"
 elf = "square/square.elf"
 bpf = "square/bpf.o"
-expect = "weak"
+expect = "strict"
