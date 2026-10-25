@@ -1,10 +1,9 @@
 //! Compare tree of expand segments.
 //!
-//! A segment is a straight walk. It ends at a two-arm fork, at `exit`, or when
-//! the walk stops. A fork's closing branch is copied onto the parent end and
-//! onto each child start. `matchStatus` compares that ordered kind list, fork
-//! shape, and exit. `wire` is `same`, `cross`, or `undecided`. Branch
-//! expressions are consulted only when both wirings have the same kind order.
+//! A segment is a straight walk of local observations. A fork branch opens each
+//! child and is absent from the parent. `matchStatus` compares kind order, fork
+//! shape, and exit. `wire` is `same`, `cross`, or `undecided`. Branch expressions
+//! resolve only when both wirings have the same kind order.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -132,29 +131,74 @@ struct Arrival {
     key: LocalKey,
 }
 
-#[derive(Debug, Clone)]
-struct Segment {
-    start: StartKind,
-    preds: Vec<Arrival>,
-    taken: Option<u32>,
-    not_taken: Option<u32>,
-    taken_open: Option<Arrival>,
-    not_taken_open: Option<Arrival>,
-    taken_open_local: bool,
-    not_taken_open_local: bool,
-    tip_id: u32,
-    ends_exit: bool,
+#[derive(Clone)]
+struct ForkBranch(Arrival);
+
+#[derive(Clone)]
+enum Segment {
+    Run {
+        start: StartKind,
+        preds: Vec<Arrival>,
+        tip_id: u32,
+        ends_exit: bool,
+    },
+    Fork {
+        start: StartKind,
+        preds: Vec<Arrival>,
+        tip_id: u32,
+        taken: u32,
+        not_taken: u32,
+    },
+}
+
+impl Segment {
+    fn preds(&self) -> &[Arrival] {
+        match self {
+            Segment::Run { preds, .. } | Segment::Fork { preds, .. } => preds,
+        }
+    }
+
+    fn start(&self) -> StartKind {
+        match self {
+            Segment::Run { start, .. } | Segment::Fork { start, .. } => *start,
+        }
+    }
+
+    fn tip_id(&self) -> u32 {
+        match self {
+            Segment::Run { tip_id, .. } | Segment::Fork { tip_id, .. } => *tip_id,
+        }
+    }
+
+    fn arms(&self) -> Option<(u32, u32)> {
+        match self {
+            Segment::Fork {
+                taken, not_taken, ..
+            } => Some((*taken, *not_taken)),
+            Segment::Run { .. } => None,
+        }
+    }
+
+    fn ends_exit(&self) -> bool {
+        match self {
+            Segment::Run { ends_exit, .. } => *ends_exit,
+            Segment::Fork { .. } => false,
+        }
+    }
+
+    fn is_fork(&self) -> bool {
+        self.arms().is_some()
+    }
 }
 
 struct WalkStart {
     id: u32,
     kind: StartKind,
     parent: Option<u32>,
-    opening: Option<Arrival>,
-    opening_local: bool,
+    opening: Option<ForkBranch>,
 }
 
-const NOTE: &str = "ordered local observations; a fork shares its closing branch with each child; matchStatus compares kind order, fork shape, and exit; wire is same, cross, or undecided; branch expressions resolve only an undecided wire";
+const NOTE: &str = "ordered local observations; a fork branch opens each child and is absent from the parent; matchStatus compares kind order, fork shape, and exit; wire is same, cross, or undecided; branch expressions resolve only an undecided wire";
 
 pub fn build_compare_tree(left: &SnapRun, right: &SnapRun) -> TreeReport {
     let maps = discover_env_maps(&[left, right]);
@@ -214,7 +258,6 @@ fn segments_from_snap(
         kind: StartKind::Create,
         parent: None,
         opening: None,
-        opening_local: false,
     });
     let mut seen = HashSet::new();
     while let Some(start) = q.pop_front() {
@@ -222,24 +265,23 @@ fn segments_from_snap(
         if !seen.insert(start_id) {
             continue;
         }
-        let seg = walk_segment(&run.arch, start, &nodes, &edges, maps, unparsed_seq);
-        let tip = seg.tip_id;
-        if let Some(t) = seg.taken {
+        let (seg, opening) = walk_segment(&run.arch, start, &nodes, &edges, maps, unparsed_seq);
+        if let Segment::Fork {
+            taken, not_taken, ..
+        } = &seg
+        {
+            let tip = seg.tip_id();
             q.push_back(WalkStart {
-                id: t,
+                id: *taken,
                 kind: StartKind::Taken,
                 parent: Some(tip),
-                opening: seg.taken_open.clone(),
-                opening_local: seg.taken_open_local,
+                opening: opening.clone(),
             });
-        }
-        if let Some(n) = seg.not_taken {
             q.push_back(WalkStart {
-                id: n,
+                id: *not_taken,
                 kind: StartKind::NotTaken,
                 parent: Some(tip),
-                opening: seg.not_taken_open.clone(),
-                opening_local: seg.not_taken_open_local,
+                opening,
             });
         }
         segs.insert(start_id, seg);
@@ -605,33 +647,66 @@ fn push_arrival(
     });
 }
 
-fn ends_with_branch(preds: &[Arrival]) -> bool {
-    preds.last().is_some_and(|a| a.atom.kind == "branch")
-}
-
-fn closing_branch(preds: &[Arrival]) -> Option<Arrival> {
-    preds
+// An opening keeps its parent tip id, so peeling this tip leaves it.
+fn peel_tip_branch(preds: &mut Vec<Arrival>, tip_id: u32) -> Option<ForkBranch> {
+    let index = preds
         .iter()
-        .rev()
-        .find(|a| a.atom.kind == "branch")
-        .cloned()
+        .rposition(|a| a.atom.node_id == tip_id && a.atom.kind == "branch")?;
+    Some(ForkBranch(preds.remove(index)))
 }
 
-fn arm_branch(
-    arch: &str,
-    nodes: &HashMap<u32, ExpandNode>,
-    child: u32,
-    parent_preds: &[PredIn],
-    maps: &[EnvMap],
-    unparsed_seq: &mut u64,
-) -> Option<Arrival> {
-    let node = nodes.get(&child)?;
-    let (index, pred) = local_rows(parent_preds, &node.predicates)
-        .into_iter()
-        .find(|(_, p)| normalize_kind(&p.kind) == "branch")?;
-    let mut built = Vec::new();
-    push_arrival(arch, node, index, pred, &mut built, maps, unparsed_seq);
-    built.pop()
+fn hoist_first_branch(preds: &mut Vec<Arrival>) {
+    let Some(index) = preds.iter().position(|a| a.atom.kind == "branch") else {
+        return;
+    };
+    if index == 0 {
+        return;
+    }
+    let branch = preds.remove(index);
+    preds.insert(0, branch);
+}
+
+fn finish_segment(
+    start: StartKind,
+    mut preds: Vec<Arrival>,
+    taken: Option<u32>,
+    not_taken: Option<u32>,
+    tip_id: u32,
+    ends_exit: bool,
+    opening: Option<ForkBranch>,
+) -> (Segment, Option<ForkBranch>) {
+    let arms = match (taken, not_taken) {
+        (Some(taken), Some(not_taken)) => Some((taken, not_taken)),
+        _ => None,
+    };
+    let tail_is_ret = preds.last().is_some_and(|a| a.atom.kind == "ret");
+    let outgoing = if arms.is_some() && !tail_is_ret {
+        peel_tip_branch(&mut preds, tip_id)
+    } else {
+        None
+    };
+    if start != StartKind::Create && opening.is_none() {
+        hoist_first_branch(&mut preds);
+    }
+    if let Some(ForkBranch(arrival)) = opening {
+        preds.insert(0, arrival);
+    }
+    let seg = match arms {
+        Some((taken, not_taken)) if !tail_is_ret => Segment::Fork {
+            start,
+            preds,
+            tip_id,
+            taken,
+            not_taken,
+        },
+        _ => Segment::Run {
+            start,
+            preds,
+            tip_id,
+            ends_exit,
+        },
+    };
+    (seg, outgoing)
 }
 
 fn walk_segment(
@@ -641,17 +716,13 @@ fn walk_segment(
     edges: &[&WireEdge],
     maps: &[EnvMap],
     unparsed_seq: &mut u64,
-) -> Segment {
+) -> (Segment, Option<ForkBranch>) {
     let mut parent_preds = start
         .parent
         .and_then(|id| nodes.get(&id))
         .map(|n| n.predicates.clone())
         .unwrap_or_default();
     let mut preds = Vec::new();
-    if let Some(open) = start.opening.clone() {
-        preds.push(open);
-    }
-    let mut skip_local_branch = start.opening_local;
     let mut cur = start.id;
     let mut taken = None;
     let mut not_taken = None;
@@ -660,10 +731,6 @@ fn walk_segment(
     for _ in 0..10_000 {
         let Some(n) = nodes.get(&cur) else { break };
         for (index, pred) in local_rows(&parent_preds, &n.predicates) {
-            if skip_local_branch && normalize_kind(&pred.kind) == "branch" {
-                skip_local_branch = false;
-                continue;
-            }
             push_arrival(arch, n, index, pred, &mut preds, maps, unparsed_seq);
         }
         parent_preds = n.predicates.clone();
@@ -699,51 +766,15 @@ fn walk_segment(
         }
     }
 
-    let mut taken_open = None;
-    let mut not_taken_open = None;
-    let mut taken_open_local = false;
-    let mut not_taken_open_local = false;
-    if taken.is_some() && not_taken.is_some() {
-        taken_open =
-            taken.and_then(|id| arm_branch(arch, nodes, id, &parent_preds, maps, unparsed_seq));
-        not_taken_open =
-            not_taken.and_then(|id| arm_branch(arch, nodes, id, &parent_preds, maps, unparsed_seq));
-        taken_open_local = taken_open.is_some();
-        not_taken_open_local = not_taken_open.is_some();
-        if !ends_with_branch(&preds) {
-            if let Some(shared) = taken_open.clone().or_else(|| not_taken_open.clone()) {
-                preds.push(shared);
-            }
-        }
-        let shared = closing_branch(&preds);
-        if taken_open.is_none() {
-            taken_open = shared.clone();
-        }
-        if not_taken_open.is_none() {
-            not_taken_open = shared;
-        }
-    }
-
-    Segment {
-        start: start.kind,
+    finish_segment(
+        start.kind,
         preds,
         taken,
         not_taken,
-        taken_open,
-        not_taken_open,
-        taken_open_local,
-        not_taken_open_local,
-        tip_id: cur,
+        cur,
         ends_exit,
-    }
-}
-
-fn is_fork(seg: &Segment) -> bool {
-    seg.taken.is_some() && seg.not_taken.is_some()
-}
-
-fn child(map: &HashMap<u32, Segment>, id: Option<u32>) -> Option<&Segment> {
-    id.and_then(|i| map.get(&i))
+        start.opening,
+    )
 }
 
 /// Boolean complement of a normalized relation family. Operand order stays.
@@ -788,11 +819,11 @@ fn branch_dir(json: &str) -> Option<String> {
     Some(v.get("dir")?.as_str()?.to_string())
 }
 
-/// Last branch whose direction is the entry edge. The shared opening branch
-/// sits in front of the arm's own condition, so the tip is the later one.
+/// Last branch whose direction is the entry edge. The fork branch can sit
+/// in front of the arm condition. The tip is the later match.
 fn arm_json(seg: &Segment, entry: &str) -> Option<String> {
     let want = cross_dir_for_edge(Some(entry))?;
-    let arrival = seg.preds.iter().rev().find(|p| {
+    let arrival = seg.preds().iter().rev().find(|p| {
         p.atom.kind == "branch" && branch_json(p).and_then(branch_dir).as_deref() == Some(want)
     })?;
     Some(branch_json(arrival)?.to_string())
@@ -829,12 +860,12 @@ fn arms_unify(
 }
 
 fn kind_seq(seg: &Segment) -> Vec<&str> {
-    seg.preds.iter().map(|p| p.atom.kind.as_str()).collect()
+    seg.preds().iter().map(|p| p.atom.kind.as_str()).collect()
 }
 
 fn shape_agrees(left: &Segment, right: &Segment) -> bool {
-    is_fork(left) == is_fork(right)
-        && left.ends_exit == right.ends_exit
+    left.is_fork() == right.is_fork()
+        && left.ends_exit() == right.ends_exit()
         && kind_seq(left) == kind_seq(right)
 }
 
@@ -846,11 +877,14 @@ fn choose_wire(
     lseg: &Segment,
     rseg: &Segment,
 ) -> Wire {
+    let (Some((lt_id, ln_id)), Some((rt_id, rn_id))) = (lseg.arms(), rseg.arms()) else {
+        return Wire::Undecided;
+    };
     let (Some(lt), Some(ln), Some(rt), Some(rn)) = (
-        child(left, lseg.taken),
-        child(left, lseg.not_taken),
-        child(right, rseg.taken),
-        child(right, rseg.not_taken),
+        left.get(&lt_id),
+        left.get(&ln_id),
+        right.get(&rt_id),
+        right.get(&rn_id),
     ) else {
         return Wire::Undecided;
     };
@@ -880,11 +914,11 @@ fn align_trees(
 ) -> (Vec<Node>, Vec<Edge>) {
     let left_root = left
         .iter()
-        .find(|(_, s)| s.start == StartKind::Create)
+        .find(|(_, s)| s.start() == StartKind::Create)
         .map(|(id, _)| *id);
     let right_root = right
         .iter()
-        .find(|(_, s)| s.start == StartKind::Create)
+        .find(|(_, s)| s.start() == StartKind::Create)
         .map(|(id, _)| *id);
 
     let mut nodes = Vec::new();
@@ -903,17 +937,21 @@ fn align_trees(
         let lseg = lid.and_then(|i| left.get(&i));
         let rseg = rid.and_then(|i| right.get(&i));
         let start = lseg
-            .map(|s| s.start)
-            .or_else(|| rseg.map(|s| s.start))
+            .map(|s| s.start())
+            .or_else(|| rseg.map(|s| s.start()))
             .unwrap_or(StartKind::Create);
 
         let edge_dir = parent_edge.map(|(_, d)| d);
-        let lt = lseg.and_then(|s| s.taken);
-        let rt = rseg.and_then(|s| s.taken);
-        let ln = lseg.and_then(|s| s.not_taken);
-        let rn = rseg.and_then(|s| s.not_taken);
+        let arms_of = |seg: Option<&Segment>| match seg.and_then(Segment::arms) {
+            Some((taken, not_taken)) => (Some(taken), Some(not_taken)),
+            None => (None, None),
+        };
+        let (lt, ln) = arms_of(lseg);
+        let (rt, rn) = arms_of(rseg);
         let wire = match (lseg, rseg) {
-            (Some(l), Some(r)) if is_fork(l) && is_fork(r) => Some(choose_wire(left, right, l, r)),
+            (Some(l), Some(r)) if l.is_fork() && r.is_fork() => {
+                Some(choose_wire(left, right, l, r))
+            }
             _ => None,
         };
         nodes.push(Node {
@@ -962,17 +1000,17 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
         return Vec::new();
     };
     let mut list = Vec::new();
-    for arrival in &seg.preds {
+    for arrival in seg.preds() {
         list.push(ListEntry::Pred {
             atom: arrival.atom.clone(),
         });
     }
     let tip_is_ret = seg
-        .preds
+        .preds()
         .last()
         .map(|a| a.atom.kind == "ret")
         .unwrap_or(false);
-    if seg.ends_exit && !tip_is_ret {
+    if seg.ends_exit() && !tip_is_ret {
         list.push(ListEntry::Exit);
     }
     list
@@ -1048,7 +1086,7 @@ fn expr_status(
 }
 
 fn branch_jsons(seg: &Segment) -> Vec<Option<&str>> {
-    seg.preds
+    seg.preds()
         .iter()
         .filter(|p| p.atom.kind == "branch")
         .map(branch_json)
@@ -1183,8 +1221,8 @@ mod tests {
         assert_eq!(create.start, StartKind::Create);
         assert_eq!(create.match_status, MatchStatus::Pass);
         assert_eq!(create.wire, Some(Wire::Undecided));
-        assert_eq!(pred_kinds(&create.left), vec!["branch"]);
-        assert_eq!(pred_kinds(&create.right), vec!["branch"]);
+        assert_eq!(pred_kinds(&create.left), Vec::<&str>::new());
+        assert_eq!(pred_kinds(&create.right), Vec::<&str>::new());
         let taken = report
             .nodes
             .iter()
@@ -1192,6 +1230,13 @@ mod tests {
             .expect("taken node");
         assert_eq!(pred_kinds(&taken.left), vec!["branch", "ret"]);
         assert_eq!(pred_kinds(&taken.right), vec!["branch", "ret"]);
+        let not_taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::NotTaken)
+            .expect("not_taken node");
+        assert_eq!(pred_kinds(&not_taken.left), vec!["branch", "ret"]);
+        assert_eq!(pred_kinds(&not_taken.right), vec!["branch", "ret"]);
         assert_eq!(pred_fingerprint(&taken.left, "branch"), "unparsed:0",);
         assert_ne!(
             pred_fingerprint(&taken.left, "branch"),
@@ -1478,6 +1523,8 @@ mod tests {
             ],
         );
         let report = build_compare_tree(&left, &right);
+        assert_eq!(pred_kinds(&report.nodes[0].left), Vec::<&str>::new());
+        assert_eq!(pred_kinds(&report.nodes[0].right), Vec::<&str>::new());
         // Without swap, taken would pair leu with gtu; with swap, taken pairs leu with leu.
         let taken = report
             .edges
@@ -1488,6 +1535,8 @@ mod tests {
         let node = &report.nodes[taken as usize];
         let l_rel = tip_from_list(&node.left);
         let r_rel = tip_from_list(&node.right);
+        assert_eq!(pred_kinds(&node.left), vec!["branch", "branch", "ret"]);
+        assert_eq!(pred_kinds(&node.right), vec!["branch", "branch", "ret"]);
         assert_eq!(
             l_rel, r_rel,
             "swapped arms should share tip rel, got {l_rel:?} vs {r_rel:?}"
@@ -1733,7 +1782,7 @@ mod tests {
     }
 
     fn fixture_segment(jsons: &[&str]) -> Segment {
-        Segment {
+        Segment::Run {
             start: StartKind::Create,
             preds: jsons
                 .iter()
@@ -1750,12 +1799,6 @@ mod tests {
                     key: LocalKey::Normalized((*json).to_string()),
                 })
                 .collect(),
-            taken: None,
-            not_taken: None,
-            taken_open: None,
-            not_taken_open: None,
-            taken_open_local: false,
-            not_taken_open_local: false,
             tip_id: 0,
             ends_exit: false,
         }
@@ -1770,12 +1813,12 @@ mod tests {
         let left = fixture_segment(&[left_var, left_reg]);
         let right = fixture_segment(&[right_var, right_reg]);
         assert_ne!(
-            left.preds[0].atom.fingerprint,
-            right.preds[0].atom.fingerprint
+            left.preds()[0].atom.fingerprint,
+            right.preds()[0].atom.fingerprint
         );
         assert_ne!(
-            left.preds[1].atom.fingerprint,
-            right.preds[1].atom.fingerprint
+            left.preds()[1].atom.fingerprint,
+            right.preds()[1].atom.fingerprint
         );
         assert_eq!(match_status(Some(&left), Some(&right)), MatchStatus::Pass);
         assert_eq!(pred_kinds(&build_list(Some(&left))), vec!["ret", "ret"]);
@@ -1868,10 +1911,57 @@ mod tests {
         let report = build_compare_tree(&snap, &snap);
         assert_eq!(report.nodes.len(), 3);
         assert_eq!(report.edges.len(), 2);
-        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper", "branch"]);
+        assert_eq!(pred_kinds(&report.nodes[0].left), vec!["helper"]);
+        assert_eq!(pred_kinds(&report.nodes[0].right), vec!["helper"]);
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken");
+        let not_taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::NotTaken)
+            .expect("not_taken");
+        assert_eq!(pred_kinds(&taken.left), vec!["branch", "ret"]);
+        assert_eq!(pred_kinds(&taken.right), vec!["branch", "ret"]);
+        assert_eq!(pred_kinds(&not_taken.left), vec!["branch", "ret"]);
+        assert_eq!(pred_kinds(&not_taken.right), vec!["branch", "ret"]);
         assert_eq!(
             report.edges.iter().map(|e| e.dir).collect::<Vec<_>>(),
             vec!["taken", "not_taken"]
         );
+    }
+
+    #[test]
+    fn two_arm_successors_hoist_branch_before_helper() {
+        let helper = pred("helper", json!({"event": 1, "helperId": 1, "args": ["1"]}));
+        let branch = pred("branch", json!({"dir": "taken", "at": "1"}));
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![]),
+                enode(1, "1", vec![helper.clone(), branch.clone()]),
+                enode(2, "2", vec![helper, branch]),
+            ],
+            vec![edge(0, 1, "taken"), edge(0, 2, "not_taken")],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), Vec::<&str>::new());
+        assert_eq!(pred_kinds(&report.nodes[0].right), Vec::<&str>::new());
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken");
+        let not_taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::NotTaken)
+            .expect("not_taken");
+        assert_eq!(pred_kinds(&taken.left), vec!["branch", "helper"]);
+        assert_eq!(pred_kinds(&taken.right), vec!["branch", "helper"]);
+        assert_eq!(pred_kinds(&not_taken.left), vec!["branch", "helper"]);
+        assert_eq!(pred_kinds(&not_taken.right), vec!["branch", "helper"]);
     }
 }

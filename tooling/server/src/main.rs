@@ -622,9 +622,19 @@ mod http_tests {
         assert_eq!(report["phase"], "local_increment");
         assert_eq!(report["nodes"].as_array().unwrap().len(), 3);
         assert_eq!(report["edges"].as_array().unwrap().len(), 2);
-        assert_eq!(report["nodes"][0]["left"][0]["tag"], "pred");
-        assert_eq!(report["nodes"][0]["left"][0]["atom"]["kind"], "branch");
-        // Same fork shape and kind counts (branch + ret) on both sides.
+        assert!(report["nodes"][0]["left"].as_array().unwrap().is_empty());
+        assert!(report["nodes"][0]["right"].as_array().unwrap().is_empty());
+        let taken = report["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["start"] == "taken")
+            .expect("taken child");
+        assert_eq!(taken["left"][0]["tag"], "pred");
+        assert_eq!(taken["left"][0]["atom"]["kind"], "branch");
+        assert_eq!(taken["left"][1]["atom"]["kind"], "ret");
+        assert_eq!(taken["right"][0]["atom"]["kind"], "branch");
+        assert_eq!(taken["right"][1]["atom"]["kind"], "ret");
         assert_eq!(report["nodes"][0]["matchStatus"], "pass");
         assert!(report["nodes"][0].get("tipScore").is_none());
     }

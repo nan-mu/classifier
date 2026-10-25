@@ -22,7 +22,7 @@ List entries:
 - `{ "tag": "pred", "atom": … }` for each local arrival
 - `{ "tag": "exit" }` when the path ends at `loc=exit` and the last arrival is not `ret`
 
-Predicate entries are the ordered local arrivals along the segment. For each expand node on the walk, an arrival is a predicate absent from the expand parent. The create root's parent list is empty. A fork that does not already end in a branch copies the taken arm's branch, or the not-taken arm's branch if the taken arm has none, onto the end of the parent. Each child starts with its own arm branch when it has one, otherwise with that shared closing branch. Straight edges stay in the same segment. Order is walk order. Duplicate arrivals stay. The five normalize kinds are `helper`, `branch`, `ret`, `mapWrite`, and `packetWrite`. Any other kind is kept as an unparsed arrival.
+Predicate entries are the ordered local arrivals along the segment. For each expand node on the walk, an arrival is a predicate absent from the expand parent. The create root's parent list is empty. A two-arm fork whose straight-walk tail is not `ret` removes the last `branch` on the tip expand node from the parent list and places that arrival at the start of each child. A tip with no `branch` leaves the parent list as the walk built it. A non-create child that received no opening moves its first local `branch` to the front. A one-arm edge stays in the same segment. A list whose tail is `ret` has no children. Straight edges stay in the same segment. Order is otherwise walk order. Duplicate arrivals stay. The five normalize kinds are `helper`, `branch`, `ret`, `mapWrite`, and `packetWrite`. Any other kind is kept as an unparsed arrival.
 
 Tree `edges` are only forks. `dir` is `taken` or `not_taken`.
 
