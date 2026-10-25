@@ -1,26 +1,24 @@
 ---
 name: verify-classifier
-description: Drive classifier's profile.toml dual-arch CLI (`classifier test`) and capture the Envelope. Use when a Lean, create, step, or compare change must be shown against the programs listed in profile.toml.
+description: Drive classifier's three gates. Use for profile.toml dual-arch outcomes, the sorry-free Verification library, or Rust unit and functional tests. Not for the web UI.
 ---
 
 # Verify classifier
 
-The primary surface is the `classifier` CLI in `tooling/server`. `classifier test` with no `--root` reads `profile.toml` at the classifier root (or `CLASSIFIER_PROFILE`) and, for every `[[program]]`, creates an RV32 session from `elf`, an eBPF session from `bpf`, runs both to the 1024 budget, and compares the trees. The web UI (`lake run dev`, API `:8788`, Vite `:5173`) and `classifier test --root tooling/test` are separate surfaces. Do not treat either as a substitute for a profile row.
+验证面是命令，不是网页。三类测试只有两个执行器：cargo 跑 profile 集成测试和 Rust 测试，lake 构建 `Verification`。没有 xtask。不跑 `npm test`，不跑 `tooling/scripts/smoke.py`，也不把 `lake run dev` 当作测试。
 
-Images are read-only. Each invocation is its own process and its own in-memory `Kernel`. Two drives can run at once. They share nothing except CPU and, if set, the single file `CLASSIFIER_DUMP_FAILS` writes at `/tmp/compare-fails.json`. Leave that variable unset. Do not point `CLASSIFIER_PROFILE` at a copy in another directory unless you rewrite `build`. Paths are resolved from the profile file's parent, and the repo file uses `build = "../build"`.
+工作目录是 classifier 仓库根。`drive.py` 只负责启动那两条命令之一并保存输出。
 
 ## Launch
 
-From the classifier root, build the Lean libraries and the CLI once.
+没有常驻进程。先构建 Lean 共享库，再编译 profile 集成测试。
 
 ```bash
 lake build Core Node RV32 EBPF
-lake env cargo build --manifest-path tooling/Cargo.toml -p server --bin classifier
+cargo test --manifest-path tooling/Cargo.toml -p server --test profile_expect --no-run
 ```
 
-Ready means `python3 .cursor/skills/verify-classifier/scripts/doctor.py` exits 0 and prints `profile`, `build`, `binary`, and one `program` line per `[[program]]`. A process that only answers `classifier` with no arguments is not enough. The images named by the profile must exist.
-
-There is no server to leave running. Each drive below starts its own process.
+就绪条件是 `python3 .cursor/skills/verify-classifier/scripts/doctor.py` 退出码 0，并且最后一行是 `doctor ok`。`--no-run` 只说明测试二进制已生成。
 
 ## Doctor
 
@@ -28,57 +26,65 @@ There is no server to leave running. Each drive below starts its own process.
 python3 .cursor/skills/verify-classifier/scripts/doctor.py
 ```
 
-The script is read-only. It fails when `profile.toml` or `CLASSIFIER_PROFILE` is missing or unparsable, when an `elf` or `bpf` path is not a file, when cargo metadata's debug `classifier` binary is missing, when that binary is older than `libclassifier_Core.dylib`, `libclassifier_Node.dylib`, `libclassifier_RV32.dylib`, or `libclassifier_EBPF.dylib`, or when the binary's no-argument probe does not exit 2 with usage text that mentions `classifier test`. Cargo metadata supplies the binary path. Do not hard-code `tooling/target`.
+脚本只读。它检查 `cargo` 和 `lake` 在 PATH 上，`lakefile.lean` 声明了 `lean_lib Verification`，`profile.toml` 里每个程序的 ELF 和 bpf 都是文件，以及 `.lake/build/lib` 里有 Core、Node、RV32、EBPF 的共享库。失败时先补 Launch，不要改 profile。
 
 ## Drive
 
-Run doctor first. Then one of these, from the classifier root.
+先跑 doctor。然后从仓库根启动一类：
 
 ```bash
-python3 .cursor/skills/verify-classifier/scripts/drive.py --program incr
-python3 .cursor/skills/verify-classifier/scripts/drive.py --all
+python3 .cursor/skills/verify-classifier/scripts/drive.py --gate profile
+python3 .cursor/skills/verify-classifier/scripts/drive.py --gate formal
+python3 .cursor/skills/verify-classifier/scripts/drive.py --gate rust
 ```
 
-`--program` passes `classifier test --program <name>`. `--all` passes `classifier test` and walks every row. The wrapper records the command, cwd, profile path, pid, stdout, stderr, and exit code. Stdout is one Envelope JSON object. Exit 0 means `ok` is true. Exit 1 means one or more cases failed (`error.code` is `cases`). Exit 2 means usage, including an unknown program name.
+同一 checkout 不要并行第二条 cargo 或 lake。`lake test` 会按 profile、Verification、Rust 的顺序把三类都跑一遍；复现某一类时用上面的 `--gate`，不要用 `lake test` 代替。
 
-Stderr is the progress log. A finished program prints `profile <name> expect <strict|weak|fail>` and then `profile <name> ok pass` or `profile <name> FAIL <detail>`.
+`expect` 的含义以 `tooling/server/src/harness.rs` 为准：
 
-What `expect` checks, from `tooling/server/src/profile.rs` and `harness.rs`:
-
-- `strict`. Both sides `status` `complete`, compare-tree `fail` 0, `expr_incomplete` 0.
-- `weak`. Both sides `complete`, `fail` 0, and `expr_incomplete` at least 1.
-- `fail`. A side does not finish `complete`, or some compare node has `matchStatus` `fail`.
-
-The current `profile.toml` sets every program to `weak`. Do not edit `expect` so a run turns green.
-
-`classifier create --arch rv32imc --budget 1024 --program <name>` and `classifier create --arch ebpf --budget 1024 --program <name>` load the same files. They are not the profile test. A create Envelope does not prove the compare.
+- `strict`：两边 `complete`，compare-tree `fail` 为 0，`expr_incomplete` 为 0。
+- `weak`：两边 `complete`，`fail` 为 0，`expr_incomplete` 至少为 1。
+- `fail`：有一边没有 `complete`，或某个节点的 kind 顺序不一致。
 
 ## Evidence
 
-The wrapper prints one directory under `.audit/verify-classifier/<UTC>-<program-or-all>/`. That directory is gitignored. Keep it.
+`drive.py` 打印 `.audit/verify-classifier/<UTC>-<gate>/`。该目录已在 `.gitignore` 里。保留它。
 
-- `command.txt` is the argv.
-- `stdout.txt` is the Envelope. `payload.passed`, `payload.failed`, and each `payload.cases[]` (`id`, `suite`, `ok`, `detail`) are the result.
-- `stderr.txt` is the per-program progress.
-- `exit_code.txt` is the process exit code.
-- `summary.json` repeats `ok`, `payload`, and `error`.
-- `pid` is the process that produced those files.
+- `command.txt` 是实际 argv。
+- `stdout.txt` 和 `stderr.txt` 是完整输出。
+- `exit_code.txt` 是进程退出码。
+- `pid` 是产生这些文件的进程。
 
-Proof is the command plus those files, not a claim that the binary compiled. A pass is exit 0 and `payload.ok` true for the programs you asked to run. A fail is exit 1 with the `detail` string. Do not drop a program from the profile to avoid a failure. `CLASSIFIER_DUMP_FAILS` is off unless you are inspecting a failure. If it is set, the extra artifact is `/tmp/compare-fails.json`, which a second drive will overwrite.
+profile 的证明是退出码 0，`stdout.txt` 里有 `test result: ok`，并且每个 `[[program]]` 都有 `profile <name> ok pass`。formal 的证明是退出码 0，并且下面这些定理的 axiom 列表出现在日志里、其中没有 `sorryAx`：
+
+- `Verification.Verified.StateUpdate.assign_lookup`
+- `Verification.Verified.StateUpdate.kept_lookup`
+- `Verification.Verified.SolveMeaning.solve_preserves_interpretation`
+- `Verification.Verified.HistoryAndPath.dependency_blocks_ignoring`
+- `Verification.Verified.HistoryAndPath.linearTrace_of_step_preservation`
+- `Verification.Verified.HistoryAndPath.drive_equal_states`
+- `Verification.Verified.HistoryAndPath.both_directions_rejected`
+- `Verification.Verified.UnifyMatch.unify_structural`
+- `Verification.Verified.HelperProjection.update_flag_denotation_lost`
+- `Verification.Verified.Acceptance.accept_is_structural`
+- `Verification.Verified.Acceptance.meanings_if_arguments_survive`
+
+Rust 的证明是退出码 0，且每个执行过的测试二进制都有 `test result: ok`。不要改 `expect`、删程序或跳过失败用例来换通过。
 
 ## Cleanup
 
 ```bash
-python3 .cursor/skills/verify-classifier/scripts/cleanup.py .audit/verify-classifier/<stamp>-<label>
+python3 .cursor/skills/verify-classifier/scripts/cleanup.py .audit/verify-classifier/<stamp>-<gate>
 ```
 
-The argument must be a directory under `.audit/verify-classifier/`. Cleanup sends `SIGTERM` to the pid recorded there when that process is still running. It does not delete the directory. A drive that already exited has nothing to kill. Do not kill a `classifier` process by name.
+参数必须在 `.audit/verify-classifier/` 下面。cleanup 只向该目录里记录的、仍在运行的 PID 发 `SIGTERM`。它不删除证据目录。不要按进程名结束 cargo 或 lake。
 
 ## Helpers
 
 - `python3 .cursor/skills/verify-classifier/scripts/doctor.py`
-- `python3 .cursor/skills/verify-classifier/scripts/drive.py --program <name>`
-- `python3 .cursor/skills/verify-classifier/scripts/drive.py --all`
+- `python3 .cursor/skills/verify-classifier/scripts/drive.py --gate profile`
+- `python3 .cursor/skills/verify-classifier/scripts/drive.py --gate formal`
+- `python3 .cursor/skills/verify-classifier/scripts/drive.py --gate rust`
 - `python3 .cursor/skills/verify-classifier/scripts/cleanup.py <evidence-dir>`
 
-The feature map is `features/README.md`.
+feature 地图在 `features/README.md`。

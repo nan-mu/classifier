@@ -74,16 +74,34 @@ script dev do
   let child ← IO.Process.spawn {cmd := "python3", args := #["tooling/scripts/dev.py", "--server", executable.toString, "--parent-pid", toString (← IO.Process.getPID)], cwd := root}
   child.wait
 
+/-- Profile outcomes, the sorry-free `Verification` library, then Rust tests.
+Web Vitest and the live HTTP smoke script are not part of this gate. -/
 @[test_driver]
 script check do
-  let executable ← runBuild server.fetch
-  let _ ← runBuild web.fetch
   let root := (← getRootPackage).dir
-  let tests ← IO.Process.spawn {cmd := "cargo", args := #["test", "--manifest-path", "tooling/Cargo.toml", "--workspace"], cwd := root}
-  let result ← tests.wait
-  if result != 0 then return result
-  let webTests ← IO.Process.spawn {cmd := "npm", args := #["test"], cwd := root / "tooling/web"}
-  let webResult ← webTests.wait
-  if webResult != 0 then return webResult
-  let smoke ← IO.Process.spawn {cmd := "python3", args := #["tooling/scripts/smoke.py", "--server", executable.toString, "--parent-pid", toString (← IO.Process.getPID)], cwd := root}
-  smoke.wait
+  let profile ← IO.Process.spawn {
+    cmd := "cargo"
+    args := #[
+      "test", "--manifest-path", "tooling/Cargo.toml", "-p", "server",
+      "--test", "profile_expect"
+    ]
+    cwd := root
+  }
+  let profileResult ← profile.wait
+  if profileResult != 0 then return profileResult
+  let pkg ← getRootPackage
+  match pkg.findLeanLib? `Verification with
+  | none => do
+    IO.eprintln "Verification library is missing"
+    return 1
+  | some vlib => do
+    let _ ← runBuild vlib.fetch
+    let units ← IO.Process.spawn {
+      cmd := "cargo"
+      args := #[
+        "test", "--manifest-path", "tooling/Cargo.toml", "--workspace",
+        "--lib", "--bins", "--tests", "--", "--skip", "profile_programs_match_expect"
+      ]
+      cwd := root
+    }
+    units.wait

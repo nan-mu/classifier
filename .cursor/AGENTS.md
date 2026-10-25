@@ -147,7 +147,11 @@ docs aligned with code.
 
 ## Build and check
 
-From repo root:
+From repo root. `lake test` is the three-type gate, in order: the profile
+integration test (`cargo test -p server --test profile_expect`), the
+sorry-free `Verification` library, then Rust tests (`cargo test --workspace
+--lib --bins --tests`, skipping `profile_programs_match_expect`). It does not
+run web Vitest or `tooling/scripts/smoke.py`.
 
 ```bash
 lake build

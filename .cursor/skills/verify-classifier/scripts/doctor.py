@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Read-only check that a profile.toml classifier test is worth driving."""
+"""Read-only check that the three classifier gates are worth driving."""
 
-import json
 import os
-import subprocess
+import shutil
 import sys
 from pathlib import Path
 
@@ -101,60 +100,30 @@ def parse_profile(path: Path) -> tuple[Path, list[tuple[str, Path, Path, str]]]:
     return build, rows
 
 
-def binary() -> Path:
-    meta = subprocess.run(
-        [
-            "lake",
-            "env",
-            "cargo",
-            "metadata",
-            "--offline",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--manifest-path",
-            "tooling/Cargo.toml",
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-    if meta.returncode != 0:
-        fail(meta.stderr.strip() or "cargo metadata failed")
-    target = Path(json.loads(meta.stdout)["target_directory"])
-    path = target / "debug" / "classifier"
-    if not path.is_file():
-        fail(f"missing {path}; run Launch first")
-    return path
-
-
 def main() -> None:
     os.chdir(ROOT)
+    if shutil.which("cargo") is None or shutil.which("lake") is None:
+        fail("cargo and lake must be on PATH")
+    lakefile = (ROOT / "lakefile.lean").read_text()
+    if "lean_lib Verification" not in lakefile:
+        fail("lakefile.lean does not declare lean_lib Verification")
     path = profile_path()
     build, rows = parse_profile(path)
-    exe = binary()
     lake_lib = ROOT / ".lake" / "build" / "lib"
-    newest = 0.0
     for name in DYLIBS:
         lib = lake_lib / name
         if not lib.is_file():
             fail(f"missing {lib}; run Launch first")
-        newest = max(newest, lib.stat().st_mtime)
-    if exe.stat().st_mtime < newest:
-        fail(f"{exe} is older than the Lean libraries; run Launch first")
     missing = [str(item) for _, elf, bpf, _ in rows for item in (elf, bpf) if not item.is_file()]
     if missing:
         fail("missing images:\n" + "\n".join(missing))
-    probe = subprocess.run([str(exe)], cwd=ROOT, capture_output=True, text=True)
-    if probe.returncode != 2 or "classifier test" not in probe.stderr:
-        fail(f"classifier usage probe exit {probe.returncode}")
     print(f"profile {path}")
     print(f"build {build}")
-    print(f"binary {exe}")
     for name, elf, bpf, expect in rows:
         print(f"program {name} expect {expect}")
         print(f"  elf {elf}")
         print(f"  bpf {bpf}")
+    print("doctor ok")
 
 
 if __name__ == "__main__":
