@@ -649,11 +649,10 @@ fn push_arrival(
     });
 }
 
-// An opening keeps its parent tip id, so peeling this tip leaves it.
-fn peel_tip_branch(preds: &mut Vec<Arrival>, tip_id: u32) -> Option<ForkBranch> {
-    let index = preds
-        .iter()
-        .rposition(|a| a.atom.node_id == tip_id && a.atom.kind == "branch")?;
+// The fork condition is the latest branch on the walk. The expand node that
+// owns both arms often inherits that branch from the previous step.
+fn peel_tip_branch(preds: &mut Vec<Arrival>) -> Option<ForkBranch> {
+    let index = preds.iter().rposition(|a| a.atom.kind == "branch")?;
     Some(ForkBranch(preds.remove(index)))
 }
 
@@ -683,7 +682,7 @@ fn finish_segment(
     };
     let tail_is_ret = preds.last().is_some_and(|a| a.atom.kind == "ret");
     let outgoing = if arms.is_some() && !tail_is_ret {
-        peel_tip_branch(&mut preds, tip_id)
+        peel_tip_branch(&mut preds)
     } else {
         None
     };
@@ -2110,5 +2109,50 @@ mod tests {
         );
         let plain_side = plain("taken", "ltu", &lhs, r#"{"kind":"c","value":"24"}"#);
         assert!(!branch_step(bound, &plain_side, Some("taken")));
+    }
+
+    #[test]
+    fn fork_peels_a_branch_recorded_before_the_tip() {
+        let held = pred("branch", json!({"dir": "notTaken", "at": "early"}));
+        let snap = run(
+            "rv32imc",
+            vec![
+                enode(0, "0", vec![]),
+                enode(1, "1", vec![held.clone()]),
+                enode(2, "2", vec![held.clone()]),
+                enode(
+                    3,
+                    "exit",
+                    vec![
+                        pred("branch", json!({"dir": "taken", "at": "early"})),
+                        pred("ret", json!({"term": "1"})),
+                    ],
+                ),
+                enode(4, "exit", vec![held, pred("ret", json!({"term": "0"}))]),
+            ],
+            vec![
+                edge(0, 1, "only"),
+                edge(1, 2, "only"),
+                edge(2, 3, "taken"),
+                edge(2, 4, "not_taken"),
+            ],
+        );
+        let report = build_compare_tree(&snap, &snap);
+        assert_eq!(pred_kinds(&report.nodes[0].left), Vec::<&str>::new());
+        assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
+        let taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::Taken)
+            .expect("taken");
+        let not_taken = report
+            .nodes
+            .iter()
+            .find(|n| n.start == StartKind::NotTaken)
+            .expect("not_taken");
+        assert_eq!(pred_kinds(&taken.left), vec!["branch", "branch", "ret"]);
+        assert_eq!(pred_kinds(&not_taken.left), vec!["branch", "ret"]);
+        assert_eq!(taken.match_status, MatchStatus::Pass);
+        assert_eq!(not_taken.match_status, MatchStatus::Pass);
     }
 }
