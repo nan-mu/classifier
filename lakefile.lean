@@ -36,9 +36,6 @@ Not imported by `Verification`. `lake build VerificationGaps`. -/
 lean_lib VerificationGaps where
   roots := #[`Verification.Unverified.Required, `Verification.Unverified.Assumed]
 
-lean_exe semanticCheck where
-  root := `SemanticCheck
-
 target server pkg : System.FilePath := do
   let some exprLib := pkg.findLeanLib? `Core | error "Core library is missing"
   let some pathLib := pkg.findLeanLib? `Node | error "Node library is missing"

@@ -26,10 +26,15 @@ pub(crate) mod ffi {
         pub fn lean_finalize_thread();
 
         pub fn initialize_Init(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_Core(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Term(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Expression(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Observation(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Interface(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Inbox(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Node(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_RV32(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_EBPF(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Cross_RV32(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Inbox_Wire_RegisterFfi(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Cross_EBPF(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
         pub fn lean_binding_string_cstr(o: LeanObj) -> *const c_char;
@@ -168,10 +173,15 @@ pub fn init() {
         ffi::lean_initialize();
         let world = std::ptr::null_mut();
         let _ = ffi::initialize_Init(1, world);
-        let _ = ffi::initialize_classifier_Core(1, world);
+        let _ = ffi::initialize_classifier_Term(1, world);
+        let _ = ffi::initialize_classifier_Expression(1, world);
+        let _ = ffi::initialize_classifier_Observation(1, world);
+        let _ = ffi::initialize_classifier_Interface(1, world);
+        let _ = ffi::initialize_classifier_Inbox(1, world);
         let _ = ffi::initialize_classifier_Node(1, world);
-        let _ = ffi::initialize_classifier_RV32(1, world);
-        let _ = ffi::initialize_classifier_EBPF(1, world);
+        let _ = ffi::initialize_classifier_Cross_RV32(1, world);
+        let _ = ffi::initialize_classifier_Inbox_Wire_RegisterFfi(1, world);
+        let _ = ffi::initialize_classifier_Cross_EBPF(1, world);
         ffi::lean_io_mark_end_initialization();
     });
 }
@@ -612,6 +622,21 @@ pub mod cross_pred {
     pub struct UnifyResult {
         pub ok: bool,
         pub pass: bool,
+    }
+
+    /// Full unify response. `None` when Lean returns the ABI failure marker `null`.
+    /// An ambiguous alignment is `{"ok":false}` and does not carry pairs.
+    pub fn unify_json(request_json: &str) -> Option<serde_json::Value> {
+        let request_json = request_json.to_owned();
+        let raw = lean_call(move || unsafe {
+            let req = lean_string(&request_json);
+            take_string(ffi::lean_cross_pred_unify(req))
+        });
+        if raw == "null" {
+            None
+        } else {
+            serde_json::from_str(&raw).ok()
+        }
     }
 
     /// `None` when Lean returns the ABI failure marker `null`.
