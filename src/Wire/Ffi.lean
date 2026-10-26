@@ -1,9 +1,9 @@
 import Term.Value.Numeric
 import Interface.Update
 import Expression.Virtual
-import Inbox.Wire.Render
+import Wire.Render
 
-namespace Inbox.Wire
+namespace Wire
 open Term Term.Value Expression Interface
 
 @[export classifier_expr_add32]
@@ -87,4 +87,4 @@ def exportPacketAccess (values : Array UInt32)
       some s!"\{\"updates\":[{renderExprsJson updates}]}"
   result.getD "null"
 
-end Inbox.Wire
+end Wire

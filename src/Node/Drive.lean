@@ -2,7 +2,7 @@ import Node.Path
 import Expression.Interval
 
 namespace Node
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-!
 One step of 标准推理 or Taken推演. See `doc/NodeInference/分支合并处理.md`.

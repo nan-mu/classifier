@@ -3,7 +3,7 @@ import Verification.Verified.Acceptance
 
 namespace Verification.Unverified.Required.CrossMeaning
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Inbox.Cross Verification.Obligation
+open Term Term.Value Expression Observation Interface Interface.Step Wire Match Verification.Obligation
 
 /-!
 `accept_is_structural` is injective coverage and rename equality of the

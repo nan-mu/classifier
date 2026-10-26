@@ -2,7 +2,7 @@ import Node.Drive
 
 namespace Verification.Unverified.Required.BranchDecision
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 /-!
 `Node.live_constraint_excludes_both` in `Node/BpfBound.lean` is an axiom.

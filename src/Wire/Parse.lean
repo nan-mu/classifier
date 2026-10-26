@@ -1,8 +1,8 @@
-import Inbox.Wire.Render
+import Wire.Render
 import Expression.Interval
 import Lean.Data.Json
 
-namespace Inbox.Wire
+namespace Wire
 open Term Term.Value Expression Observation Interface
 
 private def suffixNat (stem text : String) : Option Nat :=
@@ -600,4 +600,4 @@ private def fiveClassStateCheck : Bool :=
 #guard (parseTerm "add32(v32:1,)").isNone
 #guard (parseReg "packet64:0").isNone
 
-end Inbox.Wire
+end Wire

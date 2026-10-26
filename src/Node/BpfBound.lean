@@ -1,7 +1,7 @@
 import Node.Path
 
 namespace Node
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-!
 Human theorems taken from the Linux BPF verifier (`kernel/bpf/verifier.c`,

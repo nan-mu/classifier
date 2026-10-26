@@ -1,10 +1,10 @@
 import Expression.Basic
 import Observation.Insn
 import Interface.Step.Direction
-import Inbox.Wire.Parse
+import Wire.Parse
 
 namespace Node
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-- Path-graph node. Observations do not carry it. -/
 abbrev NodeId := Nat

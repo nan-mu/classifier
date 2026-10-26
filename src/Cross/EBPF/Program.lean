@@ -1,7 +1,7 @@
 import Cross.EBPF.Create
 
 namespace Cross.EBPF
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-- The 58 little-endian UInt64 slots of `/Volumes/SSD/bs/build/just_tx/bpf.o`,
 section `xdp1`. This is raw decode input, not a compacted instruction list:

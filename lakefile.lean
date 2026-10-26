@@ -7,7 +7,7 @@ package classifier where
 
 @[default_target]
 lean_lib Core where
-  roots := #[`Term, `Expression, `Observation, `Interface, `Inbox]
+  roots := #[`Term, `Expression, `Observation, `Interface, `Wire, `Match]
   defaultFacets := #[LeanLib.sharedFacet]
 
 @[default_target]
@@ -16,7 +16,7 @@ lean_lib Node where
 
 @[default_target]
 lean_lib RV32 where
-  roots := #[`Cross.RV32, `Inbox.Wire.RegisterFfi]
+  roots := #[`Cross.RV32, `Cross.RV32.RegisterFfi]
   defaultFacets := #[LeanLib.sharedFacet]
 
 @[default_target]

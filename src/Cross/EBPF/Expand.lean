@@ -2,10 +2,10 @@ import Cross.EBPF.Program
 import Interface.Update
 import Cross.EBPF.Step
 import Node.Budget
-import Inbox.Wire.Parse
+import Wire.Parse
 
 namespace Cross.EBPF
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 private def parseLeaf (text : String) (width : Width) : Option Term := do
   let term ← parseTerm text width

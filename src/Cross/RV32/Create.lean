@@ -2,7 +2,7 @@ import Node.Path
 import Expression.Interval
 
 namespace Cross.RV32
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 /-! RV32 wrapper entry and six XDP context slots (RV32 section of `doc/NodeInference/create.md`). -/
 

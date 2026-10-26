@@ -7,7 +7,7 @@ import Cross.RV32.Insn
 import Node.Path
 
 namespace Cross.RV32
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 /-! Use Expression.Reg: x0..x31 and PC as real32 alphas. -/
 

@@ -6,11 +6,11 @@ import Cross.RV32.Step
 import Cross.RV32.Encode
 import Cross.RV32.Program
 import Node.Budget
-import Inbox.Wire.Render
-import Inbox.Wire.Parse
+import Wire.Render
+import Wire.Parse
 
 namespace Cross.RV32
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 /-! Symbolic indirect targets reject. Map writes need a prior lookup with frozen key bytes
 (an installed map layout + complete current buffer contents) recorded on the helper Observation. -/

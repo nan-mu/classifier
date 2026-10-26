@@ -1,9 +1,9 @@
 import Node.Path
 import Interface.Update
-import Inbox.Wire.Parse
+import Wire.Parse
 
 namespace Node.ExactMerge
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 -- Compare the AST itself with proof-backed equality, not the existing BEq instances
 -- or rendered strings. Lean's DecidableEq deriving handler does not support the
@@ -160,7 +160,7 @@ def mergedJson (reuseFrom taken : Nat) : String :=
 end Node.ExactMerge
 
 namespace Node
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-- Stateless exact-config oracle over the five-class structural representation.
 HelperOnly remains a legacy declaration accepting only Helper requirements; it never

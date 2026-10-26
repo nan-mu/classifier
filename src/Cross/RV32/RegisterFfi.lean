@@ -1,10 +1,10 @@
 import Cross.RV32.Expression
 import Interface.Update
 import Cross.RV32.Create
-import Inbox.Wire.Render
+import Wire.Render
 
 namespace Cross.RV32
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 private def contextState : Option (List Expr) := do
   let fields := [Term.V32 4, addStar .w32 (Term.V32 4) (Term.C32 64),

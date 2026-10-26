@@ -1,8 +1,8 @@
 //! Concrete checks previously run by the `semanticCheck` executable.
-//! Each assertion reads JSON from the existing expand, update, normalize, or unify export.
+//! Each assertion reads JSON from the existing expand, update, prepare, path, or expr export.
 //! Term values are the compact strings inside that JSON.
 
-use lean_binding::cross_pred::{self, normalize};
+use lean_binding::matching::{self, observation, prepare};
 use lean_binding::ebpf::{self, Create};
 use lean_binding::expand;
 use lean_binding::rv32;
@@ -1134,7 +1134,7 @@ fn operator_terms_normalize_to_observation_json() {
         for raw_stem in rows {
             let term = format!("{raw_stem}(v{bits}:1,v{bits}:2)");
             let pred = format!(r#"{{"kind":"ret","width":{bits},"term":"{term}"}}"#);
-            let rendered = normalize("{}", &pred).unwrap_or_else(|| panic!("normalize {term}"));
+            let rendered = observation(&prepare(&pred)).unwrap_or_else(|| panic!("prepare {term}"));
             let parsed = parse(&raw_stem, &rendered);
             assert_eq!(parsed["kind"], "ret", "{raw_stem}");
             assert_eq!(parsed["width"], bits, "{raw_stem}");
@@ -1142,13 +1142,13 @@ fn operator_terms_normalize_to_observation_json() {
         }
         let select = format!("selectEq{bits}(v{bits}:1,v{bits}:2,v{bits}:3,v{bits}:4)");
         let pred = format!(r#"{{"kind":"ret","width":{bits},"term":"{select}"}}"#);
-        let rendered = normalize("{}", &pred).unwrap();
+        let rendered = observation(&prepare(&pred)).unwrap();
         let parsed = parse("selectEq", &rendered);
         assert_eq!(parsed["kind"], "ret");
         assert_eq!(parsed["term"], select);
     }
-    assert!(normalize("{}", r#"{"kind":"ret","width":32,"term":"udiv32_0(v32:1)"}"#).is_none());
-    assert!(normalize("{}", r#"{"kind":"ret","width":32,"term":"sdiv32_0(v64:1,v32:2)"}"#).is_none());
+    assert!(observation(&prepare(r#"{"kind":"ret","width":32,"term":"udiv32_0(v32:1)"}"#)).is_none());
+    assert!(observation(&prepare(r#"{"kind":"ret","width":32,"term":"sdiv32_0(v64:1,v32:2)"}"#)).is_none());
 }
 
 fn ret_var(name: u64) -> Value {
@@ -1158,49 +1158,46 @@ fn ret_const(value: &str) -> Value {
     json!({"kind":"ret","width":32,"term":value})
 }
 
+fn path_of(left: &Value, right: &Value) -> Value {
+    parse("path", &matching::path(&left.to_string(), &right.to_string()))
+}
+
+fn expr_of(left: &Value, right: &Value) -> Value {
+    parse("expr", &matching::expr(&left.to_string(), &right.to_string()))
+}
+
 #[test]
-fn alignment_json_reports_ambiguity_complements_and_rename() {
-    let miss = json!({"ok":true,"pass":false,"pairs":[],"onlyLeft":[0,1],"onlyRight":[0,1],"subst":{"vars":[],"regs":[]}});
-    let short = json!({"ok":true,"pass":false,"pairs":[],"onlyLeft":[0,1],"onlyRight":[0],"subst":{"vars":[],"regs":[]}});
-    let cases = [
-        (json!([ret_var(0), ret_var(1)]), json!([ret_var(1), ret_var(1)]), miss.clone()),
-        (json!([ret_const("1"), ret_const("1")]), json!([ret_const("1")]), short),
-        (
-            json!([ret_const("1"), ret_const("2")]),
-            json!([ret_const("1"), ret_const("3")]),
-            miss.clone(),
-        ),
-        (
-            json!([ret_const("1"), ret_const("3")]),
-            json!([ret_const("1"), ret_const("2")]),
-            miss.clone(),
-        ),
-        (
-            json!([ret_var(9)]),
-            json!([ret_var(4)]),
-            json!({"ok":true,"pass":true,"pairs":[{"left":0,"right":0}],"onlyLeft":[],"onlyRight":[],"subst":{"vars":[[9,4]],"regs":[]}}),
-        ),
-        (
-            json!([ret_var(4)]),
-            json!([ret_var(9)]),
-            json!({"ok":true,"pass":true,"pairs":[{"left":0,"right":0}],"onlyLeft":[],"onlyRight":[],"subst":{"vars":[[4,9]],"regs":[]}}),
-        ),
-        (json!([ret_const("1"), ret_const("2")]), json!([ret_const("2"), ret_const("1")]), miss),
-    ];
-    for (left, right, expected) in cases {
-        let request = json!({"left": left, "right": right}).to_string();
-        let actual = cross_pred::unify_json(&request).unwrap_or_else(|| panic!("{request}"));
-        assert_eq!(actual, expected, "{request}");
-    }
-    let left = r#"{"kind":"ret","width":32,"term":"udiv32_0(7,0)"}"#;
-    let right = r#"{"kind":"ret","width":32,"term":"udiv32_4294967295(7,0)"}"#;
-    let request = format!(r#"{{"left":[{left}],"right":[{right}]}}"#);
-    let actual = cross_pred::unify_json(&request).unwrap();
-    assert_eq!(actual["ok"], true);
-    assert_eq!(actual["pass"], false);
-    assert_eq!(actual["pairs"], json!([]));
-    assert_eq!(actual["onlyLeft"], json!([0]));
-    assert_eq!(actual["onlyRight"], json!([0]));
+fn path_pairs_categories_and_expr_matches_one_pair() {
+    let same_order = json!([
+        {"left": 0, "right": 0},
+        {"left": 1, "right": 1}
+    ]);
+    let swapped = (json!([ret_const("1"), ret_const("2")]), json!([ret_const("2"), ret_const("1")]));
+    let path = path_of(&swapped.0, &swapped.1);
+    assert_eq!(path["status"], "ok");
+    assert_eq!(path["pass"], true);
+    assert_eq!(path["pairs"], same_order);
+    assert_eq!(expr_of(&ret_const("1"), &ret_const("2"))["pass"], false);
+    assert_eq!(expr_of(&ret_const("2"), &ret_const("1"))["pass"], false);
+
+    let short = path_of(&json!([ret_const("1"), ret_const("1")]), &json!([ret_const("1")]));
+    assert_eq!(short["status"], "ok");
+    assert_eq!(short["pass"], false);
+
+    let renamed = expr_of(&ret_var(4), &ret_var(9));
+    assert_eq!(renamed["status"], "ok");
+    assert_eq!(renamed["pass"], true);
+    assert_eq!(renamed["subst"]["vars"], json!([[4, 9]]));
+
+    let conflict = path_of(&json!([ret_var(0), ret_var(1)]), &json!([ret_var(1), ret_var(1)]));
+    assert_eq!(conflict["pass"], true);
+    assert_eq!(expr_of(&ret_var(0), &ret_var(1))["pass"], true);
+    assert_eq!(expr_of(&ret_var(1), &ret_var(1))["pass"], true);
+
+    let left = json!({"kind":"ret","width":32,"term":"udiv32_0(7,0)"});
+    let right = json!({"kind":"ret","width":32,"term":"udiv32_4294967295(7,0)"});
+    assert_eq!(path_of(&json!([left.clone()]), &json!([right.clone()]))["pass"], true);
+    assert_eq!(expr_of(&left, &right)["pass"], false);
 }
 
 #[test]

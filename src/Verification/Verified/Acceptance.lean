@@ -3,7 +3,7 @@ import Verification.Verified.UnifyMatch
 
 namespace Verification.Verified.Acceptance
 
-open Term Term.Value Expression Observation Inbox.Cross Verification.Obligation Verification.Verified.UnifyMatch
+open Term Term.Value Expression Observation Match Verification.Obligation Verification.Verified.UnifyMatch
 
 /-!
 Acceptance is the index-aligned match of prepared observations.

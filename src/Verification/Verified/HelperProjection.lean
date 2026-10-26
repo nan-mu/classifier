@@ -1,8 +1,8 @@
-import Inbox.Cross.Unify
+import Match.Unify
 
 namespace Verification.Verified.HelperProjection
 
-open Term Term.Value Expression Observation Inbox.Cross
+open Term Term.Value Expression Observation Match
 
 /-!
 Comparison reads the helper argument list after `solve`. A flags word is an

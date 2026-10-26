@@ -5,7 +5,7 @@ import Term.Basic
 import Expression.Basic
 import Observation.Insn
 
-namespace Inbox.Wire
+namespace Wire
 open Term.Value Expression Term Observation
 
 /-! ## Compact string renderers for State JSON (`doc/NodeInference/step.md#语义状态与节点状态`) -/
@@ -143,4 +143,4 @@ def renderPredicatesJson (ps : List Observation) : String :=
 def renderStateJson (σ : State) : String × String :=
   (renderExprsJson σ.exprs, renderPredicatesJson σ.predicates)
 
-end Inbox.Wire
+end Wire

@@ -5,7 +5,7 @@ import Verification.Obligation
 
 namespace Verification.Unverified.Required.Instruction
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Inbox.Cross Verification.Obligation
+open Term Term.Value Expression Observation Interface Interface.Step Wire Match Verification.Obligation
 
 /-!
 There is no instruction semantics in this repository besides `ebpfStep` and

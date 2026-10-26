@@ -5,7 +5,7 @@ import Expression.Virtual
 import Expression.Resource.MapLayout
 import Observation.Helper
 namespace Cross.EBPF
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 inductive ResolvedAccess where
   | cell (reg : Reg)

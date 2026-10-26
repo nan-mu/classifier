@@ -4,7 +4,7 @@ import Cross.RV32.Create
 
 namespace Verification.Unverified.Assumed.HelperAndHost
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-!
 Host and helper contracts are parameters. `authorConfirmed` stays false.

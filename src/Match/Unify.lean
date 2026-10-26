@@ -1,17 +1,17 @@
-import Inbox.Cross.Pred
-import Inbox.Wire.Parse
+import Match.Prepare
+import Wire.Parse
 
-namespace Inbox.Cross
-open Term Term.Value Expression Observation Inbox.Wire
+namespace Match
+open Term Term.Value Expression Observation Wire
 
-/-! Injective renaming of prepared observations.
+/-! Two match stages, plus the shared-renaming list check.
 
-Real indices may change and must keep the interval. Other registers keep
-their constructor, identity and interval. Variable names rename only when the
-widths already match. Map-write and packet-write values are compared as
-little-endian byte extracts. The match itself is index-aligned. -/
+`pathMatch` pairs Figure 2 classes in order. It does not read terms.
+`exprMatch` prepares one pair and builds that pair's renaming.
+`unifyLists` asks for one renaming of the whole list. Pairwise `exprMatch`
+does not imply that list check. -/
 
-end Inbox.Cross
+end Match
 
 namespace Term
 
@@ -27,8 +27,8 @@ def Reg.renameable (a b : Reg) : Bool :=
 
 end Term
 
-namespace Inbox.Cross
-open Term Term.Value Expression Observation Inbox.Wire
+namespace Match
+open Term Term.Value Expression Observation Wire
 
 structure Subst where
   vars : List (Nat × Nat) := []
@@ -509,6 +509,25 @@ structure UnifyOut where
 def identityPairs (n : Nat) : List (Nat × Nat) :=
   (List.range n).map fun i => (i, i)
 
+/-- Figure 2 class. Path matching reads only this. -/
+def category : Observation → String
+  | .helper .. => "helper"
+  | .branch .. => "branch"
+  | .ret .. => "ret"
+  | .mapWrite .. => "mapWrite"
+  | .packetWrite .. => "packetWrite"
+
+/-- Order-preserving category pairing. A count or category miss is `none`. -/
+def pathMatch (L R : List Observation) : Option (List (Nat × Nat)) :=
+  if L.length == R.length && (L.zip R).all fun (a, b) => category a == category b then
+    some (identityPairs L.length)
+  else
+    none
+
+/-- One pair. Prepare both sides, then one injective renaming for that pair. -/
+def exprMatch (a b : Observation) : Option Subst :=
+  (mergeObs .empty (prepare a) (prepare b)).map Subst.strip
+
 def unifyLists (L R : List Observation) : UnifyOut :=
   match zipMatch .empty (L.map prepare) (R.map prepare) with
   | some σ =>
@@ -603,41 +622,59 @@ private def renderSubst (σ : Subst) : String :=
     s!"[\"{renderReg a}\",\"{renderReg b}\"]")
   s!"\{\"vars\":[{vs}],\"regs\":[{rs}]}"
 
-private def renderUnifyOut (out : UnifyOut) : String :=
-  if out.ambiguous then "{\"ok\":false}" else
-  let pairs := String.intercalate "," (out.pairs.map fun (i, j) =>
+def renderPairs (ps : List (Nat × Nat)) : String :=
+  let body := String.intercalate "," (ps.map fun (i, j) =>
     s!"\{\"left\":{i},\"right\":{j}}")
-  s!"\{\"ok\":true,\"pass\":{out.pass},\"pairs\":[{pairs}],\"onlyLeft\":{renderNats out.onlyLeft},\"onlyRight\":{renderNats out.onlyRight},\"subst\":{renderSubst out.subst}}"
+  s!"[{body}]"
 
-private def exactFields (value : Lean.Json) (fields : List String) : Bool :=
-  match value.getObj?.toOption with
-  | none => false
-  | some obj => obj.size == fields.length && fields.all obj.contains
+def reject : String := "{\"status\":\"fail\",\"reason\":\"LocalReject\"}"
 
-private def field (value : Lean.Json) (key : String) : Option Lean.Json :=
-  (value.getObjVal? key).toOption
+def parseObservationList (json : String) : Option (List Observation) := do
+  let value ← (Lean.Json.parse json).toOption
+  let arr ← value.getArr?.toOption
+  arr.toList.mapM parsePredicateJson
 
-/-- Boxed Lean String ABI. Bad observation JSON and lists longer than 32 return
-`null`. A full index-aligned match sets `pass` true. -/
-@[export lean_cross_pred_unify]
-def exportCrossPredUnify (requestJson : String) : String :=
-  let result : Option String := do
-    let j ← (Lean.Json.parse requestJson).toOption
-    if !exactFields j ["left", "right"] then none
-    let left ← ((← field j "left").getArr?).toOption
-    let right ← ((← field j "right").getArr?).toOption
-    if left.size > 32 || right.size > 32 then none
-    let L ← left.toList.mapM parsePredicateJson
-    let R ← right.toList.mapM parsePredicateJson
-    pure (renderUnifyOut (unifyLists L R))
-  result.getD "null"
+private def parseObservation (json : String) : Option Observation := do
+  parsePredicateJson (← (Lean.Json.parse json).toOption)
 
-#guard exportCrossPredUnify
-  "{\"left\":[{\"kind\":\"ret\",\"width\":32,\"term\":\"v32:4\"}],\"right\":[{\"kind\":\"ret\",\"width\":32,\"term\":\"v32:9\"}]}" ==
-  "{\"ok\":true,\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0}],\"onlyLeft\":[],\"onlyRight\":[],\"subst\":{\"vars\":[[4,9]],\"regs\":[]}}"
+/-- Category and order of two observation lists. -/
+@[export lean_match_path]
+def exportMatchPath (leftJson rightJson : String) : String :=
+  match parseObservationList leftJson, parseObservationList rightJson with
+  | some L, some R =>
+    match pathMatch L R with
+    | some pairs => s!"\{\"status\":\"ok\",\"pass\":true,\"pairs\":{renderPairs pairs}}"
+    | none => "{\"status\":\"ok\",\"pass\":false}"
+  | _, _ => reject
 
-#guard exportCrossPredUnify
-  "{\"left\":[{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"},{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"}],\"right\":[{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"},{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}]}" ==
-  "{\"ok\":true,\"pass\":false,\"pairs\":[],\"onlyLeft\":[0,1],\"onlyRight\":[0,1],\"subst\":{\"vars\":[],\"regs\":[]}}"
+/-- Expression match of one observation pair. -/
+@[export lean_match_expr]
+def exportMatchExpr (leftJson rightJson : String) : String :=
+  match parseObservation leftJson, parseObservation rightJson with
+  | some a, some b =>
+    match exprMatch a b with
+    | some σ => s!"\{\"status\":\"ok\",\"pass\":true,\"subst\":{renderSubst σ}}"
+    | none => "{\"status\":\"ok\",\"pass\":false}"
+  | _, _ => reject
 
-end Inbox.Cross
+#guard exportMatchPath
+  "[{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"},{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"}]"
+  "[{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"},{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}]" ==
+  "{\"status\":\"ok\",\"pass\":true,\"pairs\":[{\"left\":0,\"right\":0},{\"left\":1,\"right\":1}]}"
+
+#guard exportMatchPath
+  "[{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"},{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"}]"
+  "[{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}]" ==
+  "{\"status\":\"ok\",\"pass\":false}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"ret\",\"width\":32,\"term\":\"v32:4\"}"
+  "{\"kind\":\"ret\",\"width\":32,\"term\":\"v32:9\"}" ==
+  "{\"status\":\"ok\",\"pass\":true,\"subst\":{\"vars\":[[4,9]],\"regs\":[]}}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}"
+  "{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"}" ==
+  "{\"status\":\"ok\",\"pass\":false}"
+
+end Match

@@ -1,8 +1,8 @@
-import Inbox.Cross.Unify
+import Match.Unify
 
 namespace Verification.Verified.UnifyMatch
 
-open Term Term.Value Expression Observation Inbox.Cross
+open Term Term.Value Expression Observation Match
 
 /-!
 `unifyLists` is an index-aligned match of prepared observations. The

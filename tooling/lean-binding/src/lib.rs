@@ -30,10 +30,11 @@ pub(crate) mod ffi {
         pub fn initialize_classifier_Expression(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Observation(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Interface(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_Inbox(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Wire(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Match(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Node(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Cross_RV32(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_Inbox_Wire_RegisterFfi(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Cross_RV32_RegisterFfi(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Cross_EBPF(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
@@ -124,13 +125,17 @@ pub(crate) mod ffi {
         /// Structural same/diff of two run snapshots (`Node/Compare.lean`).
         pub fn lean_compare_run_same_diff(request_json: LeanObj) -> LeanObj;
 
-        /// Observation prepare (`Core.exportCrossPredNormalize`).
-        /// Success is observation JSON. Failure is the four characters `null`.
-        pub fn lean_cross_pred_normalize(env_json: LeanObj, pred_json: LeanObj) -> LeanObj;
+        /// Hat of one observation (`Core.exportMatchPrepare`).
+        pub fn lean_match_prepare(pred_json: LeanObj) -> LeanObj;
 
-        /// Observation unify (`Core.exportCrossPredUnify`).
-        /// Success is unify JSON. Failure is the four characters `null`.
-        pub fn lean_cross_pred_unify(request_json: LeanObj) -> LeanObj;
+        /// Category-and-order pairing of two observation lists (`Core.exportMatchPath`).
+        pub fn lean_match_path(left_json: LeanObj, right_json: LeanObj) -> LeanObj;
+
+        /// Expression match of one observation pair (`Core.exportMatchExpr`).
+        pub fn lean_match_expr(left_json: LeanObj, right_json: LeanObj) -> LeanObj;
+
+        /// Local re-pair inside one node (`Core.exportMatchLocal`).
+        pub fn lean_match_local(left_json: LeanObj, right_json: LeanObj) -> LeanObj;
     }
 
     #[cfg(test)]
@@ -177,10 +182,11 @@ pub fn init() {
         let _ = ffi::initialize_classifier_Expression(1, world);
         let _ = ffi::initialize_classifier_Observation(1, world);
         let _ = ffi::initialize_classifier_Interface(1, world);
-        let _ = ffi::initialize_classifier_Inbox(1, world);
+        let _ = ffi::initialize_classifier_Wire(1, world);
+        let _ = ffi::initialize_classifier_Match(1, world);
         let _ = ffi::initialize_classifier_Node(1, world);
         let _ = ffi::initialize_classifier_Cross_RV32(1, world);
-        let _ = ffi::initialize_classifier_Inbox_Wire_RegisterFfi(1, world);
+        let _ = ffi::initialize_classifier_Cross_RV32_RegisterFfi(1, world);
         let _ = ffi::initialize_classifier_Cross_EBPF(1, world);
         ffi::lean_io_mark_end_initialization();
     });
@@ -583,8 +589,13 @@ pub mod compare {
     }
 }
 
-/// Observation prepare (`lean_cross_pred_normalize`).
-pub mod cross_pred {
+/// Path match and expression match.
+///
+/// `prepare` is the hat of one observation. `path` pairs Figure 2 classes in
+/// order. `expr` matches one pair and returns that pair's renaming. `local`
+/// re-pairs adjacent packet or map writes inside one node after `path`.
+/// Each call returns a status JSON string, the same shape as `expand::update`.
+pub mod matching {
     use super::{ffi, lean_call};
     use std::ffi::CStr;
 
@@ -602,106 +613,106 @@ pub mod cross_pred {
         ffi::lean_binding_mk_string(c.as_ptr())
     }
 
-    /// `None` when Lean returns the ABI failure marker `null`.
-    pub fn normalize(env_json: &str, pred_json: &str) -> Option<String> {
-        let env_json = env_json.to_owned();
+    fn call(invoke: impl FnOnce() -> ffi::LeanObj + Send + 'static) -> String {
+        lean_call(move || unsafe { take_string(invoke()) })
+    }
+
+    /// `{"status":"ok","observation":...}` or `{"status":"fail","reason":"LocalReject"}`.
+    pub fn prepare(pred_json: &str) -> String {
         let pred_json = pred_json.to_owned();
-        let raw = lean_call(move || unsafe {
-            let env = lean_string(&env_json);
+        call(move || unsafe {
             let pred = lean_string(&pred_json);
-            take_string(ffi::lean_cross_pred_normalize(env, pred))
-        });
-        if raw == "null" {
-            None
-        } else {
-            Some(raw)
-        }
+            ffi::lean_match_prepare(pred)
+        })
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct UnifyResult {
-        pub ok: bool,
-        pub pass: bool,
+    /// Two JSON arrays of observations.
+    pub fn path(left_json: &str, right_json: &str) -> String {
+        let left_json = left_json.to_owned();
+        let right_json = right_json.to_owned();
+        call(move || unsafe {
+            let left = lean_string(&left_json);
+            let right = lean_string(&right_json);
+            ffi::lean_match_path(left, right)
+        })
     }
 
-    /// Full unify response. `None` when Lean returns the ABI failure marker `null`.
-    /// An ambiguous alignment is `{"ok":false}` and does not carry pairs.
-    pub fn unify_json(request_json: &str) -> Option<serde_json::Value> {
-        let request_json = request_json.to_owned();
-        let raw = lean_call(move || unsafe {
-            let req = lean_string(&request_json);
-            take_string(ffi::lean_cross_pred_unify(req))
-        });
-        if raw == "null" {
-            None
-        } else {
-            serde_json::from_str(&raw).ok()
-        }
+    /// Two observation objects.
+    pub fn expr(left_json: &str, right_json: &str) -> String {
+        let left_json = left_json.to_owned();
+        let right_json = right_json.to_owned();
+        call(move || unsafe {
+            let left = lean_string(&left_json);
+            let right = lean_string(&right_json);
+            ffi::lean_match_expr(left, right)
+        })
     }
 
-    /// `None` when Lean returns the ABI failure marker `null`.
-    pub fn unify(request_json: &str) -> Option<UnifyResult> {
-        let request_json = request_json.to_owned();
-        let raw = lean_call(move || unsafe {
-            let req = lean_string(&request_json);
-            take_string(ffi::lean_cross_pred_unify(req))
-        });
-        parse_unify(&raw)
+    /// Two JSON arrays of observations from one node on each side.
+    pub fn local(left_json: &str, right_json: &str) -> String {
+        let left_json = left_json.to_owned();
+        let right_json = right_json.to_owned();
+        call(move || unsafe {
+            let left = lean_string(&left_json);
+            let right = lean_string(&right_json);
+            ffi::lean_match_local(left, right)
+        })
     }
 
-    fn parse_unify(raw: &str) -> Option<UnifyResult> {
-        if raw == "null" {
+    /// Observation object from a successful `prepare` response.
+    pub fn observation(response: &str) -> Option<String> {
+        let value: serde_json::Value = serde_json::from_str(response).ok()?;
+        if value.get("status")?.as_str()? != "ok" {
             return None;
         }
-        let value: serde_json::Value = serde_json::from_str(raw).ok()?;
-        let ok = value.get("ok")?.as_bool()?;
-        let pass = match value.get("pass") {
-            Some(bit) => bit.as_bool()?,
-            None if !ok => false,
-            None => return None,
-        };
-        Some(UnifyResult { ok, pass })
+        let observation = value.get("observation")?;
+        observation.is_object().then(|| observation.to_string())
+    }
+
+    /// `Some` when `status` is `ok`. `None` when the response is a failure.
+    pub fn passed(response: &str) -> Option<bool> {
+        let value: serde_json::Value = serde_json::from_str(response).ok()?;
+        if value.get("status")?.as_str()? != "ok" {
+            return None;
+        }
+        value.get("pass")?.as_bool()
     }
 
     #[cfg(test)]
     mod tests {
-        use super::{normalize, unify, UnifyResult};
+        use super::{expr, observation, passed, prepare};
 
-        const ENV_R: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"}"#;
-        const ENV_E: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
         const BOUND_RT: &str = r#"{"kind":"branch","position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}"#;
         const BOUND_ET: &str = r#"{"kind":"branch","position":6,"dir":"taken","width":64,"cond":{"lhs":"id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))","rel":"gtu","rhs":"zext32/64/32(extract0,32(add32(v32:4,128)))"}}"#;
 
         #[test]
-        fn cross_pred_bound_taken_pair_stays_distinct() {
-            let left = normalize(ENV_R, BOUND_RT).expect("rv bound");
-            let right = normalize(ENV_E, BOUND_ET).expect("ebpf bound");
+        fn prepare_keeps_packet_end_spellings_apart() {
+            let left = observation(&prepare(BOUND_RT)).expect("rv bound");
+            let right = observation(&prepare(BOUND_ET)).expect("ebpf bound");
             assert_ne!(left, right);
             assert!(!left.contains("packetBound"), "{left}");
             assert!(!right.contains("packetBound"), "{right}");
         }
 
         #[test]
-        fn cross_pred_bad_json_is_none() {
-            assert_eq!(normalize("{", BOUND_RT), None);
-            assert_eq!(normalize(ENV_R, "{"), None);
+        fn prepare_rejects_bad_json() {
+            assert_eq!(observation(&prepare("{")), None);
+            assert_eq!(passed(&prepare("{")), None);
         }
 
         #[test]
-        fn cross_pred_unify_var_rename_passes() {
-            let request = r#"{"left":[{"kind":"ret","width":32,"term":"v32:4"},{"kind":"ret","width":32,"term":"regVar(real:2:[0,32))"}],"right":[{"kind":"ret","width":32,"term":"v32:9"},{"kind":"ret","width":32,"term":"regVar(real:5:[0,32))"}]}"#;
-            assert_eq!(
-                unify(request),
-                Some(UnifyResult {
-                    ok: true,
-                    pass: true
-                })
-            );
+        fn expr_renames_one_pair() {
+            let left = r#"{"kind":"ret","width":32,"term":"v32:4"}"#;
+            let right = r#"{"kind":"ret","width":32,"term":"v32:9"}"#;
+            let raw = expr(left, right);
+            assert_eq!(passed(&raw), Some(true));
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(value["subst"]["vars"], serde_json::json!([[4, 9]]));
         }
 
         #[test]
-        fn cross_pred_unify_bad_json_is_none() {
-            assert_eq!(unify("{"), None);
+        fn expr_rejects_bad_json() {
+            assert_eq!(passed(&expr("{", "{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}")), None);
         }
     }
 }

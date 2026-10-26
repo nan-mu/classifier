@@ -4,7 +4,7 @@ import Verification.Verified.HistoryAndPath
 
 namespace Verification.Unverified.Required.History
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node Verification.Verified.HistoryAndPath
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node Verification.Verified.HistoryAndPath
 
 /-!
 `dependency_blocks_ignoring` is only: a register already placed in

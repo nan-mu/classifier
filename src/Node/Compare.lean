@@ -1,8 +1,8 @@
 import Node.Merge
-import Inbox.Wire.Render
+import Wire.Render
 
 namespace Node.RunCompare
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Lean
+open Term Term.Value Expression Observation Interface Interface.Step Wire Lean
 
 /-- Parsed snapshots retain opaque IDs only for endpoint resolution. -/
 structure Run where
@@ -168,7 +168,7 @@ def compare (requestJson : String) : Except String Json := do
 end Node.RunCompare
 
 namespace Node
-open Term Term.Value Expression Observation Inbox.Wire
+open Term Term.Value Expression Observation Wire
 
 /-- Boxed Lean String ABI; validate both entire runs before emitting a report. -/
 @[export lean_compare_run_same_diff]

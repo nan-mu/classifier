@@ -3,7 +3,7 @@ import Interface.Update
 import Expression.Resource.Anchor
 
 namespace Cross.EBPF
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 /-! External correspondence TBD.
 The entry binds r1=tCtx, r10=tSp, xdp_md.data=tData and data_end=tData+packetBytes.

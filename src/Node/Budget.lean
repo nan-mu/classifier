@@ -1,9 +1,9 @@
 import Node.Path
 import Interface.Update
-import Inbox.Wire.Render
+import Wire.Render
 
 namespace Node
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire
+open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-! ## Budgeted node expansion (`doc/NodeInference/step.md`) -/
 

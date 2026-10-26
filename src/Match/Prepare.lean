@@ -1,11 +1,11 @@
 import Observation.Insn
 import Term.Basic
 import Expression.Basic
-import Inbox.Wire.Parse
-import Inbox.Wire.Render
+import Wire.Parse
+import Wire.Render
 
-namespace Inbox.Cross
-open Term Term.Value Expression Observation Inbox.Wire
+namespace Match
+open Term Term.Value Expression Observation Wire
 
 /-! Prepare one observation for comparison.
 
@@ -30,18 +30,15 @@ def prepare : Observation → Observation
     .mapWrite (solve map) (key.map solve) offset bits (solve source)
   | .packetWrite offset bits source => .packetWrite offset bits (solve source)
 
-/-- Boxed Lean String ABI. `envJson` must be a JSON object and is not part of
-the observation. A predicate that is not one of the five classes returns `null`. -/
-@[export lean_cross_pred_normalize]
-def exportCrossPredNormalize (envJson predJson : String) : String :=
-  match Lean.Json.parse envJson, Lean.Json.parse predJson with
-  | .ok env, .ok pred =>
-    match env.getObj? with
-    | .ok _ =>
-      match parsePredicateJson pred with
-      | some p => renderPredicateJson (prepare p)
-      | none => "null"
-    | .error _ => "null"
-  | _, _ => "null"
+/-- Hat of one observation. Failure is `{"status":"fail","reason":"LocalReject"}`. -/
+@[export lean_match_prepare]
+def exportMatchPrepare (predJson : String) : String :=
+  match Lean.Json.parse predJson with
+  | .ok pred =>
+    match parsePredicateJson pred with
+    | some p =>
+      s!"\{\"status\":\"ok\",\"observation\":{renderPredicateJson (prepare p)}}"
+    | none => "{\"status\":\"fail\",\"reason\":\"LocalReject\"}"
+  | .error _ => "{\"status\":\"fail\",\"reason\":\"LocalReject\"}"
 
-end Inbox.Cross
+end Match

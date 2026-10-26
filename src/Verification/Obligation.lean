@@ -1,4 +1,4 @@
-import Inbox.Cross.Unify
+import Match.Unify
 import Term.Semantics
 import Cross.EBPF.Create
 import Node.Budget
@@ -6,7 +6,7 @@ import Cross.RV32.Create
 
 namespace Verification.Obligation
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Inbox.Cross Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Match Node
 
 /-- Shared valuation. Checker acceptance does not provide it. -/
 structure SharedCondition where

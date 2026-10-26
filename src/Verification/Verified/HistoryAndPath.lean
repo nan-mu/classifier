@@ -2,7 +2,7 @@ import Node.Drive
 
 namespace Verification.Verified.HistoryAndPath
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 /-!
 `observation_dep_not_ignorable` says a register already in `observationDeps`

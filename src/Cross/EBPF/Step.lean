@@ -5,7 +5,7 @@ import Observation.Helper
 import Node.Path
 
 namespace Cross.EBPF
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Node
+open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
 private def fullReg (E : List Expr) (r : Nat) : Option Term := do
   if r > 10 then none

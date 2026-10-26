@@ -34,10 +34,6 @@ Tree `edges` are only forks. `dir` is `taken` or `not_taken`.
 
 `claim` is `crossPred`. `behavioralEquivalence` is `notEstablished`.
 
-A parsed arrival stores CrossPred JSON from `lean_cross_pred_normalize` in `fingerprint`. The server rebuilds one Predicate object from `kind` plus the atom fields and sends an arch CrossEnv.
+A parsed arrival stores the observation object from `lean_match_prepare` in `fingerprint`. A prepare failure stores `unparsed:<id>`.
 
-- `rv32imc` uses `packetBase` `v32:4`, `packetEnd` `add32(v32:4,v32:5)`, and map `1077412584` with `keyBytes` 4 and `valueBytes` 8.
-- `ebpf` uses the same `packetBase` and map, with `packetEnd` `add32(v32:4,128)`.
-- Any other arch uses `{}`.
-
-A `null` normalize result stores `unparsed:<id>`. Any unparsed arrival fails the node. When every arrival on both sides is normalized, the server sends those JSON texts, in list order, as `{"left":[...],"right":[...]}`. A variable rename can pass when the fingerprint strings differ. The `left` and `right` lists stay on the node for display.
+When every arrival on both sides is parsed, path match calls `lean_match_path` on the two observation lists. That call reads Figure 2 classes and order. Fork shape and exit stay in the server. Expression match calls `lean_match_expr` on one pair. A variable rename can pass when the fingerprint strings differ. The `left` and `right` lists stay on the node for display.

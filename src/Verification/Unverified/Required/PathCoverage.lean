@@ -3,7 +3,7 @@ import Verification.Verified.HistoryAndPath
 
 namespace Verification.Unverified.Required.PathCoverage
 
-open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Inbox.Cross Node Verification.Obligation Verification.Verified.HistoryAndPath
+open Term Term.Value Expression Observation Interface Interface.Step Wire Match Node Verification.Obligation Verification.Verified.HistoryAndPath
 
 /-!
 `drive_equal_states` equates successors of equal states. It is not used for
