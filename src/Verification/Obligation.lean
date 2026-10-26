@@ -28,26 +28,22 @@ def denotePred (ν : Var → Nat) (θ : ExternalInterpretation) (p : Observation
     Option (List Nat) :=
   (predArgs p).mapM (interpretTerm ν θ)
 
-/-- Completed runs plus an unambiguous covering alignment of the *projected*
-lists. The lists are inputs; this does not read them out of the graphs. -/
+/-- Completed runs plus an index-aligned match of the prepared observations.
+The lists are inputs. This does not read them out of the graphs. -/
 structure Accepts where
   ebpf : ExpandOutcome
   rv32 : ExpandOutcome
-  envL : CrossEnv
-  envR : CrossEnv
   left : List Observation
   right : List Observation
   ebpfComplete : ∃ g, ebpf = .complete g
   rv32Complete : ∃ g, rv32 = .complete g
-  pass : (unifyLists (left.map (toCross envL)) (right.map (toCross envR))).pass = true
-  unambiguous :
-    (unifyLists (left.map (toCross envL)) (right.map (toCross envR))).ambiguous = false
+  pass : (unifyLists left right).pass = true
 
 def matched (a : Accepts) : List (Nat × Nat) :=
-  (unifyLists (a.left.map (toCross a.envL)) (a.right.map (toCross a.envR))).pairs
+  (unifyLists a.left a.right).pairs
 
 /-- Target: matched original observations denote the same arguments, and `c`
-identifies resources and external results. Projection equality is not this
+identifies resources and external results. A structural match is not this
 statement. RV32 safety is not this statement. -/
 def MeaningsAgree (c : SharedCondition) (a : Accepts) : Prop :=
   (∀ i j p q, (i, j) ∈ matched a → a.left[i]? = some p → a.right[j]? = some q →
@@ -83,24 +79,24 @@ def ListsFromRuns (a : Accepts) (gL gR : RunGraph)
     a.left = cL.steps.flatten ∧ a.right = cR.steps.flatten ∧
     cL.faithful ∧ cR.faithful
 
-def substOf (a : Accepts) : CrossSubst :=
-  (unifyLists (a.left.map (toCross a.envL)) (a.right.map (toCross a.envR))).subst
+def substOf (a : Accepts) : Subst :=
+  (unifyLists a.left a.right).subst
 
 /-- Explicit variable names, resources and external results follow the alignment.
-Register values are absent: `CrossSubst.regImage?` has no value function here. -/
+Register values are absent: `Subst.regImage?` has no value function here. -/
 def ValuationFollows (c : SharedCondition) (a : Accepts) : Prop :=
   (∀ (w : Width) (x y : Nat), (substOf a).varImage? x = some y →
       c.νL ⟨w, x, none⟩ = c.νR ⟨w, y, none⟩) ∧
     c.external ∧ (∀ id, c.resource id)
 
-/-- Matched observations still have the same original arguments.
-False when `toCrossHelper` deletes an update flag. -/
+/-- Matched observations still have the same original argument terms.
+Renaming can change a variable name, so this is stronger than the match. -/
 def ArgsFaithful (a : Accepts) : Prop :=
   ∀ i j p q, (i, j) ∈ matched a → a.left[i]? = some p → a.right[j]? = some q →
     predArgs p = predArgs q
 
 /-- Argument denotations survive renaming when the valuation follows and the
-arguments survived projection. -/
+original arguments are syntactically the same. -/
 def RenamePreservesArguments (c : SharedCondition) (a : Accepts) : Prop :=
   ValuationFollows c a → ArgsFaithful a →
     ∀ i j p q, (i, j) ∈ matched a → a.left[i]? = some p → a.right[j]? = some q →

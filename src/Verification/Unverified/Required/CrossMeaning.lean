@@ -6,18 +6,13 @@ namespace Verification.Unverified.Required.CrossMeaning
 open Term Term.Value Expression Observation Interface Interface.Step Inbox.Wire Inbox.Cross Verification.Obligation
 
 /-!
-`accept_is_structural` is injective coverage, maximality and syntactic rename
-equality. `projection_acceptance_misses_flag_meaning` shows that equality does
-not preserve an update flag, so it is not `MeaningsAgree`.
-
-`toCrossHelper` on a layout-sized update keeps the map, key tail and value
-tail (`toCrossHelper_update_full`). It drops the event (`helper_event_erased`),
-the flags word (`update_flags_erased`), and it has no success bit and no
-helper return. Those dropped fields are why `ArgsFaithful` is required.
+`accept_is_structural` is injective coverage and rename equality of the
+compared terms. A helper argument, including a flags word, stays in that
+comparison. `distinct_helper_args_reject` is the mismatch.
 
 `ValuationFollows` and `RenamePreservesArguments` are not proved. They are not
 eBPF-checker facts. Register values are a further premise: `regImage?` is not
-a value.
+a value. Adjacent write re-pairing is not part of `unifyLists`.
 -/
 
 /-- Values of renamed registers. Not part of `ValuationFollows`. -/

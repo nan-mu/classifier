@@ -1117,63 +1117,63 @@ fn solver_rewrites_are_the_term_strings_a_step_writes() {
     );
 }
 
-fn canonical(op: &str, params: Value, arity: usize) -> Value {
-    let args: Vec<Value> = (1..=arity)
-        .map(|name| json!({"kind":"var","name":name}))
-        .collect();
-    json!({"kind":"ret","payload":{"kind":"app","op":op,"params":params,"args":args}})
-}
-
 #[test]
-fn operator_terms_normalize_to_canonical_json() {
+fn operator_terms_normalize_to_observation_json() {
     for (bits, max) in [(32u64, 4294967295u64), (64, 18446744073709551615)] {
         let rows = [
-            ("udiv", json!([bits, 0]), format!("udiv{bits}_0")),
-            ("udiv", json!([bits, max]), format!("udiv{bits}_{max}")),
-            ("sdiv", json!([bits, 0]), format!("sdiv{bits}_0")),
-            ("sdiv", json!([bits, max]), format!("sdiv{bits}_{max}")),
-            ("urem", json!([bits]), format!("urem{bits}")),
-            ("srem", json!([bits]), format!("srem{bits}")),
-            ("mulh", json!([bits]), format!("mulh{bits}")),
-            ("mulhu", json!([bits]), format!("mulhu{bits}")),
-            ("mulhsu", json!([bits]), format!("mulhsu{bits}")),
+            format!("udiv{bits}_0"),
+            format!("udiv{bits}_{max}"),
+            format!("sdiv{bits}_0"),
+            format!("sdiv{bits}_{max}"),
+            format!("urem{bits}"),
+            format!("srem{bits}"),
+            format!("mulh{bits}"),
+            format!("mulhu{bits}"),
+            format!("mulhsu{bits}"),
         ];
-        for (op, params, raw_stem) in rows {
+        for raw_stem in rows {
             let term = format!("{raw_stem}(v{bits}:1,v{bits}:2)");
             let pred = format!(r#"{{"kind":"ret","width":{bits},"term":"{term}"}}"#);
             let rendered = normalize("{}", &pred).unwrap_or_else(|| panic!("normalize {term}"));
-            assert_eq!(parse(&raw_stem, &rendered), canonical(op, params, 2), "{raw_stem}");
+            let parsed = parse(&raw_stem, &rendered);
+            assert_eq!(parsed["kind"], "ret", "{raw_stem}");
+            assert_eq!(parsed["width"], bits, "{raw_stem}");
+            assert_eq!(parsed["term"], term, "{raw_stem}");
         }
         let select = format!("selectEq{bits}(v{bits}:1,v{bits}:2,v{bits}:3,v{bits}:4)");
         let pred = format!(r#"{{"kind":"ret","width":{bits},"term":"{select}"}}"#);
         let rendered = normalize("{}", &pred).unwrap();
-        assert_eq!(parse("selectEq", &rendered), canonical("selectEq", json!([bits]), 4));
+        let parsed = parse("selectEq", &rendered);
+        assert_eq!(parsed["kind"], "ret");
+        assert_eq!(parsed["term"], select);
     }
     assert!(normalize("{}", r#"{"kind":"ret","width":32,"term":"udiv32_0(v32:1)"}"#).is_none());
     assert!(normalize("{}", r#"{"kind":"ret","width":32,"term":"sdiv32_0(v64:1,v32:2)"}"#).is_none());
 }
 
 fn ret_var(name: u64) -> Value {
-    json!({"kind":"ret","payload":{"kind":"var","name":name}})
+    json!({"kind":"ret","width":32,"term":format!("v32:{name}")})
 }
 fn ret_const(value: &str) -> Value {
-    json!({"kind":"ret","payload":{"kind":"c","value":value}})
+    json!({"kind":"ret","width":32,"term":value})
 }
 
 #[test]
 fn alignment_json_reports_ambiguity_complements_and_rename() {
+    let miss = json!({"ok":true,"pass":false,"pairs":[],"onlyLeft":[0,1],"onlyRight":[0,1],"subst":{"vars":[],"regs":[]}});
+    let short = json!({"ok":true,"pass":false,"pairs":[],"onlyLeft":[0,1],"onlyRight":[0],"subst":{"vars":[],"regs":[]}});
     let cases = [
-        (json!([ret_var(0), ret_var(1)]), json!([ret_var(1), ret_var(1)]), json!({"ok":false})),
-        (json!([ret_const("1"), ret_const("1")]), json!([ret_const("1")]), json!({"ok":false})),
+        (json!([ret_var(0), ret_var(1)]), json!([ret_var(1), ret_var(1)]), miss.clone()),
+        (json!([ret_const("1"), ret_const("1")]), json!([ret_const("1")]), short),
         (
             json!([ret_const("1"), ret_const("2")]),
             json!([ret_const("1"), ret_const("3")]),
-            json!({"ok":true,"pass":false,"pairs":[{"left":0,"right":0}],"onlyLeft":[1],"onlyRight":[1],"subst":{"vars":[],"regs":[]}}),
+            miss.clone(),
         ),
         (
             json!([ret_const("1"), ret_const("3")]),
             json!([ret_const("1"), ret_const("2")]),
-            json!({"ok":true,"pass":false,"pairs":[{"left":0,"right":0}],"onlyLeft":[1],"onlyRight":[1],"subst":{"vars":[],"regs":[]}}),
+            miss.clone(),
         ),
         (
             json!([ret_var(9)]),
@@ -1185,20 +1185,15 @@ fn alignment_json_reports_ambiguity_complements_and_rename() {
             json!([ret_var(9)]),
             json!({"ok":true,"pass":true,"pairs":[{"left":0,"right":0}],"onlyLeft":[],"onlyRight":[],"subst":{"vars":[[4,9]],"regs":[]}}),
         ),
-        (json!([ret_const("1"), ret_const("2")]), json!([ret_const("2"), ret_const("1")]), json!({"ok":false})),
+        (json!([ret_const("1"), ret_const("2")]), json!([ret_const("2"), ret_const("1")]), miss),
     ];
     for (left, right, expected) in cases {
         let request = json!({"left": left, "right": right}).to_string();
         let actual = cross_pred::unify_json(&request).unwrap_or_else(|| panic!("{request}"));
         assert_eq!(actual, expected, "{request}");
     }
-    let args = r#"[{"kind":"c","value":"7"},{"kind":"c","value":"0"}]"#;
-    let left = format!(
-        r#"{{"kind":"ret","payload":{{"kind":"app","op":"udiv","params":[32,0],"args":{args}}}}}"#
-    );
-    let right = format!(
-        r#"{{"kind":"ret","payload":{{"kind":"app","op":"udiv","params":[32,4294967295],"args":{args}}}}}"#
-    );
+    let left = r#"{"kind":"ret","width":32,"term":"udiv32_0(7,0)"}"#;
+    let right = r#"{"kind":"ret","width":32,"term":"udiv32_4294967295(7,0)"}"#;
     let request = format!(r#"{{"left":[{left}],"right":[{right}]}}"#);
     let actual = cross_pred::unify_json(&request).unwrap();
     assert_eq!(actual["ok"], true);
@@ -1459,4 +1454,134 @@ fn just_tx_finite_product_regressions() {
     assert!(rv_snap["reason"].is_null());
     assert_eq!(nodes.len(), 146);
     assert!(!reached34);
+}
+
+fn replace_eq(exprs: &str, reg: &str, term: &str) -> String {
+    let mut value = parse("replace", exprs);
+    let rows = value.as_array_mut().expect("exprs");
+    let mut found = false;
+    for row in rows {
+        if row["reg"] == reg && row["rel"] == "eq" && row.get("role").is_none() {
+            row["term"] = json!(term);
+            found = true;
+        }
+    }
+    assert!(found, "missing {reg} in {exprs}");
+    value.to_string()
+}
+
+fn has_packet_eq(rows: &Value, reg: &str) -> bool {
+    rows.as_array().is_some_and(|rows| {
+        rows.iter().any(|row| row["reg"] == reg && row["rel"] == "eq" && row.get("role").is_none())
+    })
+}
+
+/// `sb x11, offset(x12)`.
+fn rv_sb(offset: i32) -> u32 {
+    let imm = offset as u32;
+    0x00B6_0023 | ((imm & 0x1f) << 7) | ((imm >> 5) << 25)
+}
+
+fn rv_packet_parent(base: &str) -> String {
+    let raw = rv32::expand_create(0x400, 0x100, 0x2000, &[], &[], &[]);
+    let created = parse("rv packet entry", &raw);
+    assert_eq!(created["status"], "running", "{raw}");
+    let exprs = created["nodes"][0]["exprs"].to_string();
+    let exprs = replace_eq(&exprs, "context:data:[0,32)", "4096");
+    let exprs = replace_eq(&exprs, "context:dataEnd:[0,32)", "4112");
+    let exprs = with_eq(&exprs, "real:12:[0,32)", base);
+    with_eq(&exprs, "real:11:[0,32)", "68")
+}
+
+fn assert_byte_store(label: &str, step: &Value, offset: u64, source: &str, reg: &str) {
+    let one = sole(label, step);
+    assert_eq!(one["dir"], "OK", "{label}: {step}");
+    assert_eq!(one["loc"], "1", "{label}: {step}");
+    assert_eq!(
+        one["observations"],
+        json!([{"kind":"packetWrite","offset":offset,"width":8,"source":source}]),
+        "{label}: {step}"
+    );
+    assert!(has_packet_eq(&one["writes"], reg), "{label}: {step}");
+}
+
+#[test]
+fn compound_packet_byte_is_one_register_and_one_write() {
+    let ebpf_parent = with_eq(&entry(16, "4096"), "real:2:[0,64)", "4096");
+    assert_byte_store(
+        "eBPF byte at 0",
+        &ebpf_step(&[raw_insn(0x72, 2, 0, 0, 0x44), 0x95], 0, &ebpf_parent),
+        0,
+        "c64:68",
+        "packet:[0,8)",
+    );
+    assert_byte_store(
+        "eBPF byte at 14",
+        &ebpf_step(&[raw_insn(0x72, 2, 0, 14, 0x44), 0x95], 0, &ebpf_parent),
+        14,
+        "c64:68",
+        "packet:[112,120)",
+    );
+
+    let concrete = rv_packet_parent("4096");
+    assert_byte_store(
+        "RV byte at 0",
+        &rv_step(&[rv_sb(0), 0x0001], &concrete),
+        0,
+        "68",
+        "packet:[0,8)",
+    );
+    assert_byte_store(
+        "RV byte at 14",
+        &rv_step(&[rv_sb(14), 0x0001], &concrete),
+        14,
+        "68",
+        "packet:[112,120)",
+    );
+    assert_fail(
+        "RV symbolic packet address",
+        &rv_step(&[rv_sb(0), 0x0001], &rv_packet_parent("add32(4096,v32:9)")),
+        "UndefinedSrc",
+    );
+
+    let byte = "low8(v32:8)";
+    let seeded = with_eq(&concrete, "packet:[0,8)", byte);
+    let mentioned = r#"[{"kind":"branch","dir":"notTaken","position":1,"width":32,"cond":{"lhs":"4112","rel":"geu","rhs":"0"}}]"#;
+    assert_fail(
+        "unbound packet byte is not an offset",
+        &parse(
+            "missing byte",
+            &rv32::expand_step(
+                &[rv_sb(0), 0x0001],
+                70,
+                0,
+                &replace_eq(&concrete, "real:12:[0,32)", &format!("add32(4096,{byte})")),
+                mentioned,
+            ),
+        ),
+        "UndefinedSrc",
+    );
+    for address in [format!("add32(4096,{byte})"), format!("add32(4096,id32({byte}))")] {
+        let parent = replace_eq(&seeded, "real:12:[0,32)", &address);
+        let step = parse(
+            "offset leaf",
+            &rv32::expand_step(&[rv_sb(0), 0x0001], 70, 0, &parent, mentioned),
+        );
+        let one = sole(&address, &step);
+        assert!(one["observations"].as_array().is_some_and(|rows| rows.is_empty()), "{address}: {step}");
+        assert!(!has_packet_eq(&one["writes"], "packet:[0,8)"), "{address}: {step}");
+    }
+    let product = replace_eq(
+        &seeded,
+        "real:12:[0,32)",
+        &format!("add32(4096,mullo32({byte},{byte}))"),
+    );
+    assert_fail(
+        "product of a packet byte is not an offset",
+        &parse(
+            "mullo offset",
+            &rv32::expand_step(&[rv_sb(0), 0x0001], 70, 0, &product, mentioned),
+        ),
+        "UndefinedSrc",
+    );
 }

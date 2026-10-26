@@ -63,7 +63,7 @@ fn just_drop_lookup_compare_fail_count() {
         .count();
     let (lookups, others) = helper_observation_counts(&report);
     assert!(lookups > 0, "just_drop compare produced no lookup helpers");
-    assert_eq!(others, 0, "lookup fell through to CrossHelper.other");
+    assert_eq!(others, 0, "helper fell through to an other observation");
     assert_eq!(fails, 0, "just_drop compare fail want 0");
 }
 
@@ -79,7 +79,7 @@ fn helper_observation_counts(report: &pred_tree::TreeReport) -> (usize, usize) {
                 if atom.kind != "helper" {
                     continue;
                 }
-                if atom.fingerprint.contains("\"kind\":\"lookup\"") {
+                if atom.fingerprint.contains("\"helperId\":1") {
                     lookups += 1;
                 }
                 if atom.fingerprint.contains("\"kind\":\"other\"") {

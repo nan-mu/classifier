@@ -3,9 +3,9 @@
 //! A segment is a straight walk of local observations. A fork branch opens each
 //! child and is absent from the parent. `matchStatus` compares kind order, fork
 //! shape, and exit. `wire` is `same`, `cross`, or `undecided`. Branch expressions
-//! resolve only when both wirings have the same kind order. Before that
-//! unify, both packet-end spellings become one marker and nested bare `or`
-//! trees are flattened and sorted.
+//! resolve only when both wirings have the same kind order. Unify compares
+//! prepared observations. Packet-end spellings stay distinct terms. Addition
+//! is sorted by `solve`. `or` trees are not reassociated.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -366,8 +366,7 @@ const ENV_RV32: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,v32:5)"
 const ENV_EBPF: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
 
 /// Product ARRAY maps use a 4-byte key and an 8-byte value when a predicate names
-/// the map and omits sizes. `toCrossHelper` still requires the frozen arg count
-/// to match, so a wrong default stays `other`.
+/// the map and omits sizes. The comparison keeps the helper argument list.
 const DEFAULT_KEY_BYTES: u32 = 4;
 const DEFAULT_VALUE_BYTES: u32 = 8;
 
@@ -802,7 +801,7 @@ fn complement_branch_json(json: &str) -> Option<String> {
     if v.get("kind").and_then(|k| k.as_str()) != Some("branch") {
         return None;
     }
-    let rel = v.pointer_mut("/cond/rel/kind")?;
+    let rel = v.pointer_mut("/cond/rel")?;
     let name = rel.as_str()?;
     *rel = Value::String(complement_rel(name)?.to_string());
     Some(v.to_string())
@@ -855,8 +854,8 @@ fn arms_unify(
         return false;
     };
     unify_pair(
-        &rewrite_branch_dir(&canon_branch_json(&left_json), force_dir),
-        &rewrite_branch_dir(&canon_branch_json(&right_json), force_dir),
+        &rewrite_branch_dir(&left_json, force_dir),
+        &rewrite_branch_dir(&right_json, force_dir),
     )
 }
 
@@ -1017,102 +1016,11 @@ fn build_list(seg: Option<&Segment>) -> Vec<ListEntry> {
     list
 }
 
-const RV_PACKET_END: &str = r#"{"kind":"app","op":"add","params":[],"args":[{"kind":"app","op":"linear","params":[],"args":[{"kind":"app","op":"linear","params":[],"args":[{"kind":"c","value":"1"},{"kind":"var","name":4}]},{"kind":"app","op":"linear","params":[],"args":[{"kind":"c","value":"1"},{"kind":"var","name":5}]}]},{"kind":"app","op":"linear","params":[],"args":[]}]}"#;
-const EB_PACKET_END: &str = r#"{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"128"}]}"#;
-
-/// Shared marker for the two `packetEnd` spellings in `ENV_RV32` and `ENV_EBPF`.
-/// `900` is outside the small cross-var classes used by those environments.
-fn packet_end_marker() -> Value {
-    serde_json::json!({"kind": "var", "name": 900})
-}
-
-fn bare_or(v: &Value) -> bool {
-    v.get("kind").and_then(|k| k.as_str()) == Some("app")
-        && v.get("op").and_then(|k| k.as_str()) == Some("or")
-        && v.get("params")
-            .and_then(|p| p.as_array())
-            .is_some_and(|p| p.is_empty())
-        && v.get("args").and_then(|a| a.as_array()).is_some()
-}
-
-/// Bitwise `or` is commutative and associative. Nested bare `or` nodes become
-/// one right-associated tree with operands sorted by their JSON text.
-fn fold_or(leaves: &[Value]) -> Value {
-    let Some(last) = leaves.last() else {
-        return Value::Array(Vec::new());
-    };
-    let mut acc = last.clone();
-    for leaf in leaves[..leaves.len() - 1].iter().rev() {
-        acc = serde_json::json!({
-            "args": [leaf, acc],
-            "kind": "app",
-            "op": "or",
-            "params": [],
-        });
-    }
-    acc
-}
-
-fn canon_term(v: &Value, rv_end: &Value, eb_end: &Value, mark: &Value) -> Value {
-    if v == rv_end || v == eb_end {
-        return mark.clone();
-    }
-    if bare_or(v) {
-        let mut leaves = Vec::new();
-        collect_or(v, rv_end, eb_end, mark, &mut leaves);
-        if !leaves.is_empty() {
-            leaves.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-            return fold_or(&leaves);
-        }
-    }
-    match v {
-        Value::Array(xs) => Value::Array(
-            xs.iter()
-                .map(|x| canon_term(x, rv_end, eb_end, mark))
-                .collect(),
-        ),
-        Value::Object(map) => {
-            let mut out = Map::new();
-            for (k, child) in map {
-                out.insert(k.clone(), canon_term(child, rv_end, eb_end, mark));
-            }
-            Value::Object(out)
-        }
-        other => other.clone(),
-    }
-}
-
-fn collect_or(v: &Value, rv_end: &Value, eb_end: &Value, mark: &Value, out: &mut Vec<Value>) {
-    if bare_or(v) {
-        if let Some(args) = v.get("args").and_then(|a| a.as_array()) {
-            for arg in args {
-                collect_or(arg, rv_end, eb_end, mark, out);
-            }
-            return;
-        }
-    }
-    out.push(canon_term(v, rv_end, eb_end, mark));
-}
-
-fn canon_branch_json(json: &str) -> String {
-    let Ok(v) = serde_json::from_str::<Value>(json) else {
-        return json.to_string();
-    };
-    let (Ok(rv_end), Ok(eb_end)) = (
-        serde_json::from_str::<Value>(RV_PACKET_END),
-        serde_json::from_str::<Value>(EB_PACKET_END),
-    ) else {
-        return json.to_string();
-    };
-    canon_term(&v, &rv_end, &eb_end, &packet_end_marker()).to_string()
-}
-
 fn prepared_branch(json: &str, edge_dir: Option<&str>, complement: bool) -> Option<String> {
-    let json = canon_branch_json(json);
     let json = if complement {
-        complement_branch_json(&json)?
+        complement_branch_json(json)?
     } else {
-        json
+        json.to_string()
     };
     match cross_dir_for_edge(edge_dir) {
         Some(dir) => Some(rewrite_branch_dir(&json, dir)),
@@ -1185,7 +1093,7 @@ fn branch_jsons(seg: &Segment) -> Vec<Option<&str>> {
         .collect()
 }
 
-/// Map compare-tree edge dir onto CrossPred branch `dir` after polarity swap.
+/// Map compare-tree edge dir onto the branch `dir` after polarity swap.
 fn cross_dir_for_edge(edge_dir: Option<&str>) -> Option<&'static str> {
     match edge_dir {
         Some("taken") => Some("taken"),
@@ -1209,7 +1117,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const CROSS: &str = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"14"}]}}}"#;
+    fn fingerprint_eq(report_left: &str, report_right: &str) {
+        assert_eq!(report_left, report_right);
+        assert!(report_left.contains("\"kind\":\"branch\""), "{report_left}");
+        assert!(!report_left.contains("packetBound"), "{report_left}");
+    }
 
     fn pred(kind: &str, fields: serde_json::Value) -> PredIn {
         PredIn {
@@ -1399,8 +1311,10 @@ mod tests {
         assert_eq!(report.nodes.len(), 1);
         assert!(report.edges.is_empty());
         assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch"]);
-        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), CROSS);
-        assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), CROSS);
+        fingerprint_eq(
+            &pred_fingerprint(&report.nodes[0].left, "branch"),
+            &pred_fingerprint(&report.nodes[0].right, "branch"),
+        );
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
     }
 
@@ -1501,7 +1415,9 @@ mod tests {
         );
         let report = build_compare_tree(&snap, &snap);
         assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch", "branch"]);
-        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), CROSS);
+        let fp = pred_fingerprint(&report.nodes[0].left, "branch");
+        assert!(fp.contains("\"kind\":\"branch\""), "{fp}");
+        assert!(!fp.contains("packetBound"), "{fp}");
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
     }
 
@@ -1642,11 +1558,7 @@ mod tests {
                     continue;
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(&atom.fingerprint) {
-                    if let Some(rel) = v
-                        .get("cond")
-                        .and_then(|c| c.get("rel"))
-                        .and_then(|r| r.get("kind"))
-                        .and_then(|k| k.as_str())
+                    if let Some(rel) = v.get("cond").and_then(|c| c.get("rel")).and_then(|r| r.as_str())
                     {
                         return Some(rel.to_string());
                     }
@@ -1672,8 +1584,10 @@ mod tests {
         let left = run("rv32imc", vec![enode(0, "10", vec![rv_bound()])], vec![]);
         let right = run("rv32imc", vec![enode(0, "exit", vec![rv_bound()])], vec![]);
         let report = build_compare_tree(&left, &right);
-        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), CROSS);
-        assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), CROSS);
+        fingerprint_eq(
+            &pred_fingerprint(&report.nodes[0].left, "branch"),
+            &pred_fingerprint(&report.nodes[0].right, "branch"),
+        );
         assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
     }
 
@@ -1748,7 +1662,6 @@ mod tests {
 
     #[test]
     fn compare_tree_cross_pred_bound_taken() {
-        let cross = CROSS;
         let left = run(
             "rv32imc",
             vec![enode(
@@ -1776,8 +1689,11 @@ mod tests {
         let report = build_compare_tree(&left, &right);
         assert_eq!(report.claim, "crossPred");
         assert_eq!(report.behavioral_equivalence, "notEstablished");
-        assert_eq!(pred_fingerprint(&report.nodes[0].left, "branch"), cross);
-        assert_eq!(pred_fingerprint(&report.nodes[0].right, "branch"), cross);
+        let l = pred_fingerprint(&report.nodes[0].left, "branch");
+        let r = pred_fingerprint(&report.nodes[0].right, "branch");
+        assert_ne!(l, r, "32-bit and 64-bit packet bounds stay distinct\n{l}\n{r}");
+        assert!(!l.contains("packetBound"), "{l}");
+        assert!(!r.contains("packetBound"), "{r}");
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
     }
 
@@ -1790,7 +1706,6 @@ mod tests {
         pred(
             "helper",
             json!({
-                "event": 7,
                 "helperId": 1,
                 "args": args
             }),
@@ -1798,7 +1713,7 @@ mod tests {
     }
 
     #[test]
-    fn discovered_map_lookup_drops_differing_stack_key_ptr() {
+    fn map_lookup_keeps_the_key_pointer() {
         let left = run(
             "rv32imc",
             vec![enode(
@@ -1828,11 +1743,11 @@ mod tests {
         let report = build_compare_tree(&left, &right);
         let l = pred_fingerprint(&report.nodes[0].left, "helper");
         let r = pred_fingerprint(&report.nodes[0].right, "helper");
-        assert!(l.contains("\"kind\":\"lookup\""), "{l}");
-        assert!(r.contains("\"kind\":\"lookup\""), "{r}");
-        assert!(!l.contains("4294967284"), "{l}");
-        assert!(!r.contains("18446744073709551612"), "{r}");
-        assert_eq!(l, r);
+        assert!(l.contains("\"helperId\":1"), "{l}");
+        assert!(r.contains("\"helperId\":1"), "{r}");
+        assert!(l.contains("4294967284"), "{l}");
+        assert!(r.contains("18446744073709551612"), "{r}");
+        assert_ne!(l, r);
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
     }
 
@@ -1867,10 +1782,10 @@ mod tests {
         let report = build_compare_tree(&left, &right);
         let l = pred_fingerprint(&report.nodes[0].left, "helper");
         let r = pred_fingerprint(&report.nodes[0].right, "helper");
-        assert!(l.contains("\"value\":\"1077412584\""), "{l}");
-        assert!(r.contains("\"value\":\"1077412492\""), "{r}");
-        assert!(l.contains("\"kind\":\"lookup\""), "{l}");
-        assert!(r.contains("\"kind\":\"lookup\""), "{r}");
+        assert!(l.contains("1077412584"), "{l}");
+        assert!(r.contains("1077412492"), "{r}");
+        assert!(l.contains("\"helperId\":1"), "{l}");
+        assert!(r.contains("\"helperId\":1"), "{r}");
     }
 
     fn fixture_segment(jsons: &[&str]) -> Segment {
@@ -1898,10 +1813,10 @@ mod tests {
 
     #[test]
     fn var_rename_fingerprints_differ_and_unify_passes() {
-        let left_var = r#"{"kind":"ret","payload":{"kind":"var","name":4}}"#;
-        let left_reg = r#"{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":2}}"#;
-        let right_var = r#"{"kind":"ret","payload":{"kind":"var","name":9}}"#;
-        let right_reg = r#"{"kind":"ret","payload":{"kind":"reg","class":0,"alpha":5}}"#;
+        let left_var = r#"{"kind":"ret","width":32,"term":"v32:4"}"#;
+        let left_reg = r#"{"kind":"ret","width":32,"term":"regVar(real:2:[0,32))"}"#;
+        let right_var = r#"{"kind":"ret","width":32,"term":"v32:9"}"#;
+        let right_reg = r#"{"kind":"ret","width":32,"term":"regVar(real:5:[0,32))"}"#;
         let left = fixture_segment(&[left_var, left_reg]);
         let right = fixture_segment(&[right_var, right_reg]);
         assert_ne!(
@@ -2059,56 +1974,49 @@ mod tests {
 
     fn plain(dir: &str, rel: &str, lhs: &str, rhs: &str) -> String {
         format!(
-            r#"{{"kind":"branch","dir":"{dir}","cond":{{"kind":"plain","rel":{{"kind":"{rel}","q":32}},"lhs":{lhs},"rhs":{rhs}}}}}"#
+            r#"{{"kind":"branch","position":1,"dir":"{dir}","width":32,"cond":{{"lhs":"{lhs}","rel":"{rel}","rhs":"{rhs}"}}}}"#
         )
     }
 
     #[test]
-    fn packet_end_spellings_unify() {
-        let rhs = r#"{"kind":"c","value":"4"}"#;
-        let left = plain("taken", "geu", RV_PACKET_END, rhs);
-        let right = plain("notTaken", "geu", EB_PACKET_END, rhs);
-        assert!(branch_step(&left, &right, Some("taken")));
+    fn packet_end_spellings_stay_apart() {
+        let left = plain("taken", "ltu", "add32(v32:4,v32:5)", "add32(v32:4,14)");
+        let right = plain(
+            "taken",
+            "gtu",
+            "zext32/64/32(extract0,32(add32(v32:4,128)))",
+            "id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))",
+        );
+        assert!(branch_step(&left, &left, Some("taken")));
+        assert!(!branch_step(&left, &right, Some("taken")));
     }
 
     #[test]
-    fn or_association_unifies() {
-        let a = r#"{"kind":"var","name":1}"#;
-        let b = r#"{"kind":"var","name":2}"#;
-        let c = r#"{"kind":"var","name":3}"#;
-        let left_or = format!(
-            r#"{{"kind":"app","op":"or","params":[],"args":[{{"kind":"app","op":"or","params":[],"args":[{a},{b}]}},{c}]}}"#
-        );
-        let right_or = format!(
-            r#"{{"kind":"app","op":"or","params":[],"args":[{c},{{"kind":"app","op":"or","params":[],"args":[{a},{b}]}}]}}"#
-        );
-        let zero = r#"{"kind":"c","value":"0"}"#;
-        assert!(branch_step(
-            &plain("taken", "geu", &left_or, zero),
-            &plain("notTaken", "geu", &right_or, zero),
+    fn or_association_stays_apart() {
+        let left_or = "or32(or32(v32:1,v32:2),v32:3)";
+        let right_or = "or32(v32:3,or32(v32:1,v32:2))";
+        let left = plain("taken", "geu", left_or, "0");
+        assert!(branch_step(&left, &left, Some("taken")));
+        assert!(!branch_step(
+            &left,
+            &plain("notTaken", "geu", right_or, "0"),
             Some("taken")
         ));
     }
 
     #[test]
     fn vlan_constants_stay_apart() {
-        let field = r#"{"kind":"var","name":4}"#;
-        let arm = |value: &str| {
-            format!(
-                r#"{{"kind":"branch","dir":"taken","cond":{{"kind":"packetField","field":{field},"rel":{{"kind":"ne","q":32}},"value":"{value}"}}}}"#
-            )
-        };
+        let arm = |value: &str| plain("taken", "ne", "v32:4", value);
+        assert!(branch_step(&arm("43144"), &arm("43144"), Some("not_taken")));
         assert!(!branch_step(&arm("43144"), &arm("129"), Some("not_taken")));
     }
 
     #[test]
     fn wrapped_length_is_not_a_packet_bound() {
-        let bound = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"32"}]}}}"#;
-        let lhs = format!(
-            r#"{{"kind":"app","op":"sub","params":[],"args":[{EB_PACKET_END},{{"kind":"app","op":"add","params":[],"args":[{{"kind":"var","name":4}},{{"kind":"c","value":"8"}}]}}]}}"#
-        );
-        let plain_side = plain("taken", "ltu", &lhs, r#"{"kind":"c","value":"24"}"#);
-        assert!(!branch_step(bound, &plain_side, Some("taken")));
+        let bound = plain("taken", "ltu", "add32(v32:4,32)", "v32:4");
+        let plain_side = plain("taken", "ltu", "sub32(add32(v32:4,128),add32(v32:4,8))", "24");
+        assert!(branch_step(&bound, &bound, Some("taken")));
+        assert!(!branch_step(&bound, &plain_side, Some("taken")));
     }
 
     #[test]

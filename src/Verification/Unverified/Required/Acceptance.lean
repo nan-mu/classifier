@@ -17,8 +17,8 @@ are the covered runs.
 
 Proved conditional step: `meanings_if_arguments_survive`.
 It needs `ValuationFollows`, `ArgsFaithful` and `RenamePreservesArguments`.
-`projection_acceptance_misses_flag_meaning` shows `ArgsFaithful` is not true
-of every passing projection.
+`ArgsFaithful` asks for the original argument terms, which a rename need not
+preserve. `distinct_helper_args_reject` is a mismatch, not a passing pair.
 
 Still open, and not supplied by this conditional step:
 

@@ -24,9 +24,6 @@ lean_lib EBPF where
   roots := #[`Cross.EBPF]
   defaultFacets := #[LeanLib.sharedFacet]
 
-/-- Dual-arch fixtures; not linked into the server shared libs. -/
-lean_lib CrossArch
-
 /-- Sorry-free semantic statements. `lake build Verification`. -/
 lean_lib Verification where
   roots := #[`Verification]

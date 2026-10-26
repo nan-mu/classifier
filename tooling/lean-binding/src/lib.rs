@@ -124,11 +124,11 @@ pub(crate) mod ffi {
         /// Structural same/diff of two run snapshots (`Node/Compare.lean`).
         pub fn lean_compare_run_same_diff(request_json: LeanObj) -> LeanObj;
 
-        /// CrossPred normalize (`Core.exportCrossPredNormalize`).
-        /// Success is CrossPred JSON. Failure is the four characters `null`.
+        /// Observation prepare (`Core.exportCrossPredNormalize`).
+        /// Success is observation JSON. Failure is the four characters `null`.
         pub fn lean_cross_pred_normalize(env_json: LeanObj, pred_json: LeanObj) -> LeanObj;
 
-        /// CrossPred unify (`Core.exportCrossPredUnify`).
+        /// Observation unify (`Core.exportCrossPredUnify`).
         /// Success is unify JSON. Failure is the four characters `null`.
         pub fn lean_cross_pred_unify(request_json: LeanObj) -> LeanObj;
     }
@@ -583,7 +583,7 @@ pub mod compare {
     }
 }
 
-/// CrossPred normalize (`lean_cross_pred_normalize`).
+/// Observation prepare (`lean_cross_pred_normalize`).
 pub mod cross_pred {
     use super::{ffi, lean_call};
     use std::ffi::CStr;
@@ -671,12 +671,14 @@ pub mod cross_pred {
         const ENV_E: &str = r#"{"packetBase":"v32:4","packetEnd":"add32(v32:4,128)"}"#;
         const BOUND_RT: &str = r#"{"kind":"branch","position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}"#;
         const BOUND_ET: &str = r#"{"kind":"branch","position":6,"dir":"taken","width":64,"cond":{"lhs":"id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))","rel":"gtu","rhs":"zext32/64/32(extract0,32(add32(v32:4,128)))"}}"#;
-        const CROSS: &str = r#"{"kind":"branch","dir":"taken","cond":{"kind":"packetBound","base":{"kind":"var","name":4},"rel":{"kind":"ltu","q":32},"offset":{"kind":"app","op":"add","params":[],"args":[{"kind":"var","name":4},{"kind":"c","value":"14"}]}}}"#;
 
         #[test]
-        fn cross_pred_bound_taken_pair_matches() {
-            assert_eq!(normalize(ENV_R, BOUND_RT).as_deref(), Some(CROSS));
-            assert_eq!(normalize(ENV_E, BOUND_ET).as_deref(), Some(CROSS));
+        fn cross_pred_bound_taken_pair_stays_distinct() {
+            let left = normalize(ENV_R, BOUND_RT).expect("rv bound");
+            let right = normalize(ENV_E, BOUND_ET).expect("ebpf bound");
+            assert_ne!(left, right);
+            assert!(!left.contains("packetBound"), "{left}");
+            assert!(!right.contains("packetBound"), "{right}");
         }
 
         #[test]
@@ -687,7 +689,7 @@ pub mod cross_pred {
 
         #[test]
         fn cross_pred_unify_var_rename_passes() {
-            let request = r#"{"left":[{"kind":"ret","payload":{"kind":"var","name":4}},{"kind":"ret","payload":{"kind":"reg","reg":"real:2:[0,32)"}}],"right":[{"kind":"ret","payload":{"kind":"var","name":9}},{"kind":"ret","payload":{"kind":"reg","reg":"real:5:[0,32)"}}]}"#;
+            let request = r#"{"left":[{"kind":"ret","width":32,"term":"v32:4"},{"kind":"ret","width":32,"term":"regVar(real:2:[0,32))"}],"right":[{"kind":"ret","width":32,"term":"v32:9"},{"kind":"ret","width":32,"term":"regVar(real:5:[0,32))"}]}"#;
             assert_eq!(
                 unify(request),
                 Some(UnifyResult {

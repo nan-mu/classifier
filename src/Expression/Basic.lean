@@ -43,6 +43,16 @@ def Rel.compl : Rel → Rel
   | .bitsnz q => .bitsz q
   | .bitsz q => .bitsnz q
 
+/-- Operand-swap dual. Equality, inequality and bit tests stay. -/
+def Rel.swap : Rel → Rel
+  | .ltu => .gtu | .gtu => .ltu | .leu => .geu | .geu => .leu
+  | .lts => .gts | .gts => .lts | .les => .ges | .ges => .les
+  | .ltuN q => .gtuN q | .gtuN q => .ltuN q
+  | .leuN q => .geuN q | .geuN q => .leuN q
+  | .ltsN q => .gtsN q | .gtsN q => .ltsN q
+  | .lesN q => .gesN q | .gesN q => .lesN q
+  | r => r
+
 def interpretRel (wbits : Nat) (rel : Rel) (a b : Nat) : Bool :=
   let a := MNat wbits a; let b := MNat wbits b
   match rel with
