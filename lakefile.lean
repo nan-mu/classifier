@@ -3,9 +3,11 @@ open Lake DSL
 
 package classifier where
   version := v!"0.1.0"
+  srcDir := "src"
 
 @[default_target]
 lean_lib Core where
+  roots := #[`Term, `Expression, `Observation, `Interface, `Inbox]
   defaultFacets := #[LeanLib.sharedFacet]
 
 @[default_target]
@@ -14,10 +16,12 @@ lean_lib Node where
 
 @[default_target]
 lean_lib RV32 where
+  roots := #[`Cross.RV32, `Inbox.Wire.RegisterFfi]
   defaultFacets := #[LeanLib.sharedFacet]
 
 @[default_target]
 lean_lib EBPF where
+  roots := #[`Cross.EBPF]
   defaultFacets := #[LeanLib.sharedFacet]
 
 /-- Dual-arch fixtures; not linked into the server shared libs. -/
