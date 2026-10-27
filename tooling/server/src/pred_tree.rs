@@ -633,7 +633,8 @@ fn observation_list(seg: &Segment) -> Option<String> {
 fn categories_align(left: &Segment, right: &Segment) -> bool {
     match (observation_list(left), observation_list(right)) {
         (Some(left), Some(right)) => {
-            lean_binding::matching::passed(&lean_binding::matching::path(&left, &right)) == Some(true)
+            lean_binding::matching::passed(&lean_binding::matching::path(&left, &right))
+                == Some(true)
         }
         _ => kind_seq(left) == kind_seq(right),
     }
@@ -1334,7 +1335,10 @@ mod tests {
                     continue;
                 }
                 if let Ok(v) = serde_json::from_str::<Value>(&atom.fingerprint) {
-                    if let Some(rel) = v.get("cond").and_then(|c| c.get("rel")).and_then(|r| r.as_str())
+                    if let Some(rel) = v
+                        .get("cond")
+                        .and_then(|c| c.get("rel"))
+                        .and_then(|r| r.as_str())
                     {
                         return Some(rel.to_string());
                     }
@@ -1467,7 +1471,10 @@ mod tests {
         assert_eq!(report.behavioral_equivalence, "notEstablished");
         let l = pred_fingerprint(&report.nodes[0].left, "branch");
         let r = pred_fingerprint(&report.nodes[0].right, "branch");
-        assert_ne!(l, r, "32-bit and 64-bit packet bounds stay distinct\n{l}\n{r}");
+        assert_ne!(
+            l, r,
+            "32-bit and 64-bit packet bounds stay distinct\n{l}\n{r}"
+        );
         assert!(!l.contains("packetBound"), "{l}");
         assert!(!r.contains("packetBound"), "{r}");
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
@@ -1797,7 +1804,12 @@ mod tests {
     #[test]
     fn wrapped_length_is_not_a_packet_bound() {
         let bound = plain("taken", "ltu", "add32(v32:4,32)", "v32:4");
-        let plain_side = plain("taken", "ltu", "sub32(add32(v32:4,128),add32(v32:4,8))", "24");
+        let plain_side = plain(
+            "taken",
+            "ltu",
+            "sub32(add32(v32:4,128),add32(v32:4,8))",
+            "24",
+        );
         assert!(branch_step(&bound, &bound, Some("taken")));
         assert!(!branch_step(&bound, &plain_side, Some("taken")));
     }

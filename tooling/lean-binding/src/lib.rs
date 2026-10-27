@@ -34,7 +34,10 @@ pub(crate) mod ffi {
         pub fn initialize_classifier_Match(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Node(builtin: c_uchar, world: LeanObj) -> LeanObj;
         pub fn initialize_classifier_Cross_RV32(builtin: c_uchar, world: LeanObj) -> LeanObj;
-        pub fn initialize_classifier_Cross_RV32_RegisterFfi(builtin: c_uchar, world: LeanObj) -> LeanObj;
+        pub fn initialize_classifier_Cross_RV32_RegisterFfi(
+            builtin: c_uchar,
+            world: LeanObj,
+        ) -> LeanObj;
         pub fn initialize_classifier_Cross_EBPF(builtin: c_uchar, world: LeanObj) -> LeanObj;
 
         // Inlines from lean.h, exported by shim.c
@@ -712,7 +715,10 @@ pub mod matching {
 
         #[test]
         fn expr_rejects_bad_json() {
-            assert_eq!(passed(&expr("{", "{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}")), None);
+            assert_eq!(
+                passed(&expr("{", "{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}")),
+                None
+            );
         }
 
         #[test]

@@ -306,8 +306,7 @@ impl ExpandSession {
                 );
                 let parsed: Value = serde_json::from_str(&raw).expect("update JSON");
                 if parsed["status"] != "ok" {
-                    let rest: Vec<u32> =
-                        heads[i + 1..].iter().map(|(e, _, _, _, _)| *e).collect();
+                    let rest: Vec<u32> = heads[i + 1..].iter().map(|(e, _, _, _, _)| *e).collect();
                     self.agenda.requeue_front(rest);
                     self.snapshot["status"] = json!("fail");
                     self.snapshot["reason"] = parsed["reason"].clone();
@@ -315,8 +314,7 @@ impl ExpandSession {
                     self.sync_work();
                     return expanded;
                 }
-                let composed: NodeState =
-                    serde_json::from_value(parsed).expect("composed node");
+                let composed: NodeState = serde_json::from_value(parsed).expect("composed node");
                 let id = self.snapshot["nodes"].as_array().expect("nodes").len() as u32;
                 let loc = successor.loc.clone();
                 let dir = Dir::from_wire(&successor.dir);
