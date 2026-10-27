@@ -166,7 +166,7 @@ private def laterStepsCheck : Bool := Id.run do
   let plainState : State := { exprs := plainE, predicates := [] }
   let plain := ebpfSnapshot I plainState 0 200 200
   let (pexprs, ppreds) := renderStateJson plainState
-  return failedSlotCheck plain "UndefinedSrc" 36 &&
+  return failedSlotCheck plain "UndefinedSrc" 38 &&
     exportEbpfBoundWordsSnapshot justTxProgram s!"[{pexprs}]" s!"[{ppreds}]" 200 200 == plain
 
 private def productRoot : Option State :=
@@ -199,24 +199,24 @@ private def productSnapshotCheck : Bool := (do
   let value ← (Lean.Json.parse response).toOption
   let status ← (value.getObjVal? "status" >>= Lean.Json.getStr?).toOption
   let nodes ← (value.getObjVal? "nodes" >>= Lean.Json.getArr?).toOption
-  pure (status == "complete" &&
-    nodes.any (fun node =>
+  let retOk := nodes.any (fun node =>
       (node.getObjVal? "loc" >>= Lean.Json.getStr?).toOption == some "exit" &&
       ((node.getObjVal? "predicates" >>= Lean.Json.getArr?).toOption.getD #[]).any
         (fun p => (p.getObjVal? "kind" >>= Lean.Json.getStr?).toOption == some "ret" &&
           ((p.getObjVal? "term" >>= Lean.Json.getStr?).toOption >>= fun text =>
-            parseTerm text .w64) == some (Term.C64 3))) &&
-    nodes.any (fun node =>
+            parseTerm text .w64) == some (Term.C64 3)))
+  let helperOk := nodes.any (fun node =>
       ((node.getObjVal? "predicates" >>= Lean.Json.getArr?).toOption.getD #[]).any
-        (fun p => (p.getObjVal? "helperId" >>= Lean.Json.getNat?).toOption == some 1)) &&
-    nodes.any (fun node =>
+        (fun p => (p.getObjVal? "helperId" >>= Lean.Json.getNat?).toOption == some 1))
+  let extOk := nodes.any (fun node =>
       ((node.getObjVal? "exprs" >>= Lean.Json.getArr?).toOption.getD #[]).any (fun e =>
         (e.getObjVal? "reg" >>= Lean.Json.getStr?).toOption == some "real:0:[0,64)" &&
         (e.getObjVal? "rel" >>= Lean.Json.getStr?).toOption == some "eq" &&
         (match (e.getObjVal? "term" >>= Lean.Json.getStr?).toOption >>= fun text =>
             parseTerm text .w64 with
-          | some (.app .w64 (.externalResult 0) (Term.const .w64 1 :: _)) => true
-          | _ => false))))).getD false
+          | some (.app .w64 (.externalResult _ 0) (Term.const .w64 1 :: _)) => true
+          | _ => false)))
+  pure (status == "complete" && retOk && helperOk && extOk)).getD false
 
 private def productMapWriteCheck : Bool := Id.run do
   let I := decodeProgram justTxProgram

@@ -5,8 +5,9 @@
 //! shape, and exit. `wire` is `same`, `cross`, or `undecided`. Branch expressions
 //! resolve only when both wirings have the same kind order. Path match pairs
 //! Figure 2 classes in order. Expression match compares one prepared pair.
-//! Packet-end spellings stay distinct terms. Addition is sorted by `solve`.
-//! `or` trees are not reassociated.
+//! Expression match identifies the two packet-end spellings. Addition is
+//! sorted by `solve`. An `or` of payload bytes is flattened and sorted; an
+//! `or` of other variables is not. A `*N32` compare is read at 32 bits.
 
 use crate::pred_match::{normalize_kind, PredAtom, PredIn, PredNodeIn};
 use serde::{Deserialize, Serialize};
@@ -1764,6 +1765,13 @@ mod tests {
         );
         assert!(branch_step(&left, &left, Some("taken")));
         assert!(!branch_step(&left, &right, Some("taken")));
+    }
+
+    #[test]
+    fn packet_end_spellings_unify() {
+        let left = plain("notTaken", "gtu", "add32(v32:4,8)", "add32(v32:4,v32:5)");
+        let right = r#"{"kind":"branch","position":6,"dir":"taken","width":64,"cond":{"lhs":"add64(id64(low64(zext32/64/32(v32:4))),8)","rel":"gtu","rhs":"low64(zext32/64/32(add32(v32:4,128)))"}}"#;
+        assert!(branch_step(&left, &right, Some("not_taken")));
     }
 
     #[test]

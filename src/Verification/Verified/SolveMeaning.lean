@@ -34,11 +34,11 @@ theorem liftInteger_preserves_interpretation
 invent it. -/
 theorem external_result_stays_missing
     (ν : Var → Nat) (θ : ExternalInterpretation)
-    (w : Width) (lane : Nat) (args : List Term) (values : List Nat)
-    (hs : (Op.externalResult lane).validSignature w (args.map Term.width) = true)
+    (w : Width) (event lane : Nat) (args : List Term) (values : List Nat)
+    (hs : (Op.externalResult event lane).validSignature w (args.map Term.width) = true)
     (ha : interpretTerms ν θ args = some values)
     (hm : θ.externalResult w lane values = none) :
-    interpretTerm ν θ (.app w (.externalResult lane) args) = none :=
-  interpretTerm_external_missing ν θ w lane args values hs ha hm
+    interpretTerm ν θ (.app w (.externalResult event lane) args) = none :=
+  interpretTerm_external_missing ν θ w event lane args values hs ha hm
 
 end Verification.Verified.SolveMeaning

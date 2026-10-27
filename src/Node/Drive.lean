@@ -39,12 +39,12 @@ inductive DriveResult where
   deriving Repr
 
 private def termRegs : Term → List Reg
-  | .regVar r => [r]
+  | .regVar _ r => [r]
   | .app _ _ args => args.flatMap termRegs
   | .const _ _ | .var _ _ => []
 
 private def predRegs : Observation → List Reg
-  | .helper _ args => args.flatMap termRegs
+  | .helper _ _ args => args.flatMap termRegs
   | .branch _ _ cond => termRegs cond.lhs ++ termRegs cond.rhs
   | .ret term => termRegs term
   | .mapWrite map key _ _ source =>
@@ -52,7 +52,7 @@ private def predRegs : Observation → List Reg
   | .packetWrite _ _ source => termRegs source
 
 private def predAtoms : Observation → List Var
-  | .helper _ args => args.flatMap FV
+  | .helper _ _ args => args.flatMap FV
   | .branch _ _ cond => FV cond.lhs ++ FV cond.rhs
   | .ret term => FV term
   | .mapWrite map key _ _ source =>
@@ -302,11 +302,11 @@ private def capturedThenOverwritten : List (List Expr × List Observation) :=
   [([], [Observation.packetWrite 0 8 (Term.V32 7)]), (eq0 0, []), (eq0 1, [])]
 
 private def regVarThenOverwritten : List (List Expr × List Observation) :=
-  [([], [Observation.packetWrite 0 8 (Term.regVar r0)]), (eq0 0, []), (eq0 1, [])]
+  [([], [Observation.packetWrite 0 8 (Term.regVar 0 r0)]), (eq0 0, []), (eq0 1, [])]
 
 private def derivedHelper : List (List Expr × List Observation) :=
   let arg := addStar .w32 (Term.V32 7) (Term.C32 1)
-  [([Expr.mkEq r0 arg], [Observation.helper .clock [arg]])]
+  [([Expr.mkEq r0 arg], [Observation.helper 0 .clock [arg]])]
 
 private def killedBeforeUse : List (List Expr × List Observation) :=
   [(eq0 0, []), (eq0 1, []), ([], [Observation.packetWrite 0 8 (Term.C32 0)])]

@@ -28,7 +28,7 @@ def DependencyComplete : Prop :=
   where
     denoteOne (ν : Var → Nat) (θ : ExternalInterpretation) (p : Observation) : Option (List Nat) :=
       (match p with
-        | .helper _ args => args
+        | .helper _ _ args => args
         | .branch _ _ cond => [cond.lhs, cond.rhs]
         | .ret term => [term]
         | .mapWrite map key _ _ source => map :: (key ++ [source])

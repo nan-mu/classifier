@@ -23,7 +23,7 @@ def orderCond (c : Cond) : Cond :=
     { lhs, rel := c.rel, rhs }
 
 def prepare : Observation → Observation
-  | .helper kind args => .helper kind (args.map solve)
+  | .helper event kind args => .helper event kind (args.map solve)
   | .branch position dir cond => .branch position dir (orderCond cond)
   | .ret term => .ret (solve term)
   | .mapWrite map key offset bits source =>

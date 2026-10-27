@@ -33,7 +33,7 @@ inductive Op where
   | zext (q : Nat) (w : Width) (v : Nat)
   | sext (q : Nat) (w : Width) (v : Nat)
   | bswap (q v : Nat)
-  | externalResult (lane : Nat)
+  | externalResult (event lane : Nat)
   /-- Byte in a resource's immutable input image; eval has no concrete image. -/
   | inputByte (resource : Nat)
   | mergeLow (q wbits : Nat)
@@ -55,7 +55,7 @@ def Op.orderKey : Op → List Nat
   | .ltu w => [19, w.bits] | .lts w => [20, w.bits]
   | .low q v => [21, q, v] | .extract o n v => [22, o, n, v]
   | .zext q w v => [23, q, w.bits, v] | .sext q w v => [24, q, w.bits, v]
-  | .bswap q v => [25, q, v] | .externalResult l => [26, l]
+  | .bswap q v => [25, q, v] | .externalResult e l => [26, e, l]
   | .inputByte r => [27, r] | .mergeLow q v => [28, q, v]
   | .packetRead bytes ending => [29, bytes, ending]
 
@@ -85,7 +85,7 @@ def Op.ofOrderKey : List Nat → Option Op
   | [23, q, 32, v] => some (.zext q .w32 v) | [23, q, 64, v] => some (.zext q .w64 v)
   | [24, q, 32, v] => some (.sext q .w32 v) | [24, q, 64, v] => some (.sext q .w64 v)
   | [25, q, v] => some (.bswap q v)
-  | [26, l] => some (.externalResult l)
+  | [26, e, l] => some (.externalResult e l)
   | [27, r] => some (.inputByte r)
   | [28, q, v] => some (.mergeLow q v)
   | [29, bytes, ending] => some (.packetRead bytes ending)
@@ -119,7 +119,7 @@ theorem Op.orderKey_round (op : Op) : Op.ofOrderKey op.orderKey = some op := by
   | zext q w v => cases w <;> rfl
   | sext q w v => cases w <;> rfl
   | bswap q v => rfl
-  | externalResult l => rfl
+  | externalResult e l => rfl
   | inputByte r => rfl
   | mergeLow q v => rfl
   | packetRead bytes ending => rfl
@@ -143,7 +143,7 @@ def Op.validSignature (op : Op) (output : Width) (inputs : List Width) : Bool :=
   | .bswap q v =>
     (q == 16 || q == 32 || q == 64) && q ≤ v && q ≤ output.bits && input v
   | .mergeLow q v => v == output.bits && bounded q v && uniform 2
-  | .externalResult _ => !inputs.isEmpty && inputs.all (· == output)
+  | .externalResult _ _ => !inputs.isEmpty && inputs.all (· == output)
   | .inputByte _ => output == .w32 && match inputs with
     | [base, address] => base == address
     | _ => false

@@ -31,8 +31,8 @@ theorem accept_is_structural (a : Accepts) :
 not produce a passing match. -/
 theorem distinct_helper_args_reject :
     (unifyLists
-      [.helper .update [.C32 0]]
-      [.helper .update [.C32 1]]).pass = false := by
+      [.helper 0 .update [.C32 0]]
+      [.helper 0 .update [.C32 1]]).pass = false := by
   native_decide
 
 /-- Conditional last step. `ValuationFollows`, `ArgsFaithful` and

@@ -680,7 +680,7 @@ pub mod matching {
 
     #[cfg(test)]
     mod tests {
-        use super::{expr, observation, passed, prepare};
+        use super::{expr, local, observation, passed, prepare};
 
         const BOUND_RT: &str = r#"{"kind":"branch","position":10,"dir":"taken","width":32,"cond":{"lhs":"add32(v32:4,v32:5)","rel":"ltu","rhs":"add32(v32:4,14)"}}"#;
         const BOUND_ET: &str = r#"{"kind":"branch","position":6,"dir":"taken","width":64,"cond":{"lhs":"id64(add64(id64(zext32/64/32(extract0,32(v32:4))),14))","rel":"gtu","rhs":"zext32/64/32(extract0,32(add32(v32:4,128)))"}}"#;
@@ -713,6 +713,54 @@ pub mod matching {
         #[test]
         fn expr_rejects_bad_json() {
             assert_eq!(passed(&expr("{", "{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}")), None);
+        }
+
+        #[test]
+        fn local_repairs_mac_halfword_order() {
+            let write = |offset: u32| {
+                format!(r#"{{"kind":"packetWrite","offset":{offset},"width":16,"source":"1"}}"#)
+            };
+            let left = format!(
+                "[{},{},{},{},{},{}]",
+                write(0),
+                write(2),
+                write(4),
+                write(6),
+                write(8),
+                write(10)
+            );
+            let right = format!(
+                "[{},{},{},{},{},{}]",
+                write(0),
+                write(8),
+                write(2),
+                write(10),
+                write(6),
+                write(4)
+            );
+            let raw = local(&left, &right);
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(value["status"], "ok", "{raw}");
+            assert_eq!(value["pass"], true, "{raw}");
+            assert_eq!(
+                value["pairs"],
+                serde_json::json!([
+                    {"left": 0, "right": 0},
+                    {"left": 1, "right": 2},
+                    {"left": 2, "right": 5},
+                    {"left": 3, "right": 4},
+                    {"left": 4, "right": 1},
+                    {"left": 5, "right": 3}
+                ])
+            );
+        }
+
+        #[test]
+        fn local_rejects_bad_json() {
+            let raw = local("{", "[]");
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(value["status"], "fail");
+            assert_eq!(value["reason"], "LocalReject");
         }
     }
 }

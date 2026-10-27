@@ -2,9 +2,9 @@
 //! Each assertion reads JSON from the existing expand, update, prepare, path, or expr export.
 //! Term values are the compact strings inside that JSON.
 
-use lean_binding::matching::{self, observation, prepare};
 use lean_binding::ebpf::{self, Create};
 use lean_binding::expand;
+use lean_binding::matching::{self, observation, prepare};
 use lean_binding::rv32;
 use serde_json::{json, Value};
 
@@ -34,10 +34,7 @@ fn with_eq(parent: &str, reg: &str, term: &str) -> String {
 }
 
 fn ebpf_step(words: &[u64], j: u32, exprs: &str) -> Value {
-    parse(
-        "ebpf step",
-        &ebpf::expand_step(words, 70, j, exprs, "[]"),
-    )
+    parse("ebpf step", &ebpf::expand_step(words, 70, j, exprs, "[]"))
 }
 
 fn sole(label: &str, step: &Value) -> Value {
@@ -66,9 +63,7 @@ fn eq_term(state: &Value, reg: &str) -> String {
         .as_array()
         .into_iter()
         .flatten()
-        .find(|row| {
-            row["reg"] == reg && row["rel"] == "eq" && row.get("role").is_none()
-        })
+        .find(|row| row["reg"] == reg && row["rel"] == "eq" && row.get("role").is_none())
         .map(|row| row["term"].as_str().unwrap().to_string())
         .unwrap_or_else(|| panic!("missing {reg} in {state}"))
 }
@@ -96,7 +91,11 @@ fn slice_nat(state: &Value, reg_prefix: &str, lo: u32, hi: u32) -> Option<u128> 
         if start <= lo && hi <= end {
             let value: u128 = row["term"].as_str()?.parse().ok()?;
             let shift = lo - start;
-            let mask = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+            let mask = if bits >= 128 {
+                u128::MAX
+            } else {
+                (1u128 << bits) - 1
+            };
             let sliced = (value >> shift) & mask;
             let width = end - start;
             if best.map(|(have, _)| width < have).unwrap_or(true) {
@@ -112,7 +111,8 @@ fn real64(state: &Value, index: u64) -> String {
     if let Some(value) = slice_nat(state, &prefix, 0, 64) {
         return value.to_string();
     }
-    let lo = slice_nat(state, &prefix, 0, 32).unwrap_or_else(|| panic!("missing r{index} in {state}"));
+    let lo =
+        slice_nat(state, &prefix, 0, 32).unwrap_or_else(|| panic!("missing r{index} in {state}"));
     let hi = slice_nat(state, &prefix, 32, 64).unwrap_or(0);
     ((hi << 32) | lo).to_string()
 }
@@ -216,7 +216,11 @@ fn stitch(state: &Value, prefix: &str, lo: u32, hi: u32) -> Option<u128> {
         acc |= (value & mask) << (start - lo);
         cursor = end;
     }
-    if cursor == hi { Some(acc) } else { None }
+    if cursor == hi {
+        Some(acc)
+    } else {
+        None
+    }
 }
 
 fn stack_at(state: &Value, unit: u32) -> String {
@@ -296,7 +300,14 @@ fn ebpf_alu_matches_concrete_results() {
         let neg_three = max - 2;
         let bounds = [
             ("ARSH-negative-one", 12u64, 0i64, max, 1u64, max.to_string()),
-            ("ARSH-negative-odd", 12, 0, neg_three, 1, (max - 1).to_string()),
+            (
+                "ARSH-negative-odd",
+                12,
+                0,
+                neg_three,
+                1,
+                (max - 1).to_string(),
+            ),
             ("UDIV-zero", 3, 0, 7, 0, "0".into()),
             ("UREM-zero", 9, 0, 7, 0, "7".into()),
             ("SDIV-zero", 3, 1, 7, 0, "0".into()),
@@ -455,7 +466,11 @@ fn ebpf_jumps_record_concrete_and_symbolic_arms() {
                     let rel = if taken_seed { rel } else { rel_compl(rel) };
                     let dir = if taken_seed { "taken" } else { "notTaken" };
                     let loc = if taken_seed { "2" } else { "1" };
-                    assert_eq!(one["dir"], if taken_seed { "Taken" } else { "NotTaken" }, "{label}");
+                    assert_eq!(
+                        one["dir"],
+                        if taken_seed { "Taken" } else { "NotTaken" },
+                        "{label}"
+                    );
                     assert_eq!(one["loc"], loc, "{label}");
                     assert_eq!(
                         one["observations"],
@@ -473,7 +488,11 @@ fn ebpf_jumps_record_concrete_and_symbolic_arms() {
         }
         let exprs = regs64(&[(0, "18446744073709551615")]);
         for (code, taken) in [(6u64, false), (7, false), (12, true), (13, true)] {
-            let step = ebpf_step(&[raw_insn(16 * code + cls, 0, 0, 1, 1), 0x95, 0x95], 0, &exprs);
+            let step = ebpf_step(
+                &[raw_insn(16 * code + cls, 0, 0, 1, 1), 0x95, 0x95],
+                0,
+                &exprs,
+            );
             let one = sole("signed-negative-jump", &step);
             assert_eq!(
                 (one["dir"].as_str(), one["loc"].as_str()),
@@ -486,16 +505,25 @@ fn ebpf_jumps_record_concrete_and_symbolic_arms() {
         }
     }
     let wide = regs64(&[(0, "4294967297")]);
-    let low = sole("JMP32-low-view", &ebpf_step(&[raw_insn(0x16, 0, 0, 1, 1), 0x95, 0x95], 0, &wide));
+    let low = sole(
+        "JMP32-low-view",
+        &ebpf_step(&[raw_insn(0x16, 0, 0, 1, 1), 0x95, 0x95], 0, &wide),
+    );
     assert_eq!(low["dir"], "Taken");
-    let high = sole("JMP64-high-view", &ebpf_step(&[raw_insn(0x15, 0, 0, 1, 1), 0x95, 0x95], 0, &wide));
+    let high = sole(
+        "JMP64-high-view",
+        &ebpf_step(&[raw_insn(0x15, 0, 0, 1, 1), 0x95, 0x95], 0, &wide),
+    );
     assert_eq!(high["dir"], "NotTaken");
     let ones = regs64(&[(0, "18446744073709551615")]);
     let signed = sole(
         "JMP64 sign extends immediate",
         &ebpf_step(&[raw_insn(0x15, 0, 0, 1, 0xffffffff), 0x95, 0x95], 0, &ones),
     );
-    assert_eq!((signed["dir"].as_str(), signed["loc"].as_str()), (Some("Taken"), Some("2")));
+    assert_eq!(
+        (signed["dir"].as_str(), signed["loc"].as_str()),
+        (Some("Taken"), Some("2"))
+    );
 
     let symbolic = regs64(&[(0, "v64:8"), (1, "5")]);
     let step = ebpf_step(&[raw_insn(0x1d, 0, 1, 1, 0), 0x95, 0x95], 0, &symbolic);
@@ -506,7 +534,10 @@ fn ebpf_jumps_record_concrete_and_symbolic_arms() {
         ("Taken", "taken", "eq", "2"),
         ("NotTaken", "notTaken", "ne", "1"),
     ] {
-        let arm = arms.iter().find(|arm| arm["dir"] == dir_tag).unwrap_or_else(|| panic!("{step}"));
+        let arm = arms
+            .iter()
+            .find(|arm| arm["dir"] == dir_tag)
+            .unwrap_or_else(|| panic!("{step}"));
         assert_eq!(arm["loc"], loc);
         assert_eq!(
             arm["observations"],
@@ -532,13 +563,19 @@ fn ebpf_jumps_record_concrete_and_symbolic_arms() {
         "known false prunes invalid taken target",
         &ebpf_step(&[raw_insn(0x15, 0, 0, 99, 7), 0x95], 0, &known_false),
     );
-    assert_eq!((pruned["dir"].as_str(), pruned["loc"].as_str()), (Some("NotTaken"), Some("1")));
+    assert_eq!(
+        (pruned["dir"].as_str(), pruned["loc"].as_str()),
+        (Some("NotTaken"), Some("1"))
+    );
     let known_true = regs64(&[(0, "7")]);
     let forced = sole(
         "known true prunes invalid fallthrough",
         &ebpf_step(&[0x95, raw_insn(0x15, 0, 0, -2, 7)], 1, &known_true),
     );
-    assert_eq!((forced["dir"].as_str(), forced["loc"].as_str()), (Some("Taken"), Some("0")));
+    assert_eq!(
+        (forced["dir"].as_str(), forced["loc"].as_str()),
+        (Some("Taken"), Some("0"))
+    );
 }
 
 #[test]
@@ -547,13 +584,21 @@ fn ebpf_memory_and_atomics_match_stack_and_packet_terms() {
     let with_source = with_eq(&root, "real:0:[0,64)", "2864434397");
     let stored = sole(
         "ST-W",
-        &ebpf_step(&[raw_insn(0x62, 10, 0, -4, 0x11223344), 0x95], 0, &with_source),
+        &ebpf_step(
+            &[raw_insn(0x62, 10, 0, -4, 0x11223344), 0x95],
+            0,
+            &with_source,
+        ),
     );
     assert_eq!(stack_at(&merged(&with_source, stored), 0), "287454020");
 
     let double = sole(
         "ST-DW",
-        &ebpf_step(&[raw_insn(0x7a, 10, 0, -8, 0xffffffff), 0x95], 0, &with_source),
+        &ebpf_step(
+            &[raw_insn(0x7a, 10, 0, -8, 0xffffffff), 0x95],
+            0,
+            &with_source,
+        ),
     );
     let double_state = merged(&with_source, double);
     assert_eq!(stack_at(&double_state, 1), "4294967295");
@@ -566,15 +611,24 @@ fn ebpf_memory_and_atomics_match_stack_and_packet_terms() {
     );
     let byte_state = merged(&old, byte);
     assert_eq!(eq_term(&byte_state, "stack:[4072,4080)"), "low8(170)");
-    assert_eq!(eq_term(&byte_state, "stack:[4064,4072)"), "extract0,8(287454020)");
-    assert_eq!(eq_term(&byte_state, "stack:[4080,4096)"), "extract16,16(287454020)");
+    assert_eq!(
+        eq_term(&byte_state, "stack:[4064,4072)"),
+        "extract0,8(287454020)"
+    );
+    assert_eq!(
+        eq_term(&byte_state, "stack:[4080,4096)"),
+        "extract16,16(287454020)"
+    );
     let half = sole(
         "ST-partial half",
         &ebpf_step(&[raw_insn(0x6a, 10, 0, -4, 0xbbcc), 0x95], 0, &old),
     );
     let half_state = merged(&old, half);
     assert_eq!(eq_term(&half_state, "stack:[4064,4080)"), "low16(48076)");
-    assert_eq!(eq_term(&half_state, "stack:[4080,4096)"), "extract16,16(287454020)");
+    assert_eq!(
+        eq_term(&half_state, "stack:[4080,4096)"),
+        "extract16,16(287454020)"
+    );
     let hole = sole(
         "ST-partial into undefined",
         &ebpf_step(&[raw_insn(0x72, 10, 0, -3, 0xaa), 0x95], 0, &with_source),
@@ -582,7 +636,11 @@ fn ebpf_memory_and_atomics_match_stack_and_packet_terms() {
     let hole_state = merged(&with_source, hole);
     assert_eq!(eq_term(&hole_state, "stack:[4072,4080)"), "low8(170)");
     assert!(
-        hole_state["exprs"].as_array().unwrap().iter().all(|row| row["reg"] != stack_reg(0)),
+        hole_state["exprs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["reg"] != stack_reg(0)),
         "{hole_state}"
     );
 
@@ -637,7 +695,10 @@ fn ebpf_memory_and_atomics_match_stack_and_packet_terms() {
     assert_eq!(stack_at(&wide_state, 1), "2864434397");
     assert_eq!(stack_at(&wide_state, 0), "0");
 
-    let loaded = sole("LOAD-context-data", &ebpf_step(&[raw_insn(0x61, 2, 1, 0, 0), 0x95], 0, &root));
+    let loaded = sole(
+        "LOAD-context-data",
+        &ebpf_step(&[raw_insn(0x61, 2, 1, 0, 0), 0x95], 0, &root),
+    );
     let loaded_state = merged(&root, loaded);
     let packet = sole(
         "ST-packet",
@@ -723,7 +784,10 @@ fn ebpf_memory_and_atomics_match_stack_and_packet_terms() {
         "1",
     );
     let carried = with_eq(&carried, "real:1:[0,64)", "1");
-    let carry = sole("DW-carry", &ebpf_step(&[raw_insn(0xdb, 10, 1, -8, 1), 0x95], 0, &carried));
+    let carry = sole(
+        "DW-carry",
+        &ebpf_step(&[raw_insn(0xdb, 10, 1, -8, 1), 0x95], 0, &carried),
+    );
     let carry_state = merged(&carried, carry);
     assert_eq!(stack_at(&carry_state, 1), "0");
     assert_eq!(stack_at(&carry_state, 0), "2");
@@ -850,10 +914,7 @@ fn rv32_m_closed_and_open_results() {
             &format!("RV32-M/{funct}"),
             &rv_step(&[rv_m_word(funct), 0x0001], &concrete),
         );
-        assert_eq!(
-            eq_term(&merged(&concrete, step), "real:10:[0,32)"),
-            closed
-        );
+        assert_eq!(eq_term(&merged(&concrete, step), "real:10:[0,32)"), closed);
         let symbolic_parent = regs32(&[(8, "v32:41"), (9, "v32:42")]);
         let step = sole(
             &format!("RV32-open-M/{funct}"),
@@ -875,7 +936,10 @@ fn rv32_m_closed_and_open_results() {
         (6, 4294967293, 2, "4294967295"),
     ] {
         let parent = regs32(&[(8, &a.to_string()), (9, &b.to_string())]);
-        let step = sole("RV32-M boundary", &rv_step(&[rv_m_word(funct), 0x0001], &parent));
+        let step = sole(
+            "RV32-M boundary",
+            &rv_step(&[rv_m_word(funct), 0x0001], &parent),
+        );
         assert_eq!(
             eq_term(&merged(&parent, step), "real:10:[0,32)"),
             expected,
@@ -895,7 +959,7 @@ fn rv32_m_closed_and_open_results() {
 }
 
 fn helper_observation(id: u64, args: &[&str]) -> Value {
-    json!({"kind":"helper","helperId":id,"args":args})
+    json!({"kind":"helper","helperId":id,"event":70,"args":args})
 }
 
 #[test]
@@ -904,8 +968,16 @@ fn helper_snapshots_are_frozen_bytes_and_incomplete_reads_reject() {
     let mut parent = with_eq(&root, "context:mapKeyBytes:42:[0,32)", "3");
     parent = with_eq(&parent, "context:mapValueBytes:42:[0,32)", "2");
     parent = with_eq(&parent, "real:1:[0,64)", "42");
-    parent = with_eq(&parent, "real:2:[0,64)", "add64(v64:0,18446744073709551608)");
-    parent = with_eq(&parent, "real:3:[0,64)", "add64(v64:0,18446744073709551612)");
+    parent = with_eq(
+        &parent,
+        "real:2:[0,64)",
+        "add64(v64:0,18446744073709551608)",
+    );
+    parent = with_eq(
+        &parent,
+        "real:3:[0,64)",
+        "add64(v64:0,18446744073709551612)",
+    );
     parent = with_eq(&parent, "real:4:[0,64)", "0");
     let full = with_eq(
         &with_eq(&parent, &stack_reg(1), "1144201745"),
@@ -914,12 +986,22 @@ fn helper_snapshots_are_frozen_bytes_and_incomplete_reads_reject() {
     );
     let changed = with_eq(&full, &stack_reg(1), "197121");
     for (id, args, ret) in [
-        (1u64, vec!["c64:42", "c64:17", "c64:34", "c64:51"], "externalResult0(1,42,17,34,51)"),
-        (3, vec!["c64:42", "c64:17", "c64:34", "c64:51"], "externalResult0(3,42,17,34,51)"),
+        (
+            1u64,
+            vec!["c64:42", "c64:17", "c64:34", "c64:51"],
+            "externalResult70_0(1,42,17,34,51)",
+        ),
+        (
+            3,
+            vec!["c64:42", "c64:17", "c64:34", "c64:51"],
+            "externalResult70_0(3,42,17,34,51)",
+        ),
         (
             2,
-            vec!["c64:42", "c64:17", "c64:34", "c64:51", "c64:170", "c64:187", "c64:0"],
-            "externalResult0(2,42,17,34,51,170,187,0)",
+            vec![
+                "c64:42", "c64:17", "c64:34", "c64:51", "c64:170", "c64:187", "c64:0",
+            ],
+            "externalResult70_0(2,42,17,34,51,170,187,0)",
         ),
     ] {
         let step = sole(
@@ -933,11 +1015,16 @@ fn helper_snapshots_are_frozen_bytes_and_incomplete_reads_reject() {
             &ebpf_step(&[raw_insn(0x85, 0, 0, 0, id), 0x95], 0, &changed),
         );
         let changed_args: Vec<&str> = if id == 2 {
-            vec!["c64:42", "c64:1", "c64:2", "c64:3", "c64:170", "c64:187", "c64:0"]
+            vec![
+                "c64:42", "c64:1", "c64:2", "c64:3", "c64:170", "c64:187", "c64:0",
+            ]
         } else {
             vec!["c64:42", "c64:1", "c64:2", "c64:3"]
         };
-        assert_eq!(again["observations"], json!([helper_observation(id, &changed_args)]));
+        assert_eq!(
+            again["observations"],
+            json!([helper_observation(id, &changed_args)])
+        );
     }
     for incomplete in [
         with_eq(&parent, &stack_reg(0), "48042"),
@@ -995,16 +1082,27 @@ fn helper_snapshots_are_frozen_bytes_and_incomplete_reads_reject() {
         missing = with_eq(&missing, reg, term);
     }
     for (id, args, ret) in [
-        (1u64, vec!["42", "4", "5", "6"], "externalResult0(1,42,4,5,6)"),
-        (3, vec!["42", "4", "5", "6"], "externalResult0(3,42,4,5,6)"),
+        (
+            1u64,
+            vec!["42", "4", "5", "6"],
+            "externalResult70_0(1,42,4,5,6)",
+        ),
+        (
+            3,
+            vec!["42", "4", "5", "6"],
+            "externalResult70_0(3,42,4,5,6)",
+        ),
         (
             2,
             vec!["42", "4", "5", "6", "5", "6", "0"],
-            "externalResult0(2,42,4,5,6,5,6,0)",
+            "externalResult70_0(2,42,4,5,6,5,6,0)",
         ),
     ] {
         let parent = with_eq(&rv_parent, "real:10:[0,32)", &id.to_string());
-        let step = sole(&format!("RV helper/{id}"), &rv_step(&[0x1000_00ef, 0x0001], &parent));
+        let step = sole(
+            &format!("RV helper/{id}"),
+            &rv_step(&[0x1000_00ef, 0x0001], &parent),
+        );
         assert_eq!(step["observations"], json!([helper_observation(id, &args)]));
         assert_eq!(eq_term(&merged(&parent, step), "real:10:[0,32)"), ret);
         let incomplete = with_eq(&missing, "real:10:[0,32)", &id.to_string());
@@ -1040,7 +1138,12 @@ fn solved32(term: &str) -> Result<String, Value> {
 fn solver_rewrites_are_the_term_strings_a_step_writes() {
     let rows = [
         ("R1-whole-closed", "mullo32(add32(2,3),4)", "20", "20"),
-        ("R2-spine", "add32(add32(v32:1,16),4)", "add32(v32:1,20)", "29"),
+        (
+            "R2-spine",
+            "add32(add32(v32:1,16),4)",
+            "add32(v32:1,20)",
+            "29",
+        ),
         ("R3-sub", "sub32(v32:1,4)", "add32(v32:1,4294967292)", "5"),
         ("R5-sub", "sub32(v32:1,v32:1)", "0", "0"),
         ("R5-xor", "xor32(v32:1,v32:1)", "0", "0"),
@@ -1095,18 +1198,30 @@ fn solver_rewrites_are_the_term_strings_a_step_writes() {
     for (name, input) in [
         ("no-open-subtree-fold", "mullo32(v32:1,add32(2,3))"),
         ("no-symbolic-shl", "shl32(v32:1,v32:2)"),
-        ("no-overlapping-or", "or32(and32(v32:1,255),and32(v32:2,255))"),
+        (
+            "no-overlapping-or",
+            "or32(and32(v32:1,255),and32(v32:2,255))",
+        ),
         ("no-distributivity", "mullo32(v32:1,add32(v32:2,1))"),
     ] {
         assert_eq!(solved32(input).unwrap(), input, "{name}");
     }
-    for (name, input) in [("no-partial-or-unit", "or8(v32:1,0)"), ("no-partial-and-unit", "and8(v32:1,255)")] {
+    for (name, input) in [
+        ("no-partial-or-unit", "or8(v32:1,0)"),
+        ("no-partial-and-unit", "and8(v32:1,255)"),
+    ] {
         assert!(solved32(input).is_err(), "{name}");
     }
     assert!(solved32("add32(v32:1)").is_err(), "invalid-arity");
     assert!(solved32("sub64(v32:1,v32:1)").is_err(), "invalid-width");
-    assert_eq!(solved32("externalResult2(5)").unwrap(), "externalResult2(5)");
-    assert!(solved32("inputByte3(4096,4108)").is_err(), "inputByte is 8 bits");
+    assert_eq!(
+        solved32("externalResult2(5)").unwrap(),
+        "externalResult2(5)"
+    );
+    assert!(
+        solved32("inputByte3(4096,4108)").is_err(),
+        "inputByte is 8 bits"
+    );
     assert_eq!(
         solved32("sub32(externalResult2(5),externalResult2(5))").unwrap(),
         "0"
@@ -1147,8 +1262,14 @@ fn operator_terms_normalize_to_observation_json() {
         assert_eq!(parsed["kind"], "ret");
         assert_eq!(parsed["term"], select);
     }
-    assert!(observation(&prepare(r#"{"kind":"ret","width":32,"term":"udiv32_0(v32:1)"}"#)).is_none());
-    assert!(observation(&prepare(r#"{"kind":"ret","width":32,"term":"sdiv32_0(v64:1,v32:2)"}"#)).is_none());
+    assert!(observation(&prepare(
+        r#"{"kind":"ret","width":32,"term":"udiv32_0(v32:1)"}"#
+    ))
+    .is_none());
+    assert!(observation(&prepare(
+        r#"{"kind":"ret","width":32,"term":"sdiv32_0(v64:1,v32:2)"}"#
+    ))
+    .is_none());
 }
 
 fn ret_var(name: u64) -> Value {
@@ -1159,11 +1280,40 @@ fn ret_const(value: &str) -> Value {
 }
 
 fn path_of(left: &Value, right: &Value) -> Value {
-    parse("path", &matching::path(&left.to_string(), &right.to_string()))
+    parse(
+        "path",
+        &matching::path(&left.to_string(), &right.to_string()),
+    )
 }
 
 fn expr_of(left: &Value, right: &Value) -> Value {
-    parse("expr", &matching::expr(&left.to_string(), &right.to_string()))
+    parse(
+        "expr",
+        &matching::expr(&left.to_string(), &right.to_string()),
+    )
+}
+
+fn local_of(left: &Value, right: &Value) -> Value {
+    parse(
+        "local",
+        &matching::local(&left.to_string(), &right.to_string()),
+    )
+}
+
+fn packet_write(offset: u64, source: &str) -> Value {
+    json!({"kind":"packetWrite","offset":offset,"width":16,"source":source})
+}
+
+fn map_write(offset: u64, source: &str) -> Value {
+    json!({
+        "kind":"mapWrite",
+        "mapWidth":32,
+        "map":"1",
+        "key":["1"],
+        "offset":offset,
+        "sourceWidth":32,
+        "source":source
+    })
 }
 
 #[test]
@@ -1172,7 +1322,10 @@ fn path_pairs_categories_and_expr_matches_one_pair() {
         {"left": 0, "right": 0},
         {"left": 1, "right": 1}
     ]);
-    let swapped = (json!([ret_const("1"), ret_const("2")]), json!([ret_const("2"), ret_const("1")]));
+    let swapped = (
+        json!([ret_const("1"), ret_const("2")]),
+        json!([ret_const("2"), ret_const("1")]),
+    );
     let path = path_of(&swapped.0, &swapped.1);
     assert_eq!(path["status"], "ok");
     assert_eq!(path["pass"], true);
@@ -1180,7 +1333,10 @@ fn path_pairs_categories_and_expr_matches_one_pair() {
     assert_eq!(expr_of(&ret_const("1"), &ret_const("2"))["pass"], false);
     assert_eq!(expr_of(&ret_const("2"), &ret_const("1"))["pass"], false);
 
-    let short = path_of(&json!([ret_const("1"), ret_const("1")]), &json!([ret_const("1")]));
+    let short = path_of(
+        &json!([ret_const("1"), ret_const("1")]),
+        &json!([ret_const("1")]),
+    );
     assert_eq!(short["status"], "ok");
     assert_eq!(short["pass"], false);
 
@@ -1189,15 +1345,147 @@ fn path_pairs_categories_and_expr_matches_one_pair() {
     assert_eq!(renamed["pass"], true);
     assert_eq!(renamed["subst"]["vars"], json!([[4, 9]]));
 
-    let conflict = path_of(&json!([ret_var(0), ret_var(1)]), &json!([ret_var(1), ret_var(1)]));
+    let conflict = path_of(
+        &json!([ret_var(0), ret_var(1)]),
+        &json!([ret_var(1), ret_var(1)]),
+    );
     assert_eq!(conflict["pass"], true);
     assert_eq!(expr_of(&ret_var(0), &ret_var(1))["pass"], true);
     assert_eq!(expr_of(&ret_var(1), &ret_var(1))["pass"], true);
 
     let left = json!({"kind":"ret","width":32,"term":"udiv32_0(7,0)"});
     let right = json!({"kind":"ret","width":32,"term":"udiv32_4294967295(7,0)"});
-    assert_eq!(path_of(&json!([left.clone()]), &json!([right.clone()]))["pass"], true);
+    assert_eq!(
+        path_of(&json!([left.clone()]), &json!([right.clone()]))["pass"],
+        true
+    );
     assert_eq!(expr_of(&left, &right)["pass"], false);
+}
+
+#[test]
+fn local_repairs_a_write_run_and_keeps_the_rest() {
+    let mac_left = json!([
+        packet_write(0, "1"),
+        packet_write(2, "1"),
+        packet_write(4, "1"),
+        packet_write(6, "1"),
+        packet_write(8, "1"),
+        packet_write(10, "1")
+    ]);
+    let mac_right = json!([
+        packet_write(0, "1"),
+        packet_write(8, "1"),
+        packet_write(2, "1"),
+        packet_write(10, "1"),
+        packet_write(6, "1"),
+        packet_write(4, "1")
+    ]);
+    let mac = local_of(&mac_left, &mac_right);
+    assert_eq!(mac["status"], "ok");
+    assert_eq!(mac["pass"], true);
+    assert_eq!(
+        mac["pairs"],
+        json!([
+            {"left": 0, "right": 0},
+            {"left": 1, "right": 2},
+            {"left": 2, "right": 5},
+            {"left": 3, "right": 4},
+            {"left": 4, "right": 1},
+            {"left": 5, "right": 3}
+        ])
+    );
+
+    let kept = local_of(
+        &json!([ret_const("1"), packet_write(0, "1"), packet_write(2, "2")]),
+        &json!([ret_const("1"), packet_write(2, "2"), packet_write(0, "1")]),
+    );
+    assert_eq!(kept["pass"], true);
+    assert_eq!(
+        kept["pairs"],
+        json!([
+            {"left": 0, "right": 0},
+            {"left": 1, "right": 2},
+            {"left": 2, "right": 1}
+        ])
+    );
+
+    let maps = local_of(
+        &json!([map_write(0, "1"), map_write(4, "2")]),
+        &json!([map_write(4, "2"), map_write(0, "1")]),
+    );
+    assert_eq!(maps["pass"], true);
+    assert_eq!(
+        maps["pairs"],
+        json!([{"left": 0, "right": 1}, {"left": 1, "right": 0}])
+    );
+}
+
+#[test]
+fn local_reports_parameter_failure_without_a_path_error() {
+    let overlap = local_of(
+        &json!([packet_write(0, "1"), packet_write(0, "2")]),
+        &json!([packet_write(0, "2"), packet_write(0, "1")]),
+    );
+    assert_eq!(overlap["status"], "ok");
+    assert_eq!(overlap["pass"], false);
+    assert_eq!(overlap["reason"], "Parameter");
+
+    let crossed = local_of(
+        &json!([
+            packet_write(0, "1"),
+            packet_write(2, "regVar(packet:[0,16))")
+        ]),
+        &json!([
+            packet_write(2, "regVar(packet:[0,16))"),
+            packet_write(0, "1")
+        ]),
+    );
+    assert_eq!(crossed["status"], "ok");
+    assert_eq!(crossed["pass"], false);
+    assert_eq!(crossed["reason"], "Parameter");
+
+    let branch = json!({"kind":"branch","position":1,"dir":"taken","width":32,"cond":{"lhs":"1","rel":"eq","rhs":"129"}});
+    let other = json!({"kind":"branch","position":1,"dir":"taken","width":32,"cond":{"lhs":"1","rel":"eq","rhs":"43144"}});
+    let split = local_of(
+        &json!([packet_write(0, "1"), branch.clone(), packet_write(2, "1")]),
+        &json!([packet_write(2, "1"), other.clone(), packet_write(0, "1")]),
+    );
+    assert_eq!(split["pass"], false);
+    assert_eq!(split["reason"], "Parameter");
+
+    let vlan = local_of(&json!([branch.clone()]), &json!([other.clone()]));
+    assert_eq!(vlan["pass"], false);
+    assert_eq!(vlan["reason"], "Parameter");
+
+    let path = local_of(
+        &json!([ret_const("1")]),
+        &json!([{"kind":"helper","helperId":1,"args":["1"]}]),
+    );
+    assert_eq!(path["status"], "fail");
+    assert_eq!(path["reason"], "PathReject");
+
+    let bounded = local_of(
+        &json!([
+            packet_write(0, "1"),
+            packet_write(2, "1"),
+            packet_write(4, "1"),
+            packet_write(6, "1"),
+            packet_write(8, "1"),
+            packet_write(10, "1"),
+            packet_write(12, "1")
+        ]),
+        &json!([
+            packet_write(12, "1"),
+            packet_write(10, "1"),
+            packet_write(8, "1"),
+            packet_write(6, "1"),
+            packet_write(4, "1"),
+            packet_write(2, "1"),
+            packet_write(0, "1")
+        ]),
+    );
+    assert_eq!(bounded["pass"], false);
+    assert_eq!(bounded["reason"], "Parameter");
 }
 
 #[test]
@@ -1213,26 +1501,99 @@ fn string_ffi_steps_are_all_or_nothing() {
     let lddw = sole(
         "String FFI LDDW",
         &ebpf_step(
-            &[raw_insn(0x18, 0, 0, 0, 0x55667788), raw_insn(0, 0, 0, 0, 0x11223344), 0x95],
+            &[
+                raw_insn(0x18, 0, 0, 0, 0x55667788),
+                raw_insn(0, 0, 0, 0, 0x11223344),
+                0x95,
+            ],
             0,
             "[]",
         ),
     );
     assert_eq!(lddw["loc"], "2");
-    assert_eq!(eq_term(&merged("[]", lddw), "real:0:[0,64)"), "1234605616436508552");
+    assert_eq!(
+        eq_term(&merged("[]", lddw), "real:0:[0,64)"),
+        "1234605616436508552"
+    );
 
     let failures = [
-        ("illegal opcode", vec![0u64, 0x95], 0u32, "[]", "LocalReject"),
-        ("r10 destination", vec![raw_insn(0xb7, 10, 0, 0, 7), 0x95], 0, "[]", "LocalReject"),
-        ("immediate shift range", vec![raw_insn(0x64, 0, 0, 0, 32), 0x95], 0, "[]", "LocalReject"),
-        ("reserved source field", vec![raw_insn(0xb7, 0, 1, 0, 7), 0x95], 0, "[]", "LocalReject"),
-        ("invalid atomic selector", vec![raw_insn(0xc3, 10, 1, -4, 2), 0x95], 0, "[]", "LocalReject"),
-        ("FETCH r10", vec![raw_insn(0xc3, 10, 10, -4, 1), 0x95], 0, "[]", "LocalReject"),
-        ("missing ALU old", vec![raw_insn(0x04, 0, 0, 0, 1), 0x95], 0, "[]", "UndefinedSrc"),
-        ("missing helper ABI", vec![raw_insn(0x85, 0, 0, 0, 2), 0x95], 0, "[]", "UndefinedSrc"),
-        ("LDDW continuation", vec![raw_insn(0x18, 0, 0, 0, 7), 0, 0x95], 1, "[]", "LocalReject"),
-        ("LDDW missing upper", vec![raw_insn(0x18, 0, 0, 0, 7)], 0, "[]", "LocalReject"),
-        ("LDDW malformed upper", vec![raw_insn(0x18, 0, 0, 0, 7), raw_insn(0, 1, 0, 0, 0), 0x95], 0, "[]", "LocalReject"),
+        (
+            "illegal opcode",
+            vec![0u64, 0x95],
+            0u32,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "r10 destination",
+            vec![raw_insn(0xb7, 10, 0, 0, 7), 0x95],
+            0,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "immediate shift range",
+            vec![raw_insn(0x64, 0, 0, 0, 32), 0x95],
+            0,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "reserved source field",
+            vec![raw_insn(0xb7, 0, 1, 0, 7), 0x95],
+            0,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "invalid atomic selector",
+            vec![raw_insn(0xc3, 10, 1, -4, 2), 0x95],
+            0,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "FETCH r10",
+            vec![raw_insn(0xc3, 10, 10, -4, 1), 0x95],
+            0,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "missing ALU old",
+            vec![raw_insn(0x04, 0, 0, 0, 1), 0x95],
+            0,
+            "[]",
+            "UndefinedSrc",
+        ),
+        (
+            "missing helper ABI",
+            vec![raw_insn(0x85, 0, 0, 0, 2), 0x95],
+            0,
+            "[]",
+            "UndefinedSrc",
+        ),
+        (
+            "LDDW continuation",
+            vec![raw_insn(0x18, 0, 0, 0, 7), 0, 0x95],
+            1,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "LDDW missing upper",
+            vec![raw_insn(0x18, 0, 0, 0, 7)],
+            0,
+            "[]",
+            "LocalReject",
+        ),
+        (
+            "LDDW malformed upper",
+            vec![raw_insn(0x18, 0, 0, 0, 7), raw_insn(0, 1, 0, 0, 0), 0x95],
+            0,
+            "[]",
+            "LocalReject",
+        ),
         (
             "branch all-or-nothing",
             vec![raw_insn(0x15, 0, 0, 99, 7), 0x95],
@@ -1242,14 +1603,23 @@ fn string_ffi_steps_are_all_or_nothing() {
         ),
         (
             "branch continuation all-or-nothing",
-            vec![raw_insn(0x15, 0, 0, 1, 7), raw_insn(0x18, 1, 0, 0, 0), 0, 0x95],
+            vec![
+                raw_insn(0x15, 0, 0, 1, 7),
+                raw_insn(0x18, 1, 0, 0, 0),
+                0,
+                0x95,
+            ],
             0,
             r#"[{"reg":"real:0:[0,64)","rel":"eq","term":"v64:8"}]"#,
             "UnboundTarget",
         ),
     ];
     for (name, words, j, exprs, reason) in failures {
-        assert_fail(name, &parse(name, &ebpf::expand_step(&words, 70, j, exprs, "[]")), reason);
+        assert_fail(
+            name,
+            &parse(name, &ebpf::expand_step(&words, 70, j, exprs, "[]")),
+            reason,
+        );
     }
 
     let dual = r#"[{"reg":"real:0:[0,64)","rel":"eq","term":"1"},{"reg":"real:0:[0,64)","rel":"eq","term":"2"}]"#;
@@ -1330,7 +1700,13 @@ fn mov_exit_snapshot_runs_then_completes() {
     let program = [raw_insn(0xb7, 0, 0, 0, 7), 0x95];
     for (steps, status, location, observations, pending) in [
         (1u32, "running", "1", json!([]), vec!["1"]),
-        (2, "complete", "exit", json!([{"kind":"ret","width":64,"term":"7"}]), vec![]),
+        (
+            2,
+            "complete",
+            "exit",
+            json!([{"kind":"ret","width":64,"term":"7"}]),
+            vec![],
+        ),
     ] {
         let snap = parse(
             status,
@@ -1346,10 +1722,7 @@ fn mov_exit_snapshot_runs_then_completes() {
             .iter()
             .map(|id| {
                 let id = id.as_u64().unwrap();
-                nodes
-                    .iter()
-                    .find(|node| node["id"] == id)
-                    .unwrap()["loc"]
+                nodes.iter().find(|node| node["id"] == id).unwrap()["loc"]
                     .as_str()
                     .unwrap()
                     .to_string()
@@ -1363,21 +1736,64 @@ fn mov_exit_snapshot_runs_then_completes() {
 }
 
 const JUST_TX: [u64; 58] = [
-    0x00000001000000b4, 0x0000000000041261, 0x0000000000001661, 0x00000000000061bf,
-    0x0000000e00000107, 0x000000000033212d, 0x00000000000c6469, 0x0000008100020416,
-    0x0000000e000003b7, 0x0000a88800050456, 0x00000000000063bf, 0x0000001200000307,
-    0x00000000002c232d, 0x00000012000003b7, 0x0000000000021469, 0x00000000000001b4,
-    0x0000dd8600080416, 0x00000008000d0456, 0x00000000000064bf, 0x000000000000340f,
-    0x00000000000043bf, 0x0000001400000307, 0x000000000008232d, 0x0000000000094171,
-    0x0000000000060005, 0x00000000000064bf, 0x000000000000340f, 0x00000000000043bf,
-    0x0000002800000307, 0x000000000001232d, 0x0000000000064171, 0x00000000fffc1a63,
-    0x000000000000a2bf, 0xfffffffc00000207, 0x0000000000000118, 0x0000000000000000,
-    0x0000000100000085, 0x0000000000030015, 0x0000000000000179, 0x0000000100000107,
-    0x000000000000107b, 0x00000000fffca161, 0x00000001000000b4, 0x00000011000d0156,
-    0x0000000000006169, 0x0000000000066269, 0x000000000000266b, 0x0000000000086269,
-    0x0000000000026369, 0x000000000008366b, 0x000000000002266b, 0x00000000000a6269,
-    0x0000000000046369, 0x00000000000a366b, 0x000000000006166b, 0x000000000004266b,
-    0x00000003000000b4, 0x0000000000000095,
+    0x00000001000000b4,
+    0x0000000000041261,
+    0x0000000000001661,
+    0x00000000000061bf,
+    0x0000000e00000107,
+    0x000000000033212d,
+    0x00000000000c6469,
+    0x0000008100020416,
+    0x0000000e000003b7,
+    0x0000a88800050456,
+    0x00000000000063bf,
+    0x0000001200000307,
+    0x00000000002c232d,
+    0x00000012000003b7,
+    0x0000000000021469,
+    0x00000000000001b4,
+    0x0000dd8600080416,
+    0x00000008000d0456,
+    0x00000000000064bf,
+    0x000000000000340f,
+    0x00000000000043bf,
+    0x0000001400000307,
+    0x000000000008232d,
+    0x0000000000094171,
+    0x0000000000060005,
+    0x00000000000064bf,
+    0x000000000000340f,
+    0x00000000000043bf,
+    0x0000002800000307,
+    0x000000000001232d,
+    0x0000000000064171,
+    0x00000000fffc1a63,
+    0x000000000000a2bf,
+    0xfffffffc00000207,
+    0x0000000000000118,
+    0x0000000000000000,
+    0x0000000100000085,
+    0x0000000000030015,
+    0x0000000000000179,
+    0x0000000100000107,
+    0x000000000000107b,
+    0x00000000fffca161,
+    0x00000001000000b4,
+    0x00000011000d0156,
+    0x0000000000006169,
+    0x0000000000066269,
+    0x000000000000266b,
+    0x0000000000086269,
+    0x0000000000026369,
+    0x000000000008366b,
+    0x000000000002266b,
+    0x00000000000a6269,
+    0x0000000000046369,
+    0x00000000000a366b,
+    0x000000000006166b,
+    0x000000000004266b,
+    0x00000003000000b4,
+    0x0000000000000095,
 ];
 
 const RV_FIXTURE: [u32; 76] = [
@@ -1418,7 +1834,9 @@ fn just_tx_finite_product_regressions() {
     let returns_three = snap["nodes"].as_array().unwrap().iter().any(|node| {
         node["loc"] == "exit"
             && node["predicates"].as_array().is_some_and(|preds| {
-                preds.iter().any(|pred| pred["kind"] == "ret" && pred["term"] == "3")
+                preds
+                    .iter()
+                    .any(|pred| pred["kind"] == "ret" && pred["term"] == "3")
             })
     });
     assert!(returns_three, "{}", snap["nodes"]);
@@ -1442,14 +1860,43 @@ fn just_tx_finite_product_regressions() {
     let failed = nodes.iter().find(|node| node["id"] == rv_snap["failed"]);
     let reached34 = nodes.iter().any(|node| node["loc"] == "34");
     assert_eq!(
-        rv_snap["status"], "complete",
+        rv_snap["status"],
+        "complete",
         "stepping loc {} returned {}: nodes={} reached34={reached34}",
         failed.and_then(|node| node["loc"].as_str()).unwrap_or("?"),
         rv_snap["reason"],
         nodes.len()
     );
     assert!(rv_snap["reason"].is_null());
-    assert_eq!(nodes.len(), 146);
+    let edges = rv_snap["edges"].as_array().unwrap();
+    let mut kids: std::collections::BTreeMap<u64, Vec<&str>> = std::collections::BTreeMap::new();
+    for edge in edges {
+        let dst = edge["dst"].as_u64().unwrap() as usize;
+        kids.entry(edge["src"].as_u64().unwrap())
+            .or_default()
+            .push(nodes[dst]["loc"].as_str().unwrap());
+    }
+    let forks: Vec<String> = kids
+        .iter()
+        .filter(|(_, dsts)| dsts.len() > 1)
+        .map(|(src, dsts)| {
+            format!(
+                "{}->{dsts:?}",
+                nodes[*src as usize]["loc"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        forks,
+        vec![
+            "9->[\"71\", \"10\"]".to_string(),
+            "17->[\"71\", \"18\"]".to_string(),
+            "29->[\"35\", \"30\"]".to_string(),
+            "47->[\"55\", \"48\"]".to_string(),
+            "57->[\"exit\", \"58\"]".to_string(),
+        ]
+    );
+    assert_eq!(nodes.len(), 123);
     assert!(!reached34);
 }
 
@@ -1469,7 +1916,8 @@ fn replace_eq(exprs: &str, reg: &str, term: &str) -> String {
 
 fn has_packet_eq(rows: &Value, reg: &str) -> bool {
     rows.as_array().is_some_and(|rows| {
-        rows.iter().any(|row| row["reg"] == reg && row["rel"] == "eq" && row.get("role").is_none())
+        rows.iter()
+            .any(|row| row["reg"] == reg && row["rel"] == "eq" && row.get("role").is_none())
     })
 }
 
@@ -1558,15 +2006,26 @@ fn compound_packet_byte_is_one_register_and_one_write() {
         ),
         "UndefinedSrc",
     );
-    for address in [format!("add32(4096,{byte})"), format!("add32(4096,id32({byte}))")] {
+    for address in [
+        format!("add32(4096,{byte})"),
+        format!("add32(4096,id32({byte}))"),
+    ] {
         let parent = replace_eq(&seeded, "real:12:[0,32)", &address);
         let step = parse(
             "offset leaf",
             &rv32::expand_step(&[rv_sb(0), 0x0001], 70, 0, &parent, mentioned),
         );
         let one = sole(&address, &step);
-        assert!(one["observations"].as_array().is_some_and(|rows| rows.is_empty()), "{address}: {step}");
-        assert!(!has_packet_eq(&one["writes"], "packet:[0,8)"), "{address}: {step}");
+        assert!(
+            one["observations"]
+                .as_array()
+                .is_some_and(|rows| rows.is_empty()),
+            "{address}: {step}"
+        );
+        assert!(
+            !has_packet_eq(&one["writes"], "packet:[0,8)"),
+            "{address}: {step}"
+        );
     }
     let product = replace_eq(
         &seeded,

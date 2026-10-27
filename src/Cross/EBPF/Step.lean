@@ -168,16 +168,17 @@ def ebpfStep (I : Array Insn) (event : NodeId)
     else match parseHelperCall σ.exprs id.toNat with
       | .error reason => .reject reason
       | .ok call =>
-        match freezeHelperArgs ebpfConvention σ.exprs call.kind call.args with
-        | none => .reject .undefinedSrc
-        | some snapshot =>
-          match lookupAnchor ebpfConvention σ.exprs call.kind call.id snapshot with
-          | none => .reject .undefinedSrc
-          | some rows =>
-            let ret := callReturnTerm ebpfConvention σ.exprs call.kind call.id snapshot
-            let written := (update ⟨Expr.nil, []⟩
-              { exprs := [Expr.mkEq (Reg.real64 0) (solve ret)], predicates := [] }).exprs
-            .candidates [⟨.ok, .pos (j + 1), written ++ rows, [.helper call.kind snapshot]⟩]
+        match freezeSnapshot ebpfConvention σ.exprs call.kind call.args with
+        | .incomplete => .reject .undefinedSrc
+        | .snap snapshot | .abi snapshot =>
+        let rows := match freezeSnapshot ebpfConvention σ.exprs call.kind call.args with
+          | .snap snap =>
+            (lookupAnchor ebpfConvention event σ.exprs call.kind call.id snap).getD []
+          | _ => []
+        let ret := callReturnTerm ebpfConvention event σ.exprs call.kind call.id snapshot
+        let written := (update ⟨Expr.nil, []⟩
+          { exprs := [Expr.mkEq (Reg.real64 0) (solve ret)], predicates := [] }).exprs
+        .candidates [⟨.ok, .pos (j + 1), written ++ rows, [.helper event call.kind snapshot]⟩]
   | some (.jcond width op dst src offset) =>
     match branchCandidates I j σ.exprs width op dst src offset with
     | .error reason => .reject reason
@@ -409,7 +410,7 @@ private def packetLiveArmsCheck : Bool := Id.run do
 #guard oneCandidateCheck
     (ebpfStep #[.callHelper 999, .exit] 7 0 State.empty)
     .ok (.pos 1) ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 18446744073709551615))], predicates := [] }).exprs)
-    [.helper (.unsupported 999) []]
+    [.helper 7 (.unsupported 999) []]
 #guard oneCandidateCheck
     (ebpfStep #[.exit] 0 0
       ⟨(update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve (Term.C64 1))], predicates := [] }).exprs, []⟩)

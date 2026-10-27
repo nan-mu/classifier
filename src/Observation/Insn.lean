@@ -57,7 +57,7 @@ structure Cond where
 /-- Five observation classes (`doc/Predicate/谓词定义.md`).
 Resource provenance, byte-valued symbolic keys and dynamic identities are semantic premises. -/
 inductive Observation where
-  | helper (kind : HelperKind) (args : List Term)
+  | helper (event : Nat) (kind : HelperKind) (args : List Term)
   | branch (position : Nat) (dir : BranchDirection) (cond : Cond)
   | ret (term : Term)
   | mapWrite (map : Term) (key : List Term) (offset : Nat) (bits : Nat)

@@ -1,4 +1,5 @@
 import Match.Prepare
+import Match.PacketEnd
 import Wire.Parse
 
 namespace Match
@@ -7,7 +8,8 @@ open Term Term.Value Expression Observation Wire
 /-! Two match stages, plus the shared-renaming list check.
 
 `pathMatch` pairs Figure 2 classes in order. It does not read terms.
-`exprMatch` prepares one pair and builds that pair's renaming.
+`exprMatch` prepares one pair, identifies the two packet-end spellings, and
+builds that pair's renaming.
 `unifyLists` asks for one renaming of the whole list. Pairwise `exprMatch`
 does not imply that list check. -/
 
@@ -78,7 +80,7 @@ mutual
   def applyTerm (σ : Subst) : Term → Term
     | .const w c => .const w c
     | .var w n => .var w (σ.varLookup n)
-    | .regVar r => .regVar (σ.regLookup r)
+    | .regVar e r => .regVar e (σ.regLookup r)
     | .app w op args => .app w op (applyTerms σ args)
   termination_by t => sizeOf t
 
@@ -92,7 +94,7 @@ mutual
   def Determined (σ : Subst) : Term → Prop
     | .const _ _ => True
     | .var _ n => ∃ y, σ.varImage? n = some y
-    | .regVar r => ∃ b, σ.regImage? r = some b
+    | .regVar _ r => ∃ b, σ.regImage? r = some b
     | .app _ _ args => DeterminedTerms σ args
   termination_by t => sizeOf t
 
@@ -119,8 +121,8 @@ mutual
       else none
     | .var w a, .var v b =>
       if w == v then addVar? σ a b else none
-    | .regVar a, .regVar b =>
-      if a.renameable b then addReg? σ a b else none
+    | .regVar e a, .regVar f b =>
+      if e == f && a.renameable b then addReg? σ a b else none
     | .app w f as, .app v g bs =>
       if w == v then
         if f == g then mergeList σ as bs else none
@@ -310,9 +312,13 @@ mutual
         obtain ⟨he, hj, hv⟩ := addVar_sound hi h
         exact ⟨he, hj, ⟨y, hv⟩, by simp [applyTerm, varLookup, hv]⟩
       · contradiction
-    case regVar.regVar a b =>
+    case regVar.regVar event reg other b =>
       split at h
-      · obtain ⟨he, hj, hr⟩ := addReg_sound hi h
+      · have hand : (event == other) = true ∧ reg.renameable b = true := by
+          simpa [Bool.and_eq_true] using ‹(event == other && reg.renameable b) = true›
+        have hev : event = other := eq_of_beq hand.1
+        subst other
+        obtain ⟨he, hj, hr⟩ := addReg_sound hi h
         exact ⟨he, hj, ⟨b, hr⟩, by simp [applyTerm, regLookup, hr]⟩
       · contradiction
     case app.app w f as v g bs =>
@@ -426,14 +432,14 @@ def byteTerms (bits : Nat) (source : Term) : List Term :=
 /-- Terms the comparison reads. A write contributes its byte extracts, not the
 unsplit source. -/
 def comparedTerms : Observation → List Term
-  | .helper _ args => args
+  | .helper _ _ args => args
   | .branch _ _ cond => [cond.lhs, cond.rhs]
   | .ret term => [term]
   | .mapWrite map key _ bits source => map :: (key ++ byteTerms bits source)
   | .packetWrite _ bits source => byteTerms bits source
 
 def sameShape : Observation → Observation → Bool
-  | .helper k _, .helper k' _ => k == k'
+  | .helper _ k _, .helper _ k' _ => k == k'
   | .branch _ d c, .branch _ d' c' => d == d' && c.rel == c'.rel
   | .ret _, .ret _ => true
   | .mapWrite _ _ o w _, .mapWrite _ _ o' w' _ => o == o' && w == w'
@@ -524,9 +530,10 @@ def pathMatch (L R : List Observation) : Option (List (Nat × Nat)) :=
   else
     none
 
-/-- One pair. Prepare both sides, then one injective renaming for that pair. -/
+/-- One pair. Prepare both sides, identify packet-end, payload, and helper
+spellings, then one injective renaming for that pair. -/
 def exprMatch (a b : Observation) : Option Subst :=
-  (mergeObs .empty (prepare a) (prepare b)).map Subst.strip
+  (mergeObs .empty (align (prepare a)) (align (prepare b))).map Subst.strip
 
 def unifyLists (L R : List Observation) : UnifyOut :=
   match zipMatch .empty (L.map prepare) (R.map prepare) with
@@ -675,6 +682,51 @@ def exportMatchExpr (leftJson rightJson : String) : String :=
 #guard exportMatchExpr
   "{\"kind\":\"ret\",\"width\":32,\"term\":\"1\"}"
   "{\"kind\":\"ret\",\"width\":32,\"term\":\"2\"}" ==
+  "{\"status\":\"ok\",\"pass\":false}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":4,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"add32(v32:4,8)\",\"rel\":\"gtu\",\"rhs\":\"add32(v32:4,v32:5)\"}}"
+  "{\"kind\":\"branch\",\"position\":6,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"add64(id64(low64(zext32/64/32(v32:4))),8)\",\"rel\":\"gtu\",\"rhs\":\"low64(zext32/64/32(add32(v32:4,128)))\"}}" ==
+  "{\"status\":\"ok\",\"pass\":true,\"subst\":{\"vars\":[],\"regs\":[]}}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":9,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"4\",\"rel\":\"leu\",\"rhs\":\"sub32(add32(v32:4,v32:5),add32(v32:4,8))\"}}"
+  "{\"kind\":\"branch\",\"position\":8,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"4\",\"rel\":\"leuN32\",\"rhs\":\"low64(zext32/64(zext32/64/32(sub32(zext32/32/64(low64(zext32/64/32(add32(v32:4,128)))),zext32/32/64(add64(id64(low64(zext32/64/32(v32:4))),8))))))\"}}" ==
+  "{\"status\":\"ok\",\"pass\":true,\"subst\":{\"vars\":[],\"regs\":[]}}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"v32:1\",\"rel\":\"leu\",\"rhs\":\"4\"}}"
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"v64:1\",\"rel\":\"leuN32\",\"rhs\":\"4\"}}" ==
+  "{\"status\":\"ok\",\"pass\":false}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":12,\"dir\":\"notTaken\",\"width\":32,\"cond\":{\"lhs\":\"8\",\"rel\":\"eq\",\"rhs\":\"add32(mullo32(zext8/32(low8(inputByte0(v32:4,add32(v32:4,13)))),256),zext8/32(low8(inputByte0(v32:4,add32(v32:4,12)))))\"}}"
+  "{\"kind\":\"branch\",\"position\":8,\"dir\":\"notTaken\",\"width\":64,\"cond\":{\"lhs\":\"8\",\"rel\":\"eqN32\",\"rhs\":\"add64(mullo64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,13)))),256),zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,12)))))\"}}" ==
+  "{\"status\":\"ok\",\"pass\":true,\"subst\":{\"vars\":[],\"regs\":[]}}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":25,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"0\",\"rel\":\"eq\",\"rhs\":\"id32(externalResult24_0(1,1077412440,zext8/32(low8(inputByte0(v32:4,add32(v32:4,26)))),zext8/32(low8(inputByte0(v32:4,add32(v32:4,27)))),zext8/32(low8(inputByte0(v32:4,add32(v32:4,28)))),zext8/32(low8(inputByte0(v32:4,add32(v32:4,29))))))\"}}"
+  "{\"kind\":\"branch\",\"position\":18,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"0\",\"rel\":\"eq\",\"rhs\":\"id64(externalResult16_0(1,1077412440,zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,26)))),zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,27)))),zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,28)))),zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,29))))))\"}}" ==
+  "{\"status\":\"ok\",\"pass\":true,\"subst\":{\"vars\":[],\"regs\":[]}}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"4294967291\",\"rel\":\"gtu\",\"rhs\":\"or32(or32(low8(inputByte0(v32:4,add32(v32:4,4))),mullo32(low8(inputByte0(v32:4,add32(v32:4,5))),256)),mullo32(low8(inputByte0(v32:4,add32(v32:4,6))),65536))\"}}"
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"18446744073709551611\",\"rel\":\"gtuN32\",\"rhs\":\"or64(mullo64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,6)))),65536),or64(mullo64(zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,5)))),256),zext8/64/32(low8(inputByte0(v32:4,add32(v32:4,4))))))\"}}" ==
+  "{\"status\":\"ok\",\"pass\":true,\"subst\":{\"vars\":[],\"regs\":[]}}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"or32(or32(v32:1,v32:2),v32:3)\",\"rel\":\"geu\",\"rhs\":\"0\"}}"
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"or32(v32:3,or32(v32:1,v32:2))\",\"rel\":\"geu\",\"rhs\":\"0\"}}" ==
+  "{\"status\":\"ok\",\"pass\":false}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"zext8/32(v32:1)\",\"rel\":\"ne\",\"rhs\":\"0\"}}"
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"v32:1\",\"rel\":\"ne\",\"rhs\":\"0\"}}" ==
+  "{\"status\":\"ok\",\"pass\":false}"
+
+#guard exportMatchExpr
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":64,\"cond\":{\"lhs\":\"18446744073709551611\",\"rel\":\"eq\",\"rhs\":\"0\"}}"
+  "{\"kind\":\"branch\",\"position\":1,\"dir\":\"taken\",\"width\":32,\"cond\":{\"lhs\":\"4294967291\",\"rel\":\"eq\",\"rhs\":\"0\"}}" ==
   "{\"status\":\"ok\",\"pass\":false}"
 
 end Match

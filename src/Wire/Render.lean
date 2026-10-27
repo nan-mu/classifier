@@ -71,7 +71,9 @@ def renderOp : Op → String
   | .zext q w _ => s!"zext{q}/{renderWidth w}"
   | .sext q w _ => s!"sext{q}/{renderWidth w}"
   | .bswap q _ => s!"bswap{q}"
-  | .externalResult lane => s!"externalResult{lane}"
+  | .externalResult event lane =>
+    if event == 0 then s!"externalResult{lane}"
+    else s!"externalResult{event}_{lane}"
   | .inputByte resource => s!"inputByte{resource}"
   | .mergeLow q wbits => s!"mergeLow{q},{wbits}"
   | .packetRead bytes ending => s!"packetRead{bytes}_{ending}"
@@ -81,7 +83,9 @@ private def renderTermAt (context : Width) : Term → String
   | .const w c =>
     if w == context then toString c else s!"c{renderWidth w}:{c}"
   | .var w ξ => s!"v{renderWidth w}:{ξ}"
-  | .regVar reg => s!"regVar({renderReg reg})"
+  | .regVar event reg =>
+    if event == 0 then s!"regVar({renderReg reg})"
+    else s!"regVar{event}({renderReg reg})"
   | .app w op args =>
     let name := match op with
       | .low q v => if v == w.bits then renderOp op else s!"low{q}/{v}"
@@ -116,9 +120,9 @@ def renderExprJson (e : Expr) : String :=
   s!"\{\"reg\":\"{renderReg e.reg}\",\"rel\":\"{renderRel e.rel}\",\"term\":\"{renderTerm e.term}\"}"
 
 def renderPredicateJson : Observation → String
-  | .helper kind args =>
+  | .helper event kind args =>
     let args := String.intercalate "," (args.map fun t => s!"\"{renderTermAt .w32 t}\"")
-    s!"\{\"kind\":\"helper\",\"helperId\":{kind.id},\"args\":[{args}]}"
+    s!"\{\"kind\":\"helper\",\"helperId\":{kind.id},\"event\":{event},\"args\":[{args}]}"
   | .branch position dir cond =>
     let direction := match dir with | .taken => "taken" | .notTaken => "notTaken"
     let w := cond.lhs.width

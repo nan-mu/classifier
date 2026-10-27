@@ -20,9 +20,11 @@ mutual
         if hx : x = y then .isTrue (by cases hw; cases hx; rfl)
         else .isFalse (by intro h; cases h; exact hx rfl)
       else .isFalse (by intro h; cases h; exact hw rfl)
-    | .regVar r, .regVar s =>
-      if hr : r = s then .isTrue (by cases hr; rfl)
-      else .isFalse (by intro h; cases h; exact hr rfl)
+    | .regVar e r, .regVar f s =>
+      if he : e = f then
+        if hr : r = s then .isTrue (by cases he; cases hr; rfl)
+        else .isFalse (by intro h; cases h; exact hr rfl)
+      else .isFalse (by intro h; cases h; exact he rfl)
     | .app w op args, .app v other terms =>
       if hw : w = v then
         if ho : op = other then
@@ -373,7 +375,7 @@ private def mergeFiveClassRequirements : String :=
   "[\"Helper\",\"Branch\",\"Return\",\"MapWrite\",\"PacketWrite\"]"
 
 private def mergeMixedPredicates : List Observation :=
-  [.helper .clock [Term.C32 1],
+  [.helper 0 .clock [Term.C32 1],
    .branch 1 .taken ⟨Term.V32 1, .ltu, Term.C32 4⟩,
    .ret (Term.V64 2),
    .mapWrite (Term.V64 3) [Term.C32 1, Term.C32 2] 0 32 (Term.V32 4),

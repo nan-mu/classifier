@@ -35,16 +35,21 @@ def parseHelperCall (Eg : List Expr) : Except RejectReason HelperCall := do
       if j < helperRequired kind then throw .undefinedSrc else break
   pure ⟨kind, id, args⟩
 
-/-- Snapshot, return term in a0, and the lookup anchor. An incomplete buffer rejects. -/
-def helperCandidates (E : List Expr) (bound : Option Term) :
+/-- Snapshot, return term in a0, and the lookup anchor.
+An unreadable buffer keeps the ABI arguments and does not reject the call. -/
+def helperCandidates (event : Nat) (E : List Expr) (bound : Option Term) :
     Except RejectReason (List Expr × Observation) := do
   let call ← parseHelperCall E
   let conv := helperConvention bound
-  let some snapshot := freezeHelperArgs conv E call.kind call.args | throw .undefinedSrc
-  let some anchor := lookupAnchor conv E call.kind call.id snapshot | throw .undefinedSrc
-  let ret := callReturnTerm conv E call.kind call.id snapshot
+  let snapshot ← match freezeSnapshot conv E call.kind call.args with
+    | .snap args | .abi args => pure args
+    | .incomplete => throw .undefinedSrc
+  let anchor := match freezeSnapshot conv E call.kind call.args with
+    | .snap snap => (lookupAnchor conv event E call.kind call.id snap).getD []
+    | _ => []
+  let ret := callReturnTerm conv event E call.kind call.id snapshot
   let written := (update ⟨Expr.nil, []⟩
     { exprs := [Expr.mkEq (Reg.real32 10) (solve ret)], predicates := [] }).exprs
-  pure (written ++ anchor, .helper call.kind snapshot)
+  pure (written ++ anchor, .helper event call.kind snapshot)
 
 end Cross.RV32

@@ -889,10 +889,10 @@ private def esp32c3DeepFrontierCheck : Bool :=
     | _ => false
 
 private def helperObservationMergeCheck : Bool :=
-  let p := Observation.helper .clock []
-  let q := Observation.helper .printk []
+  let p := Observation.helper 0 .clock []
+  let q := Observation.helper 0 .printk []
   ((update { exprs := [], predicates := [q] } { exprs := [], predicates := [p, p, q] }).predicates == [q, p]) &&
-  renderPredicateJson p == "{\"kind\":\"helper\",\"helperId\":5,\"args\":[]}"
+  renderPredicateJson p == "{\"kind\":\"helper\",\"helperId\":5,\"event\":0,\"args\":[]}"
 
 /-- C.JR and full JALR freeze the complete symbolic pre-return a0 on wrapper Exit. -/
 private def boundReturnExprCheck : Bool :=
@@ -998,7 +998,7 @@ def inferStep (I : Array Insn) (event : NodeId) (j : Nat) (σ : State) : StepRes
       | some loc =>
         let Eg := (update ⟨σ.exprs, []⟩ { exprs := [Expr.mkEq (Reg.real32 32) (solve (Term.C32 (b + offset)))], predicates := [] }).exprs
         match Cross.RV32.step Eg i bound σ.predicates,
-            helperCandidates σ.exprs bound with
+            helperCandidates event σ.exprs bound with
         | some link, .ok (rows, observation) =>
           let Ei := (update ⟨link, []⟩ { exprs := rows, predicates := [] }).exprs
           .candidates [⟨.ok, loc, Ei, [observation]⟩]
@@ -1071,7 +1071,7 @@ private def packetStoreRejectsMissingInputsCheck : Bool := Id.run do
 
 /-- Without a frozen key the map slot cannot be named, so the local step rejects too. -/
 private def mapStoreObservationGapCheck : Bool :=
-  let pointer := star .w32 (.externalResult 0) [Term.C32 1, Term.C32 42, Term.V32 0]
+  let pointer := star .w32 (.externalResult 0 0) [Term.C32 1, Term.C32 42, Term.V32 0]
   let E := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 0xaabbccdd))], predicates := [] }).exprs)
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 2) (solve pointer)], predicates := [] }).exprs)
@@ -1087,8 +1087,8 @@ private def mapStoreObservationGapCheck : Bool :=
 /-- Frozen lookup key plus the installed layout authorize MapWrite on SB/SH/SW. -/
 private def mapStoreObservationsCheck : Bool := Id.run do
   let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
-  let pointer := star .w32 (.externalResult 0) (Term.C32 1 :: Term.C32 42 :: key)
-  let lookup : Observation := .helper .lookup (Term.C32 42 :: key)
+  let pointer := star .w32 (.externalResult 0 0) (Term.C32 1 :: Term.C32 42 :: key)
+  let lookup : Observation := .helper 0 .lookup (Term.C32 42 :: key)
   let some E := Anchor.installMaps ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkRel (Reg.real32 8) .leu
         (addStar .w32 pointer (Term.C32 16))], predicates := [] }).exprs)
@@ -1131,8 +1131,8 @@ private def packetSnapshotEventCheck : Bool :=
 /-- Matching pointer Map and frozen-key observation Map still authorizes MapWrite. -/
 private def mapWriteProvenanceMatchCheck : Bool := Id.run do
   let key := [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
-  let pointer := star .w32 (.externalResult 0) (Term.C32 1 :: Term.C32 42 :: key)
-  let lookup : Observation := .helper .lookup (Term.C32 42 :: key)
+  let pointer := star .w32 (.externalResult 0 0) (Term.C32 1 :: Term.C32 42 :: key)
+  let lookup : Observation := .helper 0 .lookup (Term.C32 42 :: key)
   let some E := Anchor.installMaps ((update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkRel (Reg.real32 8) .leu
         (addStar .w32 pointer (Term.C32 16))], predicates := [] }).exprs)
@@ -1149,9 +1149,9 @@ private def mapWriteProvenanceMatchCheck : Bool := Id.run do
 
 /-- Pointer Map 42 with frozen-key observation Map 17 must reject (no successor). -/
 private def mapWriteProvenanceMismatchCheck : Bool := Id.run do
-  let pointer := star .w32 (.externalResult 0) [Term.C32 1, Term.C32 42, Term.V32 7]
+  let pointer := star .w32 (.externalResult 0 0) [Term.C32 1, Term.C32 42, Term.V32 7]
   let key := [Term.C32 1]
-  let lookup : Observation := .helper .lookup ([Term.C32 17, Term.V32 7] ++ key)
+  let lookup : Observation := .helper 0 .lookup ([Term.C32 17, Term.V32 7] ++ key)
   let base := (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 11) (solve (Term.C32 123))], predicates := [] }).exprs)
   let some keyBytes := key.mapM mapKeyByte | return false
@@ -1346,9 +1346,9 @@ private def encodedHelperBuffersCheck : Bool := Id.run do
     let (row, _) := renderStateJson ⟨state, []⟩
     let json := exportRv32ExpandStep #[0x000280e7, 0x00008067] 80 0 s!"[{row}]" "[]"
     if !json.contains "\"status\":\"ok\"" ||
-        !json.contains (renderPredicateJson (.helper kind (Term.C32 42 :: tail))) ||
+        !json.contains (renderPredicateJson (.helper 80 kind (Term.C32 42 :: tail))) ||
         !json.contains (renderExprJson (Expr.mkEq (Reg.real32 10)
-          (star .w32 (.externalResult 0) (Term.C32 id :: Term.C32 42 :: tail)))) then return false
+          (star .w32 (.externalResult 80 0) (Term.C32 id :: Term.C32 42 :: tail)))) then return false
   let missingValue := addStar .w32 (Term.V32 0) (Term.C32 7)
   let state := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 10) (solve (Term.C32 2))], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkEq (Reg.real32 13) (solve missingValue)], predicates := [] }).exprs)

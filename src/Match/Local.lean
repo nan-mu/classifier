@@ -34,8 +34,8 @@ mutual
   def packetReadSpans : Term → Option (List (Nat × Nat))
     | .const _ _ => some []
     | .var _ _ => some []
-    | .regVar (.packet b e) => some [(b, e)]
-    | .regVar _ => some []
+    | .regVar _ (.packet b e) => some [(b, e)]
+    | .regVar _ _ => some []
     | .app _ (.inputByte _) [_, addr] =>
       match constNat? addr with
       | some a => some [(a * 8, a * 8 + 8)]
@@ -54,7 +54,7 @@ end
 
 mutual
   def mentionsMapReg : Term → Bool
-    | .regVar (.map ..) => true
+    | .regVar _ (.map ..) => true
     | .app _ _ args => mentionsMapList args
     | _ => false
 

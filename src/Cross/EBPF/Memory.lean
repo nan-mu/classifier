@@ -39,9 +39,9 @@ def relativeOffset (root address : Term) : Option Int :=
 The tail's key prefix length comes from the layout. -/
 def lookupAddress64 : Term → Option (Int × Term × List Term × Term)
   | .app .w64 (.id .w64) [a] => lookupAddress64 a
-  | .app .w64 (.externalResult 0) (id :: map :: rest) =>
+  | .app .w64 (.externalResult event 0) (id :: map :: rest) =>
     if eval (solve id) == some 1 && map.width == .w64 then
-      some (0, map, rest, .app .w64 (.externalResult 0) (id :: map :: rest))
+      some (0, map, rest, .app .w64 (.externalResult event 0) (id :: map :: rest))
     else none
   | .app .w64 (.add .w64) [a, b] =>
     match eval (solve a), eval (solve b) with
@@ -503,7 +503,7 @@ private def lookupKeyBytes : List Term :=
   [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
 
 private def lookupPointer : Term :=
-  star .w64 (.externalResult 0) (Term.C64 1 :: Term.C64 42 :: lookupKeyBytes)
+  star .w64 (.externalResult 0 0) (Term.C64 1 :: Term.C64 42 :: lookupKeyBytes)
 
 private def lookupMemoryCheck : Bool := Id.run do
   let .ok σ := buildE0 memoryEntry | return false
@@ -538,7 +538,7 @@ private def mapStoreFrozenKey : List Term :=
   [Term.C64 1, Term.C64 2, Term.C64 3, Term.C64 4]
 
 private def mapStorePointer : Term :=
-  star .w64 (.externalResult 0) (Term.C64 1 :: Term.C64 1077412584 :: mapStoreFrozenKey)
+  star .w64 (.externalResult 0 0) (Term.C64 1 :: Term.C64 1077412584 :: mapStoreFrozenKey)
 
 private def mapStoreExprs : List Expr :=
   (update ⟨Expr.nil, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve mapStorePointer)], predicates := [] }).exprs
@@ -550,7 +550,7 @@ private def mapStoreKey : List Term :=
   [Term.C32 1, Term.C32 2, Term.C32 3, Term.C32 4]
 
 private def mapStoreLookup : Observation :=
-  .helper .lookup ([Term.C64 1077412584, Term.V64 9] ++ mapStoreFrozenKey)
+  .helper 0 .lookup ([Term.C64 1077412584, Term.V64 9] ++ mapStoreFrozenKey)
 
 private def mapStoreLayouts : List MapLayout :=
   [{ mapId := 1077412584, keySize := 4, valueSize := 8 }]
@@ -582,8 +582,8 @@ private def symbolicMapStoreFrozenKeyCheck : Bool := Id.run do
   let some original := ((«seal» (Reg.stack lo (lo + 32)).bits (Term.V32 12) >>= fun stored => some (update ⟨mapStoreExprs, []⟩ { exprs := [Expr.mkEq (.stack lo (lo + 32)) stored], predicates := [] }).exprs))
     | return false
   let some frozen := bytesAt memoryEntry original keyPtr 4 | return false
-  let Pg := [.helper .lookup ([Term.C64 1077412584, keyPtr] ++ frozen)]
-  let pointer := star .w64 (.externalResult 0) (Term.C64 1 :: Term.C64 1077412584 :: frozen)
+  let Pg := [.helper 0 .lookup ([Term.C64 1077412584, keyPtr] ++ frozen)]
+  let pointer := star .w64 (.externalResult 0 0) (Term.C64 1 :: Term.C64 1077412584 :: frozen)
   let E := (update ⟨mapStoreExprs, []⟩ { exprs := [Expr.mkEq (Reg.real64 0) (solve pointer)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkRel (Reg.real64 0) .leu
         (addStar .w64 pointer (Term.C64 8))], predicates := [] }).exprs)
@@ -668,9 +668,9 @@ private def nonMapCellStoreObservationsCheck : Bool := Id.run do
   | _ => false
 #guard (lookupAddress64 (Term.C64 42)).isNone
 #guard (lookupAddress64 (addStar .w64 lookupPointer (Term.V64 3))).isNone
-#guard (lookupAddress64 (star .w64 (.externalResult 0)
+#guard (lookupAddress64 (star .w64 (.externalResult 0 0)
   [Term.C64 2, Term.C64 42, Term.V64 9])).isNone
-#guard (lookupAddress64 (star .w64 (.externalResult 1)
+#guard (lookupAddress64 (star .w64 (.externalResult 0 1)
   [Term.C64 1, Term.C64 42, Term.V64 9])).isNone
 #guard Id.run do
   let .ok σ := buildE0 memoryEntry | return false

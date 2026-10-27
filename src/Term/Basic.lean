@@ -21,8 +21,8 @@ inductive Reg where
 inductive Term where
   | const (w : Width) (c : Nat)
   | var (w : Width) (ξ : Nat)
-  /-- Live register. A value that must survive a later write is the term stored in `Expr`. -/
-  | regVar (reg : Reg)
+  /-- Live register. Nonzero `event` is that register's value captured at one node. -/
+  | regVar (event : Nat) (reg : Reg)
   | app (w : Width) (op : Op) (args : List Term)
   deriving Repr, Inhabited
 end
@@ -51,9 +51,9 @@ mutual
   private def termDecEq : (a b : Term) → Decidable (a = b)
     | .const w c, .const v d => decidable_of_iff (w = v ∧ c = d) (by simp)
     | .var w n, .var v m => decidable_of_iff (w = v ∧ n = m) (by simp)
-    | .regVar r, .regVar s =>
+    | .regVar e r, .regVar f s =>
       letI := regDecEq r s
-      decidable_of_iff (r = s) (by simp)
+      decidable_of_iff (e = f ∧ r = s) (by simp)
     | .app w f xs, .app v g ys =>
       letI := termListDecEq xs ys
       decidable_of_iff (w = v ∧ f = g ∧ xs = ys) (by simp)
@@ -149,14 +149,14 @@ def Reg.real64 : Nat → Reg := Reg.r64
 def Term.width : Term → Width
   | .const w _ => w
   | .var w _ => w
-  | .regVar r => Width.ofBits r.bits
+  | .regVar _ r => Width.ofBits r.bits
   | .app w _ _ => w
 
 /-- Bits constrained by the term. Narrow `low` and `extract` keep their own length. -/
 def Term.semanticBits : Term → Nat
   | .const w _ => w.bits
   | .var w _ => w.bits
-  | .regVar r => r.bits
+  | .regVar _ r => r.bits
   | .app w op _ =>
     match op with
     | .low q _ => q
@@ -170,7 +170,7 @@ def Term.semanticBits : Term → Nat
     | .add u | .sub u | .mullo u | .udiv u _ | .urem u | .sdiv u _ | .srem u
     | .mulh u | .mulhu u | .mulhsu u | .selectEq u | .neg u | .id u
     | .shl u | .lshr u | .ashr u | .ltu u | .lts u => u.bits
-    | .externalResult _ | .packetRead _ _ => w.bits
+    | .externalResult _ _ | .packetRead _ _ => w.bits
 
 def Term.C (w : Width) (c : Nat) : Term := .const w (MNat w.bits c)
 def Term.C32 (c : Nat) : Term := .C .w32 c
@@ -188,7 +188,7 @@ structure Var where
 def FV : Term → List Var
   | .const _ _ => []
   | .var w ξ => [⟨w, ξ, none⟩]
-  | .regVar r => [⟨Width.ofBits r.bits, r.index, some r⟩]
+  | .regVar _ r => [⟨Width.ofBits r.bits, r.index, some r⟩]
   | .app _ _ args => args.foldl (fun acc t => acc ++ FV t) []
 
 def FV.isEmpty (t : Term) : Bool := (FV t).isEmpty
@@ -196,7 +196,7 @@ mutual
   def Term.wellFormed : Term → Bool
     | .const w c => c < 2 ^ w.bits
     | .var _ _ => true
-    | .regVar reg => reg.valid
+    | .regVar _ reg => reg.valid
     | .app w op args => op.validSignature w (args.map Term.width) && termsWellFormed args
   termination_by t => sizeOf t
 
@@ -218,7 +218,7 @@ def ExternalInterpretation.Total (θ : ExternalInterpretation) : Prop :=
 def interpretWith (θ : ExternalInterpretation) (w : Width) (op : Op)
     (args : List Nat) : Option Nat :=
   match op, args with
-  | .externalResult lane, vs => θ.externalResult w lane vs
+  | .externalResult _ lane, vs => θ.externalResult w lane vs
   | .inputByte resource, [base, address] => θ.inputByte resource base address
   | _, _ => interpretOp op args
 
@@ -226,7 +226,7 @@ mutual
   def interpretTerm (ν : Var → Nat) (θ : ExternalInterpretation) : Term → Option Nat
     | .const w c => if c < 2 ^ w.bits then some c else none
     | .var w ξ => some (MNat w.bits (ν ⟨w, ξ, none⟩))
-    | .regVar r =>
+    | .regVar _ r =>
       if r.valid then
         some (MNat (Width.ofBits r.bits).bits
           (MNat r.bits (ν ⟨Width.ofBits r.bits, r.index, some r⟩)))
@@ -253,7 +253,7 @@ mutual
   def eval : Term → Option Nat
     | .const w c => if c < 2 ^ w.bits then some c else none
     | .var _ _ => none
-    | .regVar _ => none
+    | .regVar _ _ => none
     | .app w op args => do
       if !op.validSignature w (args.map Term.width) then none else
         let values ← evalArgs args
@@ -275,7 +275,7 @@ mutual
   def Term.orderKey : Term → List Nat
     | .const w c => [w.bits + 1, 1, c + 1]
     | .var w n => [w.bits + 1, 2, n + 1]
-    | .regVar r => [3] ++ regOrderKey r
+    | .regVar e r => [3, e + 1] ++ regOrderKey r
     | .app w op args =>
       [w.bits + 1, 4] ++ op.orderKey.map (· + 1) ++ [0] ++ termOrderKeys args ++ [0]
   termination_by t => sizeOf t
@@ -498,7 +498,7 @@ def rewriteHead (w : Width) (op : Op) (args : List Term) : Term :=
 def liftInteger : Term → Term
   | .const w c => .const w c
   | .var w n => .var w n
-  | .regVar r => .regVar r
+  | .regVar e r => .regVar e r
   | .app w op args => rewriteHead w op (args.map liftInteger)
 termination_by t => sizeOf t
 
@@ -667,7 +667,7 @@ theorem rewriteHead_width (w : Width) (op : Op) (args : List Term) :
 
 theorem liftInteger_width (t : Term) : (liftInteger t).width = t.width := by
   cases t with
-  | const _ _ | var _ _ | regVar _ => simp [liftInteger]
+  | const _ _ | var _ _ | regVar _ _ => simp [liftInteger]
   | app w op args =>
     simp only [liftInteger]
     exact rewriteHead_width w op (args.map liftInteger)
@@ -819,15 +819,15 @@ private theorem rewriteHead_fixed (w : Width) (op : Op) (args : List Term)
               cases hf : (wc == w && (Term.var ww nn).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;>
                   simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
-            | regVar r =>
-              cases hf : (wc == w && (Term.regVar r).width == w) <;>
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;>
                   simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
             | app ww op as =>
               cases hf : (wc == w && (Term.app ww op as).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;>
                   simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
-          | var _ _ | regVar _ | app _ _ _ =>
+          | var _ _ | regVar _ _ | app _ _ _ =>
             simp [rewriteHead, liftInteger, ha, hb, List.map_cons, List.map_nil]
   | lshr ow =>
     cases args with
@@ -851,15 +851,15 @@ private theorem rewriteHead_fixed (w : Width) (op : Op) (args : List Term)
               cases hf : (wc == w && (Term.var ww nn).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;>
                   simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
-            | regVar r =>
-              cases hf : (wc == w && (Term.regVar r).width == w) <;>
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;>
                   simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
             | app ww op as =>
               cases hf : (wc == w && (Term.app ww op as).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;>
                   simp [rewriteHead, hf, hs, liftInteger, ha, hb, List.map_cons, List.map_nil]
-          | var _ _ | regVar _ | app _ _ _ =>
+          | var _ _ | regVar _ _ | app _ _ _ =>
             simp [rewriteHead, liftInteger, ha, hb, List.map_cons, List.map_nil]
   | or q =>
     cases args with
@@ -919,14 +919,14 @@ private theorem rewriteHead_fixed (w : Width) (op : Op) (args : List Term)
   | zext _ _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
   | sext _ _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
   | bswap _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
-  | externalResult _ => simp [rewriteHead, liftInteger, map_fixed args h]
+  | externalResult _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
   | inputByte _ => simp [rewriteHead, liftInteger, map_fixed args h]
   | mergeLow _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
   | packetRead _ _ => simp [rewriteHead, liftInteger, map_fixed args h]
 
 theorem liftInteger_idempotent (t : Term) : liftInteger (liftInteger t) = liftInteger t := by
   match t with
-  | .const _ _ | .var _ _ | .regVar _ => simp [liftInteger]
+  | .const _ _ | .var _ _ | .regVar _ _ => simp [liftInteger]
   | .app w op args =>
     simp only [liftInteger]
     apply rewriteHead_fixed
@@ -937,7 +937,7 @@ termination_by sizeOf t
 
 mutual
 private def termDepth : Term → Nat
-  | .const _ _ | .var _ _ | .regVar _ => 0
+  | .const _ _ | .var _ _ | .regVar _ _ => 0
   | .app _ _ args => termDepths args + 1
 private def termDepths : List Term → Nat
   | [] => 0
@@ -972,7 +972,7 @@ private theorem termDepth_rewrite (w : Width) (op : Op) (args : List Term) :
 
 private theorem termDepth_lift (t : Term) : termDepth (liftInteger t) ≤ termDepth t := by
   match t with
-  | .const _ _ | .var _ _ | .regVar _ => simp [liftInteger, termDepth]
+  | .const _ _ | .var _ _ | .regVar _ _ => simp [liftInteger, termDepth]
   | .app w op args =>
     simp only [liftInteger, termDepth]
     exact Nat.le_trans (termDepth_rewrite w op (args.map liftInteger))
@@ -1035,8 +1035,8 @@ private theorem app_children_fixed (w : Width) (op : Op) (args : List Term)
                 cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
               · exact map_mem_fixed args (hmap.trans h) a ha
               · exact map_mem_fixed args (hmap.trans h) a ha
-            | regVar r =>
-              cases hf : (wc == w && (Term.regVar r).width == w) <;>
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
               · exact map_mem_fixed args (hmap.trans h) a ha
               · exact map_mem_fixed args (hmap.trans h) a ha
@@ -1053,7 +1053,7 @@ private theorem app_children_fixed (w : Width) (op : Op) (args : List Term)
                   simp only [rewriteHead, hf, hs] at h
                   exact (child_result_absurd w (.shl ow) args
                     (.app ww oop as) (by simp [hmap]) h).elim
-          | var _ _ | regVar _ | app _ _ _ =>
+          | var _ _ | regVar _ _ | app _ _ _ =>
             simp [rewriteHead, hmap] at h
             exact map_mem_fixed args (hmap.trans h) a ha
   | lshr ow =>
@@ -1083,8 +1083,8 @@ private theorem app_children_fixed (w : Width) (op : Op) (args : List Term)
                 cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
               · exact map_mem_fixed args (hmap.trans h) a ha
               · exact map_mem_fixed args (hmap.trans h) a ha
-            | regVar r =>
-              cases hf : (wc == w && (Term.regVar r).width == w) <;>
+            | regVar e r =>
+              cases hf : (wc == w && (Term.regVar e r).width == w) <;>
                 cases hs : ((k % w.bits) == 0) <;> simp [rewriteHead, hmap, hf, hs] at h
               · exact map_mem_fixed args (hmap.trans h) a ha
               · exact map_mem_fixed args (hmap.trans h) a ha
@@ -1101,7 +1101,7 @@ private theorem app_children_fixed (w : Width) (op : Op) (args : List Term)
                   simp only [rewriteHead, hf, hs] at h
                   exact (child_result_absurd w (.lshr ow) args
                     (.app ww oop as) (by simp [hmap]) h).elim
-          | var _ _ | regVar _ | app _ _ _ =>
+          | var _ _ | regVar _ _ | app _ _ _ =>
             simp [rewriteHead, hmap] at h
             exact map_mem_fixed args (hmap.trans h) a ha
   | or q =>
@@ -1140,7 +1140,7 @@ private theorem app_children_fixed (w : Width) (op : Op) (args : List Term)
                   exact map_mem_fixed args (hmap.trans heq) a ha
   | add _ | sub _ | mullo _ | udiv _ _ | urem _ | sdiv _ _ | srem _ | mulh _ | mulhu _
     | mulhsu _ | selectEq _ | neg _ | id _ | and _ | xor _ | ashr _ | ltu _ | lts _
-    | low _ _ | extract _ _ _ | zext _ _ _ | sext _ _ _ | bswap _ _ | externalResult _
+    | low _ _ | extract _ _ _ | zext _ _ _ | sext _ _ _ | bswap _ _ | externalResult _ _
     | inputByte _ | mergeLow _ _ | packetRead _ _ =>
     simp only [rewriteHead] at h
     injection h with _ _ heq
@@ -1358,7 +1358,7 @@ mutual
     cases t with
     | const w c => simpa only [eval, interpretTerm] using h
     | var w n => simp [eval] at h
-    | regVar r => simp [eval] at h
+    | regVar _ _ => simp [eval] at h
     | app w op args =>
       cases hs : op.validSignature w (args.map Term.width) with
       | false => simp [eval, hs] at h
@@ -1401,7 +1401,7 @@ theorem eval_lt (t : Term) (v : Nat) (h : eval t = some v) : v < 2 ^ t.width.bit
     · simp_all [Term.width]
     · contradiction
   | var w n => simp [eval] at h
-  | regVar r => simp [eval] at h
+  | regVar _ _ => simp [eval] at h
   | app w op args =>
     cases hs : op.validSignature w (args.map Term.width) with
     | false => simp [eval, hs] at h

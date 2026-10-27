@@ -304,9 +304,9 @@ private def contextReg (Eg : List Expr) (source : Term) (offset width : Nat)
 Displacement stays in `MNat 32`. -/
 def lookupAddress : Term → Option (Nat × Term × List Term × Term)
   | .app .w32 (.id .w32) [a] => lookupAddress a
-  | .app .w32 (.externalResult 0) (id :: map :: rest) =>
+  | .app .w32 (.externalResult event 0) (id :: map :: rest) =>
       if eval (solve id) == some 1 && map.width == .w32 then
-        some (0, map, rest, .app .w32 (.externalResult 0) (id :: map :: rest))
+        some (0, map, rest, .app .w32 (.externalResult event 0) (id :: map :: rest))
       else none
   | .app .w32 (.add .w32) [a, b] =>
       match lookupAddress a, eval (solve b) with
@@ -381,10 +381,10 @@ private def mapMaterialize (Eg : List Expr) (source : Term)
       let gap := Eg.bindings.all fun e => !e.reg.overlaps word
       if within + width > 4 || wordBase == 0 || !gap then none
       else
-        let args := match base with
-          | .app _ (.externalResult _) saved => saved
-          | _ => [Term.C32 1]
-        let content := star .w32 (.externalResult (1 + wordBase / 4)) args
+        let event := match base with
+          | .app _ (.externalResult event _) _ => event
+          | _ => 0
+        let content := star .w32 (.externalResult event (1 + wordBase / 4)) [Term.C32 1]
         let rows ← ((«seal» (word).bits content >>= fun stored => some [Expr.mkEq word stored]))
         some (reg, rows)
 
@@ -856,11 +856,11 @@ private def frozenResourceBuffersCheck : Bool := Id.run do
   let some E := ((«seal» (Reg.stack 0 32).bits (Term.C32 0x04030201) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.stack 0 32) stored], predicates := [] }).exprs)) | return false
   let some E := ((«seal» (Reg.packet 8 16).bits (star .w32 (.low 8 32) [Term.C32 0xaa]) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.packet 8 16) stored], predicates := [] }).exprs)) | return false
   let some E := ((«seal» (Reg.packet 16 24).bits (star .w32 (.low 8 32) [Term.C32 0xbb]) >>= fun stored => some (update ⟨E, []⟩ { exprs := [Expr.mkEq (.packet 16 24) stored], predicates := [] }).exprs)) | return false
-  let pointer := star .w32 (.externalResult 0) (Term.C32 1 :: Term.C32 42 :: key)
+  let pointer := star .w32 (.externalResult 0 0) (Term.C32 1 :: Term.C32 42 :: key)
   let E := (update ⟨E, []⟩ { exprs := [Expr.mkEq (Reg.real32 8) (solve pointer)], predicates := [] }).exprs
     |> (fun acc => (update ⟨acc, []⟩ { exprs := [Expr.mkRel (Reg.real32 8) .leu
         (addStar .w32 pointer (Term.C32 8))], predicates := [] }).exprs)
-  let preds : List Observation := [.helper .lookup ([Term.C32 42, Term.V32 0] ++ key)]
+  let preds : List Observation := [.helper 0 .lookup ([Term.C32 42, Term.V32 0] ++ key)]
   let some mapBytes := readBufferBytes E (addStar .w32 pointer (Term.C32 0)) 4
       (preds := preds) | return false
   let some mapVals := mapBytes.mapM fun t => eval (solve t) | return false

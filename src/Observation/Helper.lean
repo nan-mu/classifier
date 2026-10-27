@@ -44,19 +44,49 @@ def freezeHelperArgs (conv : HelperConvention) (E : List Expr)
   | .lookup, _ | .update, _ | .delete, _ => none
   | _, args => some args
 
+/-- A known layout whose bytes cannot be read is `incomplete`.
+No layout keeps the ABI arguments. -/
+inductive Frozen where
+  | snap (args : List Term)
+  | abi (args : List Term)
+  | incomplete
+
+def freezeSnapshot (conv : HelperConvention) (E : List Expr)
+    (kind : HelperKind) (args : List Term) : Frozen :=
+  match freezeHelperArgs conv E kind args with
+  | some snap => .snap snap
+  | none =>
+    if kind.freezesBuffers then
+      match args.head? with
+      | some map => if (Anchor.layout? E map).isSome then .incomplete else .abi args
+      | none => .abi args
+    else .abi args
+
+/-- A map cell may be narrower than the helper return. `externalResult` requires
+every argument to have the return width, so a narrow cell is zero-extended and a
+wider cell is cut down. Leaving the original width makes the return ill-formed
+and the next step cannot parse it. -/
+private def asReturnArg (w : Width) (t : Term) : Term :=
+  let solved := solve t
+  if solved.width == w then solved
+  else if solved.width.bits < w.bits then
+    zStar (min solved.semanticBits solved.width.bits) w solved.width.bits solved
+  else
+    star w (.low w.bits solved.width.bits) [solved]
+
 /-- Lane 0. The argument list is the helper id, the snapshot, then the map-cell
 terms already in `E` for that map. Checksum keeps the low 16 bits. An unsupported
 id is the all-ones constant. -/
-def callReturnTerm (conv : HelperConvention) (E : List Expr)
+def callReturnTerm (conv : HelperConvention) (event : Nat) (E : List Expr)
     (kind : HelperKind) (id : Nat) (snapshot : List Term) : Term :=
   let w := conv.width
   let cells :=
     if kind.freezesBuffers then
       match snapshot.head?.bind (eval ∘ solve) with
-      | some mid => mapCellTerms E mid
+      | some mid => (mapCellTerms E mid).map (asReturnArg w)
       | none => []
     else []
-  let external := star w (.externalResult 0) (Term.C w id :: snapshot ++ cells)
+  let external := star w (.externalResult event 0) (Term.C w id :: snapshot ++ cells)
   match kind with
   | .checksum => star w (.low 16 w.bits) [external]
   | .unsupported _ => Term.C w ((1 <<< w.bits) - 1)
@@ -64,7 +94,7 @@ def callReturnTerm (conv : HelperConvention) (E : List Expr)
 
 /-- Cell equality at value offset zero, plus a `.leu` from the return register to
 `return + valueSize`. `none` is a failed anchor. `some []` is not a lookup anchor. -/
-def lookupAnchor (conv : HelperConvention) (E : List Expr)
+def lookupAnchor (conv : HelperConvention) (event : Nat) (E : List Expr)
     (kind : HelperKind) (id : Nat) (snapshot : List Term) : Option (List Expr) := do
   if kind != .lookup then return []
   match snapshot with
@@ -74,22 +104,21 @@ def lookupAnchor (conv : HelperConvention) (E : List Expr)
       let some bits := conv.anchorBits layout.valueSize | return []
       if key.length != layout.keySize then return []
       let some narrowed := key.mapM conv.keyByte | none
-      let ret := callReturnTerm conv E kind id snapshot
+      let ret := callReturnTerm conv event E kind id snapshot
       let cell := Reg.map mid narrowed 0 bits
-      let some stored := «seal» cell.bits ret | none
+      let captured := Term.regVar event conv.returnReg
+      let some stored := («seal» cell.bits captured).orElse (fun _ => «seal» cell.bits ret) | none
       let bound := addStar conv.width ret (Term.C conv.width layout.valueSize)
-      pure [Expr.mkEq cell stored, Expr.mkRel conv.returnReg .leu bound]
+      let witness := Reg.context (.lddw 4096) 0 conv.width.bits
+      pure [Expr.mkEq cell stored, Expr.mkRel witness .leu bound]
     | _, _ => pure []
   | _ => pure []
 
-/-- Byte extent of a lookup return. The witness register's equality is `base`,
-and the relation term is that base plus a concrete byte count.
+/-- Byte extent of a lookup return. The bound stays after the return register is overwritten.
 The `Bool` is `true` when the relation is strict. -/
 def mapValueExtent (E : List Expr) (base : Term) : Option (Nat × Bool) :=
   E.constraints.findSome? fun e => do
     if e.rel != .leu && e.rel != .ltu then none
-    let lhs ← E.lookupEq e.reg
-    if solve lhs != solve base then none
     let (spine, disp) := additiveSpine base.width (solve e.term)
     let (baseSpine, baseDisp) := additiveSpine base.width (solve base)
     if spine != baseSpine || disp < baseDisp then none
@@ -125,13 +154,18 @@ private def sampleConv (w : Width) : HelperConvention where
 #guard freezeHelperArgs (sampleConv .w64) Expr.nil .printk [Term.C64 1, Term.C64 2] ==
   some [Term.C64 1, Term.C64 2]
 #guard freezeHelperArgs (sampleConv .w64) Expr.nil .lookup [Term.C64 42, Term.C64 2] == none
-#guard callReturnTerm (sampleConv .w64) Expr.nil (.unsupported 9) 9 [] ==
+#guard callReturnTerm (sampleConv .w64) 0 Expr.nil (.unsupported 9) 9 [] ==
   Term.C64 ((1 <<< 64) - 1)
 
 private def cellRow : List Expr :=
   [Expr.mkEq (Reg.map 42 [] 0 32) (Term.C64 7)]
 
-#guard callReturnTerm (sampleConv .w64) Expr.nil .lookup 1 [Term.C64 42, Term.C64 9] !=
-  callReturnTerm (sampleConv .w64) cellRow .lookup 1 [Term.C64 42, Term.C64 9]
+#guard callReturnTerm (sampleConv .w64) 0 Expr.nil .lookup 1 [Term.C64 42, Term.C64 9] !=
+  callReturnTerm (sampleConv .w64) 0 cellRow .lookup 1 [Term.C64 42, Term.C64 9]
+
+private def narrowCell : List Expr :=
+  [Expr.mkEq (Reg.map 42 [] 0 32) (Term.C32 7)]
+
+#guard (callReturnTerm (sampleConv .w64) 3 narrowCell .lookup 1 [Term.C64 42, Term.C64 9]).wellFormed
 
 end Observation

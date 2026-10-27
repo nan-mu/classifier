@@ -22,7 +22,7 @@ private theorem value_lt (ν : Var → Nat) (θ : ExternalInterpretation)
     · simp [value, interpretTerm, hc, Term.width]
     · simpa [value, interpretTerm, hc, Term.width] using Nat.two_pow_pos w.bits
   | var w n => simpa [value, interpretTerm, Term.width] using MNat_lt w.bits _
-  | regVar r =>
+  | regVar _ r =>
     by_cases hr : r.valid = true
     · simp only [value, interpretTerm, hr, Term.width]
       exact MNat_lt _ _

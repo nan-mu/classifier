@@ -8,7 +8,7 @@ private theorem interpretWith_total (θ : ExternalInterpretation) (hθ : θ.Tota
     (hs : op.validSignature w widths = true) (hl : values.length = widths.length) :
     ∃ v, interpretWith θ w op values = some v := by
   cases op
-  case externalResult lane =>
+  case externalResult _ lane =>
     exact hθ.1 w lane values
   case inputByte resource =>
     have hw : widths.length = 2 := by
@@ -63,7 +63,7 @@ mutual
       have hc : c < 2 ^ w.bits := by simpa only [Term.wellFormed, decide_eq_true_eq] using ht
       exact ⟨c, by simp [interpretTerm, hc]⟩
     | var w n => exact ⟨MNat w.bits (ν ⟨w, n, none⟩), by simp [interpretTerm]⟩
-    | regVar r =>
+    | regVar _ r =>
       have hr : r.valid = true := by
         simpa only [Term.wellFormed] using ht
       exact ⟨MNat (Width.ofBits r.bits).bits
@@ -97,11 +97,11 @@ end
 
 /-- Undefined partial environments are not implicitly promoted to complete meanings. -/
 theorem interpretTerm_external_missing (ν : Var → Nat) (θ : ExternalInterpretation)
-    (w : Width) (lane : Nat) (args : List Term) (values : List Nat)
-    (hs : (Op.externalResult lane).validSignature w (args.map Term.width) = true)
+    (w : Width) (event lane : Nat) (args : List Term) (values : List Nat)
+    (hs : (Op.externalResult event lane).validSignature w (args.map Term.width) = true)
     (ha : interpretTerms ν θ args = some values)
     (hm : θ.externalResult w lane values = none) :
-    interpretTerm ν θ (.app w (.externalResult lane) args) = none := by
+    interpretTerm ν θ (.app w (.externalResult event lane) args) = none := by
   simp [interpretTerm, hs, ha, interpretWith, hm]
 
 end Term

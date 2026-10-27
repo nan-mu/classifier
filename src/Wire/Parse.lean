@@ -95,8 +95,12 @@ private def parseOp (text : String) (w : Width) : Option Op := do
     let [bytes, ending] := (text.drop 10).toString.splitOn "_" | none
     return .packetRead (← bytes.toNat?) (← ending.toNat?)
   if text.startsWith "externalResult" then
-    let lane := (text.drop 14).toString
-    return .externalResult (← lane.toNat?)
+    let rest := (text.drop 14).toString
+    if rest.contains '_' then
+      let [event, lane] := rest.splitOn "_" | none
+      return .externalResult (← event.toNat?) (← lane.toNat?)
+    else
+      return .externalResult 0 (← rest.toNat?)
   if text.startsWith "zext" || text.startsWith "sext" then
     let [q, bits] := (text.drop 4).toString.splitOn "/" | none
     let width ← parseWidth bits
@@ -134,7 +138,7 @@ private def opArity : Op → Option Nat
   | .neg _ | .id _ | .low _ _ | .extract _ _ _ | .zext _ _ _ | .sext _ _ _
   | .bswap _ _ => some 1
   | .selectEq _ => some 4
-  | .externalResult _ | .packetRead _ _ => none
+  | .externalResult _ _ | .packetRead _ _ => none
   | _ => some 2
 
 private def tokenChar (c : Char) : Bool := c != '(' && c != ')' && c != ','
@@ -176,9 +180,11 @@ mutual
         let (term, tail) ← parseTermChars width tail annotated
         let ')' :: tail := tail | none
         if term.width != width then none else return (term, tail)
-      if name == "regVar" then
+      if name.startsWith "regVar" then
+        let suffix := (name.drop 6).toString
+        let event ← if suffix.isEmpty then some 0 else suffix.toNat?
         let (reg, tail) ← takeBalanced tail
-        return (.regVar (← parseReg (String.ofList reg)), tail)
+        return (.regVar event (← parseReg (String.ofList reg)), tail)
       let op ← if annotated then parsePredicateOp name w else parseOp name w
       let width := opWidth w op
       let input := if annotated then
@@ -277,7 +283,7 @@ private def predicateRelWellFormed (w : Width) : Rel → Bool
 helper call contracts, resource provenance/layout, symbolic key byte-valuedness and
 dynamic identity uniqueness remain semantic obligations. -/
 def predicateWellFormed : Observation → Bool
-  | .helper kind args =>
+  | .helper _ kind args =>
     kind.id < 2 ^ 32 && helperKind kind.id == kind &&
       (args.all (fun t => t.width == .w32) || args.all (fun t => t.width == .w64)) &&
       termsWellFormed args
@@ -319,11 +325,13 @@ source strings carry their own term widths in the fixed w32 parsing context. -/
 def parsePredicateJson (value : Lean.Json) : Option Observation := do
   let predicate : Observation ← match ← jsonString value "kind" with
     | "helper" => do
-      if !exactFields value ["kind", "helperId", "args"] then none else
+      if !exactFields value ["kind", "helperId", "args"] &&
+          !exactFields value ["kind", "helperId", "event", "args"] then none else
         let id ← jsonNat value "helperId"
+        let event := (jsonNat value "event").getD 0
         let args ← (value.getObjVal? "args" >>= Lean.Json.getArr?).toOption
         let args ← args.toList.mapM fun a => do parseTerm (← a.getStr?.toOption)
-        pure (.helper (helperKind id) args)
+        pure (.helper event (helperKind id) args)
     | "branch" => do
       if !exactFields value ["kind", "position", "dir", "width", "cond"] then none else
         let position ← jsonNat value "position"
@@ -384,10 +392,10 @@ def parseStateJson (exprsJson predsJson : String) : Option State := do
     pure { exprs := E, predicates }
 
 private def parseRoundTripCheck : Bool :=
-  let terms := [Term.C32 4294967295, Term.V32 12, Term.regVar (Reg.real32 10),
+  let terms := [Term.C32 4294967295, Term.V32 12, Term.regVar 0 (Reg.real32 10),
     Term.app .w32 (.add .w32) [Term.V32 1, Term.C32 4],
     Term.app .w32 (.extract 0 8 32) [Term.V32 2],
-    Term.app .w32 (.externalResult 1) [Term.C32 1],
+    Term.app .w32 (.externalResult 0 1) [Term.C32 1],
     Term.app .w32 (.mergeLow 8 32) [Term.V32 3,
       Term.app .w32 (.extract 8 8 32) [Term.V32 4]],
     Term.app .w32 (.or 32) [Term.app .w32 (.low 8 32)
@@ -406,9 +414,9 @@ private def parseRoundTripCheck : Bool :=
     match (Lean.Json.parse (renderExprJson e)).toOption >>= parseExprJson with
     | some e' => e'.reg == e.reg && e'.rel == e.rel && e'.term == e.term
     | none => false) &&
-  [Observation.helper .lookup [Term.C32 1, Term.regVar (Reg.real32 11)],
-    .helper (.unsupported 999) [],
-    .helper .lookup [Term.V32 10, Term.C32 0]].all (fun p =>
+  [Observation.helper 0 .lookup [Term.C32 1, Term.regVar 0 (Reg.real32 11)],
+    .helper 0 (.unsupported 999) [],
+    .helper 0 .lookup [Term.V32 10, Term.C32 0]].all (fun p =>
       ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p)
 
 private def parseOpsRoundTripCheck : Bool :=
@@ -418,7 +426,7 @@ private def parseOpsRoundTripCheck : Bool :=
     .mulh .w32, .mulhu .w32, .mulhsu .w32, .selectEq .w32,
     .and 32, .or 32, .xor 32, .shl .w32, .lshr .w32, .ashr .w32,
     .ltu .w32, .lts .w32, .low 8 32, .extract 8 16 32, .zext 8 .w32 32,
-    .sext 16 .w32 32, .bswap 32 32, .externalResult 3, .inputByte 7,
+    .sext 16 .w32 32, .bswap 32 32, .externalResult 0 3, .inputByte 7,
     .mergeLow 16 32]
   ops.all fun op =>
     let args := if opArity op == some 1 then [Term.V32 1]
@@ -463,7 +471,7 @@ private def fiveClassRoundTripCheck : Bool :=
   let extended := Term.app .w64 (.zext 8 .w64 32) [byte]
   let mixedInput := Term.app .w32 (.inputByte 3)
     [Term.app .w64 (.and 64) [max64, Term.C64 15], Term.C64 4]
-  [Observation.helper .lookup [Term.C32 1, Term.V32 2],
+  [Observation.helper 0 .lookup [Term.C32 1, Term.V32 2],
     .branch 1 .taken ⟨Term.V32 1, .eq, Term.C32 0⟩,
     .branch 2 .notTaken ⟨max64, .bitsz 32, Term.C64 1⟩,
     .ret (Term.C32 9), .ret (Term.C64 0), .ret max64, .ret extended,
@@ -497,7 +505,7 @@ private def malformedPredicateCheck : Bool :=
   let rejected (text : String) :=
     ((Lean.Json.parse text).toOption >>= parsePredicateJson).isNone
   let badTerms := [Term.const .w32 4294967296, .const .w64 18446744073709551616,
-    .regVar (.map 1 [] 0 0), .app .w32 (.neg .w32) [Term.C32 1, Term.C32 2],
+    .regVar 0 (.map 1 [] 0 0), .app .w32 (.neg .w32) [Term.C32 1, Term.C32 2],
     .app .w32 (.add .w32) [Term.V64 1, Term.C32 0],
     .app .w32 (.add .w32) [Term.app .w32 (.low 0 32) [Term.C32 1], Term.C32 0],
     .app .w32 (.extract 31 2 32) [Term.C32 0],
@@ -505,11 +513,11 @@ private def malformedPredicateCheck : Bool :=
     .app .w64 (.zext 33 .w64 32) [Term.C32 0],
     .app .w32 (.bswap 8 32) [Term.C32 0],
     .app .w32 (.mergeLow 8 64) [Term.C32 0, Term.C32 0],
-    .app .w32 (.externalResult 0) [],
+    .app .w32 (.externalResult 0 0) [],
     .app .w64 (.inputByte 1) [Term.V64 1, Term.V64 2],
     .app .w32 (.inputByte 1) [Term.V32 1, Term.V64 2]]
-  let badPredicates := [Observation.helper (.unsupported 4294967296) [],
-    .helper .lookup [Term.V64 1, Term.V32 2],
+  let badPredicates := [Observation.helper 0 (.unsupported 4294967296) [],
+    .helper 0 .lookup [Term.V64 1, Term.V32 2],
     .branch 0 .taken ⟨Term.C32 0, .eq, Term.C32 0⟩,
     .branch 1 .taken ⟨Term.C32 0, .eqN 0, Term.C32 0⟩,
     .branch 1 .taken ⟨Term.C32 0, .bitsnz 33, Term.C32 0⟩,
@@ -543,7 +551,7 @@ private def malformedPredicateCheck : Bool :=
   ].all rejected
 
 private def fiveClassStateCheck : Bool :=
-  let ps := [Observation.helper .clock [],
+  let ps := [Observation.helper 0 .clock [],
     .branch 1 .notTaken ⟨Term.V32 1, .ne, Term.C32 0⟩,
     .ret (Term.C64 18446744073709551615),
     .mapWrite (Term.C64 1) [Term.C32 255] 0 32 (Term.C32 3),
@@ -556,22 +564,22 @@ private def fiveClassStateCheck : Bool :=
 #guard fiveClassRoundTripCheck
 #guard branchComplementCheck
 #guard malformedPredicateCheck
-#guard renderPredicateJson (.helper .lookup [Term.C32 1, Term.V32 2]) ==
-  "{\"kind\":\"helper\",\"helperId\":1,\"args\":[\"1\",\"v32:2\"]}"
-#guard !predicateWellFormed (.helper (.unsupported 1) [])
+#guard renderPredicateJson (.helper 0 .lookup [Term.C32 1, Term.V32 2]) ==
+  "{\"kind\":\"helper\",\"helperId\":1,\"event\":0,\"args\":[\"1\",\"v32:2\"]}"
+#guard !predicateWellFormed (.helper 0 (.unsupported 1) [])
 #guard
-  let p := Observation.helper .lookup
+  let p := Observation.helper 0 .lookup
     [Term.C64 1077412584, Term.app .w64 (.add .w64) [Term.V64 0, Term.C64 4]]
   predicateWellFormed p &&
     ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p
 #guard
   let p := Observation.ret
-    (Term.app .w64 (.externalResult 0) [Term.C64 1, Term.V64 2, Term.V64 3])
+    (Term.app .w64 (.externalResult 0 0) [Term.C64 1, Term.V64 2, Term.V64 3])
   predicateWellFormed p &&
     ((Lean.Json.parse (renderPredicateJson p)).toOption >>= parsePredicateJson) == some p
-#guard !predicateWellFormed (.helper .lookup [Term.C64 1, Term.V32 2])
+#guard !predicateWellFormed (.helper 0 .lookup [Term.C64 1, Term.V32 2])
 #guard !predicateWellFormed (.ret
-  (Term.app .w64 (.externalResult 0) [Term.C64 1, Term.V32 2]))
+  (Term.app .w64 (.externalResult 0 0) [Term.C64 1, Term.V32 2]))
 #guard constraintRoundTripCheck
 #guard (parseStateJson "[]" "[{\"kind\":\"cmp\",\"width\":32,\"rel\":\"eq\",\"lhs\":\"0\",\"rhs\":\"0\"}]").isNone
 #guard (parseStateJson "[]" "[{\"kind\":\"ret\",\"term\":\"2\"}]").isNone
