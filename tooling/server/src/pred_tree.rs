@@ -1089,8 +1089,8 @@ mod tests {
         assert!(report.edges.is_empty());
         assert_eq!(pred_kinds(&report.nodes[0].left), vec!["branch"]);
         fingerprint_eq(
-            &pred_fingerprint(&report.nodes[0].left, "branch"),
-            &pred_fingerprint(&report.nodes[0].right, "branch"),
+            pred_fingerprint(&report.nodes[0].left, "branch"),
+            pred_fingerprint(&report.nodes[0].right, "branch"),
         );
         assert_eq!(report.nodes[0].match_status, MatchStatus::Pass);
     }
@@ -1365,8 +1365,8 @@ mod tests {
         let right = run("rv32imc", vec![enode(0, "exit", vec![rv_bound()])], vec![]);
         let report = build_compare_tree(&left, &right);
         fingerprint_eq(
-            &pred_fingerprint(&report.nodes[0].left, "branch"),
-            &pred_fingerprint(&report.nodes[0].right, "branch"),
+            pred_fingerprint(&report.nodes[0].left, "branch"),
+            pred_fingerprint(&report.nodes[0].right, "branch"),
         );
         assert_eq!(report.nodes[0].match_status, MatchStatus::Fail);
     }
@@ -1778,7 +1778,7 @@ mod tests {
     fn packet_end_spellings_unify() {
         let left = plain("notTaken", "gtu", "add32(v32:4,8)", "add32(v32:4,v32:5)");
         let right = r#"{"kind":"branch","position":6,"dir":"taken","width":64,"cond":{"lhs":"add64(id64(low64(zext32/64/32(v32:4))),8)","rel":"gtu","rhs":"low64(zext32/64/32(add32(v32:4,128)))"}}"#;
-        assert!(branch_step(&left, &right, Some("not_taken")));
+        assert!(branch_step(&left, right, Some("not_taken")));
     }
 
     #[test]
