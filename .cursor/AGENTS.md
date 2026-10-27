@@ -10,11 +10,12 @@ session. Do not delegate to `omp`, `spec-author`, or any external agent harness.
 
 ## Specs, Lean, and end-to-end work
 
-Current `doc/` specs define Create / Step / History / Merge / Merge-Step
-semantics. They outrank older code, obsolete limits, and historical design
-assumptions. Adapt the system to the current specs; do not weaken specs to
-match old code. If a spec is internally ambiguous, resolve from the math and
-the live expand flow — do not silently drop requirements.
+Current `doc/` notes state the comparison model: acceptance, expressions,
+observations, registers, `create` / `step` / `update` / `history`, paths,
+matching, limitations, and proof obligations. A note is a definition, a
+premise, or an unproved proposition. It does not discharge
+`src/Verification/Unverified`. When a note and the Lean differ, fix the one
+that is wrong. Do not cite a deleted `doc/` path.
 
 **Lean ↔ `doc/` stay aligned.** Changing Lean behavior updates affected docs;
 changing operation semantics updates Lean. Docs state math (I/O, preconditions,
@@ -38,11 +39,16 @@ When the task touches expand, merge, or the viewer:
 ## What Cursor owns
 
 Rust/Cargo workspace under `tooling/`: Lean FFI binding, Expand HTTP API,
-web graph viewer, fixtures, scripts, and CI — plus Lean math/implementation
-under `Core/`, `Node/`, `RV32/`, `EBPF/`, and specs under
-`doc/`.
+web graph viewer, fixtures, scripts, and CI — plus Lean sources under `src/`
+and notes under `doc/`.
 
 ```text
+src/                            Lean sources
+  Term Expression Observation Interface Wire Match    Lake lib Core
+  Node/                         paths, budget, exact-config merge
+  Cross/RV32/                   RV32IMC create, decode, step
+  Cross/EBPF/                   eBPF create, decode, step
+  Verification/                 sorry-free statements; Unverified/ stays out
 tooling/Cargo.toml              Rust workspace (one Cargo.lock)
 tooling/lean-binding/           FFI to Lean create/step/merge (+ legacy test helpers)
 tooling/lean-binding/tests/     binding and snapshot regressions
@@ -54,17 +60,16 @@ tooling/scripts/smoke.py        live API smoke
 tooling/scripts/rust-ci.sh      nightly fmt + clippy gate
 tooling/fixtures/just_tx.elf    default Compact XDP ELF
 tooling/fixtures/xdp.elf        firewall / helper-call fixture
+tooling/vendor/xpost-elf        vendored Compact ELF reader
 .github/workflows/rust.yml      mirrors rust-ci.sh
-doc/                            math defs, proofs, research notes
-Core/ Node/ RV32/ EBPF/         Lean libraries
-Core/Cross/                     cross-arch normalize / unify
-CrossArch/                      dual-arch fixtures (not in server dylibs)
+doc/                            comparison-model notes
+LICENSE                         MIT
 ```
 
 Use Lake as the repo entrypoint (`lake build`, `lake test`, `lake run dev`).
 Cargo and npm are component tools. Do not hard-code
 `tooling/target/debug/server`; take the path from Cargo artifacts.
-Keep one workspace lockfile. Validate Compact XDP ELF uploads via sibling
+Keep one workspace lockfile. Validate Compact XDP ELF uploads with the vendored
 `tooling/vendor/xpost-elf`. Reject raw BIN uploads.
 
 Default fixture budget notes used by tests/UI: HTTP/WebUI default budget
@@ -98,8 +103,10 @@ supported expand contract is three stateless String FFI calls (via
   export exists; treat the JSON contract as arch-neutral at the boundary.
 - `expand_merge(requestJson)` → exact-config merge verdict JSON
   (`merged` / `reject`). Request is arch-neutral: `taken` + `notTaken[]`
-  applied snapshots and `observationModel: HelperOnly` (no program / Meta).
-  Export: `lean_expand_merge` in `Node/Merge.lean`.
+  applied snapshots and `observationModel` (no program / Meta). `FiveClass`
+  accepts all five observation classes. `HelperOnly` is a legacy filter that
+  accepts only Helper requirements and does not project supplied states.
+  Export: `lean_expand_merge` in `src/Node/Merge.lean`.
 
 No Lean expand object stays alive across calls. Legacy snapshot helpers may exist
 for tests; do not grow new product paths on them.
