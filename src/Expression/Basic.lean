@@ -6,7 +6,7 @@ import Term.Basic
 namespace Expression
 open Term Term.Value
 
-/-! ## Relations (`doc/Expr/待处理.md#关系符定义`) -/
+/-! ## Relations (`doc/表达式.md`) -/
 
 inductive Rel where
   | eq | ne

@@ -8,7 +8,7 @@ import Observation.Insn
 namespace Wire
 open Term.Value Expression Term Observation
 
-/-! ## Compact string renderers for State JSON (`doc/NodeInference/step.md#语义状态与节点状态`) -/
+/-! ## Compact string renderers for State JSON (`doc/表达式.md`, `doc/接口.md`) -/
 
 def renderWidth : Width → String
   | .w32 => "32"

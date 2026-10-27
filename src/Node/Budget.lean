@@ -5,7 +5,7 @@ import Wire.Render
 namespace Node
 open Term Term.Value Expression Observation Interface Interface.Step Wire
 
-/-! ## Budgeted node expansion (`doc/NodeInference/step.md`) -/
+/-! ## Budgeted node expansion (`doc/路径.md`). `fuel` bounds analysis and is separate from a rejected instruction. -/
 
 structure WorkState where
   nodes : Array Node
@@ -86,7 +86,7 @@ private def appendPrepared (eta : NodeId) (nodes : Array Node) (edges : Array Ed
       let work := if Node.isExit loc then work else work ++ [zeta]
       appendPrepared eta nodes edges work rs
 
-/-- One node expansion (`doc/NodeInference/step.md`). `progLen` bounds non-Exit targets. -/
+/-- One node expansion (`doc/路径.md`). `progLen` bounds non-Exit targets. -/
 def expandOne (progLen : Nat) (step : Nat → State → StepResult) (ws : WorkState) :
     Sum ExpandOutcome WorkState :=
   match ws.work with
@@ -116,7 +116,7 @@ def expandOne (progLen : Nat) (step : Nat → State → StepResult) (ws : WorkSt
                 fuel  := ws.fuel - 1
               }
 
-/-- Recurse on remaining fuel (`doc/NodeInference/step.md#有限预算展开的终止证明`). -/
+/-- Recurse while fuel remains (`doc/路径.md`). This definition is `partial`. -/
 partial def expand (progLen : Nat) (step : Nat → State → StepResult) (ws : WorkState) :
     ExpandOutcome :=
   match expandOne progLen step ws with

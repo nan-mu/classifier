@@ -5,12 +5,13 @@ namespace Node
 open Term Term.Value Expression Observation Interface Interface.Step Wire
 
 /-!
-One step of 标准推理 or Taken推演. See `doc/NodeInference/分支合并处理.md`.
+One expansion step (`doc/路径.md`). `DriveLabel.standard` follows an ordinary
+successor. `DriveLabel.taken` walks the other side after the not-taken interval
+is known.
 
-`history` takes the not_taken interval as pairs `(E_i, O_i)` and the entry
-bindings of that interval. It returns registers whose entry values do not
-reach an observation. Positions here are 0-based indexes. The document counts
-instructions from 1.
+`history` (`doc/接口.md`) takes that interval as pairs `(E_i, O_i)` plus the
+entry bindings, and returns registers whose entry values do not reach an
+observation. Positions in this module are 0-based indexes.
 -/
 
 /-- How many only-taken returns to the same parent this frame may still take. -/

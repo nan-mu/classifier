@@ -1,18 +1,18 @@
 # Classifier
 
-基于 Lean 的指令符号表达式与有预算展开项目。`Core` 提供寄存器、符号项、表达式和 wire 类型。`Node` 比较 HelperOnly 的 ExactConfig。`RV32` 提供 RV32 解码、值转换和有预算展开。`EBPF/` 提供有限解码、ALU 值转换、入口和局部 step。
+Classifier 取同一份 XDP C 的两份编译结果。一份是 eBPF 字节码。另一份是 ESP32-C3 上的 RV32IMC XDP ELF。它先做有预算的符号展开，再对照展开得到的观察。已经实现的目标是 RV32IMC，ABI 为 `ilp32`，没有 FPU。
 
-## 文档入口
+eBPF 检查器在自己的模型里给出 Safe(E)。本仓库对照的是两边的选定观察。由观察一致得到 Safe(R) 还缺的对应写在 [证明义务](doc/证明义务.md)。
 
-完整阅读路线见 [文档索引](doc/README.md)。
+许可证是 [MIT](LICENSE)。
 
-- [寄存器定义](doc/寄存器定义.md)、[Expression](doc/Expr/Expr.md)与 [Observation](doc/Predicate/谓词定义.md)：对象定义、比较运算符和观察规则。
-- [位向量与数值函数](doc/Expr/位向量与共同数值函数.md)：共同数值基础。
-- [节点推理](doc/NodeInference/节点推理阅读索引.md)：推理入口、各判断步骤、展开模型与证明。
-- [RV32 初态描述](doc/RV32初态描述.md)：入口条件与初始关系。共同指令规则按问题放在 Expression、Observation 和 NodeInference 中。
-- [代数程序分析](doc/NodeInference/路径语言与位置消去.md)：路径表达式与语义解释的研究说明。
+## 安装依赖
 
-## 启动调试界面
+`lean-toolchain` 指定 Lean 4.29.0。用 [elan](https://github.com/leanprover/elan) 安装这个版本的 Lean 和 Lake。另外安装 Rust、Cargo、Node.js、npm 和 Python 3。
+
+Compact XDP ELF 由 `tooling/vendor/xpost-elf` 读取。
+
+## 启动界面
 
 在仓库根目录运行：
 
@@ -20,39 +20,60 @@
 lake run dev
 ```
 
-Lake 构建 Lean 和服务端、安装前端依赖，然后启动 API 和 Vite。打开 <http://127.0.0.1:5173>，按 Ctrl-C 停止服务。默认 API 地址为 <http://127.0.0.1:8788>。
+Lake 构建 Lean 库和服务端，安装前端依赖，然后启动 API 和 Vite。打开 <http://127.0.0.1:5173>。API 监听 <http://127.0.0.1:8788>。要换 API 端口，先设置环境变量 `PORT`。按 Ctrl-C 停止两个进程。
 
-服务接口见 [服务端](tooling/server/README.md)，界面操作与独立启动方式见 [前端](tooling/web/README.md)。
+没有上传镜像时，服务端使用 `tooling/fixtures/just_tx.elf`。上传文件必须是 Compact XDP ELF。服务端拒绝原始 BIN。界面操作见 [前端](tooling/web/README.md)。HTTP 字段见 [服务端](tooling/server/README.md)。
 
-界面接受 xpost 的 Compact XDP ELF。默认使用 `tooling/fixtures/just_tx.elf`
-（来自 `/Volumes/SSD/bs/build/just_tx/just_tx.elf`）。
-服务端通过 `xpost-elf` 提取代码镜像、程序基址和 helper dispatcher 地址。
-Lean 识别 helper 调用，生成 Helper 观察与返回表达式并继续展开。
-RV32 走 32 位分派器约定；原生 eBPF `call imm` 走独立的 64 位约定。
-Map 布局可由 Meta `maps` 提供（just_tx 与 RV32 AOT map 行共用）。
+## 构建并测试
 
-## 构建与检查
-
-以下命令在仓库根目录运行。
-
-Lean 工具链版本由 `lean-toolchain` 指定；本地需安装 Lean/Lake、Rust/Cargo、Node.js/npm 和 Python 3。
-Rust 服务端还依赖相邻 `../xpost/xpost-elf` 和它的 `xpost-macros` 库。
+在仓库根目录运行：
 
 ```bash
 lake build
 lake test
 ```
 
-`lake build` 构建 Lean 库、服务端和前端。`lake test` 运行 Rust 测试、前端构建和实际 API 检查。
+`lake build` 构建 Lean 库、Rust 服务端和前端。`lake test` 先跑 `profile.toml` 里的双架构比较，再构建没有 `sorry` 的 `Verification` 库，然后跑 Rust 测试。
 
-## 工作区布局
+`profile.toml` 把镜像目录设为 `../build/<name>/`。这些文件由本仓库以外的编译器写入。只克隆本仓库时，`profile_programs_match_expect` 会因为找不到镜像而失败。仓库自带的用例不读这个目录。
 
-- `Core/`：数学值对象、wire 类型与解析（跨架构簇在 `Core/Cross/`）。
-- `Node/`：路径与 HelperOnly ExactConfig 合并。
-- `RV32/`：RV32 解码、展开、预算，以及 create 和 step。
-- `EBPF/`：有限解码、ALU 值转换、入口和局部 step。
-- `CrossArch/`：双架构夹具（不进 server 共享库）。
-- `tooling/`：Rust/Cargo 工作区、前后端、FFI 绑定、启动工具与测试镜像。组件说明见 [工具工作区](tooling/README.md)。
-- `doc/`：数学定义、推导、证明与研究文档。
+```bash
+lake env cargo test --manifest-path tooling/Cargo.toml --workspace -- --skip profile_programs_match_expect
+lake env cargo run --manifest-path tooling/Cargo.toml -p server --bin classifier -- test --root tooling/test
+```
 
-代理约束见 [.cursor/AGENTS.md](.cursor/AGENTS.md)：Cursor 负责全仓库（含 `doc/` 与 Lean4）。构建产物和本地代理记录由 `.gitignore` 管理。
+`classifier test` 在每个 `case.json` 都符合期望时退出码为 0。有用例失败时退出码为 1。用法错误时退出码为 2。用例说明见 [tooling/test](tooling/test/README.md)。
+
+`../build` 里的镜像齐全时，`profile.toml` 的期望如下。预算是 1024。
+
+| 结果 | 程序 |
+| --- | --- |
+| `strict` | bitswap、bsort、firewall、incr、merge_try、square |
+| `weak` | buf、fib、fletcher32、helper_loop、just_tx、memcpy |
+
+`strict` 表示两端都展开完成，观察类别的顺序一致，并且分支表达式没有未完成项。`weak` 表示两端完成且类别顺序一致，同时至少有一条分支表达式没有配上。
+
+## 目录
+
+```text
+src/                 Lean 源码
+  Term Expression Observation Interface Wire Match   库 Core
+  Node/              路径、预算展开、精确配置合并
+  Cross/RV32/        RV32IMC 入口、解码与单步
+  Cross/EBPF/        eBPF 入口、解码与单步
+  Verification/      已证陈述。Unverified/ 不进入这个库
+tooling/             Cargo 工作区、前端、夹具、vendor
+doc/                 比较模型笔记
+profile.toml         双架构程序与期望结果
+```
+
+Lake 库名是 `Core`、`Node`、`RV32`、`EBPF` 和 `Verification`。源码都在 `src/`。组件说明见 [工具工作区](tooling/README.md)。
+
+## 笔记
+
+从 [文档索引](doc/README.md) 进入。
+
+- [接受](doc/接受.md) 写命题 1，也就是选定观察的含义一致。
+- [表达式](doc/表达式.md)、[观察](doc/观察.md) 和 [寄存器](doc/寄存器.md) 给出比较所用的三项定义。
+- [接口](doc/接口.md) 和 [路径](doc/路径.md) 记录 `create`、`step`、`update`、`history` 和单轮回边。
+- [匹配](doc/匹配.md)、[局限](doc/局限.md) 和 [证明义务](doc/证明义务.md) 写下路径匹配、表达式匹配，以及命题 1 还缺的对应。

@@ -9,7 +9,7 @@ open Term Term.Value Expression Observation Interface Interface.Step Wire
 /-- Path-graph node. Observations do not carry it. -/
 abbrev NodeId := Nat
 
-/-! ## Location, node, edge, step (`doc/NodeInference/路径.md`) -/
+/-! ## Location, node, edge, step (`doc/路径.md`) -/
 
 /-- Pre-execution snapshot (Exit holds the final post-return state). -/
 structure Node where

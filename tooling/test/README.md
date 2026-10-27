@@ -1,6 +1,6 @@
 # Classifier tooling tests
 
-Cursor-owned suite under `tooling/test/` (harness write scope is `tooling/`).
+Suites under `tooling/test/`.
 
 ## Suites
 
@@ -22,7 +22,7 @@ Each case is a `case.json` (CaseSpec). The in-process harness drives
 
 ## XDP assets
 
-Copied from `/Volumes/SSD/bs/build/<prog>/` into `xdp/{just_tx,just_drop,merge_try,firewall}/`.
+Checked in under `xdp/{just_tx,just_drop,merge_try,firewall}/`.
 eBPF Meta binds map LDDW slots from the `.bpf.o` REL section to companion
 Compact ELF map VMAs (not hard-coded just_tx slot 34). The helper-completion
 fixture `tooling/fixtures/xdp.elf` remains for expand unit tests only.

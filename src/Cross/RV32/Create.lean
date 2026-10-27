@@ -4,7 +4,7 @@ import Expression.Interval
 namespace Cross.RV32
 open Term Term.Value Expression Observation Interface Interface.Step Wire Node
 
-/-! RV32 wrapper entry and six XDP context slots (RV32 section of `doc/NodeInference/create.md`). -/
+/-! RV32 wrapper entry and XDP context slots (`doc/接口.md`, `doc/寄存器.md`). -/
 
 -- Stable names for the default symbolic calling-environment inputs.
 namespace EntryVar

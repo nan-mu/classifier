@@ -3,8 +3,8 @@ import Cross.EBPF.Create
 namespace Cross.EBPF
 open Term Term.Value Expression Observation Interface Interface.Step Wire
 
-/-- The 58 little-endian UInt64 slots of `/Volumes/SSD/bs/build/just_tx/bpf.o`,
-section `xdp1`. This is raw decode input, not a compacted instruction list:
+/-- The 58 little-endian UInt64 slots of the just_tx `xdp1` section.
+This is raw decode input, not a compacted instruction list:
 the LDDW continuation at slot 35 is retained. -/
 def justTxProgram : Array UInt64 :=
   #[0x00000001000000b4, 0x0000000000041261, 0x0000000000001661, 0x00000000000061bf,

@@ -31,9 +31,9 @@ API 检查脚本启动临时服务，验证 Compact XDP ELF 会话的创建、�
 - [web](web/README.md) 显示指令、表达式和展开图。
 - `lean-binding` 将 Lean 导出函数接入 Rust，Rust 模块名为 `lean_binding`。
 - `scripts/dev.py` 管理开发服务进程的启动和停止，由 Lake 调用。
-- `fixtures/just_tx.elf` 是默认 Compact XDP ELF（来自 `bs/build/just_tx`）。
-- `fixtures/xdp.elf` 是 expand 单测用的 helper 完成 Compact XDP ELF（非 suite dual firewall）。
-- `fixtures/esp32c3.bin` 是无 helper 元数据的回归镜像，也是 `RV32/Esp32c3Program.lean` 的生成输入。
-- Rust 通过相对路径依赖相邻 `../../xpost/xpost-elf`。该库负责解析 ELF 元数据和校验镜像摘要。
+- `fixtures/just_tx.elf` 是仓库内的默认 Compact XDP ELF。
+- `fixtures/xdp.elf` 是 expand 单测用的 helper 完成 Compact XDP ELF。双架构 firewall 用例使用 `tooling/test/xdp/firewall/`，不用这个文件。
+- `fixtures/esp32c3.bin` 是没有 helper 元数据的回归镜像，也是 `src/Cross/RV32/Program.lean` 的生成输入。服务端拒绝把原始 BIN 当作上传镜像。
+- `vendor/xpost-elf` 解析 Compact ELF 的元数据并校验镜像摘要。
 
 项目命令统一由根目录的 `lakefile.lean` 定义。

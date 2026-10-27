@@ -9,12 +9,11 @@ container and image digest, then supplies the image range, `slot_address`, and
 
 Lean produces the graph, register expressions, and predicates through
 `lean_rv32_expand_bound_words_snapshot`. Rust owns session identifiers, replay
-step counts, focus, logs, and instruction text. The server depends on the sibling
-`../../../xpost/xpost-elf` checkout and its `xpost-macros` dependency.
+step counts, focus, logs, and instruction text. Compact ELF parsing comes from
+the vendored `tooling/vendor/xpost-elf` crate and its `xpost-macros` dependency.
 
-The default `tooling/fixtures/just_tx.elf` is a copy of
-`/Volumes/SSD/bs/build/just_tx/just_tx.elf`. Its image base is `0x40380200` and
-its dispatcher address is `0x40380000`. The default session budget is 1024.
+The checked-in default `tooling/fixtures/just_tx.elf` has image base
+`0x40380200` and dispatcher address `0x40380000`. The default session budget is 1024.
 With that budget the analysis completes under exact-config merge reuse: 601
 nodes, 601 edges (including reuse), and 30 Exits; 14 Exits carry lookup-region
 Map updates. Budget 512 still crosses the lookup and Map loads/stores, then
@@ -128,7 +127,7 @@ undecodable instruction. This is a prefix heuristic, not an ELF executable-secti
 proof. Container parsing and helper binding use `xpost-elf` independently.
 
 `tooling/fixtures/esp32c3.bin` supplies the generated
-`RV32/Esp32c3Program.lean`. Its analysis now rejects the symbolic packet offset
+`src/Cross/RV32/Program.lean`. Its analysis now rejects the symbolic packet offset
 at position 25 before the queued out-of-image jump at position 36. It remains a
 partial-graph rejection regression. Regenerate those words with:
 

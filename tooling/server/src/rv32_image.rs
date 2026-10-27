@@ -9,7 +9,7 @@ use lean_binding::rv32::MapLayout;
 use riscv_isa::{decode_le_bytes, Instruction, Target};
 
 /// Default XDP fixture used when the client omits an uploaded image.
-/// Copied from `/Volumes/SSD/bs/build/just_tx/just_tx.elf`.
+/// Checked in at `tooling/fixtures/just_tx.elf`.
 pub const DEFAULT_ELF: &[u8] = include_bytes!("../../fixtures/just_tx.elf");
 pub const DEFAULT_NAME: &str = "just_tx.elf";
 /// Firewall fixture retained for helper-completion regressions.
@@ -390,9 +390,9 @@ mod tests {
             .join("../../src/Cross/RV32/Program.lean");
         let expected = emit_lean_words(esp32c3_image());
         if std::env::var_os("UPDATE_ESP32C3_LEAN").is_some() {
-            std::fs::write(&path, &expected).expect("write Esp32c3Program.lean");
+            std::fs::write(&path, &expected).expect("write src/Cross/RV32/Program.lean");
         }
-        let on_disk = std::fs::read_to_string(&path).expect("Esp32c3Program.lean");
+        let on_disk = std::fs::read_to_string(&path).expect("src/Cross/RV32/Program.lean");
         assert_eq!(on_disk, expected, "run UPDATE_ESP32C3_LEAN=1 lake test");
     }
 }

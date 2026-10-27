@@ -1,6 +1,6 @@
 namespace Interface.Step
 
-/-! ## Successor direction (`doc/NodeInference/路径.md`) -/
+/-! ## Successor direction (`doc/路径.md`) -/
 
 inductive Direction where
   | ok

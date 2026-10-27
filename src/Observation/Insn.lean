@@ -5,8 +5,7 @@ import Interface.Step.Direction
 namespace Observation
 open Term Term.Value Expression Interface.Step
 
-/-! ## Raw instruction and history (`doc/NodeInference/路径.md`,
-`doc/NodeInference/step.md#正常返回历史`) -/
+/-! ## Raw instruction word and observation history (`doc/观察.md`, `doc/接口.md`) -/
 
 /-- \(\mathrm{Insn}=\bigsqcup_w(\{w\}\times\mathbb B_w)\). -/
 structure Insn where
@@ -54,7 +53,7 @@ structure Cond where
   rhs : Term
   deriving BEq, Repr, Inhabited
 
-/-- Five observation classes (`doc/Predicate/谓词定义.md`).
+/-- Five observation classes (`doc/观察.md`).
 Resource provenance, byte-valued symbolic keys and dynamic identities are semantic premises. -/
 inductive Observation where
   | helper (event : Nat) (kind : HelperKind) (args : List Term)

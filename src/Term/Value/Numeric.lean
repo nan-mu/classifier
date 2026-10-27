@@ -2,7 +2,7 @@ import Term.Value.Bits
 
 namespace Term.Value
 
-/-! Named numeric functions from `doc/Expr/待处理.md#位向量与共同数值函数`. Architecture-neutral. -/
+/-! Width-parameterized numeric functions for term operators (`doc/表达式.md`). -/
 
 def ADD (w : Width) (a b : Nat) : Nat := MNat w.bits (a + b)
 def SUB (w : Width) (a b : Nat) : Nat :=

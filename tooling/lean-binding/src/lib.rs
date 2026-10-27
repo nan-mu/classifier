@@ -87,7 +87,7 @@ pub(crate) mod ffi {
             exprs_json: LeanObj,
             preds_json: LeanObj,
         ) -> LeanObj;
-        /// HelperOnly ExactConfig merge (`Node/Merge.lean`).
+        /// Exact-config merge (`src/Node/Merge.lean`). `HelperOnly` is a legacy requirements filter.
         pub fn lean_expand_merge(request_json: LeanObj) -> LeanObj;
         pub fn lean_expand_update(
             local_exprs: LeanObj,
@@ -199,7 +199,7 @@ pub mod expand {
     use super::{ffi, lean_call, rv32};
     use std::ffi::{CStr, CString};
 
-    /// HelperOnly ExactConfig merge (request JSON only).
+    /// Exact-config merge (request JSON only). `HelperOnly` is a legacy requirements filter.
     pub fn merge(request_json: &str) -> String {
         rv32::expand_merge(request_json)
     }
@@ -428,8 +428,8 @@ pub mod rv32 {
         })
     }
 
-    /// HelperOnly ExactConfig merge. Request JSON only.
-    /// See `doc/NodeInference/路径合并FFI.md`.
+    /// Exact-config merge over the five-class representation. Request JSON only.
+    /// `HelperOnly` is a legacy requirements filter. See `doc/路径.md`.
     pub fn expand_merge(request_json: &str) -> String {
         let request_json = request_json.to_owned();
         lean_call(move || unsafe {

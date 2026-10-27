@@ -4,8 +4,7 @@ import Term.Value.Numeric
 namespace Term
 open Term.Value
 
-/-- Form operators whose signatures lie in \(W\) (`doc/Expr/待处理.md#右值`,
-`doc/Expr/待处理.md#位向量与共同数值函数`). -/
+/-- Form operators whose signatures lie in \(W\) (`doc/表达式.md`). -/
 inductive Op where
   | add (w : Width)
   | sub (w : Width)

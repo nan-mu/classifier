@@ -154,16 +154,8 @@ def compare (requestJson : String) : Except String Json := do
     ("conclusion", .str (if coverage then "coverageDiffers" else if equal then "sameStructure" else "differs")),
     ("left", summary left), ("right", summary right),
     ("positions", .arr (positions.map Prod.fst).toArray),
-    ("basis", strings ["doc/Expr/Expr.md#表达式分量", "doc/Predicate/谓词定义.md#类型与结构相等",
-      "doc/NodeInference/路径合并FFI.md#比较规则", "doc/NodeInference/跨架构比较.md#控制与类别比较"]),
-    ("openObligations", strings ["doc/NodeInference/跨架构比较.md#输入与对应假设",
-      "doc/NodeInference/Jump/证明义务-路径合并完备.md#定理一精确配置共享判据的完备性",
-      "doc/NodeInference/Jump/证明义务-路径合并完备.md#定理二相等末配置的有限深度后续一致性",
-      "doc/NodeInference/Jump/证明义务-路径合并完备.md#充分性前提",
-      "doc/NodeInference/Jump/路径合并-接口契约.md#未决义务",
-      "doc/NodeInference/History.md#控制流与记录来源", "doc/NodeInference/History.md#完整依赖提取",
-      "doc/NodeInference/History.md#局部结果顺序与重复事件",
-      "doc/Predicate/Branch谓词.md#待证明义务", "doc/NodeInference/路径合并FFI.md#语义范围与证据边界"])])
+    ("basis", strings ["doc/表达式.md", "doc/观察.md", "doc/匹配.md", "doc/路径.md"]),
+    ("openObligations", strings ["doc/证明义务.md", "doc/局限.md", "doc/接受.md"])])
 
 end Node.RunCompare
 

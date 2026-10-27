@@ -1,3 +1,5 @@
-Vendored copies of `xpost-elf` and `xpost-macros` so CI and local builds do not
-need a sibling `../xpost` checkout. Refresh from the xpost repo when the Compact
+Vendored copies of `xpost-elf` and `xpost-macros`. CI and local builds use these
+copies and do not need another xpost checkout. Refresh them when the Compact
 ELF wire format or macros change.
+
+These snapshots are distributed under the MIT license at the repository root.
