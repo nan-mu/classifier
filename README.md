@@ -4,13 +4,25 @@ Classifier 取同一份 XDP C 的两份编译结果。一份是 eBPF 字节码�
 
 eBPF 检查器在自己的模型里给出 Safe(E)。本仓库对照的是两边的选定观察。由观察一致得到 Safe(R) 还缺的对应写在 [证明义务](doc/证明义务.md)。
 
+论文 coming soon。
+
 许可证是 [MIT](LICENSE)。
 
 Classifier takes the two compilation results of one XDP C program. One result is eBPF bytecode. The other is an RV32IMC XDP ELF for the ESP32-C3. It expands both with a budget, then compares the observations from that expansion. The implemented target is RV32IMC, the ABI is `ilp32`, and there is no FPU.
 
 The eBPF checker reports Safe(E) inside its own model. This repository compares the selected observations of the two results. The missing step from that agreement to Safe(R) is written in [证明义务](doc/证明义务.md).
 
+Paper: coming soon.
+
 The license is [MIT](LICENSE).
+
+## 现状
+
+代码还在改。这次按现状发布。下文的 `lake run dev` 是当前的启动方式。换一台机器时，工具链和路径需要自己对照代码，没有另写一份部署说明。实验室配置的清理以后再做。
+
+## Status
+
+The code is still changing. This publication keeps the tree as it is. `lake run dev` below is the current way to start the UI. On another machine, the toolchain and paths have to be checked against the code. There is no separate deployment guide. Lab-specific cleanup comes later.
 
 ## 安装依赖
 
