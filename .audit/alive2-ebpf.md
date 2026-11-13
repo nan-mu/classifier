@@ -50,7 +50,7 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | C9 | AND/OR/XOR 等简单指令 | yes | yes | 矩阵两种宽度两种来源各 3 例 | — |
 | C10 | 支持被测程序涉及的寄存器，明确 r0 为返回值 | yes | yes | `src/ebpf_lift.cpp:172-183,264` | 未初始化寄存器建模为 0，报告第六节声明 |
 | C11 | 寄存器多次写入的 SSA 版本化与 phi 合并 | yes | yes | `src/ebpf_lift.cpp:232-249,407-421`；branch 样例 IR 的 `%b3_r0` phi | — |
-| C12 | ALU32 如何更新 64 位寄存器、高 32 位如何处理 | yes | yes | `src/ebpf_lift.cpp:295-300`；`alu32 clears high bits` PASS；93 条 ALU 矩阵行含 47 条 ALU32 | — |
+| C12 | ALU32 如何更新 64 位寄存器、高 32 位如何处理 | yes | yes | `src/ebpf_lift.cpp:295-300`；`alu32 clears high bits` PASS；93 条 ALU 矩阵行含 46 条 ALU32、47 条 ALU64，多出的一条是 `alu64 movsx32 reg`（MOVSX offset 32 只允许 ALU64） | — |
 | C13 | ALU64 的 32 位立即数如何扩展 | yes | yes | `src/ebpf_lift.cpp:84-88,287`；spec:383-391,408-410；`imm without sign extend is caught` SAT | — |
 | C14 | 算术溢出按固定宽度回绕 | yes | yes | `mul (max+3)*2 wraps to 4`、`sdiv64 INT_MIN / -1 wraps to INT_MIN` PASS | — |
 | C15 | 无符号 DIV 除零结果为 0 | yes | yes | `div zero` PASS；`div zero as ub is caught` SAT | — |
@@ -75,8 +75,8 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | E9 | 随机输入补充交叉验证 | yes | yes | `check_random_differential(120, 0x5eed1234)`；240 条 PASS，每程序 24 随机点 + 12 边界点 | 随机程序只含前向跳转，循环由 D3 单独覆盖 |
 | E10 | 已有 eBPF 测试向量补充交叉验证 | yes | yes | `alu32 bytes match clang -target bpf` PASS；6 个 Clang 编译程序的 `.text` 字节 | — |
 | E11 | 可选：Clang BPF target 的 C → 机器码端到端 | yes | yes | `tests/run-clang-e2e.sh` 现场编译 `tests/bpf/*.c`，`llvm-objcopy` 提取 `.text`，`clang-e2e.log` 6 PASS 0 FAIL | — |
-| R1 | 交付可运行代码与 Alive2 构建/依赖配置 | yes | yes | `bootstrap.sh` 从零构建实测通过；Z3 路径经 pkg-config/brew 探测，不再硬编码 | — |
-| R2 | 自动化测试覆盖算术、位宽、除零、移位、条件跳转、路径合并、循环边界 | yes | yes | `tests/run-all.sh`：687 PASS 0 FAIL + 12 求解检查 + 6 端到端 | — |
+| R1 | 交付可运行代码与 Alive2 构建/依赖配置 | yes | yes | `bootstrap.sh` 从零构建实测通过；它经 pkg-config/brew 探测 Z3 并显式传入，rpath 由 `Z3_LIBRARY` 推导 | `CMakeLists.txt` 仍保留 homebrew 的 CACHE 默认值，可被覆盖；Z3、clang、ninja、cmake 是树外依赖 |
+| R2 | 自动化测试覆盖算术、位宽、除零、移位、条件跳转、路径合并、循环边界 | yes | yes | `tests/run-all.sh`：695 PASS 0 FAIL + 12 求解检查 + 6 端到端 | — |
 | R3 | 明确记录哪些测试成功、失败、尚未实现 | yes | yes | `feasibility-report.md` 第一、六节；14 例拒绝测试列出未实现 opcode | — |
 | R4 | 符号结果样例含 6 段产物 | yes | yes | `ebpf-test.log` "sample conditional program"；报告第八节 | — |
 | R5 | 修改记录区分复用/新前端/扩展语义/改上游 4 类 | yes | yes | `feasibility-report.md` 第七节四类分列 | — |
@@ -91,11 +91,27 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 
 复核由 agent 阅读任务书与本清单、对照真实产物完成，不依赖脚本判定。本轮实际读过的核对动作：
 
-- 逐条比对 `ebpf_decode.cpp` 接受的 opcode 集合与 `isa_matrix()` 生成的集合。ALU 侧 9 个通用 switch 分支加上 NEG、DIV/SDIV、MOD/SMOD、MOV/MOVSX 四个特判，共 18 个操作族；JMP 侧 10 个比较加上 JA、EXIT。矩阵 93 条 ALU + 60 条条件跳转 + 3 条 JA/EXIT = 156，与日志 `matrix cases 156` 一致，无遗漏族。
+- 逐条比对 `ebpf_decode.cpp` 接受的 opcode 集合与 `isa_matrix()` 生成的集合。ALU 侧是 9 个通用 switch 分支加 4 个特判，共 13 个 code 族；其中 DIV/SDIV、MOD/SMOD 按 offset 各分两种，MOV/MOVSX 按 offset 分四种，展开后是 18 个操作变体。JMP 侧 10 个比较加上 JA、EXIT。矩阵 93 条 ALU + 60 条条件跳转 + 3 条 JA/EXIT = 156，与日志 `matrix cases 156` 一致，无遗漏族。
 - 读 `ebpf_ref.cpp` 与 `ebpf_ref.h` 的包含与调用，确认只有 `ebpf.h` 和 `smt/expr.h`，不含 lifter、不调用 `lift_ebpf`。同时发现解码器为两侧共享，已记入 E1 的 Open issue 与报告第六节。
 - 读 `ebpf-test.log` 的两种循环形状覆盖行，确认头块判断退出得 `k+1`、回边为条件跳转得 `k`，与报告的否定结论一致。
 - 读 `direct-ir.log` 的 `x + y * 4` 对照行为 SAT，确认等价查询不是恒真。
 - 对照 kernel.org 取回的 v6.12 规范第 330-354、383-399、424-425 行，核对除零、有符号溢出、立即数扩展、移位掩码四类语义。
+
+## 独立复核与处置
+
+复核由不同模型族（Grok，xhigh）在 worktree 内独立完成，重跑了套件并读了反例模型。5 条 flag 全部处置如下。
+
+| # | 复核发现 | 严重度 | 处置 | 证据 |
+|---|---|---|---|---|
+| 1 | 符号参考在常量操作数下继承 Alive2 `expr::sdiv` 把 `SMin / -1` 折叠成 0 的错误；原报告声称边界扫描能抓住共享符号错误，属过度声称 | 中 | 已修。先补常量操作数程序，`expect_equiv` 实测 SAT 复现；再在符号参考里按规范先选被除数。报告改为准确描述两种查询的分工 | `src/ebpf_ref.cpp` Sdiv 分支；`sdiv64 constant INT_MIN / -1` 由 FAIL 转 PASS |
+| 2 | `boundary_points` 对 3 个以上输入仍生成二元点，`expect_sweep` 越界读 | 中 | 已修。按输入个数生成等宽点，3 个以上改为逐轴扫描加对角线；`expect_sweep` 增加宽度校验并抛错 | `src/ebpf_check.cpp` `boundary_points`、`expect_sweep` |
+| 3 | 清单声称 Z3 不再硬编码、迁移不依赖树外状态，均过度声称 | 低 | 已修。rpath 改由 `Z3_LIBRARY` 推导；清单改为承认 homebrew CACHE 默认值仍在，并列出 Z3/clang/ninja/cmake/llvm-objcopy 为声明的树外依赖 | `CMakeLists.txt` `alive2_link`；清单 R1 与交付记录 |
+| 4 | 计数错误：ALU32 实为 46 行而非 47；「9 加 4 等于 18 个操作族」表述错误 | 低 | 已修。改为 46 ALU32 + 47 ALU64，并说明 13 个 code 族按 offset 展开成 18 个操作变体 | 清单 C12 与人工复核记录；`ebpf-test.log` 计数 |
+| 5 | 端到端脚本把 unsupported 计为 neither，程序悄悄掉出仍绿 | 低 | 已修。该套件是策划过的，退出条件同时要求 `fail` 与 `unsupported` 为 0 | `tests/run-clang-e2e.sh` 末行 |
+
+复核同时确认了几项站得住的结论：8 个反例模型是真实区分输入而非恒真 SAT；边界扫描不是恒真 UNSAT；没有把已定义 eBPF 行为映射成 UB 或 poison；段错误修复对应真实根因（`ir/value.h:22` 的 `Value` 持有 `Type&`）；`k+1` 推测确实在本轮日志中被否定。
+
+复核未重复冷构建计时，故 8.7 秒这个数标注为本机一次测得，不作为可复现指标。
 
 ## 交付记录
 
@@ -103,7 +119,7 @@ PR：https://github.com/nan-mu/classifier/pull/5 （Draft，base `main`，head `
 
 工作区：独立 worktree `/Volumes/SSD/bs/classifier-alive2-ebpf`，分支 `agent/alive2-ebpf`，经 `EnterWorktree` 绑定。主 checkout 已切回 `main`，其 `profile.toml` 与 `tooling/` 的 5 个未提交改动原样保留，未被本轮触碰。
 
-可移植性实测：该 worktree 不含任何构建产物，仅凭已提交文件跑 `bash alive2/bootstrap.sh` 从零构建成功（8.7 秒墙钟，退出码 0），随后 `bash alive2/tests/run-all.sh` 复现 687 PASS 0 FAIL、12 条求解检查、6 个 Clang 端到端。迁移没有依赖工作区外的状态。
+可移植性实测：该 worktree 不含任何构建产物，仅凭已提交文件跑 `bash alive2/bootstrap.sh` 从零构建成功（本机一次测得 8.7 秒墙钟，退出码 0），随后 `bash alive2/tests/run-all.sh` 复现全部检查通过。准确的说法是：迁移不依赖任何未提交的源码、构建产物或工作区内的遗留状态。它仍然依赖树外工具链，即 Z3、clang、ninja、cmake，以及端到端脚本用到的 llvm-objcopy。这些是声明的外部依赖，不是被消除的依赖。
 
 复核入口：`bash alive2/tests/run-all.sh`。构建入口：`bash alive2/bootstrap.sh`。
 

@@ -599,6 +599,26 @@ int main() {
     expect_at(m, {{1, 7}, {2, 0}}, 7, "smod64 zero divisor keeps dst");
   }
   {
+    // Both operands are constants here, so Alive2's expr::sdiv constant folder
+    // is in play. Symbolic-register cases never reach it.
+    std::vector<uint8_t> c;
+    put(c, MOV | ALU64, 0, 0, 0, 1);
+    put(c, LSH | ALU64, 0, 0, 0, 63);
+    put(c, DIV | ALU64, 0, 0, 1, -1);
+    put(c, EXIT | JMP, 0, 0, 0, 0);
+    auto e = execute_ebpf(c, {}, 0);
+    expect_equiv(e, "sdiv64 constant INT_MIN / -1");
+    expect_at(e, {}, 0x8000000000000000ull, "sdiv64 constant INT_MIN / -1");
+    std::vector<uint8_t> m;
+    put(m, MOV | ALU64, 0, 0, 0, 1);
+    put(m, LSH | ALU64, 0, 0, 0, 63);
+    put(m, MOD | ALU64, 0, 0, 1, -1);
+    put(m, EXIT | JMP, 0, 0, 0, 0);
+    auto f = execute_ebpf(m, {}, 0);
+    expect_equiv(f, "smod64 constant INT_MIN % -1");
+    expect_at(f, {}, 0, "smod64 constant INT_MIN % -1");
+  }
+  {
     auto e = execute_ebpf(alu_prog(MOV | X | ALU64, 8, 0),
                           {{1, "r1"}, {2, "r2"}}, 0);
     expect_equiv(e, "movsx8");

@@ -163,9 +163,18 @@ smt::expr apply_alu_sym(EbAlu::Op op, EbWidth width, smt::expr dst, smt::expr sr
   case EbAlu::Neg:
     result = smt::expr::mkUInt(0, d.bits()) - d;
     break;
-  case EbAlu::Sdiv:
-    result = smt::expr::mkIf(s == 0, smt::expr::mkUInt(0, s.bits()), d.sdiv(s));
+  case EbAlu::Sdiv: {
+    // Alive2's expr::sdiv folds the constant pair SMin / -1 to 0, which is not
+    // the eBPF wrap result. Select the dividend before that fold can be used.
+    unsigned bits = s.bits();
+    smt::expr smin = bits == 64
+                         ? smt::expr::mkInt(-9223372036854775807ll - 1, 64)
+                         : smt::expr::mkInt(-2147483648ll, bits);
+    smt::expr overflows = (d == smin) && (s == smt::expr::mkInt(-1, bits));
+    result = smt::expr::mkIf(s == 0, smt::expr::mkUInt(0, bits),
+                             smt::expr::mkIf(overflows, d, d.sdiv(s)));
     break;
+  }
   case EbAlu::Smod:
     result = smt::expr::mkIf(s == 0, d, d.srem(s));
     break;

@@ -112,6 +112,8 @@ void expect_sweep(const EbExec &e, const std::vector<std::vector<uint64_t>> &poi
   auto ok = input_ok(e);
   smt::expr mismatch = false;
   for (const auto &point : points) {
+    if (point.size() != e.inputs.size())
+      throw std::runtime_error("sweep point width does not match the input count");
     ConcreteRegs regs;
     smt::expr guard = ok;
     for (size_t i = 0; i < e.inputs.size(); ++i) {
@@ -136,16 +138,29 @@ const std::vector<uint64_t> &boundary_values() {
 }
 
 std::vector<std::vector<uint64_t>> boundary_points(const EbExec &e) {
+  const size_t n = e.inputs.size();
   std::vector<std::vector<uint64_t>> points;
-  if (e.inputs.empty()) {
+  if (n == 0) {
     points.push_back({});
-  } else if (e.inputs.size() == 1) {
+  } else if (n == 1) {
     for (uint64_t a : boundary_values())
       points.push_back({a});
-  } else {
+  } else if (n == 2) {
     for (uint64_t a : boundary_values())
       for (uint64_t b : boundary_values())
         points.push_back({a, b});
+  } else {
+    // A full cross product is 12^n. Sweep one axis at a time plus the diagonal,
+    // and keep every point exactly n wide.
+    for (size_t axis = 0; axis < n; ++axis) {
+      for (uint64_t v : boundary_values()) {
+        std::vector<uint64_t> p(n, 0);
+        p[axis] = v;
+        points.push_back(std::move(p));
+      }
+    }
+    for (uint64_t v : boundary_values())
+      points.push_back(std::vector<uint64_t>(n, v));
   }
   return points;
 }

@@ -54,4 +54,6 @@ done
 
 echo
 echo "clang e2e: $pass passed, $fail failed, $unsupported use opcodes outside this PoC"
-[ "$fail" -eq 0 ]
+# This suite is curated, so every program is expected to lift. An unsupported
+# opcode here means coverage was lost, not that the run is still green.
+[ "$fail" -eq 0 ] && [ "$unsupported" -eq 0 ]

@@ -26,7 +26,8 @@ function(alive2_link target)
     "${ALIVE2_BUILD}/libutil.a"
     "${Z3_LIBRARY}")
   if(APPLE)
-    target_link_options(${target} PRIVATE "-Wl,-rpath,/opt/homebrew/opt/z3/lib")
+    get_filename_component(Z3_LIB_DIR "${Z3_LIBRARY}" DIRECTORY)
+    target_link_options(${target} PRIVATE "-Wl,-rpath,${Z3_LIB_DIR}")
   endif()
 endfunction()
 

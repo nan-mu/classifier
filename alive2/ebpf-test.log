@@ -111,6 +111,14 @@ PASS smod64 -13 % 3 is -1 truncated alive value UNSAT
 PASS smod64 zero divisor keeps dst concrete reference
 PASS smod64 zero divisor keeps dst alive returns UNSAT
 PASS smod64 zero divisor keeps dst alive value UNSAT
+PASS sdiv64 constant INT_MIN / -1 equivalent to reference UNSAT
+PASS sdiv64 constant INT_MIN / -1 concrete reference
+PASS sdiv64 constant INT_MIN / -1 alive returns UNSAT
+PASS sdiv64 constant INT_MIN / -1 alive value UNSAT
+PASS smod64 constant INT_MIN % -1 equivalent to reference UNSAT
+PASS smod64 constant INT_MIN % -1 concrete reference
+PASS smod64 constant INT_MIN % -1 alive returns UNSAT
+PASS smod64 constant INT_MIN % -1 alive value UNSAT
 PASS movsx8 equivalent to reference UNSAT
 PASS movsx8 0xff sign extends to -1 concrete reference
 PASS movsx8 0xff sign extends to -1 alive returns UNSAT
@@ -713,12 +721,12 @@ b3:
 }
 Symbolic return expression
 (ite (bvule #x000000000000000b r1)
-     (bvadd #x0000000000000001 r1)
+     (bvadd r1 #x0000000000000001)
      (bvadd #xffffffffffffffff r1))
 non-poison true
 Path / definedness conditions
-(and np_r1 (= isundef_r1 #b0))
-return domain (and np_r1 (= isundef_r1 #b0))
+(and (= isundef_r1 #b0) np_r1)
+return domain (and (= isundef_r1 #b0) np_r1)
 Memory summary
 none
 PASS branch equivalent to reference UNSAT
@@ -790,19 +798,19 @@ b3:
   ret i64 %b1_r0#phi#0
 }
 Symbolic return expression
-(ite (= #x0000000000000000 r1) #x0000000000000000 #x0000000000000001)
+(ite (= r1 #x0000000000000000) #x0000000000000000 #x0000000000000001)
 non-poison true
 Path / definedness conditions
-(and (or (= #x0000000000000000 r1)
-         (and (= #x0000000000000000 (bvadd #xffffffffffffffff r1))
-              (not (= #x0000000000000000 r1))))
-     np_r1
-     (= isundef_r1 #b0))
-return domain (and (or (= #x0000000000000000 r1)
-         (and (= #x0000000000000000 (bvadd #xffffffffffffffff r1))
-              (not (= #x0000000000000000 r1))))
-     np_r1
-     (= isundef_r1 #b0))
+(and (or (= r1 #x0000000000000000)
+         (and (= (bvadd #xffffffffffffffff r1) #x0000000000000000)
+              (not (= r1 #x0000000000000000))))
+     (= isundef_r1 #b0)
+     np_r1)
+return domain (and (or (= r1 #x0000000000000000)
+         (and (= (bvadd #xffffffffffffffff r1) #x0000000000000000)
+              (not (= r1 #x0000000000000000))))
+     (= isundef_r1 #b0)
+     np_r1)
 Memory summary
 loop unroll 1 covered 0 1
 PASS loop n=0 unroll 1

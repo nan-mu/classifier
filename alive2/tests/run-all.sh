@@ -8,6 +8,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 cd "$root"
 
+# Models are regenerated per run. Clearing them keeps the final count a statement
+# about this run instead of an accumulation of earlier failures.
+rm -f "$root"/counterexamples/*.smt2
+
 status=0
 
 run() {
