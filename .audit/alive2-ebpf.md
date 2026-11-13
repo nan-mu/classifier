@@ -4,9 +4,11 @@
 PStack：`/Volumes/SSD/.claude/plugins/cache/cursor-plugins/pstack/0.15.36` v0.15.36，playbook `session-pickup` → `autonomous-run`。
 Base：`main`　Branch：`agent/alive2-ebpf`　PR：见本文件末尾交付记录。
 
-工作区说明。任务分支已经 checkout 在 `/Volumes/SSD/bs/classifier`，沿用 cursor 那一轮的工作区和构建产物，不新建第二套 worktree。该 checkout 里 `profile.toml` 和 `tooling/` 的 5 个改动属于另一个任务，本轮不碰，提交一律按 `alive2/` 路径限定。
+工作区说明。本任务在独立 worktree 的 `agent/alive2-ebpf` 分支上完成，路径见下方交付记录。主 checkout 里 `profile.toml` 和 `tooling/` 的 5 个改动属于另一个任务，本轮不碰，提交按 `alive2/` 与 `.audit/alive2-ebpf.md` 路径限定。
 
-清单存放说明。本仓库 `.gitignore` 忽略整个 `/.audit/`，所以可提交的需求清单放在本文件，决策轨迹留在本地 `.audit/alive2-ebpf.tsv`。这是对 wrapper 默认路径的一处偏离，理由是尊重仓库既有约定，且只保留一份事实来源。
+清单存放说明。本文件是可提交的需求清单，位于 `.audit/alive2-ebpf.md`。仓库 `.gitignore` 已移除对 `/.audit/` 的整体忽略，改为只忽略 `/.audit/*.tsv` 与 `/.audit/__pycache__/`，所以决策轨迹 `.audit/alive2-ebpf.tsv` 仍留在本地。`.audit/` 下其他任务的文件不在本轮提交范围内。
+
+复核方式。需求一致性由 agent 逐行阅读任务书与本清单、对照真实产物自主判断，不由脚本判定。`audit-check.sh` 之类的表格解析只能数 `yes` 的个数，不能判断某行是否真的被对应测试覆盖，因此不作为验收依据。
 
 上游：`https://github.com/AliveToolkit/alive2` commit `adacbd5180ccf95075e9867c4f0c259f59c9fef2`。
 ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`，取自 `https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/Documentation/bpf/standardization/instruction-set.rst?h=v6.12`。
