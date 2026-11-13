@@ -452,12 +452,7 @@ bool exact_obs(const Obs &a, const Obs &b) {
   return true;
 }
 
-bool same_obs(const Obs &a, const Obs &b) {
-  if (std::holds_alternative<std::monostate>(a) ||
-      std::holds_alternative<std::monostate>(b))
-    return true;
-  return exact_obs(a, b);
-}
+bool same_obs(const Obs &a, const Obs &b) { return exact_obs(a, b); }
 
 bool comparable(const Obs &a, const Obs &b) {
   if (std::holds_alternative<std::monostate>(a) ||
@@ -954,13 +949,35 @@ bool head_matches(std::string &why) {
     why = "PIN is not " + std::string(kSemanticsCommit);
     return false;
   }
-  if (!std::filesystem::exists(std::filesystem::path(SEMANTICS_DIR) / ".git"))
-    return true;
-  int code = 0;
-  auto got = trim(capture("/usr/bin/git",
-                          {"-C", SEMANTICS_DIR, "rev-parse", "HEAD"}, "", code));
-  if (code != 0 || got != want) {
-    why = "semantics HEAD is " + got + ", PIN is " + want;
+  if (!std::filesystem::exists(std::filesystem::path(SEMANTICS_DIR) / ".git")) {
+    // Vendored sources have no checkout. The digest is the pin.
+  } else {
+    int code = 0;
+    auto got = trim(capture("/usr/bin/git",
+                            {"-C", SEMANTICS_DIR, "rev-parse", "HEAD"}, "", code));
+    if (code != 0 || got != want) {
+      why = "semantics HEAD is " + got + ", PIN is " + want;
+      return false;
+    }
+  }
+  std::ifstream dig(SOURCES_SHA_PATH);
+  std::string want_dig;
+  std::getline(dig, want_dig);
+  if (want_dig.size() != 64) {
+    why = "SOURCES.sha256 is missing";
+    return false;
+  }
+  int dcode = 0;
+  auto raw = trim(capture(
+      "/bin/sh",
+      {"-c", std::string("cd ") + SEMANTICS_DIR +
+                 " && find theories validator -name '*.v' -print | sort | "
+                 "xargs shasum -a 256 | shasum -a 256"},
+      "", dcode));
+  auto got_dig = raw.substr(0, raw.find(' '));
+  if (dcode != 0 || got_dig != want_dig) {
+    why = "semantics sources hash is " + got_dig + ", SOURCES.sha256 is " +
+          want_dig;
     return false;
   }
   return true;

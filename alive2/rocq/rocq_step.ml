@@ -172,8 +172,14 @@ let run ~bytes ~inputs =
     decr fuel_left;
       if !fuel_left < 0 then begin
         let before = project_regs !rs mach.code_b mach.ctx_b mach.stk_b in
+        let pc =
+          match pc_val with
+          | Vptr (b, ofs) when eq_block b mach.code_b ->
+              (match z_small (Ptrofs.unsigned ofs) with Some i -> i | None -> 0)
+          | _ -> 0
+        in
         steps := {
-          pc = 0;
+          pc;
           pc_after = `None;
           status = Incomplete;
           before;

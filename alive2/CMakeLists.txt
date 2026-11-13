@@ -84,6 +84,7 @@ target_compile_options(ebpf-concrete PRIVATE -Wall -Wextra -Wno-unused-parameter
 target_compile_definitions(ebpf-concrete PRIVATE
   "ROCQ_STEP=\"${ROCQ_STEP_BIN}\""
   "PIN_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/PIN\""
+  "SOURCES_SHA_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/SOURCES.sha256\""
   "SEMANTICS_DIR=\"${UPSTREAM_SRC}\"")
 add_dependencies(ebpf-concrete rocq-step)
 add_custom_command(TARGET ebpf-concrete PRE_BUILD
