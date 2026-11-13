@@ -49,3 +49,44 @@ target_compile_options(ebpf_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
 add_executable(ebpf_file ${EBPF_FRONTEND} src/ebpf_file.cpp)
 alive2_link(ebpf_file)
 target_compile_options(ebpf_file PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+set(ROCQ_STEP_BIN "${CMAKE_CURRENT_BINARY_DIR}/rocq/rocq-step")
+set(UPSTREAM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/rocq/upstream")
+set(UPSTREAM_BUILD "${CMAKE_CURRENT_BINARY_DIR}/rocq/upstream")
+file(GLOB_RECURSE UPSTREAM_SOURCES CONFIGURE_DEPENDS
+  "${UPSTREAM_SRC}/*.v" "${UPSTREAM_SRC}/validator/*.ml"
+  "${UPSTREAM_SRC}/Makefile")
+add_custom_command(
+  OUTPUT "${ROCQ_STEP_BIN}"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${UPSTREAM_BUILD}"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${UPSTREAM_SRC}" "${UPSTREAM_BUILD}"
+  COMMAND opam exec --switch linux-ebpf -- make -C "${UPSTREAM_BUILD}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/rocq"
+  COMMAND ${CMAKE_COMMAND} -E copy
+          "${UPSTREAM_BUILD}/validator/debug_hooks.ml"
+          "${UPSTREAM_BUILD}/validator/validation.ml"
+          "${CMAKE_CURRENT_SOURCE_DIR}/rocq/rocq_step.ml"
+          "${CMAKE_CURRENT_BINARY_DIR}/rocq/"
+  COMMAND opam exec --switch linux-ebpf -- ocamlfind ocamlopt -w -a
+          -package zarith -linkpkg -o "${ROCQ_STEP_BIN}"
+          debug_hooks.ml validation.ml rocq_step.ml
+  WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rocq"
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/rocq/rocq_step.ml" ${UPSTREAM_SOURCES}
+  VERBATIM)
+add_custom_target(rocq-step DEPENDS "${ROCQ_STEP_BIN}")
+
+add_executable(ebpf-concrete
+  src/ebpf_decode.cpp
+  src/ebpf_lift.cpp
+  src/ebpf_concrete.cpp)
+alive2_link(ebpf-concrete)
+target_compile_options(ebpf-concrete PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_definitions(ebpf-concrete PRIVATE
+  "ROCQ_STEP=\"${ROCQ_STEP_BIN}\""
+  "PIN_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/PIN\""
+  "SEMANTICS_DIR=\"${UPSTREAM_SRC}\"")
+add_dependencies(ebpf-concrete rocq-step)
+add_custom_command(TARGET ebpf-concrete PRE_BUILD
+  COMMAND /bin/sh -c
+    "if grep -E 'symexec\\.h|ebpf_run\\.h|ebpf_ref' '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_concrete.cpp'; then exit 1; fi; if grep -n sym_exec '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi; if grep -n execute_ebpf '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi"
+  VERBATIM)

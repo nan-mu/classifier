@@ -1,14 +1,83 @@
 #include "ebpf_lift.h"
+#include "ebpf_concrete.h"
 
 #include "ir/constant.h"
 #include "ir/instr.h"
 
 #include <array>
+#include <optional>
 #include <sstream>
+#include <unordered_map>
 
 namespace {
 
 using namespace IR;
+
+enum class CommitKind { AtEntry, AfterInstr };
+
+struct SourceEnd {
+  uint32_t index = 0;
+  CommitKind kind = CommitKind::AtEntry;
+  BasicBlock *block = nullptr;
+  Instr *after = nullptr;
+  std::array<Value *, 11> regs{};
+  bool flushed = false;
+};
+
+enum class IrOp { Add, Sub, And, UDiv, SDiv, ICmpEq, ICmpUgt };
+enum class IrResultKind { Bits, I1, Ub, Unsupported };
+
+struct IrResult {
+  IrResultKind kind = IrResultKind::Unsupported;
+  uint64_t bits = 0;
+};
+
+// Alive2's div_ub, checked before the C++ operator. Signed division of the
+// signed minimum by -1 is undefined in C++ as well. A zero divisor has no
+// numeric result here.
+IrResult eval_op(IrOp op, uint64_t a, uint64_t b, unsigned width) {
+  if (width == 0 || width > 64)
+    return {};
+  uint64_t mask = width == 64 ? ~uint64_t{0} : (uint64_t{1} << width) - 1;
+  a &= mask;
+  b &= mask;
+  auto bits = [&](uint64_t v) {
+    return IrResult{IrResultKind::Bits, width == 64 ? v : (v & mask)};
+  };
+  auto flag = [&](bool v) {
+    return IrResult{IrResultKind::I1, v ? 1ull : 0ull};
+  };
+  if (op == IrOp::UDiv || op == IrOp::SDiv) {
+    bool sign = op == IrOp::SDiv;
+    uint64_t smin = uint64_t{1} << (width - 1);
+    if (b == 0 || (sign && a == smin && b == mask))
+      return {IrResultKind::Ub, 0};
+    if (!sign)
+      return bits(a / b);
+    int64_t sa;
+    int64_t sb;
+    if (width == 64) {
+      sa = static_cast<int64_t>(a);
+      sb = static_cast<int64_t>(b);
+    } else {
+      uint64_t signbit = uint64_t{1} << (width - 1);
+      sa = (a & signbit) ? static_cast<int64_t>(a | ~mask)
+                         : static_cast<int64_t>(a);
+      sb = (b & signbit) ? static_cast<int64_t>(b | ~mask)
+                         : static_cast<int64_t>(b);
+    }
+    return bits(static_cast<uint64_t>(sa / sb));
+  }
+  switch (op) {
+  case IrOp::Add: return bits(a + b);
+  case IrOp::Sub: return bits(a - b);
+  case IrOp::And: return bits(a & b);
+  case IrOp::ICmpEq: return flag(a == b);
+  case IrOp::ICmpUgt: return flag(a > b);
+  default: break;
+  }
+  return {};
+}
 
 struct Block {
   int start = 0;
@@ -60,7 +129,45 @@ class Lifter {
   unsigned seq = 0;
   bool loop = false;
   std::ostringstream cfg;
+  std::vector<SourceEnd> ends;
 
+  bool bare_mov(const EbAlu &alu) const {
+    EbWidth width = alu.width;
+    if (bug == LiftBug::Alu32AsAlu64)
+      width = EbWidth::W64;
+    auto op = alu.op;
+    if (bug == LiftBug::AddAsSub && op == EbAlu::Add)
+      op = EbAlu::Sub;
+    return op == EbAlu::Mov && width == EbWidth::W64;
+  }
+
+  void note_at_entry(uint32_t index, BasicBlock *block,
+                     const std::array<Value *, 11> &regs) {
+    SourceEnd end;
+    end.index = index;
+    end.kind = CommitKind::AtEntry;
+    end.block = block;
+    end.regs = regs;
+    ends.push_back(end);
+  }
+
+  void note_after(uint32_t index, BasicBlock *block, Instr *after,
+                  const std::array<Value *, 11> &regs) {
+    if (!after)
+      throw std::runtime_error("commit has no instruction");
+    SourceEnd end;
+    end.index = index;
+    end.kind = CommitKind::AfterInstr;
+    end.block = block;
+    end.after = after;
+    end.regs = regs;
+    ends.push_back(end);
+  }
+
+ public:
+  Trace concrete(const std::unordered_map<std::string, uint64_t> &bound);
+
+ private:
   std::string nm() { return "%" + std::to_string(seq++); }
 
   Value &add(std::unique_ptr<Instr> insn) {
@@ -250,12 +357,28 @@ class Lifter {
   void emit(Block &b, int) {
     cur = b.entry;
     std::array<Value *, 11> regs = b.in;
+    bool emitted = false;
+    Instr *anchor = nullptr;
+    BasicBlock *home = b.entry;
     for (int pc = b.start; pc < b.end; ++pc) {
       const auto &insn = code[pc];
-      if (const auto *alu = std::get_if<EbAlu>(&insn.op))
-        regs[alu->dst] = emit_alu(*alu, regs);
-      else if (pc != b.end - 1)
+      if (const auto *alu = std::get_if<EbAlu>(&insn.op)) {
+        bool bare = bare_mov(*alu);
+        Value *produced = emit_alu(*alu, regs);
+        regs[alu->dst] = produced;
+        if (bare && !emitted) {
+          note_at_entry(insn.index, b.entry, regs);
+        } else if (bare) {
+          note_after(insn.index, home, anchor, regs);
+        } else {
+          home = cur;
+          anchor = dynamic_cast<Instr *>(produced);
+          emitted = true;
+          note_after(insn.index, home, anchor, regs);
+        }
+      } else if (pc != b.end - 1) {
         throw std::runtime_error("jump in the middle of a block");
+      }
     }
     const auto &last = code[b.end - 1];
     if (const auto *j = std::get_if<EbJmp>(&last.op)) {
@@ -268,6 +391,7 @@ class Lifter {
         cur->addInstr(std::make_unique<Branch>(
             cond, *blocks[b.succ[0]].entry, *blocks[b.succ[1]].entry));
       }
+      note_after(last.index, cur, &cur->back(), regs);
     } else {
       cur->addInstr(std::make_unique<Branch>(*blocks[b.succ[0]].entry));
     }
@@ -472,6 +596,296 @@ class Lifter {
   }
 };
 
+Trace Lifter::concrete(const std::unordered_map<std::string, uint64_t> &bound) {
+  std::unordered_map<const Value *, uint64_t> env;
+  auto eval = [&](const Value *v) -> std::optional<uint64_t> {
+    if (!v)
+      return std::nullopt;
+    if (auto *constant = dynamic_cast<const IntConst *>(v)) {
+      if (auto *n = constant->getInt())
+        return static_cast<uint64_t>(*n);
+      return std::nullopt;
+    }
+    if (auto *input = dynamic_cast<const Input *>(v)) {
+      auto it = bound.find(input->getName());
+      if (it == bound.end())
+        return std::nullopt;
+      return it->second;
+    }
+    if (dynamic_cast<const PoisonValue *>(v) ||
+        dynamic_cast<const UndefValue *>(v))
+      return std::nullopt;
+    auto it = env.find(v);
+    if (it == env.end())
+      return std::nullopt;
+    return it->second;
+  };
+
+  uint64_t arch[10]{};
+  for (int i = 0; i < 10; ++i) {
+    auto v = eval(init[i]);
+    if (!v)
+      throw std::runtime_error("initial register is not concrete");
+    arch[i] = *v;
+  }
+
+  Trace trace;
+  trace.memory = MemorySummary::Empty;
+  trace.producer = Producer::Ok;
+  bool halt = false;
+
+  auto file_of = [&]() {
+    RegFile file;
+    for (int i = 0; i < 10; ++i)
+      file.r[i] = Bv64{arch[i]};
+    return file;
+  };
+  auto project = [&](const std::array<Value *, 11> &regs, RegFile &out) {
+    for (int i = 0; i < 10; ++i) {
+      if (!regs[i] || regs[i]->bits() != 64)
+        return false;
+      auto v = eval(regs[i]);
+      if (!v)
+        return false;
+      out.r[i] = Bv64{*v};
+    }
+    return true;
+  };
+  auto emit_step = [&](SourceEnd &end, StepStatus status) {
+    if (halt)
+      return;
+    end.flushed = true;
+    if (!trace.steps.empty() &&
+        trace.steps.back().status == StepStatus::Next &&
+        std::holds_alternative<std::monostate>(trace.steps.back().pc_after))
+      trace.steps.back().pc_after = InsnPc{end.index};
+    Step step;
+    step.pc.index = end.index;
+    step.pc_after = std::monostate{};
+    step.before = file_of();
+    if (trace.steps.size() >= code.size() + 1)
+      status = StepStatus::Incomplete;
+    if (status == StepStatus::Ub || status == StepStatus::Unsupported ||
+        status == StepStatus::Incomplete) {
+      step.status = status;
+      step.after = step.before;
+      step.pc_after = std::monostate{};
+      trace.steps.push_back(step);
+      halt = true;
+      return;
+    }
+    if (!project(end.regs, step.after)) {
+      step.status = StepStatus::Unsupported;
+      step.after = step.before;
+      step.pc_after = std::monostate{};
+      trace.steps.push_back(step);
+      halt = true;
+      return;
+    }
+    step.status = status;
+    if (status == StepStatus::Exit) {
+      step.pc_after = ExitPc{};
+      if (auto *bits = std::get_if<Bv64>(&step.after.r[0]))
+        step.return_value = *bits;
+      else {
+        step.status = StepStatus::Unsupported;
+        step.pc_after = std::monostate{};
+        halt = true;
+      }
+    }
+    for (int i = 0; i < 10; ++i)
+      arch[i] = std::get<Bv64>(step.after.r[i]).bits;
+    trace.steps.push_back(step);
+  };
+  auto stop_unsupported = [&](Instr *ins) {
+    for (auto &end : ends) {
+      if (!end.flushed && end.after == ins) {
+        emit_step(end, StepStatus::Unsupported);
+        return;
+      }
+    }
+    Step step;
+    step.status = StepStatus::Unsupported;
+    step.before = file_of();
+    step.after = step.before;
+    trace.steps.push_back(step);
+    halt = true;
+  };
+  auto flush_entry = [&](BasicBlock *block) {
+    for (auto &end : ends) {
+      if (!end.flushed && end.kind == CommitKind::AtEntry && end.block == block)
+        emit_step(end, StepStatus::Next);
+    }
+  };
+  auto flush_after = [&](Instr *ins, StepStatus status) {
+    for (auto &end : ends) {
+      if (!end.flushed && end.kind == CommitKind::AfterInstr && end.after == ins)
+        emit_step(end, status);
+    }
+  };
+
+  BasicBlock *bb = &fn.getEntryBB();
+  BasicBlock *from = nullptr;
+  int guard = 0;
+  while (bb && !halt) {
+    if (++guard > static_cast<int>(code.size()) + 8) {
+      Step step;
+      step.status = StepStatus::Incomplete;
+      step.before = file_of();
+      step.after = step.before;
+      trace.steps.push_back(step);
+      break;
+    }
+    flush_entry(bb);
+    bool moved = false;
+    for (const auto &ins_ref : bb->instrs()) {
+      Instr *ins = const_cast<Instr *>(&ins_ref);
+      if (halt)
+        break;
+      if (auto *phi = dynamic_cast<Phi *>(ins)) {
+        std::optional<uint64_t> picked;
+        if (from) {
+          for (const auto &incoming : phi->getValues()) {
+            if (incoming.second == from->getName())
+              picked = eval(incoming.first);
+          }
+        }
+        if (!picked) {
+          stop_unsupported(ins);
+          break;
+        }
+        env[ins] = *picked;
+        flush_after(ins, StepStatus::Next);
+      } else if (auto *binop = dynamic_cast<BinOp *>(ins)) {
+        auto ops = binop->operands();
+        auto lhs = ops.size() == 2 ? eval(ops[0]) : std::nullopt;
+        auto rhs = ops.size() == 2 ? eval(ops[1]) : std::nullopt;
+        IrOp op = IrOp::Add;
+        bool known = true;
+        switch (binop->getOp()) {
+        case BinOp::Add: op = IrOp::Add; break;
+        case BinOp::Sub: op = IrOp::Sub; break;
+        case BinOp::And: op = IrOp::And; break;
+        case BinOp::UDiv: op = IrOp::UDiv; break;
+        case BinOp::SDiv: op = IrOp::SDiv; break;
+        default: known = false; break;
+        }
+        if (!known || !lhs || !rhs) {
+          stop_unsupported(ins);
+          break;
+        }
+        auto result = eval_op(op, *lhs, *rhs, binop->bits());
+        if (result.kind == IrResultKind::Ub) {
+          bool committed = false;
+          for (auto &end : ends) {
+            if (!end.flushed && end.after == ins) {
+              emit_step(end, StepStatus::Ub);
+              committed = true;
+              break;
+            }
+          }
+          if (!committed)
+            stop_unsupported(ins);
+          break;
+        }
+        if (result.kind != IrResultKind::Bits &&
+            result.kind != IrResultKind::I1) {
+          stop_unsupported(ins);
+          break;
+        }
+        env[ins] = result.bits;
+        flush_after(ins, StepStatus::Next);
+      } else if (auto *icmp = dynamic_cast<ICmp *>(ins)) {
+        auto ops = icmp->operands();
+        auto lhs = ops.size() == 2 ? eval(ops[0]) : std::nullopt;
+        auto rhs = ops.size() == 2 ? eval(ops[1]) : std::nullopt;
+        IrOp op = IrOp::ICmpEq;
+        bool known = true;
+        switch (icmp->getCond()) {
+        case ICmp::EQ: op = IrOp::ICmpEq; break;
+        case ICmp::UGT: op = IrOp::ICmpUgt; break;
+        default: known = false; break;
+        }
+        unsigned width = ops.empty() ? 0 : ops[0]->bits();
+        if (!known || !lhs || !rhs) {
+          stop_unsupported(ins);
+          break;
+        }
+        auto result = eval_op(op, *lhs, *rhs, width);
+        if (result.kind != IrResultKind::I1) {
+          stop_unsupported(ins);
+          break;
+        }
+        env[ins] = result.bits;
+        flush_after(ins, StepStatus::Next);
+      } else if (auto *branch = dynamic_cast<Branch *>(ins)) {
+        flush_after(ins, StepStatus::Next);
+        BasicBlock *dest = nullptr;
+        if (auto *cond = branch->getCond()) {
+          auto bit = eval(cond);
+          if (!bit) {
+            stop_unsupported(ins);
+            break;
+          }
+          dest = const_cast<BasicBlock *>(
+              (*bit & 1) ? &branch->getTrue() : branch->getFalse());
+        } else {
+          dest = const_cast<BasicBlock *>(&branch->getTrue());
+        }
+        if (!dest) {
+          stop_unsupported(ins);
+          break;
+        }
+        from = bb;
+        bb = dest;
+        moved = true;
+        break;
+      } else if (dynamic_cast<Return *>(ins)) {
+        flush_after(ins, StepStatus::Exit);
+        halt = true;
+        moved = true;
+        break;
+      } else {
+        if (dynamic_cast<MemInstr *>(ins))
+          trace.memory = MemorySummary::Changed;
+        stop_unsupported(ins);
+        break;
+      }
+    }
+    if (!moved && !halt) {
+      Step step;
+      step.status = StepStatus::Unsupported;
+      step.before = file_of();
+      step.after = step.before;
+      trace.steps.push_back(step);
+      break;
+    }
+  }
+  return trace;
+}
+
+Trace make_alive_trace(const std::vector<uint8_t> &bytes,
+                       const std::vector<std::pair<uint8_t, Bv64>> &inputs,
+                       BugFlag bug) {
+  auto insns = decode_ebpf(bytes);
+  std::vector<std::pair<uint8_t, std::string>> named;
+  std::unordered_map<std::string, uint64_t> bound;
+  for (auto [reg, value] : inputs) {
+    if (reg > 9)
+      throw std::runtime_error("input register out of range");
+    auto name = "r" + std::to_string(reg);
+    named.emplace_back(reg, name);
+    bound.emplace(name, value.bits);
+  }
+  EbTypes types;
+  Function fn(types.i64, "ebpf");
+  LiftBug lift_bug =
+      bug == BugFlag::DivZeroAsUb ? LiftBug::DivZeroAsUb : LiftBug::None;
+  Lifter lifter(fn, types, insns, lift_bug);
+  lifter.run(named);
+  return lifter.concrete(bound);
+}
+
 } // namespace
 
 LiftInfo lift_ebpf(IR::Function &fn, EbTypes &types,
@@ -480,3 +894,10 @@ LiftInfo lift_ebpf(IR::Function &fn, EbTypes &types,
                    LiftBug bug) {
   return Lifter(fn, types, code, bug).run(inputs);
 }
+
+Trace alive2_trace(const std::vector<uint8_t> &code,
+                   const std::vector<std::pair<uint8_t, Bv64>> &inputs,
+                   BugFlag bug) {
+  return make_alive_trace(code, inputs, bug);
+}
+
