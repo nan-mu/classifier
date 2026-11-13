@@ -2,7 +2,7 @@
 
 Task book: `/tmp/pr6-handoff/pr6_alive2_rocq/PR6_TASK.md` (attachment `pr6_alive2_rocq_handoff.zip`, no later revision). Fixtures: `/tmp/pr6-handoff/pr6_alive2_rocq/fixtures.json`.
 PStack: `/Volumes/SSD/.claude/plugins/cache/cursor-plugins/pstack/0.15.36` v0.15.36, playbook `feature`.
-Base: `agent/alive2-ebpf` (`1dbfbcdb65ed687624c6d36f4b33843ae42fd3b6`, PR #5). Branch: `agent/alive2-rocq`. PR: pending.
+Base: `agent/alive2-ebpf` (`1dbfbcdb65ed687624c6d36f4b33843ae42fd3b6`, PR #5). Branch: `agent/alive2-rocq`. PR: https://github.com/nan-mu/classifier/pull/6
 Worktree: `/Volumes/SSD/bs/classifier-alive2-rocq`.
 
 This file is the committed requirement checklist. The decision trail is `.audit/alive2-rocq.tsv`, which `.gitignore` already ignores. The dirty files on the main checkout belong to another task and stay untouched. PR #5's symbolic matrix is not acceptance evidence for this task.
@@ -18,7 +18,7 @@ Upstream pin: `https://github.com/OpenSourceVerif/linux-ebpf-semantics` commit `
 
 | # | Requirement (from task book) | Implemented | Verified | Evidence | Open issue |
 |---|------------------------------|-------------|----------|----------|------------|
-| 1 | New branch `agent/alive2-rocq` from existing `agent/alive2-ebpf`. Do not merge into `main`. | yes | no | worktree `/Volumes/SSD/bs/classifier-alive2-rocq` | PR not opened yet |
+| 1 | New branch `agent/alive2-rocq` from existing `agent/alive2-ebpf`. Do not merge into `main`. | yes | yes | https://github.com/nan-mu/classifier/pull/6 base `agent/alive2-ebpf` | — |
 | 2 | Check concrete per-eBPF-instruction state changes of the actual PR #5 lifter against the existing Rocq reference. | yes | yes | `./alive2/build/ebpf-concrete --out /tmp/ebpf-concrete-vendored` exit 0, six rows | — |
 | 3 | No SMT, symbolic execution, theorem proving, ISA reimplementation, broad fuzzing, or rewrite of PR #5. | yes | yes | `alive2/CMakeLists.txt` target `ebpf-concrete` links `ebpf_decode.cpp`, `ebpf_lift.cpp`, `ebpf_concrete.cpp` only | — |
 | 4 | On a mismatch, fix the adapter or lifter before claiming PASS. Do not accept a vacuous comparator. | yes | yes | negative row prints `pc 1 status alive2=UB rocq=NEXT` | — |
@@ -40,5 +40,5 @@ Upstream pin: `https://github.com/OpenSourceVerif/linux-ebpf-semantics` commit `
 | 20 | JGT64 `r1=10` gives `r0=9` on the other CFG path. | yes | yes | row `jgt64-10 comparator=PASS sanity=ok`; fall-through pcs 0, 1, 2, 3, 5; r0 `0000000000000009` | — |
 | 21 | Negative test bypasses the lifter DIV64 zero-divisor guard. The comparator must fail at the first relevant divergence for `7/0`. Restore the lifter before committing. | yes | yes | row `div64-7-0-div-zero-as-ub` prints `pc 1 status alive2=UB rocq=NEXT`; the flag is `LiftBug::DivZeroAsUb` on that row only (`ebpf_lift.cpp` still has the guard) | — |
 | 22 | Do not count the PR #5 symbolic matrix as this task's acceptance. No random fuzzing and no large case dump. Deliver a 6-row result table and one positive and one negative trace sample. | yes | yes | stdout is six rows; samples `/tmp/ebpf-concrete-vendored/div64-7-2/` and `div64-7-0-div-zero-as-ub/` | — |
-| 23 | Reproduction command, upstream SHA, trace format, limitations, and this evidence table are in the PR. Open the PR into `agent/alive2-ebpf` only when the checks work. Otherwise leave a Draft that states the blocker. Do not merge. | yes | no | `alive2/rocq/README.md` | PR not opened yet |
+| 23 | Reproduction command, upstream SHA, trace format, limitations, and this evidence table are in the PR. Open the PR into `agent/alive2-ebpf` only when the checks work. Otherwise leave a Draft that states the blocker. Do not merge. | yes | yes | https://github.com/nan-mu/classifier/pull/6 and `alive2/rocq/README.md` | — |
 | 24 | The result is bounded concrete translation validation for these inputs, not a proof of all inputs or all ISA instructions. | yes | yes | `alive2/rocq/README.md` states the limit | — |
