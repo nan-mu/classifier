@@ -1,3 +1,4 @@
 build/
 third_party/alive2/build/
 *.o
+counterexamples/

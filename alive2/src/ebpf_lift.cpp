@@ -25,9 +25,10 @@ struct Block {
 
 class Lifter {
  public:
-  Lifter(Function &fn, IntType &i64, IntType &i32, IntType &i1,
-         const std::vector<EbInsn> &code, LiftBug bug)
-      : fn(fn), i64(i64), i32(i32), i1(i1), code(code), bug(bug) {}
+  Lifter(Function &fn, EbTypes &types, const std::vector<EbInsn> &code,
+         LiftBug bug)
+      : fn(fn), i64(types.i64), i32(types.i32), i1(types.i1), i8(types.i8),
+        i16(types.i16), code(code), bug(bug) {}
 
   LiftInfo run(const std::vector<std::pair<uint8_t, std::string>> &inputs) {
     if (code.empty())
@@ -48,7 +49,7 @@ class Lifter {
 
  private:
   Function &fn;
-  IntType &i64, &i32, &i1;
+  IntType &i64, &i32, &i1, &i8, &i16;
   const std::vector<EbInsn> &code;
   LiftBug bug;
   std::vector<Block> blocks;
@@ -74,8 +75,8 @@ class Lifter {
     return ref;
   }
 
-  Value &c32(uint32_t v) {
-    auto c = std::make_unique<IntConst>(i32, static_cast<int64_t>(v));
+  Value &c32(int64_t v) {
+    auto c = std::make_unique<IntConst>(i32, v);
     Value &ref = *c;
     fn.addConstant(std::move(c));
     return ref;
@@ -199,8 +200,6 @@ class Lifter {
         }
         if (ready == 0)
           continue;
-        if (pending && ready == 0)
-          continue;
         if (pending || blocks[i].pred.size() > 1)
           place_phis(blocks[i], i);
         else if (blocks[i].pred[0] < 0)
@@ -284,7 +283,7 @@ class Lifter {
     if (bug == LiftBug::AddAsSub && op == EbAlu::Add)
       op = EbAlu::Sub;
     bool w32 = width == EbWidth::W32;
-    bool sign_imm = width == EbWidth::W64;
+    bool sign_imm = width == EbWidth::W64 && bug != LiftBug::ImmNoSignExtend;
     Value *src = nullptr;
     if (op != EbAlu::Neg) {
       if (alu.src == EbSrc::Reg)
@@ -292,6 +291,8 @@ class Lifter {
       else
         src = &imm64(alu.imm, sign_imm);
     }
+    if (op == EbAlu::Movsx)
+      return emit_movsx(*regs[alu.src_reg], alu.offset, w32);
     if (!w32)
       return emit_wide(op, *regs[alu.dst], src);
     Value &d = trunc32(*regs[alu.dst]);
@@ -300,17 +301,34 @@ class Lifter {
     return &zext64(narrow);
   }
 
+  Value *emit_movsx(Value &src, uint8_t bits, bool w32) {
+    IntType &narrow = bits == 8 ? i8 : bits == 16 ? i16 : i32;
+    Value &cut = add(std::make_unique<ConversionOp>(narrow, nm(), src,
+                                                    ConversionOp::Trunc));
+    Type &wide = w32 ? static_cast<Type &>(i32) : static_cast<Type &>(i64);
+    auto op = bug == LiftBug::MovsxAsZext ? ConversionOp::ZExt
+                                          : ConversionOp::SExt;
+    Value &ext = add(std::make_unique<ConversionOp>(wide, nm(), cut, op));
+    return w32 ? &zext64(ext) : &ext;
+  }
+
+  Value &shift(Value &dst, Value &src, EbAlu::Op op, bool narrow) {
+    Type &ty = narrow ? static_cast<Type &>(i32) : static_cast<Type &>(i64);
+    Value *amount = &src;
+    if (bug != LiftBug::ShiftWithoutMask)
+      amount = &binop(ty, BinOp::And, src, narrow ? c32(31) : c64(63));
+    return binop(ty, shift_op(op), dst, *amount);
+  }
+
   Value *emit_wide(EbAlu::Op op, Value &dst, Value *src) {
     if (op == EbAlu::Neg)
       return &binop(i64, BinOp::Sub, c64(0), dst);
     if (op == EbAlu::Mov)
       return src;
-    if (op == EbAlu::Div || op == EbAlu::Mod)
-      return emit_divmod(i64, dst, *src, op == EbAlu::Div, &dst);
-    if (op == EbAlu::Lsh || op == EbAlu::Rsh || op == EbAlu::Arsh) {
-      Value &sh = binop(i64, BinOp::And, *src, c64(63));
-      return &binop(i64, shift_op(op), dst, sh);
-    }
+    if (is_divmod(op))
+      return emit_divmod(i64, dst, *src, op, &dst);
+    if (op == EbAlu::Lsh || op == EbAlu::Rsh || op == EbAlu::Arsh)
+      return &shift(dst, *src, op, false);
     return &binop(i64, arith_op(op), dst, *src);
   }
 
@@ -319,35 +337,68 @@ class Lifter {
       return binop(i32, BinOp::Sub, c32(0), dst);
     if (op == EbAlu::Mov)
       return *src;
-    if (op == EbAlu::Div || op == EbAlu::Mod)
-      return *emit_divmod(i32, dst, *src, op == EbAlu::Div, &dst);
-    if (op == EbAlu::Lsh || op == EbAlu::Rsh || op == EbAlu::Arsh) {
-      Value &sh = binop(i32, BinOp::And, *src, c32(31));
-      return binop(i32, shift_op(op), dst, sh);
-    }
+    if (is_divmod(op))
+      return *emit_divmod(i32, dst, *src, op, &dst);
+    if (op == EbAlu::Lsh || op == EbAlu::Rsh || op == EbAlu::Arsh)
+      return shift(dst, *src, op, true);
     return binop(i32, arith_op(op), dst, *src);
   }
 
-  Value *emit_divmod(Type &ty, Value &dst, Value &src, bool is_div, Value *keep) {
-    if (bug == LiftBug::DivZeroAsUb)
-      return &binop(ty, is_div ? BinOp::UDiv : BinOp::URem, dst, src);
+  static bool is_divmod(EbAlu::Op op) {
+    return op == EbAlu::Div || op == EbAlu::Mod || op == EbAlu::Sdiv ||
+           op == EbAlu::Smod;
+  }
+
+  // eBPF defines both the zero divisor and the signed INT_MIN / -1 overflow, so
+  // neither may reach Alive2's sdiv/srem, which records both as UB
+  // (third_party/alive2/ir/instr.cpp:213).
+  Value *emit_divmod(Type &ty, Value &dst, Value &src, EbAlu::Op op,
+                     Value *keep) {
+    bool is_div = op == EbAlu::Div || op == EbAlu::Sdiv;
+    bool sign = op == EbAlu::Sdiv || op == EbAlu::Smod;
+    BinOp::Op raw = is_div ? (sign ? BinOp::SDiv : BinOp::UDiv)
+                           : (sign ? BinOp::SRem : BinOp::URem);
+    if (bug == LiftBug::DivZeroAsUb ||
+        (sign && bug == LiftBug::SdivOverflowAsUb))
+      return &binop(ty, raw, dst, src);
     bool narrow = &ty == &i32;
     Value &zero = narrow ? c32(0) : c64(0);
+    Value &minus_one = narrow ? c32(-1) : c64(-1);
+    Value &smin = narrow ? c32(-2147483648ll) : c64(-9223372036854775807ll - 1);
     Value &is_zero = add(std::make_unique<ICmp>(i1, nm(), ICmp::EQ, src, zero));
     auto &zbb = fn.getBB(nm());
-    auto &obb = fn.getBB(nm());
+    auto &nbb = fn.getBB(nm());
     auto &cbb = fn.getBB(nm());
-    cur->addInstr(std::make_unique<Branch>(is_zero, zbb, obb));
+    cur->addInstr(std::make_unique<Branch>(is_zero, zbb, nbb));
     cur = &zbb;
     Value &zero_result = is_div ? zero : *keep;
     zbb.addInstr(std::make_unique<Branch>(cbb));
-    cur = &obb;
-    Value &divided = binop(ty, is_div ? BinOp::UDiv : BinOp::URem, dst, src);
-    obb.addInstr(std::make_unique<Branch>(cbb));
+    cur = &nbb;
+    Value *quotient = nullptr;
+    BasicBlock *qbb = &nbb;
+    BasicBlock *obb = nullptr;
+    Value *ovf_result = nullptr;
+    if (sign) {
+      Value &at_smin = add(std::make_unique<ICmp>(i1, nm(), ICmp::EQ, dst, smin));
+      Value &at_minus_one =
+          add(std::make_unique<ICmp>(i1, nm(), ICmp::EQ, src, minus_one));
+      Value &overflows = binop(i1, BinOp::And, at_smin, at_minus_one);
+      obb = &fn.getBB(nm());
+      qbb = &fn.getBB(nm());
+      cur->addInstr(std::make_unique<Branch>(overflows, *obb, *qbb));
+      cur = obb;
+      ovf_result = is_div ? &dst : &zero;
+      obb->addInstr(std::make_unique<Branch>(cbb));
+      cur = qbb;
+    }
+    quotient = &binop(ty, raw, dst, src);
+    qbb->addInstr(std::make_unique<Branch>(cbb));
     cur = &cbb;
     auto phi = std::make_unique<Phi>(ty, nm());
     phi->addValue(zero_result, std::string(zbb.getName()));
-    phi->addValue(divided, std::string(obb.getName()));
+    if (sign)
+      phi->addValue(*ovf_result, std::string(obb->getName()));
+    phi->addValue(*quotient, std::string(qbb->getName()));
     return &add(std::move(phi));
   }
 
@@ -423,9 +474,9 @@ class Lifter {
 
 } // namespace
 
-LiftInfo lift_ebpf(IR::Function &fn, IR::IntType &i64, IR::IntType &i32,
-                   IR::IntType &i1, const std::vector<EbInsn> &code,
+LiftInfo lift_ebpf(IR::Function &fn, EbTypes &types,
+                   const std::vector<EbInsn> &code,
                    const std::vector<std::pair<uint8_t, std::string>> &inputs,
                    LiftBug bug) {
-  return Lifter(fn, i64, i32, i1, code, bug).run(inputs);
+  return Lifter(fn, types, code, bug).run(inputs);
 }

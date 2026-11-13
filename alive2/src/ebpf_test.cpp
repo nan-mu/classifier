@@ -1,3 +1,4 @@
+#include "ebpf_check.h"
 #include "ebpf_ref.h"
 #include "ebpf_run.h"
 #include "smt/solver.h"
@@ -5,12 +6,11 @@
 
 #include <array>
 #include <iostream>
+#include <random>
 #include <string>
 #include <vector>
 
 namespace {
-
-int g_failures = 0;
 
 constexpr uint8_t ALU = 0x04;
 constexpr uint8_t JMP = 0x05;
@@ -43,43 +43,6 @@ constexpr uint8_t JLE = 0xb0;
 constexpr uint8_t JSLT = 0xc0;
 constexpr uint8_t JSLE = 0xd0;
 
-const char *answer_name(const smt::Result &r) {
-  if (r.isUnsat())
-    return "UNSAT";
-  if (r.isSat())
-    return "SAT";
-  if (r.isTimeout())
-    return "TIMEOUT";
-  if (r.isInvalid())
-    return "INVALID";
-  if (r.isSkip())
-    return "SKIP";
-  return "ERROR";
-}
-
-void expect(bool cond, const std::string &name) {
-  if (!cond) {
-    std::cerr << "FAIL " << name << "\n";
-    ++g_failures;
-  } else {
-    std::cout << "PASS " << name << "\n";
-  }
-}
-
-smt::Result check(const smt::expr &e, const std::string &name, bool want_unsat) {
-  auto r = smt::check_expr(e, name.c_str(), true);
-  bool ok = want_unsat ? r.isUnsat() : r.isSat();
-  std::cout << (ok ? "PASS " : "FAIL ") << name << " " << answer_name(r) << "\n";
-  if (!ok) {
-    ++g_failures;
-    if (r.isSat())
-      std::cout << r.getModel() << "\n";
-    else if (!r.isUnsat())
-      std::cout << "reason " << r.getReason() << "\n";
-  }
-  return r;
-}
-
 void put(std::vector<uint8_t> &o, uint8_t op, uint8_t dst, uint8_t src, int16_t off,
          int32_t imm) {
   uint32_t u = static_cast<uint32_t>(imm);
@@ -89,55 +52,6 @@ void put(std::vector<uint8_t> &o, uint8_t op, uint8_t dst, uint8_t src, int16_t 
                      static_cast<uint8_t>(u & 0xff), static_cast<uint8_t>((u >> 8) & 0xff),
                      static_cast<uint8_t>((u >> 16) & 0xff),
                      static_cast<uint8_t>((u >> 24) & 0xff)});
-}
-
-smt::expr input_ok(const EbExec &e) {
-  smt::expr ok = true;
-  for (const auto &[reg, name] : e.inputs) {
-    (void)reg;
-    auto undef = smt::expr::mkVar(("isundef_" + name).c_str(), 1);
-    auto np = smt::expr::mkBoolVar(("np_" + name).c_str());
-    ok &= np && undef == 0;
-  }
-  return ok;
-}
-
-std::array<smt::expr, 11> sym_regs(const EbExec &e) {
-  std::array<smt::expr, 11> regs;
-  for (auto &r : regs)
-    r = smt::expr::mkUInt(0, 64);
-  for (const auto &[reg, name] : e.inputs)
-    regs[reg] = smt::expr::mkVar(name.c_str(), 64);
-  return regs;
-}
-
-void expect_equiv(const EbExec &e, const std::string &name) {
-  auto ref = interpret_ebpf_sym(e.insns, sym_regs(e), 8);
-  auto ok = input_ok(e);
-  auto mismatch = ok && ((e.returned != ref.returns) ||
-                         (e.returned && e.value != ref.r0) ||
-                         (e.returned && !e.non_poison));
-  check(mismatch, name + " equivalent to reference", true);
-}
-
-void expect_at(const EbExec &e, const std::vector<std::pair<uint8_t, uint64_t>> &env,
-               uint64_t want, const std::string &name) {
-  ConcreteRegs regs;
-  auto ok = input_ok(e);
-  smt::expr guard = ok;
-  for (auto [reg, val] : env) {
-    regs.r[reg] = val;
-    auto sym = smt::expr::mkVar(e.inputs.at(0).second.c_str(), 64);
-    for (const auto &[ireg, iname] : e.inputs) {
-      if (ireg == reg)
-        sym = smt::expr::mkVar(iname.c_str(), 64);
-    }
-    guard &= sym == smt::expr::mkUInt(val, 64);
-  }
-  uint64_t concrete = interpret_ebpf(e.insns, regs);
-  expect(concrete == want, name + " concrete reference");
-  check(guard && !e.returned, name + " alive returns", true);
-  check(guard && e.value != smt::expr::mkUInt(want, 64), name + " alive value", true);
 }
 
 void decode_spec_example() {
@@ -150,15 +64,51 @@ void decode_spec_example() {
          "spec example is alu64 add r1, 0x11223344");
 }
 
-void reject_unknown() {
-  std::vector<uint8_t> bytes = {0x61, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  bool threw = false;
+void reject_encoding(const char *name, uint8_t opcode, uint8_t dst, uint8_t src,
+                     int16_t off, int32_t imm) {
+  std::vector<uint8_t> bytes;
+  put(bytes, opcode, dst, src, off, imm);
+  std::string why;
   try {
     decode_ebpf(bytes);
-  } catch (const std::runtime_error &) {
-    threw = true;
+  } catch (const std::runtime_error &err) {
+    why = err.what();
   }
-  expect(threw, "LDX is rejected");
+  expect(!why.empty(), std::string(name) + " is rejected");
+  if (!why.empty())
+    std::cout << "  reason: " << why << "\n";
+}
+
+void reject_unknown() {
+  std::cout << "\n== unsupported encodings must error, never act as nop ==\n";
+  reject_encoding("LDX", 0x61, 0, 1, 0, 0);
+  reject_encoding("ST", 0x62, 1, 0, 0, 7);
+  reject_encoding("STX", 0x63, 1, 2, 0, 0);
+  reject_encoding("LDDW", 0x18, 1, 0, 0, 0);
+  reject_encoding("CALL", 0x85, 0, 0, 0, 1);
+  reject_encoding("JSET", 0x45, 1, 0, 2, 1);
+  reject_encoding("JMP32 JSET", 0x46, 1, 0, 2, 1);
+  reject_encoding("byte swap END", 0xd4, 1, 0, 0, 32);
+  reject_encoding("MOVSX with immediate", MOV | ALU64, 1, 0, 8, 0);
+  reject_encoding("MOVSX offset 32 in ALU32", MOV | X | ALU, 1, 2, 32, 0);
+  reject_encoding("MOVSX offset 7", MOV | X | ALU64, 1, 2, 7, 0);
+  reject_encoding("DIV offset 2", DIV | X | ALU64, 1, 2, 2, 0);
+  reject_encoding("NEG with register source", NEG | X | ALU64, 1, 2, 0, 0);
+}
+
+void reject_bad_program() {
+  std::vector<uint8_t> bytes;
+  put(bytes, JEQ | JMP, 1, 0, 100, 0);
+  put(bytes, EXIT | JMP, 0, 0, 0, 0);
+  std::string why;
+  try {
+    execute_ebpf(bytes, {{1, "r1"}}, 0);
+  } catch (const std::runtime_error &err) {
+    why = err.what();
+  }
+  expect(!why.empty(), "jump target past the end is rejected");
+  if (!why.empty())
+    std::cout << "  reason: " << why << "\n";
 }
 
 std::vector<uint8_t> mul_prog() {
@@ -245,6 +195,14 @@ std::vector<uint8_t> unsigned_prog() {
   return c;
 }
 
+std::vector<uint8_t> alu_prog(uint8_t opcode, int16_t offset, int32_t imm) {
+  std::vector<uint8_t> c;
+  put(c, MOV | X | ALU64, 0, 1, 0, 0);
+  put(c, opcode, 0, (opcode & X) ? 2 : 0, offset, imm);
+  put(c, EXIT | JMP, 0, 0, 0, 0);
+  return c;
+}
+
 std::vector<uint8_t> loop_prog() {
   std::vector<uint8_t> c;
   put(c, MOV | ALU64, 0, 0, 0, 0);
@@ -256,86 +214,218 @@ std::vector<uint8_t> loop_prog() {
   return c;
 }
 
-struct OpCase {
-  const char *name;
-  uint8_t op;
-  bool reg;
-  uint64_t dst;
-  uint64_t src;
-  uint64_t want;
+struct IsaCase {
+  std::string name;
+  uint8_t opcode;
+  int16_t offset;
+  int32_t imm;
+  bool jump;
 };
 
-std::vector<uint8_t> op_case_prog(const OpCase &c) {
+// The opcode table from Linux v6.12 instruction-set.rst, not a list of programs
+// someone remembered to write. Every accepted encoding gets a row.
+std::vector<IsaCase> isa_matrix() {
+  std::vector<IsaCase> out;
+  struct AluOp {
+    const char *name;
+    uint8_t code;
+    int16_t offset;
+    bool reg_only;
+    bool imm_only;
+  };
+  static const AluOp alu[] = {
+      {"add", ADD, 0, false, false},   {"sub", SUB, 0, false, false},
+      {"mul", MUL, 0, false, false},   {"div", DIV, 0, false, false},
+      {"sdiv", DIV, 1, false, false},  {"or", OR, 0, false, false},
+      {"and", AND, 0, false, false},   {"lsh", LSH, 0, false, false},
+      {"rsh", RSH, 0, false, false},   {"neg", NEG, 0, false, true},
+      {"mod", MOD, 0, false, false},   {"smod", MOD, 1, false, false},
+      {"xor", XOR, 0, false, false},   {"mov", MOV, 0, false, false},
+      {"arsh", ARSH, 0, false, false}, {"movsx8", MOV, 8, true, false},
+      {"movsx16", MOV, 16, true, false}, {"movsx32", MOV, 32, true, false},
+  };
+  for (const auto &a : alu) {
+    for (uint8_t cls : {ALU, ALU64}) {
+      if (a.offset == 32 && cls == ALU)
+        continue;
+      for (bool reg : {false, true}) {
+        if (a.reg_only && !reg)
+          continue;
+        if (a.imm_only && reg)
+          continue;
+        std::vector<int32_t> imms = reg ? std::vector<int32_t>{0}
+                                        : std::vector<int32_t>{-1, 0x40000001};
+        for (int32_t imm : imms) {
+          IsaCase c;
+          c.name = std::string(cls == ALU ? "alu32 " : "alu64 ") + a.name +
+                   (reg ? " reg" : " imm " + std::to_string(imm));
+          c.opcode = static_cast<uint8_t>(a.code | cls | (reg ? X : 0));
+          c.offset = a.offset;
+          c.imm = imm;
+          c.jump = false;
+          out.push_back(c);
+        }
+      }
+    }
+  }
+  struct JmpOp {
+    const char *name;
+    uint8_t code;
+  };
+  static const JmpOp jmp[] = {
+      {"jeq", JEQ},   {"jgt", JGT},   {"jge", JGE},  {"jne", JNE},
+      {"jsgt", JSGT}, {"jsge", JSGE}, {"jlt", JLT},  {"jle", JLE},
+      {"jslt", JSLT}, {"jsle", JSLE},
+  };
+  for (const auto &j : jmp) {
+    for (uint8_t cls : {JMP, JMP32}) {
+      for (bool reg : {false, true}) {
+        std::vector<int32_t> imms = reg ? std::vector<int32_t>{0}
+                                        : std::vector<int32_t>{-1, 1};
+        for (int32_t imm : imms) {
+          IsaCase c;
+          c.name = std::string(cls == JMP ? "jmp " : "jmp32 ") + j.name +
+                   (reg ? " reg" : " imm " + std::to_string(imm));
+          c.opcode = static_cast<uint8_t>(j.code | cls | (reg ? X : 0));
+          c.offset = 2;
+          c.imm = imm;
+          c.jump = true;
+          out.push_back(c);
+        }
+      }
+    }
+  }
+  out.push_back({"jmp ja", JA | JMP, 2, 0, true});
+  out.push_back({"jmp32 ja", JA | JMP32, 0, 2, true});
+  out.push_back({"jmp exit", EXIT | JMP, 0, 0, true});
+  return out;
+}
+
+std::vector<uint8_t> case_prog(const IsaCase &c) {
   std::vector<uint8_t> code;
-  uint8_t opcode = static_cast<uint8_t>(c.op | (c.reg ? X : 0));
-  int32_t imm = static_cast<int32_t>(static_cast<uint32_t>(c.src));
-  uint8_t cls = static_cast<uint8_t>(opcode & 0x07);
-  if (cls == JMP || cls == JMP32) {
-    put(code, opcode, 1, c.reg ? 2 : 0, 2, c.reg ? 0 : imm);
-    put(code, MOV | ALU64, 0, 0, 0, 0);
-    put(code, EXIT | JMP, 0, 0, 0, 0);
-    put(code, MOV | ALU64, 0, 0, 0, 1);
+  bool reg = c.opcode & X;
+  uint8_t code_field = c.opcode & 0xf0;
+  if (!c.jump) {
+    put(code, MOV | X | ALU64, 0, 1, 0, 0);
+    put(code, c.opcode, 0, reg ? 2 : 0, c.offset, c.imm);
     put(code, EXIT | JMP, 0, 0, 0, 0);
     return code;
   }
-  put(code, MOV | X | ALU64, 0, 1, 0, 0);
-  put(code, opcode, 0, c.reg ? 2 : 0, 0, c.reg ? 0 : imm);
+  if (code_field == EXIT) {
+    put(code, MOV | X | ALU64, 0, 1, 0, 0);
+    put(code, EXIT | JMP, 0, 0, 0, 0);
+    return code;
+  }
+  if (code_field == JA) {
+    bool imm_form = (c.opcode & 0x07) == JMP32;
+    put(code, c.opcode, 0, 0, imm_form ? 0 : c.offset, imm_form ? c.imm : 0);
+  } else {
+    put(code, c.opcode, 1, reg ? 2 : 0, c.offset, c.imm);
+  }
+  put(code, MOV | ALU64, 0, 0, 0, 0);
+  put(code, EXIT | JMP, 0, 0, 0, 0);
+  put(code, MOV | ALU64, 0, 0, 0, 1);
   put(code, EXIT | JMP, 0, 0, 0, 0);
   return code;
 }
 
-void check_op_cases() {
-  constexpr uint64_t neg1 = 0xffffffffffffffffull;
-  static const OpCase cases[] = {
-      {"and reg", AND | ALU64, true, neg1, 0x0f0f0f0f0f0f0f0full, 0x0f0f0f0f0f0f0f0full},
-      {"or reg", OR | ALU64, true, 0xf0f0f0f0f0f0f0f0ull, 0x0f0f0f0f0f0f0f0full, neg1},
-      {"xor reg", XOR | ALU64, true, neg1, 0x0f0f0f0f0f0f0f0full, 0xf0f0f0f0f0f0f0f0ull},
-      {"and imm", AND | ALU64, false, 0xffffffff00000000ull, 0xffffffffull,
-       0xffffffff00000000ull},
-      {"or imm", OR | ALU64, false, 0x100000000ull, 0xffffffffull, neg1},
-      {"xor imm", XOR | ALU64, false, neg1, 1, 0xfffffffffffffffeull},
-      {"jne taken", JNE | JMP, false, neg1, 0, 1},
-      {"jne equal", JNE | JMP, false, 0, 0, 0},
-      {"jne reg", JNE | JMP, true, 5, 5, 0},
-      {"jlt", JLT | JMP, false, neg1, 0, 0},
-      {"jslt", JSLT | JMP, false, neg1, 0, 1},
-      {"jle", JLE | JMP, false, neg1, 0, 0},
-      {"jsle", JSLE | JMP, false, neg1, 0, 1},
-      {"jge", JGE | JMP, false, neg1, 0, 1},
-      {"jsge", JSGE | JMP, false, neg1, 0, 0},
-      {"jne32", JNE | JMP32, false, 0x100000000ull, 0, 0},
-      {"jlt32", JLT | JMP32, false, neg1, 0, 0},
-      {"jslt32", JSLT | JMP32, false, neg1, 0, 1},
-      {"jle32", JLE | JMP32, false, neg1, 0, 0},
-      {"jsle32", JSLE | JMP32, false, neg1, 0, 1},
-      {"jge32", JGE | JMP32, false, neg1, 0, 1},
-      {"jsge32", JSGE | JMP32, false, neg1, 0, 0},
-      // Low 32 bits of 0x1ffffffff are 0xffffffff, and that half is >= 1, so JGE32
-      // is taken. The other arm returns 0, so a 64-bit compare is a different predicate.
-      {"jge32 trunc", JGE | JMP32, false, 0x1ffffffffull, 1, 1},
-  };
-  for (const auto &c : cases) {
-    std::vector<std::pair<uint8_t, std::string>> inputs = {{1, "r1"}};
-    if (c.reg)
-      inputs.push_back({2, "r2"});
-    auto e = execute_ebpf(op_case_prog(c), inputs, 0);
+std::vector<std::pair<uint8_t, std::string>> case_inputs(const IsaCase &c) {
+  if (c.jump && (c.opcode & 0xf0) == JA)
+    return {};
+  std::vector<std::pair<uint8_t, std::string>> inputs = {{1, "r1"}};
+  if (c.opcode & X)
+    inputs.push_back({2, "r2"});
+  return inputs;
+}
+
+void check_isa_matrix() {
+  std::cout << "\n== per-opcode ISA matrix ==\n";
+  auto matrix = isa_matrix();
+  std::cout << "matrix cases " << matrix.size() << "\n";
+  for (const auto &c : matrix) {
+    auto e = execute_ebpf(case_prog(c), case_inputs(c), 0);
     expect_equiv(e, c.name);
-    std::vector<std::pair<uint8_t, uint64_t>> env = {{1, c.dst}};
-    if (c.reg)
-      env.push_back({2, c.src});
-    expect_at(e, env, c.want, c.name);
+    expect_sweep(e, boundary_points(e), c.name);
   }
 }
 
-void print_sample(const EbExec &e) {
-  std::cout << "Decoded eBPF instructions\n" << e.decoded;
-  std::cout << "Control-flow structure\n" << e.cfg;
-  std::cout << "Generated Alive2 IR\n" << e.ir;
-  std::cout << "Symbolic return expression\n" << e.value << "\n";
-  std::cout << "non-poison " << e.non_poison << "\n";
-  std::cout << "Path / definedness conditions\n" << e.defined << "\n";
-  std::cout << "return domain " << e.returned << "\n";
-  std::cout << "Memory summary\n" << e.memory;
+std::vector<uint8_t> random_prog(std::mt19937_64 &rng, unsigned len) {
+  static const std::vector<IsaCase> alu = [] {
+    std::vector<IsaCase> v;
+    for (const auto &c : isa_matrix())
+      if (!c.jump)
+        v.push_back(c);
+    return v;
+  }();
+  struct Tmpl {
+    uint8_t opcode;
+    uint8_t dst;
+    uint8_t src;
+    int16_t off;
+    int32_t imm;
+  };
+  std::vector<Tmpl> body;
+  for (unsigned i = 0; i < len; ++i) {
+    Tmpl t{};
+    bool jump = i + 2 < len && rng() % 5 == 0;
+    if (jump) {
+      static const uint8_t conds[] = {JEQ, JGT, JGE, JNE, JSGT,
+                                      JSGE, JLT, JLE, JSLT, JSLE};
+      uint8_t cls = rng() % 2 ? JMP : JMP32;
+      bool reg = rng() % 2;
+      unsigned target = i + 2 + rng() % (len - i - 1);
+      t.opcode = static_cast<uint8_t>(conds[rng() % 10] | cls | (reg ? X : 0));
+      t.dst = 1 + rng() % 5;
+      t.src = reg ? 1 + rng() % 5 : 0;
+      t.off = static_cast<int16_t>(target - i - 1);
+      t.imm = reg ? 0 : static_cast<int32_t>(rng());
+    } else {
+      const auto &pick = alu[rng() % alu.size()];
+      t.opcode = pick.opcode;
+      t.off = pick.offset;
+      t.dst = rng() % 6;
+      t.src = (pick.opcode & X) ? 1 + rng() % 5 : 0;
+      static const int32_t pool[] = {0, 1, -1, 31, 63, 64, 0x7fffffff,
+                                     static_cast<int32_t>(0x80000000u)};
+      t.imm = (pick.opcode & X) ? 0
+                                : (rng() % 2 ? pool[rng() % 8]
+                                             : static_cast<int32_t>(rng()));
+    }
+    body.push_back(t);
+  }
+  std::vector<uint8_t> code;
+  for (const auto &t : body)
+    put(code, t.opcode, t.dst, t.src, t.off, t.imm);
+  put(code, MOV | X | ALU64, 0, rng() % 6, 0, 0);
+  put(code, EXIT | JMP, 0, 0, 0, 0);
+  return code;
+}
+
+void check_random_differential(unsigned rounds, uint64_t seed) {
+  std::cout << "\n== random differential, seed " << seed << ", " << rounds
+            << " programs ==\n";
+  std::mt19937_64 rng(seed);
+  for (unsigned i = 0; i < rounds; ++i) {
+    unsigned len = 3 + rng() % 6;
+    auto code = random_prog(rng, len);
+    std::vector<std::pair<uint8_t, std::string>> inputs = {
+        {1, "r1"}, {2, "r2"}, {3, "r3"}};
+    std::string name = "fuzz " + std::to_string(i);
+    EbExec e;
+    try {
+      e = execute_ebpf(code, inputs, 0);
+    } catch (const std::runtime_error &err) {
+      expect(false, name + " lifted: " + err.what());
+      continue;
+    }
+    expect_equiv(e, name);
+    std::vector<std::vector<uint64_t>> points;
+    for (unsigned p = 0; p < 24; ++p)
+      points.push_back({rng(), rng(), rng()});
+    for (uint64_t a : boundary_values())
+      points.push_back({a, a, a});
+    expect_sweep(e, points, name);
+  }
 }
 
 bool returns_at(const EbExec &e, uint64_t n) {
@@ -363,6 +453,7 @@ int main() {
   smt::smt_initializer smt;
   decode_spec_example();
   reject_unknown();
+  reject_bad_program();
 
   {
     auto e = execute_ebpf(mul_prog(), {{1, "r1"}, {2, "r2"}}, 0);
@@ -444,7 +535,35 @@ int main() {
     expect_at(e, {{1, 0xffffffffffffffffull}}, 1, "jgt -1 is greater than 0 unsigned");
   }
 
-  check_op_cases();
+  {
+    auto sdiv = alu_prog(DIV | X | ALU64, 1, 0);
+    auto e = execute_ebpf(sdiv, {{1, "r1"}, {2, "r2"}}, 0);
+    expect_equiv(e, "sdiv64");
+    expect_at(e, {{1, 0x8000000000000000ull}, {2, 0xffffffffffffffffull}},
+              0x8000000000000000ull, "sdiv64 INT_MIN / -1 wraps to INT_MIN");
+    expect_at(e, {{1, 0xfffffffffffffffdull}, {2, 3}},
+              0xffffffffffffffffull, "sdiv64 -3 / 3 truncates toward zero");
+    expect_at(e, {{1, 7}, {2, 0}}, 0, "sdiv64 zero divisor gives 0");
+    auto smod = alu_prog(MOD | X | ALU64, 1, 0);
+    auto m = execute_ebpf(smod, {{1, "r1"}, {2, "r2"}}, 0);
+    expect_equiv(m, "smod64");
+    expect_at(m, {{1, 0x8000000000000000ull}, {2, 0xffffffffffffffffull}}, 0,
+              "smod64 INT_MIN % -1 is 0");
+    expect_at(m, {{1, 0xfffffffffffffff3ull}, {2, 3}},
+              0xffffffffffffffffull, "smod64 -13 % 3 is -1 truncated");
+    expect_at(m, {{1, 7}, {2, 0}}, 7, "smod64 zero divisor keeps dst");
+  }
+  {
+    auto e = execute_ebpf(alu_prog(MOV | X | ALU64, 8, 0),
+                          {{1, "r1"}, {2, "r2"}}, 0);
+    expect_equiv(e, "movsx8");
+    expect_at(e, {{1, 0}, {2, 0xff}}, 0xffffffffffffffffull,
+              "movsx8 0xff sign extends to -1");
+    expect_at(e, {{1, 0}, {2, 0x7f}}, 0x7f, "movsx8 0x7f stays positive");
+  }
+
+  check_isa_matrix();
+  check_random_differential(120, 0x5eed1234ull);
 
   std::cout << "\n== sample conditional program ==\n";
   {
@@ -497,6 +616,14 @@ int main() {
       {"alu32 as alu64", alu32_prog(), {{1, "r1"}}, LiftBug::Alu32AsAlu64},
       {"div zero as ub", div_prog(), {{1, "r1"}, {2, "r2"}}, LiftBug::DivZeroAsUb},
       {"bad jump", branch_prog(), {{1, "r1"}}, LiftBug::JumpPlusOne},
+      {"sdiv overflow as ub", alu_prog(DIV | X | ALU64, 1, 0),
+       {{1, "r1"}, {2, "r2"}}, LiftBug::SdivOverflowAsUb},
+      {"shift without mask", alu_prog(LSH | X | ALU64, 0, 0),
+       {{1, "r1"}, {2, "r2"}}, LiftBug::ShiftWithoutMask},
+      {"movsx as zext", alu_prog(MOV | X | ALU64, 8, 0),
+       {{1, "r1"}, {2, "r2"}}, LiftBug::MovsxAsZext},
+      {"imm without sign extend", alu_prog(SUB | ALU64, 0, -1), {{1, "r1"}},
+       LiftBug::ImmNoSignExtend},
   };
   for (const auto &mut : muts) {
     auto e = execute_ebpf(mut.code, mut.inputs, 0, mut.bug);

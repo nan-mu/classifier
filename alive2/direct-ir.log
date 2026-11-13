@@ -50,11 +50,11 @@ merge:
 Symbolic return expression
 (ite (bvule #x0000000b x) (bvadd x #x00000001) (bvadd x #xffffffff)) / non-poison=true
 Path conditions
-return domain (and np_x (= isundef_x #b0))
+return domain (and np_x (= #b0 isundef_x))
 Definedness / UB conditions
-function domain (and np_x (= isundef_x #b0))
-entry -> then (and (bvule #x0000000b x) np_x (= isundef_x #b0))
-entry -> else (and (not (bvule #x0000000b x)) np_x (= isundef_x #b0))
+function domain (and np_x (= #b0 isundef_x))
+entry -> then (and (bvule #x0000000b x) np_x (= #b0 isundef_x))
+entry -> else (and (not (bvule #x0000000b x)) np_x (= #b0 isundef_x))
 Memory summary
 none
 Solver check branch has no UB on bitvector inputs UNSAT

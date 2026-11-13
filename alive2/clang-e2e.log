@@ -1,0 +1,8 @@
+PASS add64 (24 bytes of .text)
+PASS alu32 (24 bytes of .text)
+PASS arith (48 bytes of .text)
+PASS branch (40 bytes of .text)
+PASS shift (24 bytes of .text)
+PASS udiv (24 bytes of .text)
+
+clang e2e: 6 passed, 0 failed, 0 use opcodes outside this PoC

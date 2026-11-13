@@ -12,12 +12,14 @@ enum class EbSrc { Reg, Imm };
 struct EbAlu {
   EbWidth width;
   enum Op {
-    Add, Sub, Mul, Div, Mod, Or, And, Lsh, Rsh, Neg, Xor, Mov, Arsh
+    Add, Sub, Mul, Div, Mod, Or, And, Lsh, Rsh, Neg, Xor, Mov, Arsh,
+    Sdiv, Smod, Movsx
   } op;
   uint8_t dst;
   EbSrc src;
   uint8_t src_reg;
   int32_t imm;
+  uint8_t offset = 0;
 };
 
 struct EbJmp {
@@ -43,7 +45,11 @@ enum class LiftBug {
   AddAsSub,
   Alu32AsAlu64,
   DivZeroAsUb,
-  JumpPlusOne
+  JumpPlusOne,
+  SdivOverflowAsUb,
+  ShiftWithoutMask,
+  MovsxAsZext,
+  ImmNoSignExtend
 };
 
 std::vector<EbInsn> decode_ebpf(const std::vector<uint8_t> &bytes);

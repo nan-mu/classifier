@@ -13,10 +13,14 @@ uint64_t src64(const ConcreteRegs &regs, EbSrc kind, uint8_t reg, int32_t imm,
   return static_cast<uint32_t>(imm);
 }
 
-uint64_t apply_alu(EbAlu::Op op, EbWidth width, uint64_t dst, uint64_t src) {
+uint64_t apply_alu(EbAlu::Op op, EbWidth width, uint64_t dst, uint64_t src,
+                   uint8_t offset) {
   bool w32 = width == EbWidth::W32;
   uint32_t d32 = static_cast<uint32_t>(dst);
   uint32_t s32 = static_cast<uint32_t>(src);
+  constexpr uint32_t smin32 = 0x80000000u;
+  constexpr uint64_t smin64 = 0x8000000000000000ull;
+  constexpr uint64_t all_ones = 0xffffffffffffffffull;
   switch (op) {
   case EbAlu::Mov:
     return w32 ? s32 : src;
@@ -50,6 +54,43 @@ uint64_t apply_alu(EbAlu::Op op, EbWidth width, uint64_t dst, uint64_t src) {
     return static_cast<uint64_t>(static_cast<int64_t>(dst) >> (src & 63));
   case EbAlu::Neg:
     return w32 ? static_cast<uint32_t>(0u - d32) : 0ull - dst;
+  case EbAlu::Sdiv:
+    if (w32) {
+      if (s32 == 0)
+        return 0;
+      if (d32 == smin32 && s32 == static_cast<uint32_t>(all_ones))
+        return d32;
+      return static_cast<uint32_t>(static_cast<int32_t>(d32) /
+                                   static_cast<int32_t>(s32));
+    }
+    if (src == 0)
+      return 0;
+    if (dst == smin64 && src == all_ones)
+      return dst;
+    return static_cast<uint64_t>(static_cast<int64_t>(dst) /
+                                 static_cast<int64_t>(src));
+  case EbAlu::Smod:
+    if (w32) {
+      if (s32 == 0)
+        return d32;
+      if (d32 == smin32 && s32 == static_cast<uint32_t>(all_ones))
+        return 0;
+      return static_cast<uint32_t>(static_cast<int32_t>(d32) %
+                                   static_cast<int32_t>(s32));
+    }
+    if (src == 0)
+      return dst;
+    if (dst == smin64 && src == all_ones)
+      return 0;
+    return static_cast<uint64_t>(static_cast<int64_t>(dst) %
+                                 static_cast<int64_t>(src));
+  case EbAlu::Movsx: {
+    int64_t narrow = offset == 8    ? static_cast<int8_t>(src & 0xff)
+                     : offset == 16 ? static_cast<int16_t>(src & 0xffff)
+                                    : static_cast<int32_t>(src & 0xffffffff);
+    return w32 ? static_cast<uint32_t>(static_cast<int32_t>(narrow))
+               : static_cast<uint64_t>(narrow);
+  }
   }
   throw std::runtime_error("reference ALU op missing");
 }
@@ -90,7 +131,8 @@ smt::expr lo32(const smt::expr &v) { return v.extract(31, 0); }
 
 smt::expr to64(const smt::expr &v32) { return v32.zext(32); }
 
-smt::expr apply_alu_sym(EbAlu::Op op, EbWidth width, smt::expr dst, smt::expr src) {
+smt::expr apply_alu_sym(EbAlu::Op op, EbWidth width, smt::expr dst, smt::expr src,
+                        uint8_t offset) {
   bool w32 = width == EbWidth::W32;
   smt::expr d = w32 ? lo32(dst) : dst;
   smt::expr s = w32 ? lo32(src) : src;
@@ -120,6 +162,15 @@ smt::expr apply_alu_sym(EbAlu::Op op, EbWidth width, smt::expr dst, smt::expr sr
     break;
   case EbAlu::Neg:
     result = smt::expr::mkUInt(0, d.bits()) - d;
+    break;
+  case EbAlu::Sdiv:
+    result = smt::expr::mkIf(s == 0, smt::expr::mkUInt(0, s.bits()), d.sdiv(s));
+    break;
+  case EbAlu::Smod:
+    result = smt::expr::mkIf(s == 0, d, d.srem(s));
+    break;
+  case EbAlu::Movsx:
+    result = s.extract(offset - 1, 0).sext((w32 ? 32u : 64u) - offset);
     break;
   }
   return w32 ? to64(result) : result;
@@ -159,23 +210,14 @@ SymState run_sym(const std::vector<EbInsn> &code, std::array<smt::expr, 11> regs
     throw std::runtime_error("symbolic reference fell off the program");
   const auto &insn = code[static_cast<size_t>(pc)];
   if (const auto *alu = std::get_if<EbAlu>(&insn.op)) {
-    bool div_unsigned_imm = (alu->op == EbAlu::Div || alu->op == EbAlu::Mod) &&
-                            alu->src == EbSrc::Imm;
-    bool sign_imm = alu->width == EbWidth::W64 && !div_unsigned_imm;
-    if (alu->op == EbAlu::Div || alu->op == EbAlu::Mod)
-      sign_imm = alu->width == EbWidth::W64;
+    bool sign_imm = alu->width == EbWidth::W64;
     smt::expr src = alu->op == EbAlu::Neg
                         ? smt::expr::mkUInt(0, 64)
                         : (alu->src == EbSrc::Reg
                                ? regs[alu->src_reg]
                                : (sign_imm ? sx_imm(alu->imm) : zx_imm32(alu->imm)));
-    if ((alu->op == EbAlu::Div || alu->op == EbAlu::Mod) && alu->width == EbWidth::W32 &&
-        alu->src == EbSrc::Imm)
-      src = zx_imm32(alu->imm);
-    if ((alu->op == EbAlu::Div || alu->op == EbAlu::Mod) && alu->width == EbWidth::W64 &&
-        alu->src == EbSrc::Imm)
-      src = sx_imm(alu->imm);
-    regs[alu->dst] = apply_alu_sym(alu->op, alu->width, regs[alu->dst], src);
+    regs[alu->dst] =
+        apply_alu_sym(alu->op, alu->width, regs[alu->dst], src, alu->offset);
     return run_sym(code, regs, pc + 1, fuel, depth + 1);
   }
   const auto &jmp = std::get<EbJmp>(insn.op);
@@ -194,11 +236,9 @@ SymState run_sym(const std::vector<EbInsn> &code, std::array<smt::expr, 11> regs
     }
     return take(next);
   }
-  bool imm_signed = true;
   smt::expr src = jmp.src == EbSrc::Reg ? regs[jmp.src_reg] : sx_imm(jmp.imm);
   if (jmp.width == EbWidth::W32 && jmp.src == EbSrc::Imm)
     src = zx_imm32(jmp.imm);
-  (void)imm_signed;
   smt::expr c = cond_sym(jmp.op, jmp.width, regs[jmp.dst], src);
   unsigned t_fuel = fuel;
   if (target <= pc) {
@@ -226,12 +266,11 @@ uint64_t interpret_ebpf(const std::vector<EbInsn> &code, ConcreteRegs regs,
     const auto &insn = code[static_cast<size_t>(pc)];
     if (const auto *alu = std::get_if<EbAlu>(&insn.op)) {
       bool sign_imm = alu->width == EbWidth::W64;
-      if (alu->op == EbAlu::Div || alu->op == EbAlu::Mod)
-        sign_imm = alu->width == EbWidth::W64;
       uint64_t src = 0;
       if (alu->op != EbAlu::Neg)
         src = src64(regs, alu->src, alu->src_reg, alu->imm, sign_imm);
-      regs.r[alu->dst] = apply_alu(alu->op, alu->width, regs.r[alu->dst], src);
+      regs.r[alu->dst] =
+          apply_alu(alu->op, alu->width, regs.r[alu->dst], src, alu->offset);
       ++pc;
       continue;
     }

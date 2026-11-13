@@ -13,7 +13,17 @@ struct LiftInfo {
   bool loop = false;
 };
 
-LiftInfo lift_ebpf(IR::Function &fn, IR::IntType &i64, IR::IntType &i32,
-                   IR::IntType &i1, const std::vector<EbInsn> &code,
+// The IR keeps Type references, so these must outlive the Function, not the
+// Lifter that fills it.
+struct EbTypes {
+  IR::IntType i64{"i64", 64};
+  IR::IntType i32{"i32", 32};
+  IR::IntType i1{"i1", 1};
+  IR::IntType i8{"i8", 8};
+  IR::IntType i16{"i16", 16};
+};
+
+LiftInfo lift_ebpf(IR::Function &fn, EbTypes &types,
+                   const std::vector<EbInsn> &code,
                    const std::vector<std::pair<uint8_t, std::string>> &inputs,
                    LiftBug bug);

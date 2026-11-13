@@ -34,11 +34,17 @@ add_executable(direct_ir src/direct_ir.cpp)
 alive2_link(direct_ir)
 target_compile_options(direct_ir PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
-add_executable(ebpf_test
+set(EBPF_FRONTEND
   src/ebpf_decode.cpp
   src/ebpf_ref.cpp
   src/ebpf_lift.cpp
   src/ebpf_run.cpp
-  src/ebpf_test.cpp)
+  src/ebpf_check.cpp)
+
+add_executable(ebpf_test ${EBPF_FRONTEND} src/ebpf_test.cpp)
 alive2_link(ebpf_test)
 target_compile_options(ebpf_test PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
+add_executable(ebpf_file ${EBPF_FRONTEND} src/ebpf_file.cpp)
+alive2_link(ebpf_file)
+target_compile_options(ebpf_file PRIVATE -Wall -Wextra -Wno-unused-parameter)

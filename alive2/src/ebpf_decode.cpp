@@ -68,17 +68,31 @@ std::vector<EbInsn> decode_ebpf(const std::vector<uint8_t> &bytes) {
       if (code == 0x80) {
         if (reg_src)
           bad(index, "NEG with register source is not in the ISA");
+        if (disp != 0)
+          bad(index, "NEG offset must be 0");
         alu.op = EbAlu::Neg;
       } else if (code == 0x30 || code == 0x90) {
-        if (disp == 1)
-          bad(index, "signed DIV/MOD is outside this PoC");
-        if (disp != 0)
-          bad(index, "ALU offset must be 0 for unsigned DIV/MOD");
-        alu.op = code == 0x30 ? EbAlu::Div : EbAlu::Mod;
+        if (disp == 1) {
+          alu.op = code == 0x30 ? EbAlu::Sdiv : EbAlu::Smod;
+          alu.offset = 1;
+        } else if (disp == 0) {
+          alu.op = code == 0x30 ? EbAlu::Div : EbAlu::Mod;
+        } else {
+          bad(index, "DIV/MOD offset must be 0 for unsigned or 1 for signed");
+        }
       } else if (code == 0xb0) {
-        if (disp != 0)
-          bad(index, "MOVSX is outside this PoC");
-        alu.op = EbAlu::Mov;
+        if (disp == 0) {
+          alu.op = EbAlu::Mov;
+        } else {
+          if (!reg_src)
+            bad(index, "MOVSX is only defined for register source");
+          if (disp != 8 && disp != 16 && disp != 32)
+            bad(index, "MOVSX offset must be 8, 16 or 32");
+          if (disp == 32 && alu.width == EbWidth::W32)
+            bad(index, "MOVSX offset 32 requires ALU64");
+          alu.op = EbAlu::Movsx;
+          alu.offset = static_cast<uint8_t>(disp);
+        }
       } else if (disp != 0) {
         bad(index, "non-zero ALU offset is not a supported instruction");
       } else {
@@ -176,9 +190,16 @@ std::string format_insn(const EbInsn &insn) {
     case EbAlu::Xor: name = "xor"; break;
     case EbAlu::Mov: name = "mov"; break;
     case EbAlu::Arsh: name = "arsh"; break;
+    case EbAlu::Sdiv: name = "sdiv"; break;
+    case EbAlu::Smod: name = "smod"; break;
+    case EbAlu::Movsx: name = "movsx"; break;
     }
     os << (alu->width == EbWidth::W64 ? "alu64 " : "alu32 ") << name << " r"
        << int(alu->dst);
+    if (alu->op == EbAlu::Movsx) {
+      os << ", r" << int(alu->src_reg) << " sx" << int(alu->offset) << "\n";
+      return os.str();
+    }
     if (alu->op != EbAlu::Neg) {
       if (alu->src == EbSrc::Reg)
         os << ", r" << int(alu->src_reg);

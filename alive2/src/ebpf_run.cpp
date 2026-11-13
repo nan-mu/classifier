@@ -42,11 +42,9 @@ EbExec execute_ebpf(const std::vector<uint8_t> &code,
   for (const auto &insn : insns)
     decoded << format_insn(insn);
 
-  IR::IntType i64("i64", 64);
-  IR::IntType i32("i32", 32);
-  IR::IntType i1("i1", 1);
-  IR::Function fn(i64, "ebpf");
-  auto info = lift_ebpf(fn, i64, i32, i1, insns, inputs, bug);
+  EbTypes types;
+  IR::Function fn(types.i64, "ebpf");
+  auto info = lift_ebpf(fn, types, insns, inputs, bug);
   if (info.loop) {
     if (unroll == 0)
       throw std::runtime_error("loop requires a non-zero Alive2 unroll bound");
