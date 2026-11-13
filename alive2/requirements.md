@@ -60,7 +60,7 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | D1 | 直线程序：真实机器码 → IR → 符号执行 → 结果 | yes | yes | `ebpf-test.log` mul/div/mod/shift 程序；6 个 Clang 端到端程序 | — |
 | D2 | 条件跳转：恢复 CFG、SSA 关系、等价路径条件与返回表达式 | yes | yes | `ebpf-test.log` "sample conditional program" 六段产物 | — |
 | D3 | 有限循环：调用 Alive2 已有展开机制，不手工展开机器码 | yes | yes | `src/ebpf_run.cpp:50-56` 调 `fn.unroll`；`ebpf-test.log` unroll 1/4 | — |
-| D4 | 回边识别、展开配置生效、不同上限结果变化、越界路径处理 | yes | yes | `src/ebpf_lift.cpp:116-117`；`unroll 1 covered 0 1`、`unroll 4 covered 0 1 2 3 4`、`larger unroll covers more trips`、`some trips stay outside the bound` PASS | `k+1` 关系只在一个循环形状上测过 |
+| D4 | 回边识别、展开配置生效、不同上限结果变化、越界路径处理 | yes | yes | `src/ebpf_lift.cpp:116-117`；两种 CFG 形状各测 unroll 1/4：头块判断退出得 `k+1` 行程，回边为条件跳转得 `k` 行程；`larger unroll covers more trips`、`some trips stay outside the bound` 各 2 条 PASS | 上一轮的 `k+1` 通用推测已被第二种形状否定 |
 | D5 | 不把未覆盖路径称为已验证 | yes | yes | `src/ebpf_test.cpp` 的 `returns_at` 按 return domain 判定；报告第五节 | — |
 | E1 | 每条支持指令有独立参考模型，依据固定版本官方规范 | yes | yes | `src/ebpf_ref.cpp` 具体解释器 + 独立 Z3 模型，均不调用 lifter；156 例矩阵逐 opcode 对照 | — |
 | E2 | `valid_input ∧ (Alive2 ≠ Reference)` 交由 SMT 判定 | yes | yes | `src/ebpf_check.cpp` 的 `expect_equiv` | — |
@@ -74,7 +74,7 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | E10 | 已有 eBPF 测试向量补充交叉验证 | yes | yes | `alu32 bytes match clang -target bpf` PASS；6 个 Clang 编译程序的 `.text` 字节 | — |
 | E11 | 可选：Clang BPF target 的 C → 机器码端到端 | yes | yes | `tests/run-clang-e2e.sh` 现场编译 `tests/bpf/*.c`，`llvm-objcopy` 提取 `.text`，`clang-e2e.log` 6 PASS 0 FAIL | — |
 | R1 | 交付可运行代码与 Alive2 构建/依赖配置 | yes | yes | `bootstrap.sh` 从零构建实测通过；Z3 路径经 pkg-config/brew 探测，不再硬编码 | — |
-| R2 | 自动化测试覆盖算术、位宽、除零、移位、条件跳转、路径合并、循环边界 | yes | yes | `tests/run-all.sh`：680 PASS 0 FAIL + 12 求解检查 + 6 端到端 | — |
+| R2 | 自动化测试覆盖算术、位宽、除零、移位、条件跳转、路径合并、循环边界 | yes | yes | `tests/run-all.sh`：687 PASS 0 FAIL + 12 求解检查 + 6 端到端 | — |
 | R3 | 明确记录哪些测试成功、失败、尚未实现 | yes | yes | `feasibility-report.md` 第一、六节；14 例拒绝测试列出未实现 opcode | — |
 | R4 | 符号结果样例含 6 段产物 | yes | yes | `ebpf-test.log` "sample conditional program"；报告第八节 | — |
 | R5 | 修改记录区分复用/新前端/扩展语义/改上游 4 类 | yes | yes | `feasibility-report.md` 第七节四类分列 | — |
@@ -82,9 +82,17 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | R7 | 区分已实验验证的结论与未验证推测 | yes | yes | `feasibility-report.md` 第十一节逐条分列；第五节标注 `k+1` 未证明；第六节声明未对照真实执行器 | — |
 | W1 | 隔离实验代码，记录上游 commit，不改 classifier/XPOST 主线 | yes | yes | 分支 `agent/alive2-ebpf`；`UPSTREAM.txt`；提交按 `alive2/` 限定，未碰 `profile.toml` 与 `tooling/` | 工作区复用见文件开头说明 |
 | W2 | 需求清单持续复核 | yes | yes | 本文件；实现前、阶段收尾、提交前各复核一次 | 交付前再复核一次 |
-| W3 | 一个 Draft PR 就地更新，阶段评论按 SHA 去重 | no | no | — | 待本轮首个提交后创建 |
+| W3 | 一个 Draft PR 就地更新，阶段评论按 SHA 去重 | yes | yes | PR #5 `https://github.com/nan-mu/classifier/pull/5`，Draft，base `main`，head `agent/alive2-ebpf`；经 GitHub MCP 创建并 link | 阶段评论按 head SHA 去重 |
 | W4 | 不合并、不 force push、不清理 worktree | yes | yes | 本轮无此类操作 | 合并由用户在 GitHub 执行 |
 
 ## 交付记录
 
-待填。
+PR：https://github.com/nan-mu/classifier/pull/5 （Draft，base `main`，head `agent/alive2-ebpf`）。经 GitHub MCP 创建，已 link 到本线程。
+
+复核入口：`bash alive2/tests/run-all.sh`。构建入口：`bash alive2/bootstrap.sh`。
+
+本轮实测：`direct_ir` 12 条求解检查 0 失败；`ebpf_test` 687 PASS 0 FAIL；Clang 端到端 6 PASS 0 FAIL；8 个 SAT 反例文件对应 8 类反向测试。从零构建实测通过。
+
+结论：Conditionally feasible。详见 `feasibility-report.md`。
+
+合并由用户在 GitHub 执行，本轮不合并、不 force push、不清理 worktree。

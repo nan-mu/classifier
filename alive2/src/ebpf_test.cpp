@@ -195,6 +195,18 @@ std::vector<uint8_t> unsigned_prog() {
   return c;
 }
 
+// Back edge is a conditional jump and the exit test sits at the bottom, so the
+// CFG differs from loop_prog's top-tested header. r1 == 0 never terminates here.
+std::vector<uint8_t> loop_bottom_test_prog() {
+  std::vector<uint8_t> c;
+  put(c, MOV | ALU64, 0, 0, 0, 0);
+  put(c, ADD | ALU64, 0, 0, 0, 2);
+  put(c, SUB | ALU64, 1, 0, 0, 1);
+  put(c, JNE | JMP, 1, 0, -3, 0);
+  put(c, EXIT | JMP, 0, 0, 0, 0);
+  return c;
+}
+
 std::vector<uint8_t> alu_prog(uint8_t opcode, int16_t offset, int32_t imm) {
   std::vector<uint8_t> c;
   put(c, MOV | X | ALU64, 0, 1, 0, 0);
@@ -447,6 +459,39 @@ uint64_t value_at(const EbExec &e, uint64_t n) {
   return result.getModel().getUInt(e.value);
 }
 
+void check_loop(const std::vector<uint8_t> &code, const std::string &name,
+                bool sample) {
+  std::vector<int> covered1;
+  std::vector<int> covered4;
+  for (unsigned unroll : {1u, 4u}) {
+    auto e = execute_ebpf(code, {{1, "r1"}}, unroll);
+    if (unroll == 1 && sample)
+      print_sample(e);
+    std::cout << name << " unroll " << unroll << " covered";
+    std::vector<int> covered;
+    for (int n = 0; n <= 8; ++n) {
+      if (!returns_at(e, n))
+        continue;
+      covered.push_back(n);
+      std::cout << " " << n;
+    }
+    std::cout << "\n";
+    for (int n : covered) {
+      uint64_t got = value_at(e, n);
+      ConcreteRegs regs;
+      regs.r[1] = static_cast<uint64_t>(n);
+      uint64_t want = interpret_ebpf(e.insns, regs);
+      expect(got == want, name + " n=" + std::to_string(n) + " unroll " +
+                              std::to_string(unroll));
+    }
+    (unroll == 1 ? covered1 : covered4) = covered;
+  }
+  expect(covered1.size() < covered4.size(),
+         name + " larger unroll covers more trips");
+  expect(!covered4.empty() && covered4.back() < 8,
+         name + " some trips stay outside the bound");
+}
+
 } // namespace
 
 int main() {
@@ -574,35 +619,10 @@ int main() {
     expect_at(e, {{1, 11}}, 12, "branch x == 11");
   }
 
-  std::cout << "\n== bounded loop ==\n";
-  auto loop = loop_prog();
-  std::vector<int> covered1;
-  std::vector<int> covered4;
-  for (unsigned unroll : {1u, 4u}) {
-    auto e = execute_ebpf(loop, {{1, "r1"}}, unroll);
-    if (unroll == 1)
-      print_sample(e);
-    std::cout << "unroll " << unroll << " covered";
-    std::vector<int> covered;
-    for (int n = 0; n <= 8; ++n) {
-      if (!returns_at(e, n))
-        continue;
-      covered.push_back(n);
-      std::cout << " " << n;
-    }
-    std::cout << "\n";
-    for (int n : covered) {
-      uint64_t got = value_at(e, n);
-      ConcreteRegs regs;
-      regs.r[1] = static_cast<uint64_t>(n);
-      uint64_t want = interpret_ebpf(e.insns, regs);
-      expect(got == want, "loop n=" + std::to_string(n) + " unroll " +
-                              std::to_string(unroll));
-    }
-    (unroll == 1 ? covered1 : covered4) = covered;
-  }
-  expect(covered1.size() < covered4.size(), "larger unroll covers more trips");
-  expect(!covered4.empty() && covered4.back() < 8, "some trips stay outside the bound");
+  std::cout << "\n== bounded loop, top-tested header ==\n";
+  check_loop(loop_prog(), "loop", true);
+  std::cout << "\n== bounded loop, bottom-tested back edge ==\n";
+  check_loop(loop_bottom_test_prog(), "loop-bottom", false);
 
   std::cout << "\n== mutation tests ==\n";
   struct Mut {
