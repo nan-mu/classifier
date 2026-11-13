@@ -64,7 +64,7 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | D3 | 有限循环：调用 Alive2 已有展开机制，不手工展开机器码 | yes | yes | `src/ebpf_run.cpp:50-56` 调 `fn.unroll`；`ebpf-test.log` unroll 1/4 | — |
 | D4 | 回边识别、展开配置生效、不同上限结果变化、越界路径处理 | yes | yes | `src/ebpf_lift.cpp:116-117`；两种 CFG 形状各测 unroll 1/4：头块判断退出得 `k+1` 行程，回边为条件跳转得 `k` 行程；`larger unroll covers more trips`、`some trips stay outside the bound` 各 2 条 PASS | 上一轮的 `k+1` 通用推测已被第二种形状否定 |
 | D5 | 不把未覆盖路径称为已验证 | yes | yes | `src/ebpf_test.cpp` 的 `returns_at` 按 return domain 判定；报告第五节 | — |
-| E1 | 每条支持指令有独立参考模型，依据固定版本官方规范 | yes | yes | `src/ebpf_ref.cpp` 具体解释器 + 独立 Z3 模型，均不调用 lifter；156 例矩阵逐 opcode 对照 | — |
+| E1 | 每条支持指令有独立参考模型，依据固定版本官方规范 | yes | yes | `src/ebpf_ref.cpp` 只包含 `ebpf.h` 与 `smt/expr.h`，无 lifter 包含或调用；具体解释器 + 独立 Z3 模型；156 例矩阵逐 opcode 对照 | 解码器 `ebpf_decode.cpp` 为两侧共享，无独立第二实现；报告第六节记为共模风险 |
 | E2 | `valid_input ∧ (Alive2 ≠ Reference)` 交由 SMT 判定 | yes | yes | `src/ebpf_check.cpp` 的 `expect_equiv` | — |
 | E3 | UNSAT 才算通过；SAT 存反例；UNKNOWN/超时不得报成功 | yes | yes | `src/ebpf_check.cpp` 的 `check` 区分 UNSAT/SAT/TIMEOUT，SAT 落盘 `counterexamples/`；本轮 8 个反例文件对应 8 类反向测试 | — |
 | E4 | 反向测试：ADD 当 SUB | yes | yes | `add as sub is caught SAT` | — |
@@ -87,13 +87,25 @@ ISA 规范：Linux v6.12 `Documentation/bpf/standardization/instruction-set.rst`
 | W3 | 一个 Draft PR 就地更新，阶段评论按 SHA 去重 | yes | yes | PR #5 `https://github.com/nan-mu/classifier/pull/5`，Draft，base `main`，head `agent/alive2-ebpf`；经 GitHub MCP 创建并 link | 阶段评论按 head SHA 去重 |
 | W4 | 不合并、不 force push、不清理 worktree | yes | yes | 本轮无此类操作 | 合并由用户在 GitHub 执行 |
 
+## 人工复核记录
+
+复核由 agent 阅读任务书与本清单、对照真实产物完成，不依赖脚本判定。本轮实际读过的核对动作：
+
+- 逐条比对 `ebpf_decode.cpp` 接受的 opcode 集合与 `isa_matrix()` 生成的集合。ALU 侧 9 个通用 switch 分支加上 NEG、DIV/SDIV、MOD/SMOD、MOV/MOVSX 四个特判，共 18 个操作族；JMP 侧 10 个比较加上 JA、EXIT。矩阵 93 条 ALU + 60 条条件跳转 + 3 条 JA/EXIT = 156，与日志 `matrix cases 156` 一致，无遗漏族。
+- 读 `ebpf_ref.cpp` 与 `ebpf_ref.h` 的包含与调用，确认只有 `ebpf.h` 和 `smt/expr.h`，不含 lifter、不调用 `lift_ebpf`。同时发现解码器为两侧共享，已记入 E1 的 Open issue 与报告第六节。
+- 读 `ebpf-test.log` 的两种循环形状覆盖行，确认头块判断退出得 `k+1`、回边为条件跳转得 `k`，与报告的否定结论一致。
+- 读 `direct-ir.log` 的 `x + y * 4` 对照行为 SAT，确认等价查询不是恒真。
+- 对照 kernel.org 取回的 v6.12 规范第 330-354、383-399、424-425 行，核对除零、有符号溢出、立即数扩展、移位掩码四类语义。
+
 ## 交付记录
 
 PR：https://github.com/nan-mu/classifier/pull/5 （Draft，base `main`，head `agent/alive2-ebpf`）。经 GitHub MCP 创建，已 link 到本线程。
 
-复核入口：`bash alive2/tests/run-all.sh`。构建入口：`bash alive2/bootstrap.sh`。
+工作区：独立 worktree `/Volumes/SSD/bs/classifier-alive2-ebpf`，分支 `agent/alive2-ebpf`，经 `EnterWorktree` 绑定。主 checkout 已切回 `main`，其 `profile.toml` 与 `tooling/` 的 5 个未提交改动原样保留，未被本轮触碰。
 
-本轮实测：`direct_ir` 12 条求解检查 0 失败；`ebpf_test` 687 PASS 0 FAIL；Clang 端到端 6 PASS 0 FAIL；8 个 SAT 反例文件对应 8 类反向测试。从零构建实测通过。
+可移植性实测：该 worktree 不含任何构建产物，仅凭已提交文件跑 `bash alive2/bootstrap.sh` 从零构建成功（8.7 秒墙钟，退出码 0），随后 `bash alive2/tests/run-all.sh` 复现 687 PASS 0 FAIL、12 条求解检查、6 个 Clang 端到端。迁移没有依赖工作区外的状态。
+
+复核入口：`bash alive2/tests/run-all.sh`。构建入口：`bash alive2/bootstrap.sh`。
 
 结论：Conditionally feasible。详见 `feasibility-report.md`。
 

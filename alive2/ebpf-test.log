@@ -714,7 +714,7 @@ b3:
 Symbolic return expression
 (ite (bvule #x000000000000000b r1)
      (bvadd #x0000000000000001 r1)
-     (bvadd r1 #xffffffffffffffff))
+     (bvadd #xffffffffffffffff r1))
 non-poison true
 Path / definedness conditions
 (and np_r1 (= isundef_r1 #b0))
@@ -790,19 +790,16 @@ b3:
   ret i64 %b1_r0#phi#0
 }
 Symbolic return expression
-(ite (and (= #x0000000000000000 (bvadd r1 #xffffffffffffffff))
-          (not (= #x0000000000000000 r1)))
-     #x0000000000000001
-     #x0000000000000000)
+(ite (= #x0000000000000000 r1) #x0000000000000000 #x0000000000000001)
 non-poison true
 Path / definedness conditions
-(and np_r1
-     (or (= #x0000000000000000 r1)
-         (and (= #x0000000000000000 (bvadd r1 #xffffffffffffffff))
+(and (or (= #x0000000000000000 r1)
+         (and (= #x0000000000000000 (bvadd #xffffffffffffffff r1))
               (not (= #x0000000000000000 r1))))
+     np_r1
      (= isundef_r1 #b0))
 return domain (and (or (= #x0000000000000000 r1)
-         (and (= #x0000000000000000 (bvadd r1 #xffffffffffffffff))
+         (and (= #x0000000000000000 (bvadd #xffffffffffffffff r1))
               (not (= #x0000000000000000 r1))))
      np_r1
      (= isundef_r1 #b0))
