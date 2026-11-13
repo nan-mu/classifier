@@ -1,0 +1,856 @@
+PASS spec example decodes one insn
+PASS spec example is alu64 add r1, 0x11223344
+
+== unsupported encodings must error, never act as nop ==
+PASS LDX is rejected
+  reason: eBPF insn 0: unsupported class in opcode 0x61
+PASS ST is rejected
+  reason: eBPF insn 0: unsupported class in opcode 0x62
+PASS STX is rejected
+  reason: eBPF insn 0: unsupported class in opcode 0x63
+PASS LDDW is rejected
+  reason: eBPF insn 0: unsupported class in opcode 0x18
+PASS CALL is rejected
+  reason: eBPF insn 0: unsupported jump opcode
+PASS JSET is rejected
+  reason: eBPF insn 0: unsupported jump opcode
+PASS JMP32 JSET is rejected
+  reason: eBPF insn 0: unsupported jump opcode
+PASS byte swap END is rejected
+  reason: eBPF insn 0: unsupported ALU opcode 0xd4
+PASS MOVSX with immediate is rejected
+  reason: eBPF insn 0: MOVSX is only defined for register source
+PASS MOVSX offset 32 in ALU32 is rejected
+  reason: eBPF insn 0: MOVSX offset 32 requires ALU64
+PASS MOVSX offset 7 is rejected
+  reason: eBPF insn 0: MOVSX offset must be 8, 16 or 32
+PASS DIV offset 2 is rejected
+  reason: eBPF insn 0: DIV/MOD offset must be 0 for unsigned or 1 for signed
+PASS NEG with register source is rejected
+  reason: eBPF insn 0: NEG with register source is not in the ISA
+PASS jump target past the end is rejected
+  reason: jump target out of range at 0
+PASS mul equivalent to reference UNSAT
+PASS mul 5,7 concrete reference
+PASS mul 5,7 alive returns UNSAT
+PASS mul 5,7 alive value UNSAT
+PASS mul (max+3)*2 wraps to 4 concrete reference
+PASS mul (max+3)*2 wraps to 4 alive returns UNSAT
+PASS mul (max+3)*2 wraps to 4 alive value UNSAT
+PASS alu32 bytes match clang -target bpf for (unsigned)(x + 1)
+PASS alu32 add equivalent to reference UNSAT
+PASS alu32 clears high bits concrete reference
+PASS alu32 clears high bits alive returns UNSAT
+PASS alu32 clears high bits alive value UNSAT
+PASS div64 equivalent to reference UNSAT
+PASS div 7/2 concrete reference
+PASS div 7/2 alive returns UNSAT
+PASS div 7/2 alive value UNSAT
+PASS div zero concrete reference
+PASS div zero alive returns UNSAT
+PASS div zero alive value UNSAT
+PASS div64 imm -1 equivalent to reference UNSAT
+PASS div64 imm -1 is the unsigned all-ones divisor concrete reference
+PASS div64 imm -1 is the unsigned all-ones divisor alive returns UNSAT
+PASS div64 imm -1 is the unsigned all-ones divisor alive value UNSAT
+PASS mod64 equivalent to reference UNSAT
+PASS mod 7%3 concrete reference
+PASS mod 7%3 alive returns UNSAT
+PASS mod 7%3 alive value UNSAT
+PASS mod zero keeps dst concrete reference
+PASS mod zero keeps dst alive returns UNSAT
+PASS mod zero keeps dst alive value UNSAT
+PASS mod32 equivalent to reference UNSAT
+PASS mod32 zero clears high concrete reference
+PASS mod32 zero clears high alive returns UNSAT
+PASS mod32 zero clears high alive value UNSAT
+PASS lsh mask equivalent to reference UNSAT
+PASS lsh 127 masks to 63 concrete reference
+PASS lsh 127 masks to 63 alive returns UNSAT
+PASS lsh 127 masks to 63 alive value UNSAT
+PASS arsh equivalent to reference UNSAT
+PASS arsh sign fill concrete reference
+PASS arsh sign fill alive returns UNSAT
+PASS arsh sign fill alive value UNSAT
+PASS rsh equivalent to reference UNSAT
+PASS rsh zero fill concrete reference
+PASS rsh zero fill alive returns UNSAT
+PASS rsh zero fill alive value UNSAT
+PASS neg equivalent to reference UNSAT
+PASS neg 1 concrete reference
+PASS neg 1 alive returns UNSAT
+PASS neg 1 alive value UNSAT
+PASS jsgt equivalent to reference UNSAT
+PASS jsgt -1 is not greater than 0 concrete reference
+PASS jsgt -1 is not greater than 0 alive returns UNSAT
+PASS jsgt -1 is not greater than 0 alive value UNSAT
+PASS jsgt 1 is greater than 0 concrete reference
+PASS jsgt 1 is greater than 0 alive returns UNSAT
+PASS jsgt 1 is greater than 0 alive value UNSAT
+PASS jgt equivalent to reference UNSAT
+PASS jgt -1 is greater than 0 unsigned concrete reference
+PASS jgt -1 is greater than 0 unsigned alive returns UNSAT
+PASS jgt -1 is greater than 0 unsigned alive value UNSAT
+PASS sdiv64 equivalent to reference UNSAT
+PASS sdiv64 INT_MIN / -1 wraps to INT_MIN concrete reference
+PASS sdiv64 INT_MIN / -1 wraps to INT_MIN alive returns UNSAT
+PASS sdiv64 INT_MIN / -1 wraps to INT_MIN alive value UNSAT
+PASS sdiv64 -3 / 3 truncates toward zero concrete reference
+PASS sdiv64 -3 / 3 truncates toward zero alive returns UNSAT
+PASS sdiv64 -3 / 3 truncates toward zero alive value UNSAT
+PASS sdiv64 zero divisor gives 0 concrete reference
+PASS sdiv64 zero divisor gives 0 alive returns UNSAT
+PASS sdiv64 zero divisor gives 0 alive value UNSAT
+PASS smod64 equivalent to reference UNSAT
+PASS smod64 INT_MIN % -1 is 0 concrete reference
+PASS smod64 INT_MIN % -1 is 0 alive returns UNSAT
+PASS smod64 INT_MIN % -1 is 0 alive value UNSAT
+PASS smod64 -13 % 3 is -1 truncated concrete reference
+PASS smod64 -13 % 3 is -1 truncated alive returns UNSAT
+PASS smod64 -13 % 3 is -1 truncated alive value UNSAT
+PASS smod64 zero divisor keeps dst concrete reference
+PASS smod64 zero divisor keeps dst alive returns UNSAT
+PASS smod64 zero divisor keeps dst alive value UNSAT
+PASS sdiv64 constant INT_MIN / -1 equivalent to reference UNSAT
+PASS sdiv64 constant INT_MIN / -1 concrete reference
+PASS sdiv64 constant INT_MIN / -1 alive returns UNSAT
+PASS sdiv64 constant INT_MIN / -1 alive value UNSAT
+PASS smod64 constant INT_MIN % -1 equivalent to reference UNSAT
+PASS smod64 constant INT_MIN % -1 concrete reference
+PASS smod64 constant INT_MIN % -1 alive returns UNSAT
+PASS smod64 constant INT_MIN % -1 alive value UNSAT
+PASS movsx8 equivalent to reference UNSAT
+PASS movsx8 0xff sign extends to -1 concrete reference
+PASS movsx8 0xff sign extends to -1 alive returns UNSAT
+PASS movsx8 0xff sign extends to -1 alive value UNSAT
+PASS movsx8 0x7f stays positive concrete reference
+PASS movsx8 0x7f stays positive alive returns UNSAT
+PASS movsx8 0x7f stays positive alive value UNSAT
+
+== per-opcode ISA matrix ==
+matrix cases 156
+PASS alu32 add imm -1 equivalent to reference UNSAT
+PASS alu32 add imm -1 sweep 12 points UNSAT
+PASS alu32 add imm 1073741825 equivalent to reference UNSAT
+PASS alu32 add imm 1073741825 sweep 12 points UNSAT
+PASS alu32 add reg equivalent to reference UNSAT
+PASS alu32 add reg sweep 144 points UNSAT
+PASS alu64 add imm -1 equivalent to reference UNSAT
+PASS alu64 add imm -1 sweep 12 points UNSAT
+PASS alu64 add imm 1073741825 equivalent to reference UNSAT
+PASS alu64 add imm 1073741825 sweep 12 points UNSAT
+PASS alu64 add reg equivalent to reference UNSAT
+PASS alu64 add reg sweep 144 points UNSAT
+PASS alu32 sub imm -1 equivalent to reference UNSAT
+PASS alu32 sub imm -1 sweep 12 points UNSAT
+PASS alu32 sub imm 1073741825 equivalent to reference UNSAT
+PASS alu32 sub imm 1073741825 sweep 12 points UNSAT
+PASS alu32 sub reg equivalent to reference UNSAT
+PASS alu32 sub reg sweep 144 points UNSAT
+PASS alu64 sub imm -1 equivalent to reference UNSAT
+PASS alu64 sub imm -1 sweep 12 points UNSAT
+PASS alu64 sub imm 1073741825 equivalent to reference UNSAT
+PASS alu64 sub imm 1073741825 sweep 12 points UNSAT
+PASS alu64 sub reg equivalent to reference UNSAT
+PASS alu64 sub reg sweep 144 points UNSAT
+PASS alu32 mul imm -1 equivalent to reference UNSAT
+PASS alu32 mul imm -1 sweep 12 points UNSAT
+PASS alu32 mul imm 1073741825 equivalent to reference UNSAT
+PASS alu32 mul imm 1073741825 sweep 12 points UNSAT
+PASS alu32 mul reg equivalent to reference UNSAT
+PASS alu32 mul reg sweep 144 points UNSAT
+PASS alu64 mul imm -1 equivalent to reference UNSAT
+PASS alu64 mul imm -1 sweep 12 points UNSAT
+PASS alu64 mul imm 1073741825 equivalent to reference UNSAT
+PASS alu64 mul imm 1073741825 sweep 12 points UNSAT
+PASS alu64 mul reg equivalent to reference UNSAT
+PASS alu64 mul reg sweep 144 points UNSAT
+PASS alu32 div imm -1 equivalent to reference UNSAT
+PASS alu32 div imm -1 sweep 12 points UNSAT
+PASS alu32 div imm 1073741825 equivalent to reference UNSAT
+PASS alu32 div imm 1073741825 sweep 12 points UNSAT
+PASS alu32 div reg equivalent to reference UNSAT
+PASS alu32 div reg sweep 144 points UNSAT
+PASS alu64 div imm -1 equivalent to reference UNSAT
+PASS alu64 div imm -1 sweep 12 points UNSAT
+PASS alu64 div imm 1073741825 equivalent to reference UNSAT
+PASS alu64 div imm 1073741825 sweep 12 points UNSAT
+PASS alu64 div reg equivalent to reference UNSAT
+PASS alu64 div reg sweep 144 points UNSAT
+PASS alu32 sdiv imm -1 equivalent to reference UNSAT
+PASS alu32 sdiv imm -1 sweep 12 points UNSAT
+PASS alu32 sdiv imm 1073741825 equivalent to reference UNSAT
+PASS alu32 sdiv imm 1073741825 sweep 12 points UNSAT
+PASS alu32 sdiv reg equivalent to reference UNSAT
+PASS alu32 sdiv reg sweep 144 points UNSAT
+PASS alu64 sdiv imm -1 equivalent to reference UNSAT
+PASS alu64 sdiv imm -1 sweep 12 points UNSAT
+PASS alu64 sdiv imm 1073741825 equivalent to reference UNSAT
+PASS alu64 sdiv imm 1073741825 sweep 12 points UNSAT
+PASS alu64 sdiv reg equivalent to reference UNSAT
+PASS alu64 sdiv reg sweep 144 points UNSAT
+PASS alu32 or imm -1 equivalent to reference UNSAT
+PASS alu32 or imm -1 sweep 12 points UNSAT
+PASS alu32 or imm 1073741825 equivalent to reference UNSAT
+PASS alu32 or imm 1073741825 sweep 12 points UNSAT
+PASS alu32 or reg equivalent to reference UNSAT
+PASS alu32 or reg sweep 144 points UNSAT
+PASS alu64 or imm -1 equivalent to reference UNSAT
+PASS alu64 or imm -1 sweep 12 points UNSAT
+PASS alu64 or imm 1073741825 equivalent to reference UNSAT
+PASS alu64 or imm 1073741825 sweep 12 points UNSAT
+PASS alu64 or reg equivalent to reference UNSAT
+PASS alu64 or reg sweep 144 points UNSAT
+PASS alu32 and imm -1 equivalent to reference UNSAT
+PASS alu32 and imm -1 sweep 12 points UNSAT
+PASS alu32 and imm 1073741825 equivalent to reference UNSAT
+PASS alu32 and imm 1073741825 sweep 12 points UNSAT
+PASS alu32 and reg equivalent to reference UNSAT
+PASS alu32 and reg sweep 144 points UNSAT
+PASS alu64 and imm -1 equivalent to reference UNSAT
+PASS alu64 and imm -1 sweep 12 points UNSAT
+PASS alu64 and imm 1073741825 equivalent to reference UNSAT
+PASS alu64 and imm 1073741825 sweep 12 points UNSAT
+PASS alu64 and reg equivalent to reference UNSAT
+PASS alu64 and reg sweep 144 points UNSAT
+PASS alu32 lsh imm -1 equivalent to reference UNSAT
+PASS alu32 lsh imm -1 sweep 12 points UNSAT
+PASS alu32 lsh imm 1073741825 equivalent to reference UNSAT
+PASS alu32 lsh imm 1073741825 sweep 12 points UNSAT
+PASS alu32 lsh reg equivalent to reference UNSAT
+PASS alu32 lsh reg sweep 144 points UNSAT
+PASS alu64 lsh imm -1 equivalent to reference UNSAT
+PASS alu64 lsh imm -1 sweep 12 points UNSAT
+PASS alu64 lsh imm 1073741825 equivalent to reference UNSAT
+PASS alu64 lsh imm 1073741825 sweep 12 points UNSAT
+PASS alu64 lsh reg equivalent to reference UNSAT
+PASS alu64 lsh reg sweep 144 points UNSAT
+PASS alu32 rsh imm -1 equivalent to reference UNSAT
+PASS alu32 rsh imm -1 sweep 12 points UNSAT
+PASS alu32 rsh imm 1073741825 equivalent to reference UNSAT
+PASS alu32 rsh imm 1073741825 sweep 12 points UNSAT
+PASS alu32 rsh reg equivalent to reference UNSAT
+PASS alu32 rsh reg sweep 144 points UNSAT
+PASS alu64 rsh imm -1 equivalent to reference UNSAT
+PASS alu64 rsh imm -1 sweep 12 points UNSAT
+PASS alu64 rsh imm 1073741825 equivalent to reference UNSAT
+PASS alu64 rsh imm 1073741825 sweep 12 points UNSAT
+PASS alu64 rsh reg equivalent to reference UNSAT
+PASS alu64 rsh reg sweep 144 points UNSAT
+PASS alu32 neg imm -1 equivalent to reference UNSAT
+PASS alu32 neg imm -1 sweep 12 points UNSAT
+PASS alu32 neg imm 1073741825 equivalent to reference UNSAT
+PASS alu32 neg imm 1073741825 sweep 12 points UNSAT
+PASS alu64 neg imm -1 equivalent to reference UNSAT
+PASS alu64 neg imm -1 sweep 12 points UNSAT
+PASS alu64 neg imm 1073741825 equivalent to reference UNSAT
+PASS alu64 neg imm 1073741825 sweep 12 points UNSAT
+PASS alu32 mod imm -1 equivalent to reference UNSAT
+PASS alu32 mod imm -1 sweep 12 points UNSAT
+PASS alu32 mod imm 1073741825 equivalent to reference UNSAT
+PASS alu32 mod imm 1073741825 sweep 12 points UNSAT
+PASS alu32 mod reg equivalent to reference UNSAT
+PASS alu32 mod reg sweep 144 points UNSAT
+PASS alu64 mod imm -1 equivalent to reference UNSAT
+PASS alu64 mod imm -1 sweep 12 points UNSAT
+PASS alu64 mod imm 1073741825 equivalent to reference UNSAT
+PASS alu64 mod imm 1073741825 sweep 12 points UNSAT
+PASS alu64 mod reg equivalent to reference UNSAT
+PASS alu64 mod reg sweep 144 points UNSAT
+PASS alu32 smod imm -1 equivalent to reference UNSAT
+PASS alu32 smod imm -1 sweep 12 points UNSAT
+PASS alu32 smod imm 1073741825 equivalent to reference UNSAT
+PASS alu32 smod imm 1073741825 sweep 12 points UNSAT
+PASS alu32 smod reg equivalent to reference UNSAT
+PASS alu32 smod reg sweep 144 points UNSAT
+PASS alu64 smod imm -1 equivalent to reference UNSAT
+PASS alu64 smod imm -1 sweep 12 points UNSAT
+PASS alu64 smod imm 1073741825 equivalent to reference UNSAT
+PASS alu64 smod imm 1073741825 sweep 12 points UNSAT
+PASS alu64 smod reg equivalent to reference UNSAT
+PASS alu64 smod reg sweep 144 points UNSAT
+PASS alu32 xor imm -1 equivalent to reference UNSAT
+PASS alu32 xor imm -1 sweep 12 points UNSAT
+PASS alu32 xor imm 1073741825 equivalent to reference UNSAT
+PASS alu32 xor imm 1073741825 sweep 12 points UNSAT
+PASS alu32 xor reg equivalent to reference UNSAT
+PASS alu32 xor reg sweep 144 points UNSAT
+PASS alu64 xor imm -1 equivalent to reference UNSAT
+PASS alu64 xor imm -1 sweep 12 points UNSAT
+PASS alu64 xor imm 1073741825 equivalent to reference UNSAT
+PASS alu64 xor imm 1073741825 sweep 12 points UNSAT
+PASS alu64 xor reg equivalent to reference UNSAT
+PASS alu64 xor reg sweep 144 points UNSAT
+PASS alu32 mov imm -1 equivalent to reference UNSAT
+PASS alu32 mov imm -1 sweep 12 points UNSAT
+PASS alu32 mov imm 1073741825 equivalent to reference UNSAT
+PASS alu32 mov imm 1073741825 sweep 12 points UNSAT
+PASS alu32 mov reg equivalent to reference UNSAT
+PASS alu32 mov reg sweep 144 points UNSAT
+PASS alu64 mov imm -1 equivalent to reference UNSAT
+PASS alu64 mov imm -1 sweep 12 points UNSAT
+PASS alu64 mov imm 1073741825 equivalent to reference UNSAT
+PASS alu64 mov imm 1073741825 sweep 12 points UNSAT
+PASS alu64 mov reg equivalent to reference UNSAT
+PASS alu64 mov reg sweep 144 points UNSAT
+PASS alu32 arsh imm -1 equivalent to reference UNSAT
+PASS alu32 arsh imm -1 sweep 12 points UNSAT
+PASS alu32 arsh imm 1073741825 equivalent to reference UNSAT
+PASS alu32 arsh imm 1073741825 sweep 12 points UNSAT
+PASS alu32 arsh reg equivalent to reference UNSAT
+PASS alu32 arsh reg sweep 144 points UNSAT
+PASS alu64 arsh imm -1 equivalent to reference UNSAT
+PASS alu64 arsh imm -1 sweep 12 points UNSAT
+PASS alu64 arsh imm 1073741825 equivalent to reference UNSAT
+PASS alu64 arsh imm 1073741825 sweep 12 points UNSAT
+PASS alu64 arsh reg equivalent to reference UNSAT
+PASS alu64 arsh reg sweep 144 points UNSAT
+PASS alu32 movsx8 reg equivalent to reference UNSAT
+PASS alu32 movsx8 reg sweep 144 points UNSAT
+PASS alu64 movsx8 reg equivalent to reference UNSAT
+PASS alu64 movsx8 reg sweep 144 points UNSAT
+PASS alu32 movsx16 reg equivalent to reference UNSAT
+PASS alu32 movsx16 reg sweep 144 points UNSAT
+PASS alu64 movsx16 reg equivalent to reference UNSAT
+PASS alu64 movsx16 reg sweep 144 points UNSAT
+PASS alu64 movsx32 reg equivalent to reference UNSAT
+PASS alu64 movsx32 reg sweep 144 points UNSAT
+PASS jmp jeq imm -1 equivalent to reference UNSAT
+PASS jmp jeq imm -1 sweep 12 points UNSAT
+PASS jmp jeq imm 1 equivalent to reference UNSAT
+PASS jmp jeq imm 1 sweep 12 points UNSAT
+PASS jmp jeq reg equivalent to reference UNSAT
+PASS jmp jeq reg sweep 144 points UNSAT
+PASS jmp32 jeq imm -1 equivalent to reference UNSAT
+PASS jmp32 jeq imm -1 sweep 12 points UNSAT
+PASS jmp32 jeq imm 1 equivalent to reference UNSAT
+PASS jmp32 jeq imm 1 sweep 12 points UNSAT
+PASS jmp32 jeq reg equivalent to reference UNSAT
+PASS jmp32 jeq reg sweep 144 points UNSAT
+PASS jmp jgt imm -1 equivalent to reference UNSAT
+PASS jmp jgt imm -1 sweep 12 points UNSAT
+PASS jmp jgt imm 1 equivalent to reference UNSAT
+PASS jmp jgt imm 1 sweep 12 points UNSAT
+PASS jmp jgt reg equivalent to reference UNSAT
+PASS jmp jgt reg sweep 144 points UNSAT
+PASS jmp32 jgt imm -1 equivalent to reference UNSAT
+PASS jmp32 jgt imm -1 sweep 12 points UNSAT
+PASS jmp32 jgt imm 1 equivalent to reference UNSAT
+PASS jmp32 jgt imm 1 sweep 12 points UNSAT
+PASS jmp32 jgt reg equivalent to reference UNSAT
+PASS jmp32 jgt reg sweep 144 points UNSAT
+PASS jmp jge imm -1 equivalent to reference UNSAT
+PASS jmp jge imm -1 sweep 12 points UNSAT
+PASS jmp jge imm 1 equivalent to reference UNSAT
+PASS jmp jge imm 1 sweep 12 points UNSAT
+PASS jmp jge reg equivalent to reference UNSAT
+PASS jmp jge reg sweep 144 points UNSAT
+PASS jmp32 jge imm -1 equivalent to reference UNSAT
+PASS jmp32 jge imm -1 sweep 12 points UNSAT
+PASS jmp32 jge imm 1 equivalent to reference UNSAT
+PASS jmp32 jge imm 1 sweep 12 points UNSAT
+PASS jmp32 jge reg equivalent to reference UNSAT
+PASS jmp32 jge reg sweep 144 points UNSAT
+PASS jmp jne imm -1 equivalent to reference UNSAT
+PASS jmp jne imm -1 sweep 12 points UNSAT
+PASS jmp jne imm 1 equivalent to reference UNSAT
+PASS jmp jne imm 1 sweep 12 points UNSAT
+PASS jmp jne reg equivalent to reference UNSAT
+PASS jmp jne reg sweep 144 points UNSAT
+PASS jmp32 jne imm -1 equivalent to reference UNSAT
+PASS jmp32 jne imm -1 sweep 12 points UNSAT
+PASS jmp32 jne imm 1 equivalent to reference UNSAT
+PASS jmp32 jne imm 1 sweep 12 points UNSAT
+PASS jmp32 jne reg equivalent to reference UNSAT
+PASS jmp32 jne reg sweep 144 points UNSAT
+PASS jmp jsgt imm -1 equivalent to reference UNSAT
+PASS jmp jsgt imm -1 sweep 12 points UNSAT
+PASS jmp jsgt imm 1 equivalent to reference UNSAT
+PASS jmp jsgt imm 1 sweep 12 points UNSAT
+PASS jmp jsgt reg equivalent to reference UNSAT
+PASS jmp jsgt reg sweep 144 points UNSAT
+PASS jmp32 jsgt imm -1 equivalent to reference UNSAT
+PASS jmp32 jsgt imm -1 sweep 12 points UNSAT
+PASS jmp32 jsgt imm 1 equivalent to reference UNSAT
+PASS jmp32 jsgt imm 1 sweep 12 points UNSAT
+PASS jmp32 jsgt reg equivalent to reference UNSAT
+PASS jmp32 jsgt reg sweep 144 points UNSAT
+PASS jmp jsge imm -1 equivalent to reference UNSAT
+PASS jmp jsge imm -1 sweep 12 points UNSAT
+PASS jmp jsge imm 1 equivalent to reference UNSAT
+PASS jmp jsge imm 1 sweep 12 points UNSAT
+PASS jmp jsge reg equivalent to reference UNSAT
+PASS jmp jsge reg sweep 144 points UNSAT
+PASS jmp32 jsge imm -1 equivalent to reference UNSAT
+PASS jmp32 jsge imm -1 sweep 12 points UNSAT
+PASS jmp32 jsge imm 1 equivalent to reference UNSAT
+PASS jmp32 jsge imm 1 sweep 12 points UNSAT
+PASS jmp32 jsge reg equivalent to reference UNSAT
+PASS jmp32 jsge reg sweep 144 points UNSAT
+PASS jmp jlt imm -1 equivalent to reference UNSAT
+PASS jmp jlt imm -1 sweep 12 points UNSAT
+PASS jmp jlt imm 1 equivalent to reference UNSAT
+PASS jmp jlt imm 1 sweep 12 points UNSAT
+PASS jmp jlt reg equivalent to reference UNSAT
+PASS jmp jlt reg sweep 144 points UNSAT
+PASS jmp32 jlt imm -1 equivalent to reference UNSAT
+PASS jmp32 jlt imm -1 sweep 12 points UNSAT
+PASS jmp32 jlt imm 1 equivalent to reference UNSAT
+PASS jmp32 jlt imm 1 sweep 12 points UNSAT
+PASS jmp32 jlt reg equivalent to reference UNSAT
+PASS jmp32 jlt reg sweep 144 points UNSAT
+PASS jmp jle imm -1 equivalent to reference UNSAT
+PASS jmp jle imm -1 sweep 12 points UNSAT
+PASS jmp jle imm 1 equivalent to reference UNSAT
+PASS jmp jle imm 1 sweep 12 points UNSAT
+PASS jmp jle reg equivalent to reference UNSAT
+PASS jmp jle reg sweep 144 points UNSAT
+PASS jmp32 jle imm -1 equivalent to reference UNSAT
+PASS jmp32 jle imm -1 sweep 12 points UNSAT
+PASS jmp32 jle imm 1 equivalent to reference UNSAT
+PASS jmp32 jle imm 1 sweep 12 points UNSAT
+PASS jmp32 jle reg equivalent to reference UNSAT
+PASS jmp32 jle reg sweep 144 points UNSAT
+PASS jmp jslt imm -1 equivalent to reference UNSAT
+PASS jmp jslt imm -1 sweep 12 points UNSAT
+PASS jmp jslt imm 1 equivalent to reference UNSAT
+PASS jmp jslt imm 1 sweep 12 points UNSAT
+PASS jmp jslt reg equivalent to reference UNSAT
+PASS jmp jslt reg sweep 144 points UNSAT
+PASS jmp32 jslt imm -1 equivalent to reference UNSAT
+PASS jmp32 jslt imm -1 sweep 12 points UNSAT
+PASS jmp32 jslt imm 1 equivalent to reference UNSAT
+PASS jmp32 jslt imm 1 sweep 12 points UNSAT
+PASS jmp32 jslt reg equivalent to reference UNSAT
+PASS jmp32 jslt reg sweep 144 points UNSAT
+PASS jmp jsle imm -1 equivalent to reference UNSAT
+PASS jmp jsle imm -1 sweep 12 points UNSAT
+PASS jmp jsle imm 1 equivalent to reference UNSAT
+PASS jmp jsle imm 1 sweep 12 points UNSAT
+PASS jmp jsle reg equivalent to reference UNSAT
+PASS jmp jsle reg sweep 144 points UNSAT
+PASS jmp32 jsle imm -1 equivalent to reference UNSAT
+PASS jmp32 jsle imm -1 sweep 12 points UNSAT
+PASS jmp32 jsle imm 1 equivalent to reference UNSAT
+PASS jmp32 jsle imm 1 sweep 12 points UNSAT
+PASS jmp32 jsle reg equivalent to reference UNSAT
+PASS jmp32 jsle reg sweep 144 points UNSAT
+PASS jmp ja equivalent to reference UNSAT
+PASS jmp ja sweep 1 points UNSAT
+PASS jmp32 ja equivalent to reference UNSAT
+PASS jmp32 ja sweep 1 points UNSAT
+PASS jmp exit equivalent to reference UNSAT
+PASS jmp exit sweep 12 points UNSAT
+
+== random differential, seed 1592594996, 120 programs ==
+PASS fuzz 0 equivalent to reference UNSAT
+PASS fuzz 0 sweep 36 points UNSAT
+PASS fuzz 1 equivalent to reference UNSAT
+PASS fuzz 1 sweep 36 points UNSAT
+PASS fuzz 2 equivalent to reference UNSAT
+PASS fuzz 2 sweep 36 points UNSAT
+PASS fuzz 3 equivalent to reference UNSAT
+PASS fuzz 3 sweep 36 points UNSAT
+PASS fuzz 4 equivalent to reference UNSAT
+PASS fuzz 4 sweep 36 points UNSAT
+PASS fuzz 5 equivalent to reference UNSAT
+PASS fuzz 5 sweep 36 points UNSAT
+PASS fuzz 6 equivalent to reference UNSAT
+PASS fuzz 6 sweep 36 points UNSAT
+PASS fuzz 7 equivalent to reference UNSAT
+PASS fuzz 7 sweep 36 points UNSAT
+PASS fuzz 8 equivalent to reference UNSAT
+PASS fuzz 8 sweep 36 points UNSAT
+PASS fuzz 9 equivalent to reference UNSAT
+PASS fuzz 9 sweep 36 points UNSAT
+PASS fuzz 10 equivalent to reference UNSAT
+PASS fuzz 10 sweep 36 points UNSAT
+PASS fuzz 11 equivalent to reference UNSAT
+PASS fuzz 11 sweep 36 points UNSAT
+PASS fuzz 12 equivalent to reference UNSAT
+PASS fuzz 12 sweep 36 points UNSAT
+PASS fuzz 13 equivalent to reference UNSAT
+PASS fuzz 13 sweep 36 points UNSAT
+PASS fuzz 14 equivalent to reference UNSAT
+PASS fuzz 14 sweep 36 points UNSAT
+PASS fuzz 15 equivalent to reference UNSAT
+PASS fuzz 15 sweep 36 points UNSAT
+PASS fuzz 16 equivalent to reference UNSAT
+PASS fuzz 16 sweep 36 points UNSAT
+PASS fuzz 17 equivalent to reference UNSAT
+PASS fuzz 17 sweep 36 points UNSAT
+PASS fuzz 18 equivalent to reference UNSAT
+PASS fuzz 18 sweep 36 points UNSAT
+PASS fuzz 19 equivalent to reference UNSAT
+PASS fuzz 19 sweep 36 points UNSAT
+PASS fuzz 20 equivalent to reference UNSAT
+PASS fuzz 20 sweep 36 points UNSAT
+PASS fuzz 21 equivalent to reference UNSAT
+PASS fuzz 21 sweep 36 points UNSAT
+PASS fuzz 22 equivalent to reference UNSAT
+PASS fuzz 22 sweep 36 points UNSAT
+PASS fuzz 23 equivalent to reference UNSAT
+PASS fuzz 23 sweep 36 points UNSAT
+PASS fuzz 24 equivalent to reference UNSAT
+PASS fuzz 24 sweep 36 points UNSAT
+PASS fuzz 25 equivalent to reference UNSAT
+PASS fuzz 25 sweep 36 points UNSAT
+PASS fuzz 26 equivalent to reference UNSAT
+PASS fuzz 26 sweep 36 points UNSAT
+PASS fuzz 27 equivalent to reference UNSAT
+PASS fuzz 27 sweep 36 points UNSAT
+PASS fuzz 28 equivalent to reference UNSAT
+PASS fuzz 28 sweep 36 points UNSAT
+PASS fuzz 29 equivalent to reference UNSAT
+PASS fuzz 29 sweep 36 points UNSAT
+PASS fuzz 30 equivalent to reference UNSAT
+PASS fuzz 30 sweep 36 points UNSAT
+PASS fuzz 31 equivalent to reference UNSAT
+PASS fuzz 31 sweep 36 points UNSAT
+PASS fuzz 32 equivalent to reference UNSAT
+PASS fuzz 32 sweep 36 points UNSAT
+PASS fuzz 33 equivalent to reference UNSAT
+PASS fuzz 33 sweep 36 points UNSAT
+PASS fuzz 34 equivalent to reference UNSAT
+PASS fuzz 34 sweep 36 points UNSAT
+PASS fuzz 35 equivalent to reference UNSAT
+PASS fuzz 35 sweep 36 points UNSAT
+PASS fuzz 36 equivalent to reference UNSAT
+PASS fuzz 36 sweep 36 points UNSAT
+PASS fuzz 37 equivalent to reference UNSAT
+PASS fuzz 37 sweep 36 points UNSAT
+PASS fuzz 38 equivalent to reference UNSAT
+PASS fuzz 38 sweep 36 points UNSAT
+PASS fuzz 39 equivalent to reference UNSAT
+PASS fuzz 39 sweep 36 points UNSAT
+PASS fuzz 40 equivalent to reference UNSAT
+PASS fuzz 40 sweep 36 points UNSAT
+PASS fuzz 41 equivalent to reference UNSAT
+PASS fuzz 41 sweep 36 points UNSAT
+PASS fuzz 42 equivalent to reference UNSAT
+PASS fuzz 42 sweep 36 points UNSAT
+PASS fuzz 43 equivalent to reference UNSAT
+PASS fuzz 43 sweep 36 points UNSAT
+PASS fuzz 44 equivalent to reference UNSAT
+PASS fuzz 44 sweep 36 points UNSAT
+PASS fuzz 45 equivalent to reference UNSAT
+PASS fuzz 45 sweep 36 points UNSAT
+PASS fuzz 46 equivalent to reference UNSAT
+PASS fuzz 46 sweep 36 points UNSAT
+PASS fuzz 47 equivalent to reference UNSAT
+PASS fuzz 47 sweep 36 points UNSAT
+PASS fuzz 48 equivalent to reference UNSAT
+PASS fuzz 48 sweep 36 points UNSAT
+PASS fuzz 49 equivalent to reference UNSAT
+PASS fuzz 49 sweep 36 points UNSAT
+PASS fuzz 50 equivalent to reference UNSAT
+PASS fuzz 50 sweep 36 points UNSAT
+PASS fuzz 51 equivalent to reference UNSAT
+PASS fuzz 51 sweep 36 points UNSAT
+PASS fuzz 52 equivalent to reference UNSAT
+PASS fuzz 52 sweep 36 points UNSAT
+PASS fuzz 53 equivalent to reference UNSAT
+PASS fuzz 53 sweep 36 points UNSAT
+PASS fuzz 54 equivalent to reference UNSAT
+PASS fuzz 54 sweep 36 points UNSAT
+PASS fuzz 55 equivalent to reference UNSAT
+PASS fuzz 55 sweep 36 points UNSAT
+PASS fuzz 56 equivalent to reference UNSAT
+PASS fuzz 56 sweep 36 points UNSAT
+PASS fuzz 57 equivalent to reference UNSAT
+PASS fuzz 57 sweep 36 points UNSAT
+PASS fuzz 58 equivalent to reference UNSAT
+PASS fuzz 58 sweep 36 points UNSAT
+PASS fuzz 59 equivalent to reference UNSAT
+PASS fuzz 59 sweep 36 points UNSAT
+PASS fuzz 60 equivalent to reference UNSAT
+PASS fuzz 60 sweep 36 points UNSAT
+PASS fuzz 61 equivalent to reference UNSAT
+PASS fuzz 61 sweep 36 points UNSAT
+PASS fuzz 62 equivalent to reference UNSAT
+PASS fuzz 62 sweep 36 points UNSAT
+PASS fuzz 63 equivalent to reference UNSAT
+PASS fuzz 63 sweep 36 points UNSAT
+PASS fuzz 64 equivalent to reference UNSAT
+PASS fuzz 64 sweep 36 points UNSAT
+PASS fuzz 65 equivalent to reference UNSAT
+PASS fuzz 65 sweep 36 points UNSAT
+PASS fuzz 66 equivalent to reference UNSAT
+PASS fuzz 66 sweep 36 points UNSAT
+PASS fuzz 67 equivalent to reference UNSAT
+PASS fuzz 67 sweep 36 points UNSAT
+PASS fuzz 68 equivalent to reference UNSAT
+PASS fuzz 68 sweep 36 points UNSAT
+PASS fuzz 69 equivalent to reference UNSAT
+PASS fuzz 69 sweep 36 points UNSAT
+PASS fuzz 70 equivalent to reference UNSAT
+PASS fuzz 70 sweep 36 points UNSAT
+PASS fuzz 71 equivalent to reference UNSAT
+PASS fuzz 71 sweep 36 points UNSAT
+PASS fuzz 72 equivalent to reference UNSAT
+PASS fuzz 72 sweep 36 points UNSAT
+PASS fuzz 73 equivalent to reference UNSAT
+PASS fuzz 73 sweep 36 points UNSAT
+PASS fuzz 74 equivalent to reference UNSAT
+PASS fuzz 74 sweep 36 points UNSAT
+PASS fuzz 75 equivalent to reference UNSAT
+PASS fuzz 75 sweep 36 points UNSAT
+PASS fuzz 76 equivalent to reference UNSAT
+PASS fuzz 76 sweep 36 points UNSAT
+PASS fuzz 77 equivalent to reference UNSAT
+PASS fuzz 77 sweep 36 points UNSAT
+PASS fuzz 78 equivalent to reference UNSAT
+PASS fuzz 78 sweep 36 points UNSAT
+PASS fuzz 79 equivalent to reference UNSAT
+PASS fuzz 79 sweep 36 points UNSAT
+PASS fuzz 80 equivalent to reference UNSAT
+PASS fuzz 80 sweep 36 points UNSAT
+PASS fuzz 81 equivalent to reference UNSAT
+PASS fuzz 81 sweep 36 points UNSAT
+PASS fuzz 82 equivalent to reference UNSAT
+PASS fuzz 82 sweep 36 points UNSAT
+PASS fuzz 83 equivalent to reference UNSAT
+PASS fuzz 83 sweep 36 points UNSAT
+PASS fuzz 84 equivalent to reference UNSAT
+PASS fuzz 84 sweep 36 points UNSAT
+PASS fuzz 85 equivalent to reference UNSAT
+PASS fuzz 85 sweep 36 points UNSAT
+PASS fuzz 86 equivalent to reference UNSAT
+PASS fuzz 86 sweep 36 points UNSAT
+PASS fuzz 87 equivalent to reference UNSAT
+PASS fuzz 87 sweep 36 points UNSAT
+PASS fuzz 88 equivalent to reference UNSAT
+PASS fuzz 88 sweep 36 points UNSAT
+PASS fuzz 89 equivalent to reference UNSAT
+PASS fuzz 89 sweep 36 points UNSAT
+PASS fuzz 90 equivalent to reference UNSAT
+PASS fuzz 90 sweep 36 points UNSAT
+PASS fuzz 91 equivalent to reference UNSAT
+PASS fuzz 91 sweep 36 points UNSAT
+PASS fuzz 92 equivalent to reference UNSAT
+PASS fuzz 92 sweep 36 points UNSAT
+PASS fuzz 93 equivalent to reference UNSAT
+PASS fuzz 93 sweep 36 points UNSAT
+PASS fuzz 94 equivalent to reference UNSAT
+PASS fuzz 94 sweep 36 points UNSAT
+PASS fuzz 95 equivalent to reference UNSAT
+PASS fuzz 95 sweep 36 points UNSAT
+PASS fuzz 96 equivalent to reference UNSAT
+PASS fuzz 96 sweep 36 points UNSAT
+PASS fuzz 97 equivalent to reference UNSAT
+PASS fuzz 97 sweep 36 points UNSAT
+PASS fuzz 98 equivalent to reference UNSAT
+PASS fuzz 98 sweep 36 points UNSAT
+PASS fuzz 99 equivalent to reference UNSAT
+PASS fuzz 99 sweep 36 points UNSAT
+PASS fuzz 100 equivalent to reference UNSAT
+PASS fuzz 100 sweep 36 points UNSAT
+PASS fuzz 101 equivalent to reference UNSAT
+PASS fuzz 101 sweep 36 points UNSAT
+PASS fuzz 102 equivalent to reference UNSAT
+PASS fuzz 102 sweep 36 points UNSAT
+PASS fuzz 103 equivalent to reference UNSAT
+PASS fuzz 103 sweep 36 points UNSAT
+PASS fuzz 104 equivalent to reference UNSAT
+PASS fuzz 104 sweep 36 points UNSAT
+PASS fuzz 105 equivalent to reference UNSAT
+PASS fuzz 105 sweep 36 points UNSAT
+PASS fuzz 106 equivalent to reference UNSAT
+PASS fuzz 106 sweep 36 points UNSAT
+PASS fuzz 107 equivalent to reference UNSAT
+PASS fuzz 107 sweep 36 points UNSAT
+PASS fuzz 108 equivalent to reference UNSAT
+PASS fuzz 108 sweep 36 points UNSAT
+PASS fuzz 109 equivalent to reference UNSAT
+PASS fuzz 109 sweep 36 points UNSAT
+PASS fuzz 110 equivalent to reference UNSAT
+PASS fuzz 110 sweep 36 points UNSAT
+PASS fuzz 111 equivalent to reference UNSAT
+PASS fuzz 111 sweep 36 points UNSAT
+PASS fuzz 112 equivalent to reference UNSAT
+PASS fuzz 112 sweep 36 points UNSAT
+PASS fuzz 113 equivalent to reference UNSAT
+PASS fuzz 113 sweep 36 points UNSAT
+PASS fuzz 114 equivalent to reference UNSAT
+PASS fuzz 114 sweep 36 points UNSAT
+PASS fuzz 115 equivalent to reference UNSAT
+PASS fuzz 115 sweep 36 points UNSAT
+PASS fuzz 116 equivalent to reference UNSAT
+PASS fuzz 116 sweep 36 points UNSAT
+PASS fuzz 117 equivalent to reference UNSAT
+PASS fuzz 117 sweep 36 points UNSAT
+PASS fuzz 118 equivalent to reference UNSAT
+PASS fuzz 118 sweep 36 points UNSAT
+PASS fuzz 119 equivalent to reference UNSAT
+PASS fuzz 119 sweep 36 points UNSAT
+
+== sample conditional program ==
+Decoded eBPF instructions
+0: jmp jgt r1, 10, 3
+1: alu64 mov r0, r1
+2: alu64 sub r0, 1
+3: jmp ja 2
+4: alu64 mov r0, r1
+5: alu64 add r0, 1
+6: jmp exit
+Control-flow structure
+b0 -> b2 or b1
+b1 -> b3
+b2 -> b3
+b3 exit
+Generated Alive2 IR
+define i64 @ebpf(i64 r1) memory(none) {
+entry:
+  br label %b0
+
+b0:
+  %0 = icmp ugt i64 r1, 10
+  br i1 %0, label %b2, label %b1
+
+b2:
+  %2 = add i64 r1, 1
+  br label %b3
+
+b1:
+  %1 = sub i64 r1, 1
+  br label %b3
+
+b3:
+  %b3_r0 = phi i64 [ %1, %b1 ], [ %2, %b2 ]
+  ret i64 %b3_r0
+}
+Symbolic return expression
+(ite (bvule #x000000000000000b r1)
+     (bvadd r1 #x0000000000000001)
+     (bvadd #xffffffffffffffff r1))
+non-poison true
+Path / definedness conditions
+(and (= isundef_r1 #b0) np_r1)
+return domain (and (= isundef_r1 #b0) np_r1)
+Memory summary
+none
+PASS branch equivalent to reference UNSAT
+PASS branch x == 10 concrete reference
+PASS branch x == 10 alive returns UNSAT
+PASS branch x == 10 alive value UNSAT
+PASS branch x == 11 concrete reference
+PASS branch x == 11 alive returns UNSAT
+PASS branch x == 11 alive value UNSAT
+
+== bounded loop, top-tested header ==
+Decoded eBPF instructions
+0: alu64 mov r0, 0
+1: jmp jeq r1, 0, 3
+2: alu64 add r0, 1
+3: alu64 sub r1, 1
+4: jmp ja -4
+5: jmp exit
+Control-flow structure
+b0 -> b1
+b1 -> b3 or b2
+b2 -> b1
+b3 exit
+Generated Alive2 IR
+define i64 @ebpf(i64 r1) memory(none) {
+entry:
+  br label %b0
+
+b0:
+  br label %b1
+
+b1:
+  %b1_r0 = phi i64 [ 0, %b0 ], [ %1, %b2 ]
+  %b1_r1 = phi i64 [ r1, %b0 ], [ %2, %b2 ]
+  %b1_r2 = phi i64 [ 0, %b0 ], [ %b1_r2, %b2 ]
+  %b1_r3 = phi i64 [ 0, %b0 ], [ %b1_r3, %b2 ]
+  %b1_r4 = phi i64 [ 0, %b0 ], [ %b1_r4, %b2 ]
+  %b1_r5 = phi i64 [ 0, %b0 ], [ %b1_r5, %b2 ]
+  %b1_r6 = phi i64 [ 0, %b0 ], [ %b1_r6, %b2 ]
+  %b1_r7 = phi i64 [ 0, %b0 ], [ %b1_r7, %b2 ]
+  %b1_r8 = phi i64 [ 0, %b0 ], [ %b1_r8, %b2 ]
+  %b1_r9 = phi i64 [ 0, %b0 ], [ %b1_r9, %b2 ]
+  %b1_r10 = phi i64 [ 0, %b0 ], [ %b1_r10, %b2 ]
+  %0 = icmp eq i64 %b1_r1, 0
+  br i1 %0, label %b3, label %b2
+
+b2:
+  %1 = add i64 %b1_r0, 1
+  %2 = sub i64 %b1_r1, 1
+  br label %b1#exit
+
+b1#exit:
+  %b1_r0#exit = phi i64 [ %1, %b2 ]
+  %b1_r1#exit = phi i64 [ %2, %b2 ]
+  %b1_r2#exit = phi i64 [ %b1_r2, %b2 ]
+  %b1_r3#exit = phi i64 [ %b1_r3, %b2 ]
+  %b1_r4#exit = phi i64 [ %b1_r4, %b2 ]
+  %b1_r5#exit = phi i64 [ %b1_r5, %b2 ]
+  %b1_r6#exit = phi i64 [ %b1_r6, %b2 ]
+  %b1_r7#exit = phi i64 [ %b1_r7, %b2 ]
+  %b1_r8#exit = phi i64 [ %b1_r8, %b2 ]
+  %b1_r9#exit = phi i64 [ %b1_r9, %b2 ]
+  %b1_r10#exit = phi i64 [ %b1_r10, %b2 ]
+  %0#exit = icmp eq i64 %b1_r1#exit, 0
+  br i1 %0#exit, label %b3, label #sink
+
+b3:
+  %b1_r0#phi#0 = phi i64 [ %b1_r0, %b1 ], [ %b1_r0#exit, %b1#exit ]
+  ret i64 %b1_r0#phi#0
+}
+Symbolic return expression
+(ite (= r1 #x0000000000000000) #x0000000000000000 #x0000000000000001)
+non-poison true
+Path / definedness conditions
+(and (or (= r1 #x0000000000000000)
+         (and (= (bvadd #xffffffffffffffff r1) #x0000000000000000)
+              (not (= r1 #x0000000000000000))))
+     (= isundef_r1 #b0)
+     np_r1)
+return domain (and (or (= r1 #x0000000000000000)
+         (and (= (bvadd #xffffffffffffffff r1) #x0000000000000000)
+              (not (= r1 #x0000000000000000))))
+     (= isundef_r1 #b0)
+     np_r1)
+Memory summary
+loop unroll 1 covered 0 1
+PASS loop n=0 unroll 1
+PASS loop n=1 unroll 1
+loop unroll 4 covered 0 1 2 3 4
+PASS loop n=0 unroll 4
+PASS loop n=1 unroll 4
+PASS loop n=2 unroll 4
+PASS loop n=3 unroll 4
+PASS loop n=4 unroll 4
+PASS loop larger unroll covers more trips
+PASS loop some trips stay outside the bound
+
+== bounded loop, bottom-tested back edge ==
+loop-bottom unroll 1 covered 1
+PASS loop-bottom n=1 unroll 1
+loop-bottom unroll 4 covered 1 2 3 4
+PASS loop-bottom n=1 unroll 4
+PASS loop-bottom n=2 unroll 4
+PASS loop-bottom n=3 unroll 4
+PASS loop-bottom n=4 unroll 4
+PASS loop-bottom larger unroll covers more trips
+PASS loop-bottom some trips stay outside the bound
+
+== mutation tests ==
+PASS add as sub is caught SAT
+counterexample counterexamples/add_as_sub_is_caught.smt2
+PASS alu32 as alu64 is caught SAT
+counterexample counterexamples/alu32_as_alu64_is_caught.smt2
+PASS div zero as ub is caught SAT
+counterexample counterexamples/div_zero_as_ub_is_caught.smt2
+PASS bad jump is caught SAT
+counterexample counterexamples/bad_jump_is_caught.smt2
+PASS sdiv overflow as ub is caught SAT
+counterexample counterexamples/sdiv_overflow_as_ub_is_caught.smt2
+PASS shift without mask is caught SAT
+counterexample counterexamples/shift_without_mask_is_caught.smt2
+PASS movsx as zext is caught SAT
+counterexample counterexamples/movsx_as_zext_is_caught.smt2
+PASS imm without sign extend is caught SAT
+counterexample counterexamples/imm_without_sign_extend_is_caught.smt2
+
+all eBPF checks passed

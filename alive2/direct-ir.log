@@ -1,0 +1,137 @@
+
+== arithmetic x + y * 3 ==
+Input symbols
+x y
+Alive2 IR
+define i32 @add_mul(i32 x, i32 y) memory(none) {
+entry:
+  %mul = mul i32 y, 3
+  %sum = add i32 x, %mul
+  ret i32 %sum
+}
+
+Symbolic return expression
+(bvadd x (bvmul #x00000003 y)) / non-poison=true
+Path conditions
+return domain (and (= #b0 isundef_x) np_x (= #b0 isundef_y) np_y)
+Definedness / UB conditions
+function domain (and (= #b0 isundef_x) np_x (= #b0 isundef_y) np_y)
+Memory summary
+none
+Solver check arith has no UB on bitvector inputs UNSAT
+Solver check arith returns on bitvector inputs UNSAT
+Solver check arith result is not poison UNSAT
+Solver check arith matches x + y * 3 UNSAT
+Solver check arith harness rejects x + y * 4 SAT
+Solver check arith overflow wraps to 2 UNSAT
+
+== branch x > 10 ==
+Input symbols
+x
+Alive2 IR
+define i32 @branch(i32 x) memory(none) {
+entry:
+  %c = icmp ugt i32 x, 10
+  br i1 %c, label %then, label %else
+
+then:
+  %inc = add i32 x, 1
+  br label %merge
+
+else:
+  %dec = sub i32 x, 1
+  br label %merge
+
+merge:
+  %r = phi i32 [ %inc, %then ], [ %dec, %else ]
+  ret i32 %r
+}
+
+Symbolic return expression
+(ite (bvule #x0000000b x) (bvadd x #x00000001) (bvadd x #xffffffff)) / non-poison=true
+Path conditions
+return domain (and np_x (= #b0 isundef_x))
+Definedness / UB conditions
+function domain (and np_x (= #b0 isundef_x))
+entry -> then (and (bvule #x0000000b x) np_x (= #b0 isundef_x))
+entry -> else (and (not (bvule #x0000000b x)) np_x (= #b0 isundef_x))
+Memory summary
+none
+Solver check branch has no UB on bitvector inputs UNSAT
+Solver check branch matches ite(x > 10, x + 1, x - 1) UNSAT
+Solver check branch harness rejects swapped arms SAT
+
+== memory store then load ==
+Input symbols
+x
+Alive2 IR
+define i32 @memory(i32 x) memory(none) {
+entry:
+  %p = alloca i32 4, align 4
+  store i32 x, ptr %p, align 4
+  %v = load i32, ptr %p, align 4
+  ret i32 %v
+}
+
+Symbolic return expression
+x / non-poison=true
+Path conditions
+return domain (and (= #b0 isundef_x) np_x)
+Definedness / UB conditions
+function domain (and (= #b0 isundef_x) np_x)
+Memory summary
+
+
+MEMORY
+======
+BLOCK VALUE:
+Local BLK 0:	(store (store (store ((as const (Array (_ BitVec 16) (_ BitVec 18)))
+                       (concat #b1 ((_ extract 7 0) x) #b000000000))
+                     #x0001
+                     (concat #b1 ((_ extract 15 8) x) #b000000001))
+              #x0002
+              (concat #b1 ((_ extract 23 16) x) #b000000010))
+       #x0003
+       (concat #b1 ((_ extract 31 24) x) #b000000011))
+NonLocal BLK 0:	init_mem_0
+BLOCK LIVENESS:
+Local: #b1
+Non-local: #b1
+
+BLOCK SIZE:
+Local: {
+#b0: #x0004
+}
+Non-local: {
+#b0: (blk_size #b0)
+}
+
+BLOCK ALIGN:
+Local: {
+#b0: #x2
+}
+Non-local: {
+}
+
+BLOCK KIND:
+Local: {
+#b0: #b001
+}
+Non-local: {
+}
+
+
+LOCAL BLOCK ADDR: {
+#b0: (concat local_addr!3 #b00)
+}
+
+STORED ADDRS: (null)
+
+STORED NON-LOCAL PTRS:
+0: / 0
+
+Solver check memory access is defined UNSAT
+Solver check loaded value is not poison UNSAT
+Solver check load returns the stored input UNSAT
+
+all direct-IR checks passed
