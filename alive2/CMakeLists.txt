@@ -78,7 +78,9 @@ add_custom_target(rocq-step DEPENDS "${ROCQ_STEP_BIN}")
 add_executable(ebpf-concrete
   src/ebpf_decode.cpp
   src/ebpf_lift.cpp
-  src/ebpf_concrete.cpp)
+  src/ebpf_concrete.cpp
+  src/ebpf_gate.cpp
+  src/ebpf_concrete_main.cpp)
 alive2_link(ebpf-concrete)
 target_compile_options(ebpf-concrete PRIVATE -Wall -Wextra -Wno-unused-parameter)
 target_compile_definitions(ebpf-concrete PRIVATE
@@ -89,5 +91,5 @@ target_compile_definitions(ebpf-concrete PRIVATE
 add_dependencies(ebpf-concrete rocq-step)
 add_custom_command(TARGET ebpf-concrete PRE_BUILD
   COMMAND /bin/sh -c
-    "if grep -E 'symexec\\.h|ebpf_run\\.h|ebpf_ref' '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_concrete.cpp'; then exit 1; fi; if grep -n sym_exec '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi; if grep -n execute_ebpf '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi"
+    "if grep -E 'symexec\\.h|ebpf_run\\.h|ebpf_ref' '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_concrete.cpp'; then exit 1; fi; if grep -n sym_exec '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi; if grep -n execute_ebpf '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi; if grep -nE 'execute_ebpf|sym_exec|symexec\\.h|ebpf_run\\.h|ebpf_ref' '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_gate.cpp'; then exit 1; fi"
   VERBATIM)

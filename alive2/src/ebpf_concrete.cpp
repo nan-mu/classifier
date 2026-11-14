@@ -1,5 +1,8 @@
 #include "ebpf_concrete.h"
 
+#include "ebpf.h"
+#include "ebpf_gate.h"
+
 #include <CommonCrypto/CommonDigest.h>
 
 #include <cctype>
@@ -990,14 +993,185 @@ bool contract_ok() {
          out.size() >= 4 && out.substr(out.size() - 4) == "end\n";
 }
 
+const char *succ_name(SuccKind kind) {
+  switch (kind) {
+  case SuccKind::Jump: return "jump";
+  case SuccKind::Fall: return "fall";
+  case SuccKind::Exit: return "exit";
+  }
+  return "fall";
+}
+
+void write_program(const std::filesystem::path &path, const Gate &program) {
+  std::ostringstream o;
+  o << "{\n";
+  o << "  \"kind\": \"";
+  if (program.kind == GateKind::Reject)
+    o << "reject";
+  else if (program.kind == GateKind::IllFormed)
+    o << "ill-formed";
+  else
+    o << "ready";
+  o << "\",\n";
+  o << "  \"pc\": " << program.pc << ",\n";
+  o << "  \"reason\": \"" << json_escape(program.reason) << "\",\n";
+  o << "  \"nodes\": [\n";
+  for (size_t i = 0; i < program.nodes.size(); ++i) {
+    const auto &node = program.nodes[i];
+    o << "    {\"pc\": " << node.pc << ", \"succs\": [";
+    for (size_t s = 0; s < node.succs.size(); ++s) {
+      const auto &succ = node.succs[s];
+      o << "{\"kind\": \"" << succ_name(succ.kind) << "\"";
+      if (succ.kind != SuccKind::Exit)
+        o << ", \"pc\": " << succ.pc;
+      o << "}";
+      if (s + 1 != node.succs.size())
+        o << ", ";
+    }
+    o << "]}";
+    if (i + 1 != program.nodes.size())
+      o << ",";
+    o << "\n";
+  }
+  o << "  ]\n}\n";
+  std::filesystem::create_directories(path.parent_path());
+  auto tmp = path;
+  tmp += ".tmp";
+  {
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    if (!out)
+      throw std::runtime_error("cannot write program");
+    out << o.str();
+    out.flush();
+    if (!out)
+      throw std::runtime_error("cannot flush program");
+  }
+  if (std::rename(tmp.c_str(), path.c_str()) != 0)
+    throw std::runtime_error("cannot replace program");
+}
+
+const char *gate_kind_name(GateKind kind) {
+  switch (kind) {
+  case GateKind::Ready: return "ready";
+  case GateKind::Reject: return "reject";
+  case GateKind::IllFormed: return "ill-formed";
+  }
+  return "ill-formed";
+}
+
+bool expect_gate(const char *name, const char *hex, const char *seed_digits,
+                 GateKind kind, uint32_t pc, const char *reason, Gate &got) {
+  std::vector<RegNum> seeds;
+  for (const char *p = seed_digits; *p; ++p) {
+    auto parsed = RegNum::from_index(static_cast<uint8_t>(*p - '0'));
+    if (!parsed)
+      return false;
+    seeds.push_back(*parsed);
+  }
+  auto insns = decode_ebpf(parse_hex(hex));
+  got = gate(insns, seeds);
+  bool pc_ok = kind == GateKind::Ready || (got.pc == pc && got.reason == reason);
+  if (got.kind == kind && pc_ok)
+    return true;
+  std::cerr << "boundary " << name << " got " << gate_kind_name(got.kind)
+            << " pc " << got.pc << " " << got.reason << "\n";
+  for (const auto &insn : insns)
+    std::cerr << format_insn(insn);
+  return false;
+}
+
+bool gate_boundary_ok() {
+  struct Case {
+    const char *name;
+    const char *hex;
+    const char *seeds;
+    GateKind kind;
+    uint32_t pc;
+    const char *reason;
+  };
+  const Case rows[] = {
+      {"mov64 r0, r10; exit", "bfa00000000000009500000000000000", "",
+       GateKind::Reject, 0, "r10 read"},
+      {"mov64 r10, r1; exit", "bf1a0000000000009500000000000000", "1",
+       GateKind::Reject, 0, "r10 write"},
+      {"add64 r10, r1; exit", "0f1a0000000000009500000000000000", "1",
+       GateKind::Reject, 0, "r10 read and write"},
+      {"mov64 r0, r3; exit", "bf300000000000009500000000000000", "",
+       GateKind::Reject, 0, "r3 read before define"},
+      {"exit", "9500000000000000", "", GateKind::Reject, 0,
+       "r0 read before define"},
+      {"jgt64 r1, 0, +2; mov64 r0, r3; exit; mov64 r0, r1; exit",
+       "2501020000000000bf300000000000009500000000000000bf100000000000009500000000000000",
+       "1", GateKind::Reject, 1, "r3 read before define"},
+      {"mov64 r0, r3; mov64 r3, r1; ja -3",
+       "bf30000000000000bf130000000000000500fdff00000000", "1", GateKind::Reject,
+       0, "r3 read before define"},
+      {"ja +1; mov64 r0, r10; mov64 r0, 1; exit",
+       "0500010000000000bfa0000000000000b7000000010000009500000000000000", "",
+       GateKind::Reject, 1, "r10 read"},
+      {"ja +1; mov64 r0, r3; mov64 r0, 1; exit",
+       "0500010000000000bf30000000000000b7000000010000009500000000000000", "",
+       GateKind::Ready, 0, ""},
+      {"mov64 r0, 1; exit", "b7000000010000009500000000000000", "",
+       GateKind::Ready, 0, ""},
+  };
+  for (const auto &row : rows) {
+    Gate got;
+    if (!expect_gate(row.name, row.hex, row.seeds, row.kind, row.pc, row.reason,
+                     got))
+      return false;
+    if (std::string(row.name).rfind("jgt64 r1", 0) == 0) {
+      auto insns = decode_ebpf(parse_hex(row.hex));
+      bool two = !got.nodes.empty() && got.nodes[0].succs.size() == 2 &&
+                 got.nodes[0].succs[0].kind == SuccKind::Jump &&
+                 got.nodes[0].succs[0].pc == 3 &&
+                 got.nodes[0].succs[1].kind == SuccKind::Fall &&
+                 got.nodes[0].succs[1].pc == 1;
+      if (!two) {
+        std::cerr << "boundary jgt node does not have jump 3 then fall 1\n";
+        std::cerr << format_insn(insns[0]);
+        return false;
+      }
+    }
+    if (std::string(row.name).rfind("ja +1; mov64 r0, r3", 0) == 0) {
+      if (got.nodes.size() != 4 || got.nodes[1].pc != 1) {
+        std::cerr << "boundary skipped mov r0, r3 left the static graph\n";
+        return false;
+      }
+    }
+  }
+  for (const auto &fixture : kFixtures()) {
+    auto insns = decode_ebpf(parse_hex(fixture.bytes_hex));
+    Gate got = gate(insns, regs_from_inputs(fixture.inputs));
+    if (got.kind != GateKind::Ready) {
+      std::cerr << "boundary fixture " << fixture.id << " got "
+                << gate_kind_name(got.kind) << " pc " << got.pc << " "
+                << got.reason << "\n";
+      if (got.pc < insns.size())
+        std::cerr << format_insn(insns[got.pc]);
+      return false;
+    }
+  }
+  return true;
+}
+
 struct Row {
   bool ok = false;
   bool sanity = false;
+  bool rejected = false;
+  Gate gate;
   std::optional<Divergence> found;
 };
 
 Row run_row(const Fixture &fixture, const std::filesystem::path &dir) {
   Row row;
+  auto bytes = parse_hex(fixture.bytes_hex);
+  auto insns = decode_ebpf(bytes);
+  row.gate = gate(insns, regs_from_inputs(fixture.inputs));
+  if (row.gate.kind != GateKind::Ready) {
+    row.rejected = true;
+    return row;
+  }
   Trace rocq;
   rocq.producer = Producer::Failed;
   try {
@@ -1015,7 +1189,7 @@ Row run_row(const Fixture &fixture, const std::filesystem::path &dir) {
     std::vector<std::pair<uint8_t, Bv64>> inputs;
     for (auto [reg, bits] : fixture.inputs)
       inputs.emplace_back(reg, Bv64{bits});
-    alive = alive2_trace(parse_hex(fixture.bytes_hex), inputs, fixture.bug);
+    alive = alive2_trace(bytes, inputs, fixture.bug);
     alive.producer = Producer::Ok;
   } catch (const std::exception &) {
     alive.producer = Producer::Failed;
@@ -1026,6 +1200,7 @@ Row run_row(const Fixture &fixture, const std::filesystem::path &dir) {
   auto alive_path = dir / fixture.id / "alive2.trace.json";
   write_trace(rocq_path, rocq);
   write_trace(alive_path, alive);
+  write_program(dir / fixture.id / "program.json", row.gate);
   bool roundtrip = false;
   try {
     roundtrip = traces_equal(rocq, read_trace(rocq_path)) &&
@@ -1041,7 +1216,10 @@ Row run_row(const Fixture &fixture, const std::filesystem::path &dir) {
     row.found = d;
   }
   auto got = exit_bits(rocq);
-  row.sanity = fixture.sanity_r0 && got && *got == *fixture.sanity_r0;
+  if (fixture.sanity_r0)
+    row.sanity = got && *got == *fixture.sanity_r0;
+  else
+    row.sanity = true;
   if (fixture.must_fail_div_zero)
     row.ok = row.found && negative_holds(*row.found) && row.sanity && roundtrip;
   else
@@ -1049,25 +1227,83 @@ Row run_row(const Fixture &fixture, const std::filesystem::path &dir) {
   return row;
 }
 
+void usage() {
+  std::cerr << "usage: ebpf-concrete --out DIR [--only ID]\n";
+  std::cerr << "       ebpf-concrete --out DIR --bytes HEX [--seed rN=HEX]... "
+               "[--id NAME] [--bug div-zero-as-ub]\n";
 }
 
-int main(int argc, char **argv) {
+}
+
+int concrete_main(int argc, char **argv) {
   std::string out;
   std::optional<std::string> only;
+  std::optional<std::string> bytes_hex;
+  std::optional<std::string> id;
+  std::vector<std::pair<uint8_t, uint64_t>> seeds;
+  uint16_t seed_mask = 0;
+  BugFlag bug = BugFlag::None;
+  bool saw_bug = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
     if (arg == "--out" && i + 1 < argc)
       out = argv[++i];
     else if (arg == "--only" && i + 1 < argc)
       only = argv[++i];
-    else {
-      std::cerr << "usage: ebpf-concrete --out DIR [--only ID]\n";
+    else if (arg == "--bytes" && i + 1 < argc)
+      bytes_hex = argv[++i];
+    else if (arg == "--id" && i + 1 < argc)
+      id = argv[++i];
+    else if (arg == "--bug" && i + 1 < argc) {
+      std::string value = argv[++i];
+      if (value != "div-zero-as-ub" || saw_bug) {
+        usage();
+        return 2;
+      }
+      saw_bug = true;
+      bug = BugFlag::DivZeroAsUb;
+    } else if (arg == "--seed" && i + 1 < argc) {
+      std::string spec = argv[++i];
+      if (spec.size() < 4 || spec[0] != 'r' || spec[2] != '=' || spec[1] < '0' ||
+          spec[1] > '9') {
+        usage();
+        return 2;
+      }
+      auto reg = static_cast<uint8_t>(spec[1] - '0');
+      uint16_t bit = static_cast<uint16_t>(1u << reg);
+      if (seed_mask & bit) {
+        usage();
+        return 2;
+      }
+      try {
+        seeds.emplace_back(reg, parse_hex64(spec.substr(3)));
+      } catch (const std::exception &) {
+        usage();
+        return 2;
+      }
+      seed_mask = static_cast<uint16_t>(seed_mask | bit);
+    } else {
+      usage();
       return 2;
     }
   }
-  if (out.empty()) {
-    std::cerr << "usage: ebpf-concrete --out DIR [--only ID]\n";
+  if (out.empty() || (bytes_hex && only) ||
+      (!bytes_hex && (saw_bug || id || !seeds.empty()))) {
+    usage();
     return 2;
+  }
+  if (id && (id->empty() || id->find('/') != std::string::npos || *id == "." ||
+             *id == "..")) {
+    usage();
+    return 2;
+  }
+  if (bytes_hex) {
+    try {
+      (void)parse_hex(*bytes_hex);
+    } catch (const std::exception &) {
+      usage();
+      return 2;
+    }
   }
   std::string why;
   if (!head_matches(why)) {
@@ -1078,13 +1314,51 @@ int main(int argc, char **argv) {
     std::cerr << "rocq-step contract mismatch\n";
     return 2;
   }
+  if (!gate_boundary_ok())
+    return 1;
+  if (bytes_hex) {
+    std::string name = id ? *id : "bytes";
+    Fixture fixture;
+    fixture.id = name.c_str();
+    fixture.bytes_hex = bytes_hex->c_str();
+    fixture.inputs = seeds;
+    fixture.bug = bug;
+    Row row;
+    try {
+      row = run_row(fixture, out);
+    } catch (const std::exception &ex) {
+      std::cerr << ex.what() << "\n";
+      return 1;
+    }
+    if (row.rejected) {
+      std::cout << name << " reject pc " << row.gate.pc << " " << row.gate.reason
+                << "\n";
+      return 1;
+    }
+    std::cout << name << " comparator=" << (row.found ? "FAIL" : "PASS") << "\n";
+    if (row.found)
+      std::cout << "  " << row.found->line << "\n";
+    return row.ok ? 0 : 1;
+  }
   bool saw = false;
   bool suite = true;
   for (const auto &fixture : kFixtures()) {
     if (only && *only != fixture.id)
       continue;
     saw = true;
-    Row row = run_row(fixture, out);
+    Row row;
+    try {
+      row = run_row(fixture, out);
+    } catch (const std::exception &ex) {
+      std::cerr << ex.what() << "\n";
+      return 1;
+    }
+    if (row.rejected) {
+      std::cout << fixture.id << " reject pc " << row.gate.pc << " "
+                << row.gate.reason << "\n";
+      suite = false;
+      continue;
+    }
     std::cout << fixture.id << " comparator=" << (row.found ? "FAIL" : "PASS")
               << " sanity=" << (row.sanity ? "ok" : "bad") << "\n";
     if (row.found)

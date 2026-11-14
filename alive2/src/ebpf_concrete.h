@@ -102,3 +102,5 @@ bool negative_holds(const Divergence &found);
 
 void write_trace(const std::filesystem::path &path, const Trace &trace);
 Trace read_trace(const std::filesystem::path &path);
+
+int concrete_main(int argc, char **argv);
