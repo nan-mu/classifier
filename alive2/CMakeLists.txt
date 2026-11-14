@@ -93,3 +93,18 @@ add_custom_command(TARGET ebpf-concrete PRE_BUILD
   COMMAND /bin/sh -c
     "if grep -E 'symexec\\.h|ebpf_run\\.h|ebpf_ref' '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_concrete.cpp'; then exit 1; fi; if grep -n sym_exec '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi; if grep -n execute_ebpf '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_lift.cpp'; then exit 1; fi; if grep -nE 'execute_ebpf|sym_exec|symexec\\.h|ebpf_run\\.h|ebpf_ref' '${CMAKE_CURRENT_SOURCE_DIR}/src/ebpf_gate.cpp'; then exit 1; fi"
   VERBATIM)
+
+add_executable(ebpf-exhibit
+  src/ebpf_decode.cpp
+  src/ebpf_lift.cpp
+  src/ebpf_concrete.cpp
+  src/ebpf_gate.cpp
+  src/ebpf_run.cpp
+  src/ebpf_exhibit.cpp)
+alive2_link(ebpf-exhibit)
+target_compile_options(ebpf-exhibit PRIVATE -Wall -Wextra -Wno-unused-parameter)
+target_compile_definitions(ebpf-exhibit PRIVATE
+  "ROCQ_STEP=\"${ROCQ_STEP_BIN}\""
+  "PIN_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/PIN\""
+  "SOURCES_SHA_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/SOURCES.sha256\""
+  "SEMANTICS_DIR=\"${UPSTREAM_SRC}\"")
