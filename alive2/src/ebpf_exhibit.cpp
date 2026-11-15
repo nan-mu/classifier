@@ -247,6 +247,18 @@ std::string render_markdown(const J &root) {
     md << "## " << program.need("label").text << "\n\n";
     md << "Bytes `" << program.need("bytes").text << "`.\n\n";
     md << "Bug flag is " << program.need("bug").text << ".\n\n";
+    if (program.find("gate") && program.need("gate").text != "ready") {
+      md << program.need("gate").text << " pc " << program.need("gate_pc").text << " "
+         << program.need("gate_reason").text << ".\n\n";
+    }
+    md << "Input assumptions.\n\n";
+    const auto &assumptions = program.need("assumptions").array;
+    if (assumptions.empty())
+      md << "No bitvector input is assumed.\n\n";
+    for (const auto &assumption : assumptions)
+      md << assumption.text << ".\n\n";
+    if (!program.need("assumption_smt").text.empty())
+      md << "SMT assumption is `" << program.need("assumption_smt").text << "`.\n\n";
     if (program.need("loop").flag) {
       md << "The CFG has a back edge. The symbolic result is UNSUPPORTED. "
             "The program was not unrolled.\n\n";
@@ -332,22 +344,50 @@ std::string render_markdown(const J &root) {
     }
     const auto &cross = program.need("cross").array;
     if (!cross.empty()) {
-      md << "Concrete cross-check of the projection against rocq-step. "
-            "This is not the SMT result.\n\n";
-      md << "| input | projection r0 | rocq-step r0 | match |\n";
+      md << "Concrete trace comparison against rocq-step. "
+            "Agreement here is not a symbolic proof.\n\n";
+      md << "| input | projection return | rocq-step return | agree |\n";
       md << "| --- | --- | --- | --- |\n";
       for (const auto &row : cross) {
         md << "| " << row.need("label").text << " | " << row.need("projection").text
            << " | " << row.need("rocq").text << " | "
            << (row.need("match").flag ? "yes" : "no") << " |\n";
-        if (!row.need("error").text.empty() && !row.need("match").flag)
-          md << "\n" << row.need("label").text << " " << row.need("error").text << "\n";
       }
       md << "\n";
+      for (const auto &row : cross) {
+        md << row.need("label").text << ".\n\n";
+        if (!row.need("error").text.empty() && !row.need("match").flag)
+          md << row.need("label").text << " " << row.need("error").text << ".\n\n";
+        for (const auto &step : row.need("steps").array) {
+          md << "pc " << step.need("pc").text << " projection " << step.need("status").text
+             << " to " << step.need("successor").text << ", rocq-step "
+             << step.need("rocq_status").text << " to " << step.need("rocq_successor").text
+             << ".\n\n";
+          if (!step.need("return_verdict").text.empty())
+            md << "Exit return projection `" << step.need("return_projection").text
+               << "` rocq-step `" << step.need("return_rocq").text << "` is "
+               << step.need("return_verdict").text << ".\n\n";
+          auto regs = [&](const char *when, const J &cells) {
+            md << when << "\n\n";
+            md << "| reg | projection | rocq-step | comparison |\n";
+            md << "| --- | --- | --- | --- |\n";
+            for (const auto &cell : cells.array) {
+              md << "| r" << cell.need("reg").text << " | " << cell.need("projection").text
+                 << " | " << cell.need("rocq").text << " | " << cell.need("verdict").text
+                 << " |\n";
+            }
+            md << "\n";
+          };
+          regs("Pre-state comparison.", step.need("pre"));
+          regs("Post-state comparison.", step.need("post"));
+          if (!step.need("match").flag && !step.need("error").text.empty())
+            md << step.need("error").text << ".\n\n";
+        }
+      }
     }
   }
   md << "## Concrete sanity\n\n";
-  md << "These edges are concrete traces. They are not the symbolic path condition.\n\n";
+  md << "These edges are concrete traces. They are not a symbolic proof.\n\n";
   const auto &concrete = root.need("concrete").array;
   if (concrete.empty()) {
     md << "No concrete trace was supplied. The symbolic successors above stay.\n\n";
@@ -572,13 +612,14 @@ int main(int argc, char **argv) {
         (void)bits;
         inputs.emplace_back(reg, "r" + std::to_string(reg));
       }
-      doc.projection =
-          "The Rocq side is a projection of the vendored instruction rules. "
-          "It is not native Rocq symbolic execution. "
-          "EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison. "
-          "An undef register can have definedness EQUIVALENT and value UNSUPPORTED. "
-          "That UNSUPPORTED cell is not a pass.";
-      doc.programs.push_back(analyze_bytes(code, inputs, bound, LiftBug::None, "bytes"));
+      doc.projection = exhibit_projection();
+      auto program = analyze_bytes(code, inputs, bound, LiftBug::None, "bytes");
+      if (program.gate != "ready") {
+        std::cout << program.gate << " pc " << program.gate_pc << " " << program.gate_reason
+                  << "\n";
+        return 1;
+      }
+      doc.programs.push_back(std::move(program));
     }
     if (!traces.empty())
       doc.concrete = load_concrete(traces);

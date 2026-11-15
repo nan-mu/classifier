@@ -50,7 +50,20 @@ struct AlivePhi {
   int reg = 0;
   std::string pred;
   AliveCell incoming;
+  smt::expr pred_path;
 };
+
+inline AliveCell *alive_cell(std::array<AliveCell, 10> &cells, int reg) {
+  if (reg < 0 || reg > 9)
+    return nullptr;
+  return &cells[reg];
+}
+
+inline const AliveCell *alive_cell(const std::array<AliveCell, 10> &cells, int reg) {
+  if (reg < 0 || reg > 9)
+    return nullptr;
+  return &cells[reg];
+}
 
 struct AliveEdge {
   std::string block;

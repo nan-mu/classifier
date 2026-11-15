@@ -1,9 +1,11 @@
 #include "ebpf_project.h"
 
 #include "ebpf_concrete.h"
+#include "ebpf_gate.h"
 #include "smt/solver.h"
 #include "smt/smt.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cerrno>
 #include <cstring>
@@ -15,14 +17,20 @@
 #include <sys/wait.h>
 #include <utility>
 
-namespace {
+const char *exhibit_projection() {
+  return "The Rocq side is a projection of the vendored instruction rules. "
+         "It is not native Rocq symbolic execution. "
+         "EQUIVALENT means the value inequality is unsat under the listed input assumptions "
+         "and Alive2 non_poison is true under those assumptions. "
+         "Rocq has no poison bit. "
+         "Undef is not proved by matching tags. "
+         "If definedness cannot be stated to the solver, the verdict is UNSUPPORTED. "
+         "Poison is not undef. "
+         "UNKNOWN and UNSUPPORTED are not passes. "
+         "A concrete trace agreement is not a symbolic proof.";
+}
 
-const char *kProjection =
-    "The Rocq side is a projection of the vendored instruction rules. "
-    "It is not native Rocq symbolic execution. "
-    "EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison. "
-    "An undef register can have definedness EQUIVALENT and value UNSUPPORTED. "
-    "That UNSUPPORTED cell is not a pass.";
+namespace {
 
 std::string json_escape(const std::string &text) {
   std::string out;
@@ -250,20 +258,37 @@ entry_regs(const std::vector<std::pair<uint8_t, std::string>> &inputs) {
   return regs;
 }
 
+const RReg *reg_at(const std::array<RReg, 10> &regs, uint8_t index) {
+  if (index > 9)
+    return nullptr;
+  return &regs[index];
+}
+
 RNode operand(const EbAlu &alu, const std::array<RReg, 10> &regs, bool &pointer) {
   if (alu.src == EbSrc::Reg) {
-    if (regs[alu.src_reg].tag == CellTag::Pointer)
+    const RReg *src = reg_at(regs, alu.src_reg);
+    if (!src) {
       pointer = true;
-    return regs[alu.src_reg].node;
+      return pointer_node();
+    }
+    if (src->tag == CellTag::Pointer)
+      pointer = true;
+    return src->node;
   }
   return const_node(imm_bits(alu.imm), "eval_alu64");
 }
 
 RReg eval_alu(const EbAlu &alu, const std::array<RReg, 10> &regs, bool &pointer,
               std::string &reason) {
-  if (regs[alu.dst].tag == CellTag::Pointer)
+  const RReg *dst = reg_at(regs, alu.dst);
+  const RReg *src_reg = alu.src == EbSrc::Reg ? reg_at(regs, alu.src_reg) : nullptr;
+  if (!dst || (alu.src == EbSrc::Reg && alu.op != EbAlu::Neg && !src_reg)) {
+    reason = "register out of range";
+    return reg_of(undef_node(), CellTag::Undef);
+  }
+  if (dst->tag == CellTag::Pointer)
     pointer = true;
-  if (alu.src == EbSrc::Reg && regs[alu.src_reg].tag == CellTag::Pointer)
+  if (src_reg && src_reg->tag == CellTag::Pointer)
     pointer = true;
   if (pointer) {
     reason = "bitvector use of a pointer register";
@@ -272,19 +297,19 @@ RReg eval_alu(const EbAlu &alu, const std::array<RReg, 10> &regs, bool &pointer,
   if (alu.op == EbAlu::Sub && alu.src == EbSrc::Reg && alu.src_reg == alu.dst)
     return reg_of(const_node(0, "exec_alu"), CellTag::Zero);
   auto src = operand(alu, regs, pointer);
-  auto dst = regs[alu.dst];
+  auto dst_reg = *dst;
   if (alu.op == EbAlu::Mov)
     return reg_of(src, src.tag);
-  if (dst.tag == CellTag::Undef || src.tag == CellTag::Undef)
+  if (dst_reg.tag == CellTag::Undef || src.tag == CellTag::Undef)
     return reg_of(undef_node(), CellTag::Undef);
   if (alu.op == EbAlu::Add)
-    return reg_of(wrap(RNode::Kind::Add, "eval_alu64", dst.node, src), CellTag::Bits);
+    return reg_of(wrap(RNode::Kind::Add, "eval_alu64", dst_reg.node, src), CellTag::Bits);
   if (alu.op == EbAlu::Sub)
-    return reg_of(wrap(RNode::Kind::Sub, "eval_alu64", dst.node, src), CellTag::Bits);
+    return reg_of(wrap(RNode::Kind::Sub, "eval_alu64", dst_reg.node, src), CellTag::Bits);
   RNode src_for_div = src;
   RNode eq = wrap(RNode::Kind::Eq, "eval_div_u64", std::move(src),
                   const_node(0, "eval_div_u64"));
-  RNode udiv = wrap(RNode::Kind::Udiv, "eval_div_u64", dst.node, std::move(src_for_div));
+  RNode udiv = wrap(RNode::Kind::Udiv, "eval_div_u64", dst_reg.node, std::move(src_for_div));
   RNode ite = node_of(RNode::Kind::Ite, "eval_div_u64");
   ite.tag = CellTag::Bits;
   ite.kids = {std::move(eq), const_node(0, "eval_div_u64"), std::move(udiv)};
@@ -296,18 +321,24 @@ RNode jgt_cond(const EbJmp &jmp, const std::array<RReg, 10> &regs, bool &pointer
     return bool_node(false, "eval_cmp_static");
   if (jmp.src == EbSrc::Imm && jmp.imm == -1)
     return bool_node(false, "eval_cmp_static");
-  RNode dst = regs[jmp.dst].node;
-  if (regs[jmp.dst].tag == CellTag::Pointer)
+  const RReg *dst = reg_at(regs, jmp.dst);
+  const RReg *src_reg = jmp.src == EbSrc::Reg ? reg_at(regs, jmp.src_reg) : nullptr;
+  if (!dst || (jmp.src == EbSrc::Reg && !src_reg)) {
+    pointer = true;
+    return bool_node(false, "eval_cmp64");
+  }
+  RNode dst_node = dst->node;
+  if (dst->tag == CellTag::Pointer)
     pointer = true;
   RNode src;
-  if (jmp.src == EbSrc::Reg) {
-    src = regs[jmp.src_reg].node;
-    if (regs[jmp.src_reg].tag == CellTag::Pointer)
+  if (src_reg) {
+    src = src_reg->node;
+    if (src_reg->tag == CellTag::Pointer)
       pointer = true;
   } else {
     src = const_node(imm_bits(jmp.imm), "eval_cmp64");
   }
-  RNode cond = wrap(RNode::Kind::Ugt, "eval_cmp64", std::move(dst), std::move(src));
+  RNode cond = wrap(RNode::Kind::Ugt, "eval_cmp64", std::move(dst_node), std::move(src));
   if (jmp.src == EbSrc::Imm && jmp.imm == 10)
     cond.note = "eval_cmp_static not applied";
   return cond;
@@ -465,6 +496,14 @@ project(const std::vector<EbInsn> &code,
           continue;
         }
         if (const auto *alu = std::get_if<EbAlu>(&insn.op)) {
+          bool bad_index = alu->dst > 9 ||
+                           (alu->src == EbSrc::Reg && alu->op != EbAlu::Neg && alu->src_reg > 9);
+          if (bad_index) {
+            draft.unsupported = true;
+            draft.reason = "register out of range";
+            draft.post = regs;
+            draft.rules = {"unsupported"};
+          } else {
           bool pointer = false;
           std::string reason;
           regs[alu->dst] = eval_alu(*alu, draft.pre, pointer, reason);
@@ -481,6 +520,7 @@ project(const std::vector<EbInsn> &code,
               edge.cond = sim.path;
               draft.edges.push_back(edge);
             }
+          }
           }
         } else {
           const auto &jmp = std::get<EbJmp>(insn.op);
@@ -499,6 +539,12 @@ project(const std::vector<EbInsn> &code,
             edge.cond = sim.path;
             draft.edges.push_back(edge);
           } else {
+            bool bad_index = jmp.dst > 9 || (jmp.src == EbSrc::Reg && jmp.src_reg > 9);
+            if (bad_index) {
+              draft.unsupported = true;
+              draft.reason = "register out of range";
+              draft.rules = {"unsupported"};
+            } else {
             bool pointer = false;
             RNode taken = jgt_cond(jmp, regs, pointer);
             draft.pointer_use = pointer;
@@ -514,6 +560,7 @@ project(const std::vector<EbInsn> &code,
             stay.target_pc = blocks[stay.block].start;
             stay.cond = land(sim.path, lnot(taken, "exec_jmpcmp"), "exec_jmpcmp");
             draft.edges = {std::move(go), std::move(stay)};
+            }
           }
         }
         pcs.push_back(std::move(draft));
@@ -618,21 +665,25 @@ std::optional<smt::expr> lower(const RNode &node) {
   return std::nullopt;
 }
 
-bool zero_const(const smt::expr &expr) {
-  return expr.isValid() && expr.isBV() && expr.isConst() && expr.isZero();
-}
+Verdict prove(const smt::expr &alive, const std::optional<smt::expr> &rocq,
+              const smt::expr &assume, std::string &model);
 
-Verdict definedness_of(CellTag alive, CellTag rocq, const smt::expr &expr) {
-  if (rocq == CellTag::Undef) {
-    if (alive == CellTag::Undef && !zero_const(expr))
-      return Verdict::Equivalent;
-    return Verdict::Counterexample;
+Verdict definedness_of(const AliveCell &alive, CellTag rocq, const smt::expr &assume,
+                       std::string &model) {
+  if (rocq == CellTag::Pointer || alive.tag == CellTag::Pointer)
+    return Verdict::Unsupported;
+  if (!alive.non_poison.isValid())
+    return Verdict::Unsupported;
+  if (rocq == CellTag::Undef || alive.tag == CellTag::Undef) {
+    std::string poison_model;
+    Verdict poison = prove(alive.non_poison, smt::expr(false), assume, poison_model);
+    if (poison == Verdict::Equivalent) {
+      model = poison_model;
+      return Verdict::Counterexample;
+    }
+    return Verdict::Unsupported;
   }
-  if (alive == CellTag::Undef && rocq == CellTag::Zero)
-    return Verdict::Counterexample;
-  if (alive == rocq)
-    return Verdict::Equivalent;
-  return Verdict::Counterexample;
+  return prove(alive.non_poison, smt::expr(true), assume, model);
 }
 
 smt::expr input_assume(const std::vector<std::pair<uint8_t, std::string>> &inputs) {
@@ -671,13 +722,69 @@ std::string show_expr(const smt::expr &expr) {
   return printed.str();
 }
 
-void collect_leaves(const RNode &node, std::vector<const RNode *> &leaves) {
+struct GuardedArm {
+  RNode guard;
+  RNode value;
+};
+
+void flatten_arms(const RNode &node, const RNode &guard, std::vector<GuardedArm> &arms) {
   if (node.kind == RNode::Kind::Ite && node.kids.size() == 3) {
-    collect_leaves(node.kids[1], leaves);
-    collect_leaves(node.kids[2], leaves);
+    flatten_arms(node.kids[1], land(guard, node.kids[0], "exec_jmpcmp"), arms);
+    flatten_arms(node.kids[2], land(guard, lnot(node.kids[0], "exec_jmpcmp"), "exec_jmpcmp"),
+                 arms);
     return;
   }
-  leaves.push_back(&node);
+  arms.push_back(GuardedArm{guard, node});
+}
+
+Verdict verdict_phi(const AlivePhi &phi, const RNode &post, const smt::expr &assume, RNode &paired,
+                    std::string &model) {
+  if (phi.reg < 0 || phi.reg > 9 || !phi.pred_path.isValid() || phi.incoming.missing ||
+      phi.incoming.structure.partial)
+    return Verdict::Unsupported;
+  std::vector<GuardedArm> arms;
+  flatten_arms(post, bool_node(true, "exec_jmpcmp"), arms);
+  const GuardedArm *hit = nullptr;
+  int hits = 0;
+  for (const auto &arm : arms) {
+    std::string ignored;
+    if (prove(phi.pred_path, lower(arm.guard), assume, ignored) == Verdict::Equivalent) {
+      hit = &arm;
+      ++hits;
+    }
+  }
+  if (hits != 1 || !hit)
+    return Verdict::Unsupported;
+  paired = hit->value;
+  smt::expr under = assume && phi.pred_path;
+  Verdict verdict = prove(phi.incoming.value, lower(hit->value), under, model);
+  if (verdict != Verdict::Equivalent)
+    return verdict;
+  if (!phi.incoming.non_poison.isValid())
+    return Verdict::Unsupported;
+  std::string poison_model;
+  Verdict poison = prove(phi.incoming.non_poison, smt::expr(true), under, poison_model);
+  if (poison != Verdict::Equivalent) {
+    if (model.empty())
+      model = poison_model;
+    return poison;
+  }
+  return Verdict::Equivalent;
+}
+
+std::vector<RegNum> symbolic_seeds(
+    const std::vector<std::pair<uint8_t, std::string>> &inputs) {
+  std::vector<std::pair<uint8_t, uint64_t>> bits;
+  bool saw_r1 = false;
+  for (auto [reg, name] : inputs) {
+    (void)name;
+    if (reg == 1)
+      saw_r1 = true;
+    bits.emplace_back(reg, 0);
+  }
+  if (!saw_r1)
+    bits.emplace_back(static_cast<uint8_t>(1), 0);
+  return regs_from_inputs(bits);
 }
 
 CheckedCell check_cell(const AliveCell &alive, const RReg &rocq, const smt::expr &assume,
@@ -688,7 +795,10 @@ CheckedCell check_cell(const AliveCell &alive, const RReg &rocq, const smt::expr
   cell.alive = alive.structure;
   cell.rocq = rocq.node;
   cell.smt = show_expr(alive.value);
-  cell.definedness = definedness_of(alive.tag, rocq.tag, alive.value);
+  std::string defined_model;
+  cell.definedness = definedness_of(alive, rocq.tag, assume, defined_model);
+  if (!defined_model.empty())
+    cell.model = defined_model;
   if (force_unsupported || alive.tag == CellTag::Pointer || rocq.tag == CellTag::Pointer) {
     cell.value = Verdict::Unsupported;
     return cell;
@@ -703,6 +813,19 @@ CheckedCell check_cell(const AliveCell &alive, const RReg &rocq, const smt::expr
   }
   auto lowered = lower(rocq.node);
   cell.value = prove(alive.value, lowered, assume, cell.model);
+  if (cell.value != Verdict::Equivalent)
+    return cell;
+  if (!alive.non_poison.isValid()) {
+    cell.value = Verdict::Unsupported;
+    return cell;
+  }
+  std::string poison_model;
+  Verdict poison = prove(alive.non_poison, smt::expr(true), assume, poison_model);
+  if (poison != Verdict::Equivalent) {
+    cell.value = poison;
+    if (cell.model.empty())
+      cell.model = poison_model;
+  }
   return cell;
 }
 
@@ -715,6 +838,28 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
   program.label = label;
   program.bytes = bytes;
   program.bug = bug == LiftBug::DivZeroAsUb ? "div-zero-as-ub" : "none";
+  std::vector<EbInsn> insns;
+  try {
+    insns = decode_ebpf(code);
+  } catch (const std::exception &ex) {
+    program.gate = "ill-formed";
+    program.gate_reason = ex.what();
+    return program;
+  }
+  Gate decision;
+  try {
+    decision = gate(insns, symbolic_seeds(inputs));
+  } catch (const std::exception &ex) {
+    program.gate = "ill-formed";
+    program.gate_reason = ex.what();
+    return program;
+  }
+  if (decision.kind != GateKind::Ready) {
+    program.gate = decision.kind == GateKind::Reject ? "reject" : "ill-formed";
+    program.gate_pc = decision.pc;
+    program.gate_reason = decision.reason;
+    return program;
+  }
   auto alive = observe_ebpf(code, inputs, bug);
   program.loop = alive.loop;
   if (alive.loop) {
@@ -725,7 +870,7 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
     return program;
   }
   bool loop = false;
-  auto draft = project(decode_ebpf(code), inputs, loop);
+  auto draft = project(insns, inputs, loop);
   if (loop) {
     program.loop = true;
     CheckedPc pc;
@@ -735,6 +880,11 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
     return program;
   }
   auto assume = input_assume(inputs);
+  for (auto [reg, name] : inputs) {
+    (void)reg;
+    program.assumptions.push_back(name + " is not undef and not poison");
+  }
+  program.assumption_smt = show_expr(assume);
   for (const auto &site : alive.pcs) {
     const DraftPc *rocq = nullptr;
     for (const auto &candidate : draft) {
@@ -767,6 +917,8 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
     pc.pre.reserve(10);
     pc.post.reserve(10);
     for (int reg = 0; reg < 10; ++reg) {
+      if (!alive_cell(site.pre, reg) || !alive_cell(site.post, reg))
+        continue;
       pc.pre.push_back(check_cell(site.pre[reg], rocq->pre[reg], assume, blocked));
       pc.post.push_back(check_cell(site.post[reg], rocq->post[reg], assume, blocked));
     }
@@ -791,39 +943,64 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
       pc.edges.push_back(std::move(out));
     }
     for (const auto &phi : site.phis) {
-      if (phi.reg < 0 || phi.reg > 9)
-        continue;
-      std::vector<const RNode *> arms;
-      collect_leaves(rocq->post[phi.reg].node, arms);
       CheckedPhi checked;
       checked.reg = phi.reg;
       checked.pred = phi.pred;
       checked.alive = phi.incoming.structure;
       checked.smt = show_expr(phi.incoming.value);
-      if (blocked || phi.incoming.structure.partial || phi.incoming.missing || arms.empty()) {
+      int copies = 0;
+      for (const auto &other : site.phis) {
+        if (other.reg == phi.reg && other.pred == phi.pred)
+          ++copies;
+      }
+      if (phi.reg < 0 || phi.reg > 9 || copies != 1 || blocked ||
+          phi.incoming.structure.partial || phi.incoming.missing) {
         checked.verdict = Verdict::Unsupported;
       } else {
-        Verdict best = Verdict::Unsupported;
-        std::string model;
-        for (const RNode *arm : arms) {
-          std::string arm_model;
-          auto verdict = prove(phi.incoming.value, lower(*arm), assume, arm_model);
-          if (verdict == Verdict::Equivalent) {
-            best = verdict;
-            checked.rocq = *arm;
-            model.clear();
-            break;
-          }
-          if (best == Verdict::Unsupported || verdict == Verdict::Counterexample) {
-            best = verdict;
-            model = arm_model;
-            checked.rocq = *arm;
-          }
-        }
-        checked.verdict = best;
-        checked.model = model;
+        checked.verdict =
+            verdict_phi(phi, rocq->post[phi.reg].node, assume, checked.rocq, checked.model);
       }
       pc.phis.push_back(std::move(checked));
+    }
+    int b1 = 0;
+    int b2 = 0;
+    for (const auto &phi : site.phis) {
+      if (phi.pred == "%b1")
+        ++b1;
+      if (phi.pred == "%b2")
+        ++b2;
+    }
+    if (!blocked && b1 > 0 && b2 > 0) {
+      const AlivePhi *sample = nullptr;
+      for (const auto &phi : site.phis) {
+        if (phi.pred == "%b1" || phi.pred == "%b2")
+          sample = &phi;
+      }
+      if (sample && sample->reg >= 0 && sample->reg <= 9 &&
+          rocq->post[sample->reg].node.kind == RNode::Kind::Ite &&
+          rocq->post[sample->reg].node.kids.size() == 3) {
+        RNode swapped = rocq->post[sample->reg].node;
+        std::swap(swapped.kids[1], swapped.kids[2]);
+        RNode dropped = rocq->post[sample->reg].node.kids[1];
+        int swapped_bad = 0;
+        int dropped_unsupported = 0;
+        int checked_preds = 0;
+        for (const auto &phi : site.phis) {
+          if (phi.pred != "%b1" && phi.pred != "%b2")
+            continue;
+          ++checked_preds;
+          RNode paired;
+          std::string model;
+          if (verdict_phi(phi, swapped, assume, paired, model) != Verdict::Equivalent)
+            ++swapped_bad;
+          model.clear();
+          if (verdict_phi(phi, dropped, assume, paired, model) == Verdict::Unsupported)
+            ++dropped_unsupported;
+        }
+        program.phi_swap_rejected = checked_preds >= 2 && swapped_bad == checked_preds;
+        program.phi_drop_unsupported =
+            checked_preds >= 2 && dropped_unsupported == checked_preds;
+      }
     }
     program.pcs.push_back(std::move(pc));
   }
@@ -989,52 +1166,295 @@ std::string hex_bytes(const std::vector<uint8_t> &code) {
   return out;
 }
 
+const char *step_status_name(StepStatus status) {
+  switch (status) {
+  case StepStatus::Next: return "NEXT";
+  case StepStatus::Exit: return "EXIT";
+  case StepStatus::Stuck: return "STUCK";
+  case StepStatus::Ub: return "UB";
+  case StepStatus::Incomplete: return "INCOMPLETE";
+  case StepStatus::Unsupported: return "UNSUPPORTED";
+  }
+  return "UNSUPPORTED";
+}
+
+std::string after_text(const PcAfter &pc) {
+  if (const auto *idx = std::get_if<InsnPc>(&pc))
+    return "pc " + std::to_string(idx->index);
+  if (std::holds_alternative<ExitPc>(pc))
+    return "exit";
+  return "none";
+}
+
+struct ConcreteCell {
+  enum class Kind { Bits, Undef, Pointer, Unsupported } kind = Kind::Unsupported;
+  uint64_t bits = 0;
+};
+
+ConcreteCell cell_from_node(const RNode &node,
+                            const std::vector<std::pair<uint8_t, uint64_t>> &env) {
+  ConcreteCell cell;
+  if (node.kind == RNode::Kind::Undef) {
+    cell.kind = ConcreteCell::Kind::Undef;
+    return cell;
+  }
+  if (node.kind == RNode::Kind::Pointer) {
+    cell.kind = ConcreteCell::Kind::Pointer;
+    return cell;
+  }
+  auto value = eval_node(node, env);
+  if (!value)
+    return cell;
+  cell.kind = ConcreteCell::Kind::Bits;
+  cell.bits = *value;
+  return cell;
+}
+
+ConcreteCell cell_from_obs(const Obs &obs) {
+  ConcreteCell cell;
+  if (const auto *bits = std::get_if<Bv64>(&obs)) {
+    cell.kind = ConcreteCell::Kind::Bits;
+    cell.bits = bits->bits;
+    return cell;
+  }
+  if (std::holds_alternative<std::monostate>(obs)) {
+    cell.kind = ConcreteCell::Kind::Undef;
+    return cell;
+  }
+  if (std::holds_alternative<Ptr>(obs)) {
+    cell.kind = ConcreteCell::Kind::Pointer;
+    return cell;
+  }
+  return cell;
+}
+
+std::string cell_text(const ConcreteCell &cell) {
+  if (cell.kind == ConcreteCell::Kind::Bits)
+    return hex16(cell.bits);
+  if (cell.kind == ConcreteCell::Kind::Undef)
+    return "undef";
+  if (cell.kind == ConcreteCell::Kind::Pointer)
+    return "pointer";
+  return "UNSUPPORTED";
+}
+
+std::string compare_obs(const ConcreteCell &projection, const ConcreteCell &rocq, bool &fail) {
+  bool projection_open = projection.kind == ConcreteCell::Kind::Pointer ||
+                         projection.kind == ConcreteCell::Kind::Unsupported;
+  bool rocq_open = rocq.kind == ConcreteCell::Kind::Pointer ||
+                   rocq.kind == ConcreteCell::Kind::Unsupported;
+  if (projection_open || rocq_open)
+    return "UNSUPPORTED";
+  if (projection.kind == ConcreteCell::Kind::Undef || rocq.kind == ConcreteCell::Kind::Undef) {
+    if (projection.kind == rocq.kind)
+      return "agree";
+    fail = true;
+    return "mismatch";
+  }
+  if (projection.bits == rocq.bits)
+    return "agree";
+  fail = true;
+  return "mismatch";
+}
+
+const CheckedPc *find_pc(const CheckedProgram &program, uint32_t pc) {
+  for (const auto &row : program.pcs) {
+    if (row.pc == pc)
+      return &row;
+  }
+  return nullptr;
+}
+
+struct VisitedPc {
+  const CheckedPc *pc = nullptr;
+  std::string successor;
+  bool exit = false;
+};
+
+std::vector<VisitedPc> concrete_path(const CheckedProgram &program,
+                                     const std::vector<std::pair<uint8_t, uint64_t>> &inputs,
+                                     std::string &error) {
+  std::vector<VisitedPc> path;
+  if (program.pcs.empty()) {
+    error = "pc 0 length";
+    return path;
+  }
+  uint32_t cur = program.pcs.front().pc;
+  for (size_t guard = 0; guard < program.pcs.size() + 1; ++guard) {
+    const CheckedPc *pc = find_pc(program, cur);
+    if (!pc) {
+      error = "pc " + std::to_string(cur) + " length";
+      return {};
+    }
+    for (const auto &seen : path) {
+      if (seen.pc->pc == pc->pc) {
+        error = "pc " + std::to_string(pc->pc) + " length";
+        return {};
+      }
+    }
+    const CheckedEdge *taken = nullptr;
+    int hits = 0;
+    if (!pc->edges.empty()) {
+      for (const auto &edge : pc->edges) {
+        auto cond = eval_node(edge.rocq, inputs);
+        if (cond && *cond != 0) {
+          taken = &edge;
+          ++hits;
+        }
+      }
+      if (hits != 1 || !taken) {
+        error = "pc " + std::to_string(pc->pc) + " successor";
+        return {};
+      }
+    }
+    VisitedPc step;
+    step.pc = pc;
+    if (!taken) {
+      const CheckedPc *next = find_pc(program, pc->pc + 1);
+      if (!next) {
+        error = "pc " + std::to_string(pc->pc) + " successor";
+        return {};
+      }
+      step.successor = "pc " + std::to_string(next->pc);
+      path.push_back(step);
+      cur = next->pc;
+      continue;
+    }
+    if (taken->exit) {
+      step.exit = true;
+      step.successor = "exit";
+      path.push_back(step);
+      return path;
+    }
+    step.successor = "pc " + std::to_string(taken->target_pc);
+    path.push_back(step);
+    if (taken->target_pc < 0) {
+      error = "pc " + std::to_string(pc->pc) + " successor";
+      return {};
+    }
+    cur = static_cast<uint32_t>(taken->target_pc);
+  }
+  error = "pc " + std::to_string(cur) + " length";
+  return {};
+}
+
+void fill_cross_regs(const std::vector<CheckedCell> &cells, const RegFile &file,
+                     const std::vector<std::pair<uint8_t, uint64_t>> &inputs,
+                     std::vector<CrossObs> &out, bool &fail) {
+  for (int reg = 0; reg < 10; ++reg) {
+    CrossObs obs;
+    obs.reg = reg;
+    if (reg >= static_cast<int>(cells.size())) {
+      obs.projection = "UNSUPPORTED";
+      obs.rocq = cell_text(cell_from_obs(file.r[reg]));
+      obs.verdict = "UNSUPPORTED";
+      out.push_back(obs);
+      continue;
+    }
+    ConcreteCell projection = cell_from_node(cells[reg].rocq, inputs);
+    ConcreteCell rocq = cell_from_obs(file.r[reg]);
+    obs.projection = cell_text(projection);
+    obs.rocq = cell_text(rocq);
+    obs.verdict = compare_obs(projection, rocq, fail);
+    out.push_back(obs);
+  }
+}
+
 CrossCheck cross_one(const CheckedProgram &program, const std::vector<uint8_t> &code,
                      const std::vector<std::pair<uint8_t, uint64_t>> &inputs,
                      const std::string &label) {
   CrossCheck row;
   row.label = label;
-  const CheckedPc *exit_pc = nullptr;
-  for (const auto &pc : program.pcs) {
-    if (pc.insn.find("exit") != std::string::npos)
-      exit_pc = &pc;
-  }
-  if (!exit_pc || exit_pc->post.size() < 1) {
-    row.error = "projection has no exit r0";
+  std::string path_error;
+  auto path = concrete_path(program, inputs, path_error);
+  if (!path_error.empty()) {
+    row.error = path_error;
     return row;
   }
-  auto projected = eval_node(exit_pc->post[0].rocq, inputs);
-  if (!projected) {
-    row.error = "projection r0 did not evaluate";
-    return row;
-  }
-  row.projection = hex16(*projected);
   std::ostringstream request;
   request << "bytes " << hex_bytes(code) << "\n";
   for (auto [reg, bits] : inputs)
     request << "in " << static_cast<int>(reg) << " " << hex16(bits) << "\n";
+  Trace trace;
   try {
     int code_status = 0;
     auto output = capture_rocq(request.str(), code_status);
     if (code_status != 0)
       throw std::runtime_error("rocq-step failed");
-    auto trace = parse_rocq_stream(output);
-    const Step *exit_step = nullptr;
-    for (const auto &step : trace.steps) {
-      if (step.status == StepStatus::Exit)
-        exit_step = &step;
-    }
-    if (!exit_step || !exit_step->return_value) {
-      row.error = "rocq-step returned no r0";
-      return row;
-    }
-    row.rocq = hex16(exit_step->return_value->bits);
-    row.match = row.projection == row.rocq;
-    if (!row.match)
-      row.error = "projection r0 disagrees with rocq-step";
+    trace = parse_rocq_stream(output);
   } catch (const std::exception &ex) {
     row.error = ex.what();
+    return row;
   }
+  bool ok = true;
+  if (trace.steps.size() != path.size()) {
+    ok = false;
+    uint32_t named = path.empty() ? 0 : path.back().pc->pc;
+    if (trace.steps.size() < path.size())
+      named = path[trace.steps.size()].pc->pc;
+    else if (path.size() < trace.steps.size())
+      named = trace.steps[path.size()].pc.index;
+    row.error = "pc " + std::to_string(named) + " length";
+  }
+  size_t n = std::min(path.size(), trace.steps.size());
+  for (size_t i = 0; i < n; ++i) {
+    const auto &visited = path[i];
+    const auto &step = trace.steps[i];
+    CrossStep out;
+    out.pc = visited.pc->pc;
+    out.status = visited.exit ? "EXIT" : "NEXT";
+    out.successor = visited.successor;
+    out.rocq_status = step_status_name(step.status);
+    out.rocq_successor = after_text(step.pc_after);
+    bool step_fail = false;
+    if (step.pc.index != visited.pc->pc) {
+      step_fail = true;
+      if (row.error.empty())
+        row.error = "pc " + std::to_string(step.pc.index) + " pc";
+    }
+    if (out.status != out.rocq_status) {
+      step_fail = true;
+      if (row.error.empty())
+        row.error = "pc " + std::to_string(visited.pc->pc) + " status";
+    }
+    if (out.successor != out.rocq_successor) {
+      step_fail = true;
+      if (row.error.empty())
+        row.error = "pc " + std::to_string(visited.pc->pc) + " successor";
+    }
+    fill_cross_regs(visited.pc->pre, step.before, inputs, out.pre, step_fail);
+    fill_cross_regs(visited.pc->post, step.after, inputs, out.post, step_fail);
+    if (visited.exit || step.status == StepStatus::Exit) {
+      ConcreteCell projection = visited.pc->post.empty()
+                                    ? ConcreteCell{}
+                                    : cell_from_node(visited.pc->post[0].rocq, inputs);
+      out.ret_projection = cell_text(projection);
+      if (step.return_value)
+        out.ret_rocq = hex16(step.return_value->bits);
+      else
+        out.ret_rocq = "none";
+      ConcreteCell returned;
+      if (step.return_value) {
+        returned.kind = ConcreteCell::Kind::Bits;
+        returned.bits = step.return_value->bits;
+      } else {
+        returned.kind = ConcreteCell::Kind::Unsupported;
+      }
+      out.ret_verdict = compare_obs(projection, returned, step_fail);
+      if (out.ret_verdict == "mismatch" && row.error.empty())
+        row.error = "pc " + std::to_string(visited.pc->pc) + " return";
+      row.projection = out.ret_projection;
+      row.rocq = out.ret_rocq;
+    }
+    if (step_fail && row.error.empty())
+      row.error = "pc " + std::to_string(visited.pc->pc) + " state";
+    out.match = !step_fail;
+    out.error = step_fail ? row.error : "";
+    if (step_fail)
+      ok = false;
+    row.steps.push_back(std::move(out));
+  }
+  row.match = ok && row.error.empty();
   return row;
 }
 
@@ -1117,9 +1537,12 @@ std::vector<std::pair<uint8_t, std::string>> names_of(const Fixture &fixture) {
 
 bool cell_bits_ok(const CheckedCell &cell) {
   if (cell.alive_tag == CellTag::Pointer || cell.rocq_tag == CellTag::Pointer)
-    return cell.value == Verdict::Unsupported && cell.definedness == Verdict::Equivalent;
-  if (cell.alive_tag == CellTag::Undef || cell.rocq_tag == CellTag::Undef)
-    return cell.definedness == Verdict::Equivalent;
+    return cell.value == Verdict::Unsupported && cell.definedness == Verdict::Unsupported;
+  if (cell.alive_tag == CellTag::Undef || cell.rocq_tag == CellTag::Undef) {
+    if (cell.alive_tag != cell.rocq_tag)
+      return false;
+    return cell.value == Verdict::Unsupported && cell.definedness == Verdict::Unsupported;
+  }
   return cell.value == Verdict::Equivalent && cell.definedness == Verdict::Equivalent;
 }
 
@@ -1165,14 +1588,16 @@ CheckedProgram analyze_bytes(const std::vector<uint8_t> &code,
                              std::vector<std::pair<uint8_t, uint64_t>> concrete,
                              LiftBug bug, const std::string &label) {
   auto program = finish(label, hex_bytes(code), bug, code, inputs);
-  if (!concrete.empty() && !program.loop)
+  if (program.gate != "ready" || program.loop)
+    return program;
+  if (!concrete.empty())
     program.cross.push_back(cross_one(program, code, concrete, label));
   return program;
 }
 
 ExhibitDoc analyze_default() {
   ExhibitDoc doc;
-  doc.projection = kProjection;
+  doc.projection = exhibit_projection();
   const Fixture *jgt11 = fixture_named("jgt64-11");
   const Fixture *jgt10 = fixture_named("jgt64-10");
   const Fixture *div2 = fixture_named("div64-7-2");
@@ -1203,7 +1628,15 @@ std::string exhibit_json(const ExhibitDoc &doc) {
       out << ',';
     out << "{\"label\":\"" << json_escape(program.label) << "\",\"bytes\":\""
         << json_escape(program.bytes) << "\",\"bug\":\"" << json_escape(program.bug)
-        << "\",\"loop\":" << (program.loop ? "true" : "false") << ",\"pcs\":[";
+        << "\",\"gate\":\"" << json_escape(program.gate) << "\",\"gate_pc\":" << program.gate_pc
+        << ",\"gate_reason\":\"" << json_escape(program.gate_reason) << "\",\"loop\":"
+        << (program.loop ? "true" : "false") << ",\"assumptions\":[";
+    for (size_t a = 0; a < program.assumptions.size(); ++a) {
+      if (a)
+        out << ',';
+      out << '"' << json_escape(program.assumptions[a]) << '"';
+    }
+    out << "],\"assumption_smt\":\"" << json_escape(program.assumption_smt) << "\",\"pcs\":[";
     for (size_t i = 0; i < program.pcs.size(); ++i) {
       const auto &pc = program.pcs[i];
       if (i)
@@ -1273,7 +1706,37 @@ std::string exhibit_json(const ExhibitDoc &doc) {
       out << "{\"label\":\"" << json_escape(row.label) << "\",\"projection\":\""
           << json_escape(row.projection) << "\",\"rocq\":\"" << json_escape(row.rocq)
           << "\",\"match\":" << (row.match ? "true" : "false") << ",\"error\":\""
-          << json_escape(row.error) << "\"}";
+          << json_escape(row.error) << "\",\"steps\":[";
+      for (size_t s = 0; s < row.steps.size(); ++s) {
+        const auto &step = row.steps[s];
+        if (s)
+          out << ',';
+        auto write_obs = [&](const std::vector<CrossObs> &cells) {
+          out << '[';
+          for (size_t r = 0; r < cells.size(); ++r) {
+            if (r)
+              out << ',';
+            const auto &cell = cells[r];
+            out << "{\"reg\":" << cell.reg << ",\"projection\":\""
+                << json_escape(cell.projection) << "\",\"rocq\":\"" << json_escape(cell.rocq)
+                << "\",\"verdict\":\"" << json_escape(cell.verdict) << "\"}";
+          }
+          out << ']';
+        };
+        out << "{\"pc\":" << step.pc << ",\"status\":\"" << json_escape(step.status)
+            << "\",\"successor\":\"" << json_escape(step.successor) << "\",\"rocq_status\":\""
+            << json_escape(step.rocq_status) << "\",\"rocq_successor\":\""
+            << json_escape(step.rocq_successor) << "\",\"return_projection\":\""
+            << json_escape(step.ret_projection) << "\",\"return_rocq\":\""
+            << json_escape(step.ret_rocq) << "\",\"return_verdict\":\""
+            << json_escape(step.ret_verdict) << "\",\"match\":" << (step.match ? "true" : "false")
+            << ",\"error\":\"" << json_escape(step.error) << "\",\"pre\":";
+        write_obs(step.pre);
+        out << ",\"post\":";
+        write_obs(step.post);
+        out << '}';
+      }
+      out << "]}";
     }
     out << "]}";
   }
@@ -1312,7 +1775,8 @@ int symbolic_check() {
     else if (program.bug == "div-zero-as-ub")
       mutation = &program;
   }
-  bool jgt_ok = jgt && program_equivalent(*jgt);
+  bool jgt_ok = jgt && program_equivalent(*jgt) && jgt->phi_swap_rejected &&
+                jgt->phi_drop_unsupported;
   const CheckedPc *jgt_pc = jgt ? pc_with_insn(*jgt, "jgt") : nullptr;
   if (!jgt_pc || jgt_pc->edges.size() != 2)
     jgt_ok = false;
@@ -1352,8 +1816,8 @@ int symbolic_check() {
         continue;
       const auto &cell = pc.pre[0];
       if (cell.alive_tag == CellTag::Undef && cell.rocq_tag == CellTag::Undef &&
-          cell.definedness == Verdict::Equivalent && cell.smt != "0" &&
-          cell.alive.op != "const") {
+          cell.definedness == Verdict::Unsupported && cell.value == Verdict::Unsupported &&
+          cell.smt != "0" && cell.alive.op == "var" && cell.alive.var.find("undef") == 0) {
         init_ok = true;
         break;
       }
@@ -1393,6 +1857,10 @@ int symbolic_check() {
     }
   }
   if (!jgt_ok || !div_ok || !mutation_ok || !init_ok || !cross_ok) {
+    if (jgt && !jgt->phi_swap_rejected)
+      std::cerr << "phi swap still matched\n";
+    if (jgt && !jgt->phi_drop_unsupported)
+      std::cerr << "phi drop was not unsupported\n";
     for (const auto &program : doc.programs) {
       std::cerr << program.label << "\n";
       for (const auto &pc : program.pcs) {

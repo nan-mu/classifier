@@ -254,14 +254,24 @@ AliveProgram observe_ebpf(const std::vector<uint8_t> &code,
       pc.edges.push_back(std::move(out));
     }
     for (int reg = 0; reg < 10; ++reg) {
-      pc.pre[reg] = cell_from(state, site.pre[reg], false);
-      pc.post[reg] = cell_from(state, site.post[reg], false);
+      AliveCell *pre = alive_cell(pc.pre, reg);
+      AliveCell *post = alive_cell(pc.post, reg);
+      if (!pre || !post)
+        continue;
+      *pre = cell_from(state, site.pre[reg], false);
+      *post = cell_from(state, site.post[reg], false);
       if (auto *phi = dynamic_cast<IR::Phi *>(site.post[reg].value)) {
         for (const auto &incoming : phi->getValues()) {
           AlivePhi arm;
           arm.reg = reg;
           arm.pred = incoming.second;
           arm.incoming = cell_from(state, slot_for(incoming.first), false);
+          for (auto *block : fn.getBBs()) {
+            if (block->getName() == incoming.second) {
+              arm.pred_path = state.getPath(*block);
+              break;
+            }
+          }
           pc.phis.push_back(std::move(arm));
         }
       }
@@ -271,10 +281,14 @@ AliveProgram observe_ebpf(const std::vector<uint8_t> &code,
   for (size_t i = 0; i < program.pcs.size(); ++i) {
     auto &pc = program.pcs[i];
     for (int reg = 0; reg < 10; ++reg) {
-      if (pc.pre[reg].missing && pc.pre[reg].tag == CellTag::Undef)
-        pc.pre[reg] = cell_from(state, info.sites[i].pre[reg], true);
-      if (pc.post[reg].missing && pc.post[reg].tag == CellTag::Undef)
-        pc.post[reg] = cell_from(state, info.sites[i].post[reg], true);
+      AliveCell *pre = alive_cell(pc.pre, reg);
+      AliveCell *post = alive_cell(pc.post, reg);
+      if (!pre || !post)
+        continue;
+      if (pre->missing && pre->tag == CellTag::Undef)
+        *pre = cell_from(state, info.sites[i].pre[reg], true);
+      if (post->missing && post->tag == CellTag::Undef)
+        *post = cell_from(state, info.sites[i].post[reg], true);
     }
   }
   return program;
