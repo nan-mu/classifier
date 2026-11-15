@@ -29,6 +29,14 @@ run direct_ir "$root/direct-ir.log" ./build/direct_ir
 run ebpf_test "$root/ebpf-test.log" ./build/ebpf_test
 run clang_e2e "$root/clang-e2e.log" bash "$here/run-clang-e2e.sh"
 
+# Count only the models the original mutation tests wrote. The Rocq runs below
+# must not change this number, so the count is taken before they start.
+cex="$(find counterexamples -name '*.smt2' 2>/dev/null | wc -l | tr -d ' ')"
+
+rm -rf "$root/build/concrete-test"
+run ebpf_concrete "$root/ebpf-concrete.log" ./build/ebpf-concrete --out "$root/build/concrete-test"
+run ebpf_exhibit "$root/ebpf-exhibit-check.log" ./build/ebpf-exhibit --check
+
 echo
 printf '%-16s %s\n' direct-ir.log \
   "$(grep -c '^Solver check' "$root/direct-ir.log") solver checks, $(grep -c '^FAIL' "$root/direct-ir.log") failures"
@@ -38,6 +46,25 @@ for log in ebpf-test.log clang-e2e.log; do
 done
 
 echo
-echo "counterexamples written this run: $(ls counterexamples 2>/dev/null | wc -l | tr -d ' ')"
+echo "counterexamples written this run: $cex"
 echo "expected: 8, one per intentional mutation"
+if [ "$cex" != 8 ]; then
+  echo "FAIL counterexample count is $cex, expected 8"
+  status=1
+fi
+
+for line in \
+  "JGT supported scope EQUIVALENT" \
+  "DIV supported scope EQUIVALENT" \
+  "mutation definedness COUNTEREXAMPLE" \
+  "mutation nonzero EQUIVALENT" \
+  "gate reject r10" \
+  "gate reject uninit"
+do
+  if ! grep -qx "$line" "$root/ebpf-exhibit-check.log"; then
+    echo "FAIL exhibit check missing: $line"
+    status=1
+  fi
+done
+
 exit "$status"

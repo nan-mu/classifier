@@ -109,3 +109,4 @@ target_compile_definitions(ebpf-exhibit PRIVATE
   "PIN_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/PIN\""
   "SOURCES_SHA_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/rocq/SOURCES.sha256\""
   "SEMANTICS_DIR=\"${UPSTREAM_SRC}\"")
+add_dependencies(ebpf-exhibit rocq-step)

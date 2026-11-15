@@ -1,0 +1,9 @@
+JGT supported scope EQUIVALENT
+DIV supported scope EQUIVALENT
+mutation definedness COUNTEREXAMPLE
+mutation poison EQUIVALENT
+mutation nonzero EQUIVALENT
+unseeded r0 excluded
+gate reject r10
+gate reject uninit
+observe closed
