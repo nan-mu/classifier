@@ -575,7 +575,9 @@ int main(int argc, char **argv) {
       doc.projection =
           "The Rocq side is a projection of the vendored instruction rules. "
           "It is not native Rocq symbolic execution. "
-          "EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison.";
+          "EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison. "
+          "An undef register can have definedness EQUIVALENT and value UNSUPPORTED. "
+          "That UNSUPPORTED cell is not a pass.";
       doc.programs.push_back(analyze_bytes(code, inputs, bound, LiftBug::None, "bytes"));
     }
     if (!traces.empty())

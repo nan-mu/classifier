@@ -20,7 +20,9 @@ namespace {
 const char *kProjection =
     "The Rocq side is a projection of the vendored instruction rules. "
     "It is not native Rocq symbolic execution. "
-    "EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison.";
+    "EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison. "
+    "An undef register can have definedness EQUIVALENT and value UNSUPPORTED. "
+    "That UNSUPPORTED cell is not a pass.";
 
 std::string json_escape(const std::string &text) {
   std::string out;
@@ -1366,8 +1368,12 @@ int symbolic_check() {
         cross_ok = false;
     }
   }
-  std::cout << "JGT " << (jgt_ok ? "EQUIVALENT" : "FAIL") << "\n";
-  std::cout << "DIV " << (div_ok ? "EQUIVALENT" : "FAIL") << "\n";
+  std::cout << "JGT bitvector " << (jgt_ok ? "EQUIVALENT" : "FAIL") << "\n";
+  if (jgt_ok)
+    std::cout << "JGT undef value UNSUPPORTED\n";
+  std::cout << "DIV bitvector " << (div_ok ? "EQUIVALENT" : "FAIL") << "\n";
+  if (div_ok)
+    std::cout << "DIV undef value UNSUPPORTED\n";
   std::cout << "mutation " << (mutation_ok ? "COUNTEREXAMPLE" : "FAIL") << "\n";
   if (mutation_ok) {
     std::cout << "mutation path " << path << "\n";
