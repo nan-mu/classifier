@@ -1,5 +1,6 @@
 #include "ebpf_run.h"
 
+#include "ebpf_gate.h"
 #include "ebpf_lift.h"
 #include "ir/constant.h"
 #include "ir/globals.h"
@@ -189,6 +190,7 @@ AliveCell cell_from(IR::State &state, const EbSlot &slot, bool allow_exec) {
   }
   cell.value = got->val.value;
   cell.non_poison = got->val.non_poison;
+  cell.domain = got->domain();
   cell.undef = cell.tag == CellTag::Undef || got->undef_vars.count(cell.value) != 0;
   cell.structure = walk_expr(cell.value, 0);
   return cell;
@@ -211,7 +213,9 @@ EbSlot slot_for(IR::Value *value) {
 
 AliveProgram observe_ebpf(const std::vector<uint8_t> &code,
                           std::vector<std::pair<uint8_t, std::string>> inputs,
-                          LiftBug bug) {
+                          LiftBug bug, ObservePermit permit) {
+  if (!permit.is_ready())
+    return {};
   auto insns = decode_ebpf(code);
   EbTypes types;
   IR::Function fn(types.i64, "ebpf");

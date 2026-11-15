@@ -44,6 +44,7 @@ struct AliveCell {
   AliveNode structure;
   smt::expr value;
   smt::expr non_poison;
+  smt::expr domain;
 };
 
 struct AlivePhi {
@@ -91,8 +92,3 @@ struct AliveProgram {
   std::vector<AlivePc> pcs;
   std::vector<std::pair<uint8_t, std::string>> inputs;
 };
-
-// Rocq register init. Does not unroll. A back edge returns loop set and no pcs.
-AliveProgram observe_ebpf(const std::vector<uint8_t> &code,
-                          std::vector<std::pair<uint8_t, std::string>> inputs,
-                          LiftBug bug = LiftBug::None);

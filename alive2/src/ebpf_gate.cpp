@@ -250,5 +250,7 @@ Gate gate(const std::vector<EbInsn> &insns, const std::vector<RegNum> &seeds) {
     result.pc = best->pc;
     result.reason = best->reason;
   }
+  if (result.kind == GateKind::Ready)
+    result.permit = ObservePermit::issue();
   return result;
 }

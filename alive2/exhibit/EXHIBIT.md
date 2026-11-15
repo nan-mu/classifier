@@ -1,16 +1,20 @@
 # Exhibit
 
-The Rocq side is a projection of the vendored instruction rules. It is not native Rocq symbolic execution. EQUIVALENT means the value inequality is unsat under the listed input assumptions and Alive2 non_poison is true under those assumptions. Rocq has no poison bit. Undef is not proved by matching tags. If definedness cannot be stated to the solver, the verdict is UNSUPPORTED. Poison is not undef. UNKNOWN and UNSUPPORTED are not passes. A concrete trace agreement is not a symbolic proof.
+The Rocq side is a projection of the vendored instruction rules and not a kernel proof. EQUIVALENT for a value is unsat of the inequality under the listed assumptions. Domain EQUIVALENT is unsat of `domain != true` under those assumptions and is not `non_poison`. Poison is a separate Alive2 `non_poison` proof and this opcode subset has no poison-producing case. Rocq has no poison bit. EXCLUDED is not a proof. UNKNOWN and UNSUPPORTED are not passes. Concrete agreement is not a symbolic proof. supported-scope-equivalent is not whole-program equivalence.
 
 Run `alive2/exhibit/regen.sh` from the repository root.
 
-Each SMT cell is EQUIVALENT, COUNTEREXAMPLE, UNKNOWN, or UNSUPPORTED. UNKNOWN and UNSUPPORTED are not passes.
+Each SMT cell is EQUIVALENT, COUNTEREXAMPLE, UNKNOWN, UNSUPPORTED, or EXCLUDED. EXCLUDED is not a proof. UNKNOWN and UNSUPPORTED are not passes.
+
+supported-scope-equivalent does not cover loops, memory, maps, helpers, pointer arithmetic, or poison beyond non_poison being true.
 
 ## JGT64
 
 Bytes `bf10000000000000250002000a0000001700000001000000050001000000000007000000010000009500000000000000`.
 
 Bug flag is none.
+
+Scope is `supported-scope-equivalent`.
 
 Input assumptions.
 
@@ -32,18 +36,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var undef!0`.
 
@@ -53,18 +57,18 @@ r0 Alive2 smt is `undef!0`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -90,18 +94,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -111,18 +115,18 @@ r0 Alive2 smt is `r1`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -162,18 +166,18 @@ Alive2 smt path is `(not (bvule #x000000000000000b r1))`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -183,18 +187,18 @@ r0 Alive2 smt is `r1`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `add(var r1, const 18446744073709551615)`.
 
@@ -220,18 +224,18 @@ Alive2 smt path is `(not (bvule #x000000000000000b r1))`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `add(var r1, const 18446744073709551615)`.
 
@@ -241,18 +245,18 @@ r0 Alive2 smt is `(bvadd r1 #xffffffffffffffff)`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `add(var r1, const 18446744073709551615)`.
 
@@ -284,18 +288,18 @@ Alive2 smt path is `(bvule #x000000000000000b r1)`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -305,18 +309,18 @@ r0 Alive2 smt is `r1`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `add(const 1, var r1)`.
 
@@ -348,18 +352,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `ite(bvule(const 11, var r1), add(const 1, var r1), add(var r1, const 18446744073709551615))`.
 
@@ -371,18 +375,18 @@ r0 Alive2 smt is `(ite (bvule #x000000000000000b r1)
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `ite(bvule(const 11, var r1), add(const 1, var r1), add(var r1, const 18446744073709551615))`.
 
@@ -435,16 +439,16 @@ Pre-state comparison.
 
 | reg | projection | rocq-step | comparison |
 | --- | --- | --- | --- |
-| r0 | undef | undef | agree |
+| r0 | undef | undef | excluded |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -452,14 +456,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000b | 000000000000000b | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 1 projection NEXT to pc 4, rocq-step NEXT to pc 4.
 
@@ -469,14 +473,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000b | 000000000000000b | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -484,14 +488,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000b | 000000000000000b | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 4 projection NEXT to pc 5, rocq-step NEXT to pc 5.
 
@@ -501,14 +505,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000b | 000000000000000b | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -516,14 +520,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000c | 000000000000000c | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 5 projection EXIT to exit, rocq-step EXIT to exit.
 
@@ -535,14 +539,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000c | 000000000000000c | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -550,14 +554,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000c | 000000000000000c | agree |
 | r1 | 000000000000000b | 000000000000000b | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 jgt64-10.
 
@@ -567,16 +571,16 @@ Pre-state comparison.
 
 | reg | projection | rocq-step | comparison |
 | --- | --- | --- | --- |
-| r0 | undef | undef | agree |
+| r0 | undef | undef | excluded |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -584,14 +588,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000a | 000000000000000a | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 1 projection NEXT to pc 2, rocq-step NEXT to pc 2.
 
@@ -601,14 +605,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000a | 000000000000000a | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -616,14 +620,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000a | 000000000000000a | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 2 projection NEXT to pc 3, rocq-step NEXT to pc 3.
 
@@ -633,14 +637,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 000000000000000a | 000000000000000a | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -648,14 +652,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 0000000000000009 | 0000000000000009 | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 3 projection NEXT to pc 5, rocq-step NEXT to pc 5.
 
@@ -665,14 +669,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 0000000000000009 | 0000000000000009 | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -680,14 +684,14 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 0000000000000009 | 0000000000000009 | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 5 projection EXIT to exit, rocq-step EXIT to exit.
 
@@ -699,14 +703,14 @@ Pre-state comparison.
 | --- | --- | --- | --- |
 | r0 | 0000000000000009 | 0000000000000009 | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -714,20 +718,22 @@ Post-state comparison.
 | --- | --- | --- | --- |
 | r0 | 0000000000000009 | 0000000000000009 | agree |
 | r1 | 000000000000000a | 000000000000000a | agree |
-| r2 | undef | undef | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r2 | undef | undef | excluded |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 ## DIV64
 
 Bytes `bf100000000000003f200000000000009500000000000000`.
 
 Bug flag is none.
+
+Scope is `supported-scope-equivalent`.
 
 Input assumptions.
 
@@ -751,39 +757,39 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
-r0 Alive2 expression is `var undef!114`.
+r0 Alive2 expression is `var undef!17`.
 
 r0 Rocq projection is `undef [create_initial_state]`.
 
-r0 Alive2 smt is `undef!114`.
+r0 Alive2 smt is `undef!17`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -809,18 +815,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -830,18 +836,18 @@ r0 Alive2 smt is `r1`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `ite(=(var r2, const 0), const 0, bvudiv(var r1, var r2))`.
 
@@ -885,18 +891,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `ite(=(var r2, const 0), const 0, bvudiv(var r1, var r2))`.
 
@@ -906,18 +912,18 @@ r0 Alive2 smt is `(ite (= r2 #x0000000000000000) #x0000000000000000 (bvudiv r1 r
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `ite(=(var r2, const 0), const 0, bvudiv(var r1, var r2))`.
 
@@ -968,16 +974,16 @@ Pre-state comparison.
 
 | reg | projection | rocq-step | comparison |
 | --- | --- | --- | --- |
-| r0 | undef | undef | agree |
+| r0 | undef | undef | excluded |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000002 | 0000000000000002 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -986,13 +992,13 @@ Post-state comparison.
 | r0 | 0000000000000007 | 0000000000000007 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000002 | 0000000000000002 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 1 projection NEXT to pc 2, rocq-step NEXT to pc 2.
 
@@ -1003,13 +1009,13 @@ Pre-state comparison.
 | r0 | 0000000000000007 | 0000000000000007 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000002 | 0000000000000002 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -1018,13 +1024,13 @@ Post-state comparison.
 | r0 | 0000000000000003 | 0000000000000003 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000002 | 0000000000000002 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 2 projection EXIT to exit, rocq-step EXIT to exit.
 
@@ -1037,13 +1043,13 @@ Pre-state comparison.
 | r0 | 0000000000000003 | 0000000000000003 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000002 | 0000000000000002 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -1052,13 +1058,13 @@ Post-state comparison.
 | r0 | 0000000000000003 | 0000000000000003 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000002 | 0000000000000002 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 div64-7-0.
 
@@ -1068,16 +1074,16 @@ Pre-state comparison.
 
 | reg | projection | rocq-step | comparison |
 | --- | --- | --- | --- |
-| r0 | undef | undef | agree |
+| r0 | undef | undef | excluded |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000000 | 0000000000000000 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -1086,13 +1092,13 @@ Post-state comparison.
 | r0 | 0000000000000007 | 0000000000000007 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000000 | 0000000000000000 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 1 projection NEXT to pc 2, rocq-step NEXT to pc 2.
 
@@ -1103,13 +1109,13 @@ Pre-state comparison.
 | r0 | 0000000000000007 | 0000000000000007 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000000 | 0000000000000000 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -1118,13 +1124,13 @@ Post-state comparison.
 | r0 | 0000000000000000 | 0000000000000000 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000000 | 0000000000000000 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 pc 2 projection EXIT to exit, rocq-step EXIT to exit.
 
@@ -1137,13 +1143,13 @@ Pre-state comparison.
 | r0 | 0000000000000000 | 0000000000000000 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000000 | 0000000000000000 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 Post-state comparison.
 
@@ -1152,13 +1158,13 @@ Post-state comparison.
 | r0 | 0000000000000000 | 0000000000000000 | agree |
 | r1 | 0000000000000007 | 0000000000000007 | agree |
 | r2 | 0000000000000000 | 0000000000000000 | agree |
-| r3 | undef | undef | agree |
-| r4 | undef | undef | agree |
-| r5 | undef | undef | agree |
-| r6 | undef | undef | agree |
-| r7 | undef | undef | agree |
-| r8 | undef | undef | agree |
-| r9 | undef | undef | agree |
+| r3 | undef | undef | excluded |
+| r4 | undef | undef | excluded |
+| r5 | undef | undef | excluded |
+| r6 | undef | undef | excluded |
+| r7 | undef | undef | excluded |
+| r8 | undef | undef | excluded |
+| r9 | undef | undef | excluded |
 
 ## DIV64 div-zero-as-ub
 
@@ -1166,13 +1172,15 @@ Bytes `bf100000000000003f200000000000009500000000000000`.
 
 Bug flag is div-zero-as-ub.
 
+Scope is `counterexample`.
+
 Input assumptions.
 
 r1 is not undef and not poison.
 
 r2 is not undef and not poison.
 
-SMT assumption is `(and np_r1 (= isundef_r1 #b0) np_r2 (= #b0 isundef_r2))`.
+SMT assumption is `(and np_r1 (= #b0 isundef_r1) np_r2 (= #b0 isundef_r2))`.
 
 ### pc 0 alu64 mov r0, r1
 
@@ -1188,39 +1196,39 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
-r0 Alive2 expression is `var undef!216`.
+r0 Alive2 expression is `var undef!33`.
 
 r0 Rocq projection is `undef [create_initial_state]`.
 
-r0 Alive2 smt is `undef!216`.
+r0 Alive2 smt is `undef!33`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -1246,18 +1254,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | input | input | EQUIVALENT | EQUIVALENT |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `var r1`.
 
@@ -1267,18 +1275,18 @@ r0 Alive2 smt is `r1`.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | COUNTEREXAMPLE |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | COUNTEREXAMPLE | EQUIVALENT | COUNTEREXAMPLE |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `bvudiv(var r1, var r2)`.
 
@@ -1287,10 +1295,9 @@ r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], cons
 r0 Alive2 smt is `(bvudiv r1 r2)`.
 
 r0 model is `np_r2 -> true
-r2 -> #x0000000000000000
-r1 -> #x0000000000000000
 isundef_r2 -> #b0
 np_r1 -> true
+r2 -> #x0000000000000000
 isundef_r1 -> #b0
 `.
 
@@ -1312,18 +1319,18 @@ Alive2 smt path is `true`.
 
 Pre-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | COUNTEREXAMPLE |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | COUNTEREXAMPLE | EQUIVALENT | COUNTEREXAMPLE |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `bvudiv(var r1, var r2)`.
 
@@ -1331,28 +1338,27 @@ r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], cons
 
 r0 Alive2 smt is `(bvudiv r1 r2)`.
 
-r0 model is `isundef_r2 -> #b0
-r1 -> #x0000000000400000
-r2 -> #x0000000000000000
-isundef_r1 -> #b0
+r0 model is `r2 -> #x0000000000000000
+isundef_r2 -> #b0
 np_r1 -> true
 np_r2 -> true
+isundef_r1 -> #b0
 `.
 
 Post-state.
 
-| reg | alive tag | rocq tag | definedness | value |
-| --- | --- | --- | --- | --- |
-| r0 | bits | bits | EQUIVALENT | COUNTEREXAMPLE |
-| r1 | input | input | EQUIVALENT | EQUIVALENT |
-| r2 | input | input | EQUIVALENT | EQUIVALENT |
-| r3 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r4 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r5 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r6 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r7 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r8 | undef | undef | UNSUPPORTED | UNSUPPORTED |
-| r9 | undef | undef | UNSUPPORTED | UNSUPPORTED |
+| reg | alive tag | rocq tag | definedness | poison | value |
+| --- | --- | --- | --- | --- | --- |
+| r0 | bits | bits | COUNTEREXAMPLE | EQUIVALENT | COUNTEREXAMPLE |
+| r1 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r4 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r5 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r6 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r7 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r8 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
+| r9 | undef | undef | EXCLUDED | EXCLUDED | EXCLUDED |
 
 r0 Alive2 expression is `bvudiv(var r1, var r2)`.
 
@@ -1360,12 +1366,11 @@ r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], cons
 
 r0 Alive2 smt is `(bvudiv r1 r2)`.
 
-r0 model is `np_r2 -> true
+r0 model is `isundef_r1 -> #b0
 r2 -> #x0000000000000000
-r1 -> #x0000000000400000
 isundef_r2 -> #b0
 np_r1 -> true
-isundef_r1 -> #b0
+np_r2 -> true
 `.
 
 Successors.

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-enum class Verdict { Equivalent, Counterexample, Unknown, Unsupported };
+enum class Verdict { Equivalent, Counterexample, Unknown, Unsupported, Excluded };
 
 struct RNode {
   enum class Kind {
@@ -25,6 +25,7 @@ struct CheckedCell {
   CellTag alive_tag = CellTag::Bits;
   CellTag rocq_tag = CellTag::Bits;
   Verdict definedness = Verdict::Unsupported;
+  Verdict poison = Verdict::Unsupported;
   Verdict value = Verdict::Unsupported;
   std::string model;
   std::string smt;
@@ -113,6 +114,7 @@ struct CheckedProgram {
   std::string assumption_smt;
   bool phi_swap_rejected = false;
   bool phi_drop_unsupported = false;
+  std::string scope;
   std::vector<CheckedPc> pcs;
   std::vector<CrossCheck> cross;
 };
@@ -147,5 +149,4 @@ const char *exhibit_projection();
 
 std::string exhibit_json(const ExhibitDoc &doc);
 
-// Prints the contract's four lines. Returns 0 when they hold.
 int symbolic_check();

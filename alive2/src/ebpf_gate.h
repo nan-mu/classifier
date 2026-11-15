@@ -9,6 +9,37 @@
 #include <utility>
 #include <vector>
 
+class RegNum {
+ public:
+  static std::optional<RegNum> from_index(uint8_t index) {
+    if (index > 9)
+      return std::nullopt;
+    return RegNum{index};
+  }
+  uint8_t index() const { return index_; }
+
+ private:
+  explicit RegNum(uint8_t index) : index_(index) {}
+  uint8_t index_ = 0;
+};
+
+struct Gate;
+
+class ObservePermit {
+ public:
+  ObservePermit() = default;
+  bool is_ready() const { return ready; }
+
+ private:
+  bool ready = false;
+  friend Gate gate(const std::vector<EbInsn> &insns, const std::vector<RegNum> &seeds);
+  static ObservePermit issue() {
+    ObservePermit permit;
+    permit.ready = true;
+    return permit;
+  }
+};
+
 enum class GateKind { Ready, Reject, IllFormed };
 
 enum class SuccKind { Jump, Fall, Exit };
@@ -28,20 +59,7 @@ struct Gate {
   uint32_t pc = 0;
   std::string reason;
   std::vector<GateNode> nodes;
-};
-
-class RegNum {
- public:
-  static std::optional<RegNum> from_index(uint8_t index) {
-    if (index > 9)
-      return std::nullopt;
-    return RegNum{index};
-  }
-  uint8_t index() const { return index_; }
-
- private:
-  explicit RegNum(uint8_t index) : index_(index) {}
-  uint8_t index_ = 0;
+  ObservePermit permit;
 };
 
 inline std::vector<RegNum> regs_from_inputs(

@@ -241,12 +241,15 @@ std::string render_markdown(const J &root) {
   md << "# Exhibit\n\n";
   md << root.need("projection").text << "\n\n";
   md << "Run `alive2/exhibit/regen.sh` from the repository root.\n\n";
-  md << "Each SMT cell is EQUIVALENT, COUNTEREXAMPLE, UNKNOWN, or UNSUPPORTED. "
-        "UNKNOWN and UNSUPPORTED are not passes.\n\n";
+  md << "Each SMT cell is EQUIVALENT, COUNTEREXAMPLE, UNKNOWN, UNSUPPORTED, or EXCLUDED. "
+        "EXCLUDED is not a proof. UNKNOWN and UNSUPPORTED are not passes.\n\n";
+  md << "supported-scope-equivalent does not cover loops, memory, maps, helpers, "
+        "pointer arithmetic, or poison beyond non_poison being true.\n\n";
   for (const auto &program : root.need("programs").array) {
     md << "## " << program.need("label").text << "\n\n";
     md << "Bytes `" << program.need("bytes").text << "`.\n\n";
     md << "Bug flag is " << program.need("bug").text << ".\n\n";
+    md << "Scope is `" << program.need("scope").text << "`.\n\n";
     if (program.find("gate") && program.need("gate").text != "ready") {
       md << program.need("gate").text << " pc " << program.need("gate_pc").text << " "
          << program.need("gate_reason").text << ".\n\n";
@@ -284,13 +287,13 @@ std::string render_markdown(const J &root) {
         md << "Path model is `" << path.need("model").text << "`.\n\n";
       auto table = [&](const char *title, const J &cells) {
         md << title << "\n\n";
-        md << "| reg | alive tag | rocq tag | definedness | value |\n";
-        md << "| --- | --- | --- | --- | --- |\n";
+        md << "| reg | alive tag | rocq tag | definedness | poison | value |\n";
+        md << "| --- | --- | --- | --- | --- | --- |\n";
         for (const auto &cell : cells.array) {
           md << "| r" << cell.need("reg").text << " | " << cell.need("alive_tag").text
              << " | " << cell.need("rocq_tag").text << " | "
-             << cell.need("definedness").text << " | " << cell.need("value").text
-             << " |\n";
+             << cell.need("definedness").text << " | " << cell.need("poison").text
+             << " | " << cell.need("value").text << " |\n";
         }
         md << "\n";
         for (const auto &cell : cells.array) {

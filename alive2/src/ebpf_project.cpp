@@ -17,17 +17,20 @@
 #include <sys/wait.h>
 #include <utility>
 
+AliveProgram observe_ebpf(const std::vector<uint8_t> &code,
+                          std::vector<std::pair<uint8_t, std::string>> inputs,
+                          LiftBug bug, ObservePermit permit);
+
 const char *exhibit_projection() {
-  return "The Rocq side is a projection of the vendored instruction rules. "
-         "It is not native Rocq symbolic execution. "
-         "EQUIVALENT means the value inequality is unsat under the listed input assumptions "
-         "and Alive2 non_poison is true under those assumptions. "
+  return "The Rocq side is a projection of the vendored instruction rules and not a kernel proof. "
+         "EQUIVALENT for a value is unsat of the inequality under the listed assumptions. "
+         "Domain EQUIVALENT is unsat of `domain != true` under those assumptions and is not `non_poison`. "
+         "Poison is a separate Alive2 `non_poison` proof and this opcode subset has no poison-producing case. "
          "Rocq has no poison bit. "
-         "Undef is not proved by matching tags. "
-         "If definedness cannot be stated to the solver, the verdict is UNSUPPORTED. "
-         "Poison is not undef. "
+         "EXCLUDED is not a proof. "
          "UNKNOWN and UNSUPPORTED are not passes. "
-         "A concrete trace agreement is not a symbolic proof.";
+         "Concrete agreement is not a symbolic proof. "
+         "supported-scope-equivalent is not whole-program equivalence.";
 }
 
 namespace {
@@ -61,6 +64,7 @@ const char *verdict_name(Verdict verdict) {
   case Verdict::Counterexample: return "COUNTEREXAMPLE";
   case Verdict::Unknown: return "UNKNOWN";
   case Verdict::Unsupported: return "UNSUPPORTED";
+  case Verdict::Excluded: return "EXCLUDED";
   }
   return "UNSUPPORTED";
 }
@@ -668,22 +672,10 @@ std::optional<smt::expr> lower(const RNode &node) {
 Verdict prove(const smt::expr &alive, const std::optional<smt::expr> &rocq,
               const smt::expr &assume, std::string &model);
 
-Verdict definedness_of(const AliveCell &alive, CellTag rocq, const smt::expr &assume,
-                       std::string &model) {
-  if (rocq == CellTag::Pointer || alive.tag == CellTag::Pointer)
+Verdict prove_true(const smt::expr &cond, const smt::expr &assume, std::string &model) {
+  if (!cond.isValid() || !cond.isBool())
     return Verdict::Unsupported;
-  if (!alive.non_poison.isValid())
-    return Verdict::Unsupported;
-  if (rocq == CellTag::Undef || alive.tag == CellTag::Undef) {
-    std::string poison_model;
-    Verdict poison = prove(alive.non_poison, smt::expr(false), assume, poison_model);
-    if (poison == Verdict::Equivalent) {
-      model = poison_model;
-      return Verdict::Counterexample;
-    }
-    return Verdict::Unsupported;
-  }
-  return prove(alive.non_poison, smt::expr(true), assume, model);
+  return prove(cond, smt::expr(true), assume, model);
 }
 
 smt::expr input_assume(const std::vector<std::pair<uint8_t, std::string>> &inputs) {
@@ -760,13 +752,18 @@ Verdict verdict_phi(const AlivePhi &phi, const RNode &post, const smt::expr &ass
   Verdict verdict = prove(phi.incoming.value, lower(hit->value), under, model);
   if (verdict != Verdict::Equivalent)
     return verdict;
-  if (!phi.incoming.non_poison.isValid())
-    return Verdict::Unsupported;
+  std::string domain_model;
+  Verdict domain = prove_true(phi.incoming.domain, under, domain_model);
+  if (domain != Verdict::Equivalent) {
+    if (model.empty())
+      model = std::move(domain_model);
+    return domain;
+  }
   std::string poison_model;
-  Verdict poison = prove(phi.incoming.non_poison, smt::expr(true), under, poison_model);
+  Verdict poison = prove_true(phi.incoming.non_poison, under, poison_model);
   if (poison != Verdict::Equivalent) {
     if (model.empty())
-      model = poison_model;
+      model = std::move(poison_model);
     return poison;
   }
   return Verdict::Equivalent;
@@ -795,46 +792,58 @@ CheckedCell check_cell(const AliveCell &alive, const RReg &rocq, const smt::expr
   cell.alive = alive.structure;
   cell.rocq = rocq.node;
   cell.smt = show_expr(alive.value);
-  std::string defined_model;
-  cell.definedness = definedness_of(alive, rocq.tag, assume, defined_model);
-  if (!defined_model.empty())
-    cell.model = defined_model;
-  if (force_unsupported || alive.tag == CellTag::Pointer || rocq.tag == CellTag::Pointer) {
-    cell.value = Verdict::Unsupported;
+  auto set_all = [&](Verdict verdict) {
+    cell.definedness = verdict;
+    cell.poison = verdict;
+    cell.value = verdict;
+  };
+  if (alive.tag == CellTag::Pointer || rocq.tag == CellTag::Pointer) {
+    set_all(Verdict::Unsupported);
+    return cell;
+  }
+  if (alive.tag == CellTag::Undef && rocq.tag == CellTag::Undef) {
+    set_all(Verdict::Excluded);
     return cell;
   }
   if (alive.tag == CellTag::Undef || rocq.tag == CellTag::Undef) {
-    cell.value = Verdict::Unsupported;
+    set_all(Verdict::Counterexample);
     return cell;
   }
-  if (alive.missing || alive.structure.partial) {
-    cell.value = Verdict::Unsupported;
+  if (force_unsupported) {
+    set_all(Verdict::Unsupported);
     return cell;
   }
-  auto lowered = lower(rocq.node);
-  cell.value = prove(alive.value, lowered, assume, cell.model);
-  if (cell.value != Verdict::Equivalent)
-    return cell;
-  if (!alive.non_poison.isValid()) {
-    cell.value = Verdict::Unsupported;
-    return cell;
-  }
+  std::string defined_model;
+  cell.definedness = prove_true(alive.domain, assume, defined_model);
   std::string poison_model;
-  Verdict poison = prove(alive.non_poison, smt::expr(true), assume, poison_model);
-  if (poison != Verdict::Equivalent) {
-    cell.value = poison;
-    if (cell.model.empty())
-      cell.model = poison_model;
-  }
+  cell.poison = prove_true(alive.non_poison, assume, poison_model);
+  std::string value_model;
+  if (alive.missing || alive.structure.partial)
+    cell.value = Verdict::Unsupported;
+  else
+    cell.value = prove(alive.value, lower(rocq.node), assume, value_model);
+  if (cell.definedness == Verdict::Counterexample)
+    cell.model = std::move(defined_model);
+  else if (cell.value == Verdict::Counterexample)
+    cell.model = std::move(value_model);
+  else if (cell.poison == Verdict::Counterexample)
+    cell.model = std::move(poison_model);
   return cell;
 }
 
+std::string scope_of(const CheckedProgram &program);
+
 CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBug bug,
                       const std::vector<uint8_t> &code,
-                      std::vector<std::pair<uint8_t, std::string>> inputs) {
+                      std::vector<std::pair<uint8_t, std::string>> inputs,
+                      const std::vector<std::pair<std::string, smt::expr>> &extra = {}) {
   static smt::smt_initializer smt;
   (void)smt;
   CheckedProgram program;
+  auto done = [&]() {
+    program.scope = scope_of(program);
+    return program;
+  };
   program.label = label;
   program.bytes = bytes;
   program.bug = bug == LiftBug::DivZeroAsUb ? "div-zero-as-ub" : "none";
@@ -844,7 +853,7 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
   } catch (const std::exception &ex) {
     program.gate = "ill-formed";
     program.gate_reason = ex.what();
-    return program;
+    return done();
   }
   Gate decision;
   try {
@@ -852,22 +861,22 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
   } catch (const std::exception &ex) {
     program.gate = "ill-formed";
     program.gate_reason = ex.what();
-    return program;
+    return done();
   }
   if (decision.kind != GateKind::Ready) {
     program.gate = decision.kind == GateKind::Reject ? "reject" : "ill-formed";
     program.gate_pc = decision.pc;
     program.gate_reason = decision.reason;
-    return program;
+    return done();
   }
-  auto alive = observe_ebpf(code, inputs, bug);
+  auto alive = observe_ebpf(code, inputs, bug, decision.permit);
   program.loop = alive.loop;
   if (alive.loop) {
     CheckedPc pc;
     pc.reason = "back edge";
     pc.path = Verdict::Unsupported;
     program.pcs.push_back(pc);
-    return program;
+    return done();
   }
   bool loop = false;
   auto draft = project(insns, inputs, loop);
@@ -877,12 +886,16 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
     pc.reason = "back edge";
     pc.path = Verdict::Unsupported;
     program.pcs.push_back(pc);
-    return program;
+    return done();
   }
   auto assume = input_assume(inputs);
   for (auto [reg, name] : inputs) {
     (void)reg;
     program.assumptions.push_back(name + " is not undef and not poison");
+  }
+  for (const auto &item : extra) {
+    assume = assume && item.second;
+    program.assumptions.push_back(item.first);
   }
   program.assumption_smt = show_expr(assume);
   for (const auto &site : alive.pcs) {
@@ -1004,7 +1017,7 @@ CheckedProgram finish(const std::string &label, const std::string &bytes, LiftBu
     }
     program.pcs.push_back(std::move(pc));
   }
-  return program;
+  return done();
 }
 
 std::optional<uint64_t> eval_node(const RNode &node,
@@ -1243,11 +1256,13 @@ std::string compare_obs(const ConcreteCell &projection, const ConcreteCell &rocq
                          projection.kind == ConcreteCell::Kind::Unsupported;
   bool rocq_open = rocq.kind == ConcreteCell::Kind::Pointer ||
                    rocq.kind == ConcreteCell::Kind::Unsupported;
-  if (projection_open || rocq_open)
+  if (projection_open || rocq_open) {
+    fail = true;
     return "UNSUPPORTED";
+  }
   if (projection.kind == ConcreteCell::Kind::Undef || rocq.kind == ConcreteCell::Kind::Undef) {
     if (projection.kind == rocq.kind)
-      return "agree";
+      return "excluded";
     fail = true;
     return "mismatch";
   }
@@ -1488,7 +1503,8 @@ void write_rocq_node(std::ostringstream &out, const RNode &node) {
 void write_cell(std::ostringstream &out, int reg, const CheckedCell &cell) {
   out << "{\"reg\":" << reg << ",\"alive_tag\":\"" << tag_name(cell.alive_tag)
       << "\",\"rocq_tag\":\"" << tag_name(cell.rocq_tag) << "\",\"definedness\":\""
-      << verdict_name(cell.definedness) << "\",\"value\":\"" << verdict_name(cell.value)
+      << verdict_name(cell.definedness) << "\",\"poison\":\"" << verdict_name(cell.poison)
+      << "\",\"value\":\"" << verdict_name(cell.value)
       << "\",\"model\":\"" << json_escape(cell.model) << "\",\"smt\":\""
       << json_escape(cell.smt) << "\",\"alive\":";
   write_alive_node(out, cell.alive);
@@ -1535,41 +1551,52 @@ std::vector<std::pair<uint8_t, std::string>> names_of(const Fixture &fixture) {
   return names;
 }
 
-bool cell_bits_ok(const CheckedCell &cell) {
-  if (cell.alive_tag == CellTag::Pointer || cell.rocq_tag == CellTag::Pointer)
-    return cell.value == Verdict::Unsupported && cell.definedness == Verdict::Unsupported;
-  if (cell.alive_tag == CellTag::Undef || cell.rocq_tag == CellTag::Undef) {
-    if (cell.alive_tag != cell.rocq_tag)
-      return false;
-    return cell.value == Verdict::Unsupported && cell.definedness == Verdict::Unsupported;
-  }
-  return cell.value == Verdict::Equivalent && cell.definedness == Verdict::Equivalent;
+bool cell_closed(const CheckedCell &cell) {
+  return cell.value == Verdict::Excluded && cell.definedness == Verdict::Excluded &&
+         cell.poison == Verdict::Excluded;
 }
 
-bool program_equivalent(const CheckedProgram &program) {
-  if (program.loop || program.pcs.empty())
-    return false;
+std::string scope_of(const CheckedProgram &program) {
+  if (program.gate != "ready" || program.loop || program.pcs.empty())
+    return "unsupported";
+  bool counterexample = false;
+  bool unknown = false;
+  bool unsupported = false;
+  auto note = [&](Verdict verdict) {
+    if (verdict == Verdict::Equivalent || verdict == Verdict::Excluded)
+      return;
+    if (verdict == Verdict::Counterexample)
+      counterexample = true;
+    else if (verdict == Verdict::Unknown)
+      unknown = true;
+    else
+      unsupported = true;
+  };
   for (const auto &pc : program.pcs) {
-    if (pc.path != Verdict::Equivalent)
-      return false;
-    for (const auto &cell : pc.pre) {
-      if (!cell_bits_ok(cell))
-        return false;
-    }
-    for (const auto &cell : pc.post) {
-      if (!cell_bits_ok(cell))
-        return false;
-    }
-    for (const auto &edge : pc.edges) {
-      if (edge.verdict != Verdict::Equivalent)
-        return false;
-    }
-    for (const auto &phi : pc.phis) {
-      if (phi.verdict != Verdict::Equivalent)
-        return false;
-    }
+    note(pc.path);
+    auto cells = [&](const std::vector<CheckedCell> &rows) {
+      for (const auto &cell : rows) {
+        if (cell_closed(cell))
+          continue;
+        note(cell.value);
+        note(cell.definedness);
+        note(cell.poison);
+      }
+    };
+    cells(pc.pre);
+    cells(pc.post);
+    for (const auto &edge : pc.edges)
+      note(edge.verdict);
+    for (const auto &phi : pc.phis)
+      note(phi.verdict);
   }
-  return true;
+  if (counterexample)
+    return "counterexample";
+  if (unknown)
+    return "unknown";
+  if (unsupported)
+    return "unsupported";
+  return "supported-scope-equivalent";
 }
 
 const CheckedPc *pc_with_insn(const CheckedProgram &program, const char *token) {
@@ -1628,7 +1655,7 @@ std::string exhibit_json(const ExhibitDoc &doc) {
       out << ',';
     out << "{\"label\":\"" << json_escape(program.label) << "\",\"bytes\":\""
         << json_escape(program.bytes) << "\",\"bug\":\"" << json_escape(program.bug)
-        << "\",\"gate\":\"" << json_escape(program.gate) << "\",\"gate_pc\":" << program.gate_pc
+        << "\",\"scope\":\"" << json_escape(program.scope) << "\",\"gate\":\"" << json_escape(program.gate) << "\",\"gate_pc\":" << program.gate_pc
         << ",\"gate_reason\":\"" << json_escape(program.gate_reason) << "\",\"loop\":"
         << (program.loop ? "true" : "false") << ",\"assumptions\":[";
     for (size_t a = 0; a < program.assumptions.size(); ++a) {
@@ -1775,77 +1802,45 @@ int symbolic_check() {
     else if (program.bug == "div-zero-as-ub")
       mutation = &program;
   }
-  bool jgt_ok = jgt && program_equivalent(*jgt) && jgt->phi_swap_rejected &&
-                jgt->phi_drop_unsupported;
-  const CheckedPc *jgt_pc = jgt ? pc_with_insn(*jgt, "jgt") : nullptr;
-  if (!jgt_pc || jgt_pc->edges.size() != 2)
-    jgt_ok = false;
-  bool div_ok = div && program_equivalent(*div);
-  const CheckedPc *div_pc = div ? pc_with_insn(*div, "div") : nullptr;
-  if (!div_pc || div_pc->post.size() < 1 || div_pc->post[0].value != Verdict::Equivalent ||
-      div_pc->phis.empty())
-    div_ok = false;
-  bool phi_zero = false;
-  if (div_pc) {
-    for (const auto &phi : div_pc->phis) {
-      if (phi.verdict == Verdict::Equivalent &&
-          (phi.alive.op == "const" && phi.alive.constant == "0"))
-        phi_zero = true;
+
+  auto listed = [](const CheckedProgram *program, const char *text) {
+    if (!program)
+      return false;
+    for (const auto &item : program->assumptions) {
+      if (item == text)
+        return true;
     }
-  }
-  if (!phi_zero)
-    div_ok = false;
-  bool mutation_ok = false;
-  std::string model;
-  std::string path;
-  std::string absent;
-  if (mutation) {
-    const CheckedPc *bad = pc_with_insn(*mutation, "div");
-    if (bad && !bad->post.empty() && bad->post[0].value == Verdict::Counterexample) {
-      mutation_ok = true;
-      model = bad->post[0].model;
-      path = bad->path_smt;
-      if (model.empty())
-        absent = bad->post[0].model.empty() ? "solver returned no model" : bad->post[0].model;
+    return false;
+  };
+  auto cross_named = [](const CheckedProgram *program,
+                        const char *label) -> const CrossCheck * {
+    if (!program)
+      return nullptr;
+    for (const auto &row : program->cross) {
+      if (row.label == label)
+        return &row;
     }
-  }
-  bool init_ok = false;
-  if (jgt) {
-    for (const auto &pc : jgt->pcs) {
-      if (pc.pre.empty())
-        continue;
-      const auto &cell = pc.pre[0];
-      if (cell.alive_tag == CellTag::Undef && cell.rocq_tag == CellTag::Undef &&
-          cell.definedness == Verdict::Unsupported && cell.value == Verdict::Unsupported &&
-          cell.smt != "0" && cell.alive.op == "var" && cell.alive.var.find("undef") == 0) {
-        init_ok = true;
-        break;
-      }
-    }
-  }
-  bool cross_ok = true;
-  for (const auto &program : doc.programs) {
-    if (program.bug != "none")
-      continue;
-    for (const auto &row : program.cross) {
-      if (!row.match)
-        cross_ok = false;
-    }
-  }
-  bool definedness_ok = false;
-  const char *definedness_shown = "missing";
-  if (mutation) {
-    const CheckedPc *bad = pc_with_insn(*mutation, "div");
-    if (bad && !bad->post.empty()) {
-      definedness_shown = verdict_name(bad->post[0].definedness);
-      definedness_ok = bad->post[0].definedness == Verdict::Counterexample &&
-                       bad->post[0].value == Verdict::Counterexample;
-    }
-  }
+    return nullptr;
+  };
+  auto bits_match = [](const CrossCheck *row, const char *hex) {
+    if (!row || !row->match || !row->error.empty())
+      return false;
+    if (row->projection != row->rocq || row->projection.empty())
+      return false;
+    return !hex || row->projection == hex;
+  };
+  auto post_r0 = [](const CheckedProgram *program, const char *insn) -> const CheckedCell * {
+    const CheckedPc *pc = program ? pc_with_insn(*program, insn) : nullptr;
+    if (!pc || pc->post.empty())
+      return nullptr;
+    return &pc->post[0];
+  };
   bool undef_agree = false;
   for (const auto &program : doc.programs) {
     for (const auto &row : program.cross) {
       for (const auto &step : row.steps) {
+        if (step.ret_projection == "undef" && step.ret_verdict == "agree")
+          undef_agree = true;
         auto scan = [&](const std::vector<CrossObs> &cells) {
           for (const auto &obs : cells) {
             if (obs.projection == "undef" && obs.verdict == "agree")
@@ -1857,84 +1852,183 @@ int symbolic_check() {
       }
     }
   }
-  std::vector<uint8_t> r10_bytes = {0xbf, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                    0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  AliveProgram bypass = observe_ebpf(r10_bytes, {}, LiftBug::None);
-  bool observe_open = !bypass.pcs.empty();
-  std::cout << "JGT bitvector " << (jgt_ok ? "EQUIVALENT" : "FAIL") << "\n";
-  if (jgt_ok)
-    std::cout << "JGT undef value UNSUPPORTED\n";
-  std::cout << "DIV bitvector " << (div_ok ? "EQUIVALENT" : "FAIL") << "\n";
-  if (div_ok)
-    std::cout << "DIV undef value UNSUPPORTED\n";
-  std::cout << "mutation " << (mutation_ok ? "COUNTEREXAMPLE" : "FAIL") << "\n";
-  if (mutation_ok) {
-    std::cout << "mutation path " << path << "\n";
-    if (!model.empty())
-      std::cout << "mutation model\n" << model << "\n";
-    else
-      std::cout << "mutation model absent: " << absent << "\n";
+
+  const CheckedPc *jgt_pc = jgt ? pc_with_insn(*jgt, "jgt") : nullptr;
+  bool edges_ok = jgt_pc && jgt_pc->edges.size() == 2;
+  if (jgt_pc) {
+    for (const auto &edge : jgt_pc->edges) {
+      if (edge.verdict != Verdict::Equivalent)
+        edges_ok = false;
+    }
   }
-  std::cout << "unseeded r0 " << (init_ok ? "undef" : "FAIL") << "\n";
-  std::cout << "mutation definedness " << definedness_shown << "\n";
+  bool jgt_cross = bits_match(cross_named(jgt, "jgt64-11"), nullptr) &&
+                   bits_match(cross_named(jgt, "jgt64-10"), nullptr);
+  bool jgt_ready = false;
+  bool unused_undef = false;
+  if (jgt) {
+    auto again = analyze_bytes(bytes_of(jgt->bytes.c_str()), {{1, "r1"}}, {}, LiftBug::None,
+                               "jgt-r1");
+    jgt_ready = again.gate == "ready" && !again.pcs.empty();
+    for (const auto &pc : again.pcs) {
+      for (const auto &cell : pc.pre) {
+        if (cell.alive_tag == CellTag::Undef && cell.rocq_tag == CellTag::Undef &&
+            cell.value == Verdict::Excluded)
+          unused_undef = true;
+      }
+    }
+  }
+  bool jgt_line = jgt && jgt->scope == "supported-scope-equivalent" && jgt->phi_swap_rejected &&
+                  jgt->phi_drop_unsupported && edges_ok && jgt_cross && jgt_ready &&
+                  unused_undef && !undef_agree;
+
+  const CheckedCell *div_r0 = post_r0(div, "div");
+  bool div_cell = div_r0 && div_r0->value == Verdict::Equivalent &&
+                  div_r0->definedness == Verdict::Equivalent &&
+                  div_r0->poison == Verdict::Equivalent;
+  bool div_cross = bits_match(cross_named(div, "div64-7-2"), "0000000000000003") &&
+                   bits_match(cross_named(div, "div64-7-0"), "0000000000000000");
+  bool div_line = div && div->scope == "supported-scope-equivalent" && div_cell && div_cross;
+
+  const CheckedCell *mut_r0 = post_r0(mutation, "div");
+  bool mut_defined =
+      mut_r0 && mut_r0->definedness == Verdict::Counterexample &&
+      mut_r0->model.find("r2 -> #x0000000000000000") != std::string::npos;
+  bool mut_poison = mut_r0 && mut_r0->poison == Verdict::Equivalent;
+  bool mut_scope = mutation && mutation->scope == "counterexample" &&
+                   !listed(mutation, "r2 != 0");
+
+  CheckedProgram nonzero;
+  bool nonzero_line = false;
+  if (mutation) {
+    std::vector<std::pair<uint8_t, std::string>> inputs = {{1, "r1"}, {2, "r2"}};
+    auto code = bytes_of(mutation->bytes.c_str());
+    nonzero = finish("mutation-nonzero", mutation->bytes, LiftBug::DivZeroAsUb, code, inputs,
+                     {{"r2 != 0", smt::expr::mkVar("r2", 64) != 0}});
+    const CheckedCell *nz = post_r0(&nonzero, "div");
+    nonzero_line = listed(&nonzero, "r2 != 0") && nz && nz->value == Verdict::Equivalent &&
+                   nz->definedness == Verdict::Equivalent;
+  }
+
+  auto r10_code = bytes_of("bfa00000000000009500000000000000");
+  auto r10 = analyze_bytes(r10_code, {}, {}, LiftBug::None, "r10");
+  bool r10_line = r10.gate == "reject" && r10.gate_pc == 0 && r10.gate_reason == "r10 read" &&
+                  r10.pcs.empty();
+  auto uninit = analyze_bytes(bytes_of("bf300000000000009500000000000000"), {}, {}, LiftBug::None,
+                              "uninit");
+  bool uninit_line = uninit.gate == "reject" && uninit.pcs.empty() &&
+                     uninit.gate_reason == "r3 read before define";
+
+  bool r0_line = false;
+  if (jgt) {
+    for (const auto &pc : jgt->pcs) {
+      if (pc.pre.empty())
+        continue;
+      const auto &cell = pc.pre[0];
+      if (cell.alive_tag == CellTag::Undef && cell.rocq_tag == CellTag::Undef &&
+          cell.value == Verdict::Excluded && cell.definedness == Verdict::Excluded &&
+          cell.poison == Verdict::Excluded && cell.smt != "0" && cell.alive.op == "var" &&
+          cell.alive.var.find("undef") == 0) {
+        r0_line = true;
+        break;
+      }
+    }
+  }
+
+  AliveProgram closed = observe_ebpf(r10_code, {}, LiftBug::None, ObservePermit{});
+  bool observe_line = closed.pcs.empty();
+
+  if (jgt_line)
+    std::cout << "JGT supported scope EQUIVALENT\n";
+  if (div_line)
+    std::cout << "DIV supported scope EQUIVALENT\n";
+  if (mut_defined && mut_scope)
+    std::cout << "mutation definedness COUNTEREXAMPLE\n";
+  if (mut_poison)
+    std::cout << "mutation poison EQUIVALENT\n";
+  if (nonzero_line)
+    std::cout << "mutation nonzero EQUIVALENT\n";
+  if (r0_line)
+    std::cout << "unseeded r0 excluded\n";
+  if (r10_line)
+    std::cout << "gate reject r10\n";
+  if (uninit_line)
+    std::cout << "gate reject uninit\n";
+  if (observe_line)
+    std::cout << "observe closed\n";
+
+  if (jgt_line && div_line && mut_defined && mut_poison && mut_scope && nonzero_line && r0_line &&
+      r10_line && uninit_line && observe_line && !undef_agree)
+    return 0;
+
+  std::cerr << "scope jgt " << (jgt ? jgt->scope : "missing") << " div "
+            << (div ? div->scope : "missing") << " mutation "
+            << (mutation ? mutation->scope : "missing") << "\n";
+  if (!edges_ok)
+    std::cerr << "jgt edges\n";
+  if (jgt && !jgt->phi_swap_rejected)
+    std::cerr << "phi swap still matched\n";
+  if (jgt && !jgt->phi_drop_unsupported)
+    std::cerr << "phi drop was not unsupported\n";
+  if (!jgt_cross || !div_cross)
+    std::cerr << "cross mismatch\n";
+  if (!jgt_ready || !unused_undef)
+    std::cerr << "jgt ready " << jgt_ready << " unused " << unused_undef << "\n";
   if (undef_agree)
-    std::cout << "undef reported agree\n";
-  if (observe_open)
-    std::cout << "observe bypass " << bypass.pcs.size() << "\n";
-  if (!cross_ok) {
-    for (const auto &program : doc.programs) {
-      for (const auto &row : program.cross) {
-        if (!row.match)
-          std::cout << "projection bug " << row.label << " projection " << row.projection
-                    << " rocq " << row.rocq << " " << row.error << "\n";
+    std::cerr << "undef reported agree\n";
+  if (div_r0)
+    std::cerr << "div r0 value " << verdict_name(div_r0->value) << " definedness "
+              << verdict_name(div_r0->definedness) << " poison " << verdict_name(div_r0->poison)
+              << "\n";
+  if (mut_r0) {
+    std::cerr << "mutation definedness " << verdict_name(mut_r0->definedness) << " poison "
+              << verdict_name(mut_r0->poison) << " value " << verdict_name(mut_r0->value) << "\n";
+    if (!mut_r0->model.empty())
+      std::cerr << mut_r0->model << "\n";
+  }
+  if (!nonzero_line) {
+    const CheckedCell *nz = post_r0(&nonzero, "div");
+    std::cerr << "nonzero gate " << nonzero.gate << " " << nonzero.gate_reason << "\n";
+    for (const auto &item : nonzero.assumptions)
+      std::cerr << "nonzero assumption " << item << "\n";
+    if (nz)
+      std::cerr << "nonzero value " << verdict_name(nz->value) << " definedness "
+                << verdict_name(nz->definedness) << "\n";
+  }
+  if (!r10_line)
+    std::cerr << "r10 " << r10.gate << " pc " << r10.gate_pc << " " << r10.gate_reason << " pcs "
+              << r10.pcs.size() << "\n";
+  if (!uninit_line)
+    std::cerr << "uninit " << uninit.gate << " pc " << uninit.gate_pc << " " << uninit.gate_reason
+              << " pcs " << uninit.pcs.size() << "\n";
+  if (!observe_line)
+    std::cerr << "observe bypass " << closed.pcs.size() << "\n";
+  auto dump = [](const CheckedProgram *program) {
+    if (!program)
+      return;
+    for (const auto &pc : program->pcs) {
+      for (const auto &phi : pc.phis) {
+        if (phi.verdict == Verdict::Equivalent)
+          continue;
+        std::cerr << program->label << " phi r" << phi.reg << " " << phi.pred << " "
+                  << verdict_name(phi.verdict) << "\n";
+        if (!phi.model.empty())
+          std::cerr << phi.model << "\n";
+      }
+      for (size_t reg = 0; reg < pc.post.size(); ++reg) {
+        const auto &cell = pc.post[reg];
+        if (cell.value == Verdict::Equivalent && cell.definedness == Verdict::Equivalent &&
+            cell.poison == Verdict::Equivalent)
+          continue;
+        if (cell.value == Verdict::Excluded && cell.definedness == Verdict::Excluded &&
+            cell.poison == Verdict::Excluded)
+          continue;
+        std::cerr << program->label << " post r" << reg << " " << verdict_name(cell.definedness)
+                  << " " << verdict_name(cell.poison) << " " << verdict_name(cell.value) << "\n";
       }
     }
-  }
-  if (!jgt_ok || !div_ok || !mutation_ok || !init_ok || !cross_ok || !definedness_ok ||
-      undef_agree || observe_open) {
-    if (jgt && !jgt->phi_swap_rejected)
-      std::cerr << "phi swap still matched\n";
-    if (jgt && !jgt->phi_drop_unsupported)
-      std::cerr << "phi drop was not unsupported\n";
-    for (const auto &program : doc.programs) {
-      std::cerr << program.label << "\n";
-      for (const auto &pc : program.pcs) {
-        std::cerr << " pc " << pc.pc << " " << pc.insn << " path " << verdict_name(pc.path)
-                  << " " << pc.reason << "\n";
-        if (pc.path != Verdict::Equivalent && !pc.path_model.empty())
-          std::cerr << "  path model " << pc.path_model << "\n";
-        for (size_t reg = 0; reg < pc.post.size(); ++reg) {
-          const auto &cell = pc.post[reg];
-          if (cell.value == Verdict::Equivalent && cell.definedness == Verdict::Equivalent)
-            continue;
-          std::cerr << "  post r" << reg << " tag " << tag_name(cell.alive_tag) << "/"
-                    << tag_name(cell.rocq_tag) << " definedness "
-                    << verdict_name(cell.definedness) << " value " << verdict_name(cell.value)
-                    << "\n";
-          if (!cell.model.empty())
-            std::cerr << "  model " << cell.model << "\n";
-          if (!cell.smt.empty())
-            std::cerr << "  smt " << cell.smt << "\n";
-        }
-        for (const auto &edge : pc.edges) {
-          if (edge.verdict == Verdict::Equivalent)
-            continue;
-          std::cerr << "  edge " << edge.block << " -> " << edge.target_pc << " "
-                    << verdict_name(edge.verdict) << "\n";
-          if (!edge.smt.empty())
-            std::cerr << "  edge smt " << edge.smt << "\n";
-          if (!edge.model.empty())
-            std::cerr << "  edge model " << edge.model << "\n";
-        }
-        for (const auto &phi : pc.phis) {
-          if (phi.verdict == Verdict::Equivalent)
-            continue;
-          std::cerr << "  phi r" << phi.reg << " " << phi.pred << " "
-                    << verdict_name(phi.verdict) << "\n";
-        }
-      }
-    }
-    return 1;
-  }
-  return 0;
+  };
+  dump(jgt);
+  dump(div);
+  dump(mutation);
+  return 1;
 }
