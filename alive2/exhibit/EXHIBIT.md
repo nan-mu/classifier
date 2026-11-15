@@ -1,779 +1,932 @@
 # Exhibit
 
+The Rocq side is a projection of the vendored instruction rules. It is not native Rocq symbolic execution. EQUIVALENT means the inequality is unsat under the assumption that each named input is not undef and not poison.
+
 Run `alive2/exhibit/regen.sh` from the repository root.
 
-## Why the link line stays
-
-ebpf-concrete does not call smt:: or Z3. It still links libir, libsmt, libtools, libutil, and libz3 because alive2_link is shared with ebpf_test. ebpf_lift.cpp builds IR instructions whose methods live in instr.cpp. instr.cpp references IR::State. state.cpp calls smt::Solver. smt::expr is a Z3 AST. Dropping libsmt or Z3 leaves those symbols undefined. A second helper that still links those libraries does not remove them.
-
-## Missing from the Alive2 step
-
-These fields are not in the result of `execute_ebpf`. The list is not filled in.
-
-- pc-indexed symbolic pre-state and post-state for r0-r10
-- the compare as its own smt::expr
-- the path condition at that pc (getPath dies with IR::State)
-- per-instruction symbolic UB
-- memory before and after as expressions
-- phi operands as data
+Each SMT cell is EQUIVALENT, COUNTEREXAMPLE, UNKNOWN, or UNSUPPORTED. UNKNOWN and UNSUPPORTED are not passes.
 
 ## JGT64
 
-Bytes from fixture `jgt64-11`, the same bytes as `jgt64-10`.
+Bytes `bf10000000000000250002000a0000001700000001000000050001000000000007000000010000009500000000000000`.
 
-`bf10000000000000250002000a0000001700000001000000050001000000000007000000010000009500000000000000`
+Bug flag is none.
 
-### JGT64 execute_ebpf
+### pc 0 alu64 mov r0, r1
 
-Decoded instructions.
+Rules `exec_alu`, `eval_alu64`, `nextinstr`.
 
-```
-0: alu64 mov r0, r1
-1: jmp jgt r0, 10, 2
-2: alu64 sub r0, 1
-3: jmp ja 1
-4: alu64 add r0, 1
-5: jmp exit
-```
+Symbolic path condition is EQUIVALENT.
 
-Alive2 block cfg from `execute_ebpf`.
+Alive2 path is `const 1`.
 
-```
-b0 -> b2 or b1
-b1 -> b3
-b2 -> b3
-b3 exit
-```
+Rocq projection path is `true [nextinstr]`.
 
-Alive2 IR from `execute_ebpf`.
+Alive2 smt path is `true`.
 
-```
-define i64 @ebpf(i64 r1) memory(none) {
-entry:
-  br label %b0
+Pre-state.
 
-b0:
-  %0 = icmp ugt i64 r1, 10
-  br i1 %0, label %b2, label %b1
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-b2:
-  %2 = add i64 r1, 1
-  br label %b3
+r0 Alive2 expression is `var undef!0`.
 
-b1:
-  %1 = sub i64 r1, 1
-  br label %b3
+r0 Rocq projection is `undef [create_initial_state]`.
 
-b3:
-  %b3_r0 = phi i64 [ %1, %b1 ], [ %2, %b2 ]
-  ret i64 %b3_r0
-}
-```
+r0 Alive2 smt is `undef!0`.
 
-`execute_ebpf` memory field.
+Post-state.
 
-```
-none
-```
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-`value` is the path-merged return, not the concrete r0 of either JGT input.
+r0 Alive2 expression is `var r1`.
 
-`defined` is function_domain.
+r0 Rocq projection is `var r1 [Vlong]`.
 
-<!-- smt-start -->
-```
-(and (= #b0 isundef_r1) np_r1)
-```
-<!-- smt-end -->
+r0 Alive2 smt is `r1`.
 
-`non_poison` is the Alive2 return non_poison expression.
+Successors.
 
-<!-- smt-start -->
-```
-true
-```
-<!-- smt-end -->
+This instruction has no successor edge.
 
-`returned` is the Alive2 return_domain expression.
+### pc 1 jmp jgt r0, 10, 2
 
-<!-- smt-start -->
-```
-(and (= #b0 isundef_r1) np_r1)
-```
-<!-- smt-end -->
+Rules `exec_jmpcmp`, `eval_cmp_static`, `eval_cmp64`, `nextinstr`.
 
-`value` is the path-merged return.
+Symbolic path condition is EQUIVALENT.
 
-<!-- smt-start -->
-```
-(ite (bvule #x000000000000000b r1)
+Alive2 path is `const 1`.
+
+Rocq projection path is `true [nextinstr]`.
+
+Alive2 smt path is `true`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var r1`.
+
+r0 Rocq projection is `var r1 [Vlong]`.
+
+r0 Alive2 smt is `r1`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var r1`.
+
+r0 Rocq projection is `var r1 [Vlong]`.
+
+r0 Alive2 smt is `r1`.
+
+Successors.
+
+Edge to pc 4 block `%b2` is EQUIVALENT.
+
+Alive2 jump condition is `and(bvule(const 11, var r1), and(=(const 0, var isundef_r1), var np_r1))`.
+
+Rocq projection condition is `ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])`.
+
+Alive2 smt condition is `(and (bvule #x000000000000000b r1) (= #b0 isundef_r1) np_r1)`.
+
+Edge to pc 2 block `%b1` is EQUIVALENT.
+
+Alive2 jump condition is `and(not(bvule(const 11, var r1)), and(=(const 0, var isundef_r1), var np_r1))`.
+
+Rocq projection condition is `not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64]))`.
+
+Alive2 smt condition is `(and (not (bvule #x000000000000000b r1)) (= #b0 isundef_r1) np_r1)`.
+
+### pc 2 alu64 sub r0, 1
+
+Rules `exec_alu`, `eval_alu64`, `nextinstr`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `not(bvule(const 11, var r1))`.
+
+Rocq projection path is `not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64]))`.
+
+Alive2 smt path is `(not (bvule #x000000000000000b r1))`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var r1`.
+
+r0 Rocq projection is `var r1 [Vlong]`.
+
+r0 Alive2 smt is `r1`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `add(var r1, const 18446744073709551615)`.
+
+r0 Rocq projection is `sub [eval_alu64](var r1 [Vlong], const 1 [eval_alu64])`.
+
+r0 Alive2 smt is `(bvadd r1 #xffffffffffffffff)`.
+
+Successors.
+
+This instruction has no successor edge.
+
+### pc 3 jmp ja 1
+
+Rules `exec_jmp64`, `nextinstr`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `not(bvule(const 11, var r1))`.
+
+Rocq projection path is `not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64]))`.
+
+Alive2 smt path is `(not (bvule #x000000000000000b r1))`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `add(var r1, const 18446744073709551615)`.
+
+r0 Rocq projection is `sub [eval_alu64](var r1 [Vlong], const 1 [eval_alu64])`.
+
+r0 Alive2 smt is `(bvadd r1 #xffffffffffffffff)`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `add(var r1, const 18446744073709551615)`.
+
+r0 Rocq projection is `sub [eval_alu64](var r1 [Vlong], const 1 [eval_alu64])`.
+
+r0 Alive2 smt is `(bvadd r1 #xffffffffffffffff)`.
+
+Successors.
+
+Edge to pc 5 block `%b3` is EQUIVALENT.
+
+Alive2 jump condition is `and(not(bvule(const 11, var r1)), and(=(const 0, var isundef_r1), var np_r1))`.
+
+Rocq projection condition is `not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64]))`.
+
+Alive2 smt condition is `(and (not (bvule #x000000000000000b r1)) (= #b0 isundef_r1) np_r1)`.
+
+### pc 4 alu64 add r0, 1
+
+Rules `exec_alu`, `eval_alu64`, `nextinstr`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `bvule(const 11, var r1)`.
+
+Rocq projection path is `ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])`.
+
+Alive2 smt path is `(bvule #x000000000000000b r1)`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var r1`.
+
+r0 Rocq projection is `var r1 [Vlong]`.
+
+r0 Alive2 smt is `r1`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `add(const 1, var r1)`.
+
+r0 Rocq projection is `add [eval_alu64](var r1 [Vlong], const 1 [eval_alu64])`.
+
+r0 Alive2 smt is `(bvadd #x0000000000000001 r1)`.
+
+Successors.
+
+Edge to pc 5 block `%b3` is EQUIVALENT.
+
+Alive2 jump condition is `and(bvule(const 11, var r1), and(=(const 0, var isundef_r1), var np_r1))`.
+
+Rocq projection condition is `ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])`.
+
+Alive2 smt condition is `(and (bvule #x000000000000000b r1) (= #b0 isundef_r1) np_r1)`.
+
+### pc 5 jmp exit
+
+Rules `exec_ret`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `const 1`.
+
+Rocq projection path is `or [exec_jmpcmp](not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])), ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64]))`.
+
+Alive2 smt path is `true`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `ite(bvule(const 11, var r1), add(const 1, var r1), add(var r1, const 18446744073709551615))`.
+
+r0 Rocq projection is `ite [exec_jmpcmp](not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])), sub [eval_alu64](var r1 [Vlong], const 1 [eval_alu64]), add [eval_alu64](var r1 [Vlong], const 1 [eval_alu64]))`.
+
+r0 Alive2 smt is `(ite (bvule #x000000000000000b r1)
      (bvadd #x0000000000000001 r1)
-     (bvadd r1 #xffffffffffffffff))
-```
-<!-- smt-end -->
+     (bvadd r1 #xffffffffffffffff))`.
 
-### Graph
+Post-state.
 
-Edges come from the gate. A trace may label an edge. It does not add or drop one.
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-```mermaid
-flowchart TD
-  pc0["pc 0 alu64 mov r0, r1"]
-  pc1["pc 1 jmp jgt r0, 10, 2"]
-  pc2["pc 2 alu64 sub r0, 1"]
-  pc3["pc 3 jmp ja 1"]
-  pc4["pc 4 alu64 add r0, 1"]
-  pc5["pc 5 jmp exit"]
-  exit["exit"]
-  pc0 -->|"alu64 mov r0, r1 jgt64-11 r0 0000000000000000 to 000000000000000b jgt64-10 r0 0000000000000000 to 000000000000000a"| pc1
-  pc1 -->|"jmp jgt r0, 10, 2 jgt64-11"| pc4
-  pc1 -->|"not jmp jgt r0, 10, 2 jgt64-10"| pc2
-  pc2 -->|"alu64 sub r0, 1 jgt64-10 r0 000000000000000a to 0000000000000009"| pc3
-  pc3 -->|"ja jgt64-10"| pc5
-  pc4 -->|"alu64 add r0, 1 jgt64-11 r0 000000000000000b to 000000000000000c"| pc5
-  pc5 -->|"exit jgt64-11 jgt64-10"| exit
-```
+r0 Alive2 expression is `ite(bvule(const 11, var r1), add(const 1, var r1), add(var r1, const 18446744073709551615))`.
 
-### Rocq citations
+r0 Rocq projection is `ite [exec_jmpcmp](not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])), sub [eval_alu64](var r1 [Vlong], const 1 [eval_alu64]), add [eval_alu64](var r1 [Vlong], const 1 [eval_alu64]))`.
 
-Citation for pc0. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_alu`, `Definition eval_alu64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+r0 Alive2 smt is `(ite (bvule #x000000000000000b r1)
+     (bvadd #x0000000000000001 r1)
+     (bvadd r1 #xffffffffffffffff))`.
 
-Citation for pc1. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_jmpcmp`, `Definition eval_cmp_static`, `Definition eval_cmp64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Successors.
 
-`eval_cmp_static` is not the result for immediate 10. Its W64 GT Unsigned arm matches only the immediate -1. `exec_jmpcmp` tries `eval_cmp_static`, then `eval_cmp64` for W64.
+Edge to exit is EQUIVALENT.
 
-Citation for pc2. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_alu`, `Definition eval_alu64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Alive2 jump condition is `const 1`.
 
-Citation for pc3. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_jmp64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Rocq projection condition is `or [exec_jmpcmp](not [exec_jmpcmp](ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64])), ugt [eval_cmp64] (eval_cmp_static not applied)(var r1 [Vlong], const 10 [eval_cmp64]))`.
 
-Citation for pc4. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_alu`, `Definition eval_alu64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Alive2 smt condition is `true`.
 
-Citation for pc5. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_ret` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Phi inputs.
 
-### Concrete steps
+r0 from `%b1` is EQUIVALENT.
 
-The concrete step is the state at the end of the eBPF instruction, not the state of each IR block.
+Alive2 incoming expression is `add(var r1, const 18446744073709551615)`.
 
-### pc0 jgt64-11
+Rocq projection arm is `sub [eval_alu64](var r1 [Vlong], const 1 [eval_alu64])`.
 
-R_r(pc0, S, S') for jgt64-11.
+Alive2 smt incoming is `(bvadd r1 #xffffffffffffffff)`.
 
-S is r0=UNDEF r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
+r0 from `%b2` is EQUIVALENT.
 
-S' is r0=000000000000000b r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
+Alive2 incoming expression is `add(const 1, var r1)`.
 
-R_a(pc0, S, S') for jgt64-11.
+Rocq projection arm is `add [eval_alu64](var r1 [Vlong], const 1 [eval_alu64])`.
 
-S is r0=0000000000000000 r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
+Alive2 smt incoming is `(bvadd #x0000000000000001 r1)`.
 
-S' is r0=000000000000000b r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
+Concrete cross-check of the projection against rocq-step. This is not the SMT result.
 
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc0 to pc1.
-
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are bf10000000000000.
-
-### pc0 jgt64-10
-
-R_r(pc0, S, S') for jgt64-10.
-
-S is r0=UNDEF r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=000000000000000a r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc0, S, S') for jgt64-10.
-
-S is r0=0000000000000000 r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=000000000000000a r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc0 to pc1.
-
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are bf10000000000000.
-
-### pc1 jgt64-11
-
-R_r(pc1, S, S') for jgt64-11.
-
-S is r0=000000000000000b r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=000000000000000b r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc1, S, S') for jgt64-11.
-
-S is r0=000000000000000b r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=000000000000000b r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc1 to pc4.
-
-Memory effect is empty. That is the m returned by Next in `exec_jmpcmp`.
-
-Return value is none.
-
-Source bytes are 250002000a000000.
-
-### pc1 jgt64-10
-
-R_r(pc1, S, S') for jgt64-10.
-
-S is r0=000000000000000a r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=000000000000000a r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc1, S, S') for jgt64-10.
-
-S is r0=000000000000000a r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=000000000000000a r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc1 to pc2.
-
-Memory effect is empty. That is the m returned by Next in `exec_jmpcmp`.
-
-Return value is none.
-
-Source bytes are 250002000a000000.
-
-### pc2 jgt64-10
-
-R_r(pc2, S, S') for jgt64-10.
-
-S is r0=000000000000000a r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000009 r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc2, S, S') for jgt64-10.
-
-S is r0=000000000000000a r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=0000000000000009 r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc2 to pc3.
-
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are 1700000001000000.
-
-### pc3 jgt64-10
-
-R_r(pc3, S, S') for jgt64-10.
-
-S is r0=0000000000000009 r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000009 r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc3, S, S') for jgt64-10.
-
-S is r0=0000000000000009 r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=0000000000000009 r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc3 to pc5.
-
-Memory effect is empty. That is the m returned by Next in `exec_jmp64`.
-
-Return value is none.
-
-Source bytes are 0500010000000000.
-
-### pc4 jgt64-11
-
-R_r(pc4, S, S') for jgt64-11.
-
-S is r0=000000000000000b r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=000000000000000c r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc4, S, S') for jgt64-11.
-
-S is r0=000000000000000b r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=000000000000000c r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc4 to pc5.
-
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are 0700000001000000.
-
-### pc5 jgt64-11
-
-R_r(pc5, S, S') for jgt64-11.
-
-S is r0=000000000000000c r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=000000000000000c r1=000000000000000b r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc5, S, S') for jgt64-11.
-
-S is r0=000000000000000c r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=000000000000000c r1=000000000000000b r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is EXIT.
-
-PC update is pc5 to exit.
-
-Memory effect is empty. `exec_ret` on an empty call stack returns Next with PC set to Vnullptr and the same m. The return value is r0.
-
-Return value is 000000000000000c.
-
-Source bytes are 9500000000000000.
-
-### pc5 jgt64-10
-
-R_r(pc5, S, S') for jgt64-10.
-
-S is r0=0000000000000009 r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000009 r1=000000000000000a r2=UNDEF r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc5, S, S') for jgt64-10.
-
-S is r0=0000000000000009 r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=0000000000000009 r1=000000000000000a r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r2, r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is EXIT.
-
-PC update is pc5 to exit.
-
-Memory effect is empty. `exec_ret` on an empty call stack returns Next with PC set to Vnullptr and the same m. The return value is r0.
-
-Return value is 0000000000000009.
-
-Source bytes are 9500000000000000.
+| input | projection r0 | rocq-step r0 | match |
+| --- | --- | --- | --- |
+| jgt64-11 | 000000000000000c | 000000000000000c | yes |
+| jgt64-10 | 0000000000000009 | 0000000000000009 | yes |
 
 ## DIV64
 
-Bytes from fixture `div64-7-0`, the same bytes as `div64-7-0-div-zero-as-ub`.
+Bytes `bf100000000000003f200000000000009500000000000000`.
 
-`bf100000000000003f200000000000009500000000000000`
+Bug flag is none.
 
-### DIV64 guarded execute_ebpf
+### pc 0 alu64 mov r0, r1
 
-Decoded instructions.
+Rules `exec_alu`, `eval_alu64`, `nextinstr`.
 
-```
-0: alu64 mov r0, r1
-1: alu64 div r0, r2
-2: jmp exit
-```
+Symbolic path condition is EQUIVALENT.
 
-Alive2 block cfg from `execute_ebpf`.
+Alive2 path is `const 1`.
 
-```
-b0 exit
-```
+Rocq projection path is `true [nextinstr]`.
 
-Alive2 IR from `execute_ebpf`.
+Alive2 smt path is `true`.
 
-```
-define i64 @ebpf(i64 r1, i64 r2) memory(none) {
-entry:
-  br label %b0
+Pre-state.
 
-b0:
-  %0 = icmp eq i64 r2, 0
-  br i1 %0, label %1, label %2
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-1:
-  br label %3
+r0 Alive2 expression is `var undef!10`.
 
-2:
-  %4 = udiv i64 r1, r2
-  br label %3
+r0 Rocq projection is `undef [create_initial_state]`.
 
-3:
-  %5 = phi i64 [ 0, %1 ], [ %4, %2 ]
-  ret i64 %5
-}
-```
+r0 Alive2 smt is `undef!10`.
 
-`execute_ebpf` memory field.
+Post-state.
 
-```
-none
-```
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-`value` is the path-merged return, not the concrete r0 of this input.
+r0 Alive2 expression is `var r1`.
 
-`defined` is function_domain.
+r0 Rocq projection is `var r1 [Vlong]`.
 
-<!-- smt-start -->
-```
-(and (= isundef_r2 #b0) (= #b0 isundef_r1) np_r1 np_r2)
-```
-<!-- smt-end -->
+r0 Alive2 smt is `r1`.
 
-`non_poison` is the Alive2 return non_poison expression.
+Successors.
 
-<!-- smt-start -->
-```
-true
-```
-<!-- smt-end -->
+This instruction has no successor edge.
 
-`returned` is the Alive2 return_domain expression.
+### pc 1 alu64 div r0, r2
 
-<!-- smt-start -->
-```
-(and (= isundef_r2 #b0) (= #b0 isundef_r1) np_r1 np_r2)
-```
-<!-- smt-end -->
+Rules `exec_alu`, `eval_div_u64`, `nextinstr`.
 
-`value` is the path-merged return.
+Symbolic path condition is EQUIVALENT.
 
-<!-- smt-start -->
-```
-(ite (= #x0000000000000000 r2) #x0000000000000000 (bvudiv r1 r2))
-```
-<!-- smt-end -->
+Alive2 path is `const 1`.
 
-The guarded print has the zero icmp, the udiv block, and the merge phi. One eBPF div is several IR blocks. The concrete step is still the end of that eBPF instruction.
+Rocq projection path is `true [nextinstr]`.
 
-### DIV64 div-zero-as-ub execute_ebpf
+Alive2 smt path is `true`.
 
-Decoded instructions.
+Pre-state.
 
-```
-0: alu64 mov r0, r1
-1: alu64 div r0, r2
-2: jmp exit
-```
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-Alive2 block cfg from `execute_ebpf`.
+r0 Alive2 expression is `var r1`.
 
-```
-b0 exit
-```
+r0 Rocq projection is `var r1 [Vlong]`.
 
-Alive2 IR from `execute_ebpf`.
+r0 Alive2 smt is `r1`.
 
-```
-define i64 @ebpf(i64 r1, i64 r2) memory(none) {
-entry:
-  br label %b0
+Post-state.
 
-b0:
-  %0 = udiv i64 r1, r2
-  ret i64 %0
-}
-```
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-`execute_ebpf` memory field.
+r0 Alive2 expression is `ite(=(const 0, var r2), const 0, bvudiv(var r1, var r2))`.
 
-```
-none
-```
+r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], const 0 [eval_div_u64]), const 0 [eval_div_u64], udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong]))`.
 
-`value` is the path-merged return, not the concrete r0 of this input.
+r0 Alive2 smt is `(ite (= #x0000000000000000 r2) #x0000000000000000 (bvudiv r1 r2))`.
 
-`defined` is function_domain.
+Successors.
 
-<!-- smt-start -->
-```
-(and (= isundef_r2 #b0)
-     (= #b0 isundef_r1)
-     np_r1
-     np_r2
-     (not (= #x0000000000000000 r2)))
-```
-<!-- smt-end -->
+This instruction has no successor edge.
 
-`non_poison` is the Alive2 return non_poison expression.
+Phi inputs.
 
-<!-- smt-start -->
-```
-true
-```
-<!-- smt-end -->
+r0 from `%1` is EQUIVALENT.
 
-`returned` is the Alive2 return_domain expression.
+Alive2 incoming expression is `const 0`.
 
-<!-- smt-start -->
-```
-(and (= isundef_r2 #b0)
-     (= #b0 isundef_r1)
-     np_r1
-     np_r2
-     (not (= #x0000000000000000 r2)))
-```
-<!-- smt-end -->
+Rocq projection arm is `const 0 [eval_div_u64]`.
 
-`value` is the path-merged return.
+Alive2 smt incoming is `#x0000000000000000`.
 
-<!-- smt-start -->
-```
-(bvudiv r1 r2)
-```
-<!-- smt-end -->
+r0 from `%2` is EQUIVALENT.
 
-The mutation print has a raw udiv.
+Alive2 incoming expression is `bvudiv(var r1, var r2)`.
 
-### Graph
+Rocq projection arm is `udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong])`.
 
-Edges come from the gate. A trace may label an edge. It does not add or drop one.
+Alive2 smt incoming is `(bvudiv r1 r2)`.
 
-```mermaid
-flowchart TD
-  pc0["pc 0 alu64 mov r0, r1"]
-  pc1["pc 1 alu64 div r0, r2"]
-  pc2["pc 2 jmp exit"]
-  exit["exit"]
-  pc0 -->|"alu64 mov r0, r1 div64-7-0 r0 0000000000000000 to 0000000000000007"| pc1
-  pc1 -->|"alu64 div r0, r2 div64-7-0 r0 0000000000000007 to 0000000000000000"| pc2
-  pc2 -->|"exit div64-7-0"| exit
-```
+### pc 2 jmp exit
 
-div64-7-0-div-zero-as-ub stops at pc1. The static fall-through stays.
+Rules `exec_ret`.
 
-### Rocq citations
+Symbolic path condition is EQUIVALENT.
 
-Citation for pc0. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_alu`, `Definition eval_alu64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Alive2 path is `const 1`.
 
-Citation for pc1. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_alu`, `Definition eval_alu64`, `Definition eval_div_u64`, `Definition nextinstr` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Rocq projection path is `true [nextinstr]`.
 
-Citation for pc2. `Definition find_instr` in ebpfDecoder.v. `Definition exec_instr`, `Definition exec_ret` in ebpfBinSem.v. This note names the definitions. Rocq did not print this term.
+Alive2 smt path is `true`.
 
-### Concrete steps
+Pre-state.
 
-The concrete step is the state at the end of the eBPF instruction, not the state of each IR block.
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-### pc0 div64-7-0
+r0 Alive2 expression is `ite(=(const 0, var r2), const 0, bvudiv(var r1, var r2))`.
 
-R_r(pc0, S, S') for div64-7-0.
+r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], const 0 [eval_div_u64]), const 0 [eval_div_u64], udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong]))`.
 
-S is r0=UNDEF r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
+r0 Alive2 smt is `(ite (= #x0000000000000000 r2) #x0000000000000000 (bvudiv r1 r2))`.
 
-S' is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
+Post-state.
 
-R_a(pc0, S, S') for div64-7-0.
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
 
-S is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
+r0 Alive2 expression is `ite(=(const 0, var r2), const 0, bvudiv(var r1, var r2))`.
 
-S' is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
+r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], const 0 [eval_div_u64]), const 0 [eval_div_u64], udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong]))`.
 
-r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
+r0 Alive2 smt is `(ite (= #x0000000000000000 r2) #x0000000000000000 (bvudiv r1 r2))`.
 
-Status is NEXT.
+Successors.
 
-PC update is pc0 to pc1.
+Edge to exit is EQUIVALENT.
 
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
+Alive2 jump condition is `const 1`.
 
-Return value is none.
+Rocq projection condition is `true [nextinstr]`.
 
-Source bytes are bf10000000000000.
+Alive2 smt condition is `true`.
 
-### pc0 div64-7-0-div-zero-as-ub
+Phi inputs.
 
-R_r(pc0, S, S') for div64-7-0-div-zero-as-ub.
+r0 from `%1` is EQUIVALENT.
 
-S is r0=UNDEF r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
+Alive2 incoming expression is `const 0`.
 
-S' is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
+Rocq projection arm is `const 0 [eval_div_u64]`.
 
-R_a(pc0, S, S') for div64-7-0-div-zero-as-ub.
+Alive2 smt incoming is `#x0000000000000000`.
 
-S is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
+r0 from `%2` is EQUIVALENT.
 
-S' is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
+Alive2 incoming expression is `bvudiv(var r1, var r2)`.
 
-r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
+Rocq projection arm is `udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong])`.
 
-Status is NEXT.
+Alive2 smt incoming is `(bvudiv r1 r2)`.
 
-PC update is pc0 to pc1.
+Concrete cross-check of the projection against rocq-step. This is not the SMT result.
 
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are bf10000000000000.
-
-### pc1 div64-7-0
-
-R_r(pc1, S, S') for div64-7-0.
-
-S is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc1, S, S') for div64-7-0.
-
-S is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is NEXT.
-
-PC update is pc1 to pc2.
-
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are 3f20000000000000.
-
-### pc1 div64-7-0-div-zero-as-ub
-
-R_r(pc1, S, S') for div64-7-0-div-zero-as-ub.
-
-S is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc1, S, S') for div64-7-0-div-zero-as-ub.
-
-S is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=0000000000000007 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Rocq status is NEXT.
-
-Alive2 status is UB.
-
-Rocq PC update is pc1 to pc2.
-
-Alive2 PC update is pc1 to none.
-
-Memory effect is empty. That is the m returned by Next in `exec_alu`.
-
-Return value is none.
-
-Source bytes are 3f20000000000000.
-
-### pc2 div64-7-0
-
-R_r(pc2, S, S') for div64-7-0.
-
-S is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-R_a(pc2, S, S') for div64-7-0.
-
-S is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-S' is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=0000000000000000 r4=0000000000000000 r5=0000000000000000 r6=0000000000000000 r7=0000000000000000 r8=0000000000000000 r9=0000000000000000.
-
-r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Status is EXIT.
-
-PC update is pc2 to exit.
-
-Memory effect is empty. `exec_ret` on an empty call stack returns Next with PC set to Vnullptr and the same m. The return value is r0.
-
-Return value is 0000000000000000.
-
-Source bytes are 9500000000000000.
-
-### pc2 div64-7-0-div-zero-as-ub
-
-R_r(pc2, S, S') for div64-7-0-div-zero-as-ub.
-
-S is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-S' is r0=0000000000000000 r1=0000000000000007 r2=0000000000000000 r3=UNDEF r4=UNDEF r5=UNDEF r6=UNDEF r7=UNDEF r8=UNDEF r9=UNDEF.
-
-Alive2 did not record pc2 for div64-7-0-div-zero-as-ub.
-
-r3, r4, r5, r6, r7, r8, and r9 are UNDEF on the Rocq side. The comparator skips those cells because those registers were not read.
-
-Rocq status is EXIT.
-
-Rocq PC update is pc2 to exit.
-
-Memory effect is empty. `exec_ret` on an empty call stack returns Next with PC set to Vnullptr and the same m. The return value is r0.
-
-Rocq return value is 0000000000000000.
-
-Source bytes are 9500000000000000.
-
-## Comparison
-
-Concrete PASS is this input only. It is not a proof for all inputs.
-
-### JGT64 by instruction
-
-| pc | instruction | input | Rocq | Alive2 | Concrete PASS | Structural Match | Not Established |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | alu64 mov r0, r1 | jgt64-11 | NEXT to pc1, r0 UNDEF to 000000000000000b | NEXT to pc1, r0 0000000000000000 to 000000000000000b | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 0 | alu64 mov r0, r1 | jgt64-10 | NEXT to pc1, r0 UNDEF to 000000000000000a | NEXT to pc1, r0 0000000000000000 to 000000000000000a | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 1 | jmp jgt r0, 10, 2 | jgt64-11 | NEXT to pc4 | NEXT to pc4 | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 1 | jmp jgt r0, 10, 2 | jgt64-10 | NEXT to pc2 | NEXT to pc2 | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 2 | alu64 sub r0, 1 | jgt64-10 | NEXT to pc3, r0 000000000000000a to 0000000000000009 | NEXT to pc3, r0 000000000000000a to 0000000000000009 | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 3 | jmp ja 1 | jgt64-10 | NEXT to pc5 | NEXT to pc5 | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 4 | alu64 add r0, 1 | jgt64-11 | NEXT to pc5, r0 000000000000000b to 000000000000000c | NEXT to pc5, r0 000000000000000b to 000000000000000c | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 5 | jmp exit | jgt64-11 | EXIT to exit | EXIT to exit | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| 5 | jmp exit | jgt64-10 | EXIT to exit | EXIT to exit | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-
-### DIV64 by instruction
-
-| pc | instruction | input | Rocq | Alive2 | Concrete PASS | Structural Match | Not Established |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | alu64 mov r0, r1 | div64-7-0 | NEXT to pc1, r0 UNDEF to 0000000000000007 | NEXT to pc1, r0 0000000000000000 to 0000000000000007 | Yes. This input's traces agree. | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-| 0 | alu64 mov r0, r1 | div64-7-0-div-zero-as-ub | NEXT to pc1, r0 UNDEF to 0000000000000007 | NEXT to pc1, r0 0000000000000000 to 0000000000000007 | No. This input diverges at pc 1. | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-| 1 | alu64 div r0, r2 | div64-7-0 | NEXT to pc2, r0 0000000000000007 to 0000000000000000 | NEXT to pc2, r0 0000000000000007 to 0000000000000000 | Yes. This input's traces agree. | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-| 1 | alu64 div r0, r2 | div64-7-0-div-zero-as-ub | NEXT to pc2, r0 0000000000000007 to 0000000000000000 | UB to none | No. pc 1 status alive2=UB rocq=NEXT | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-| 2 | jmp exit | div64-7-0 | EXIT to exit | EXIT to exit | Yes. This input's traces agree. | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-| 2 | jmp exit | div64-7-0-div-zero-as-ub | EXIT to exit | not recorded | No. This input diverges at pc 1. | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-
-### By input
-
-| Input | Concrete PASS | Structural Match | Not Established |
+| input | projection r0 | rocq-step r0 | match |
 | --- | --- | --- | --- |
-| jgt64-11 | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| jgt64-10 | Yes. This input's traces agree. | pc1 has two successors. jgt64-11 and jgt64-10 mark different ones. | This input is not all inputs. See Missing from the Alive2 step. |
-| div64-7-0 | Yes. This input's traces agree. | The guarded IR has the zero icmp, the udiv block, and the merge phi. | This input is not all inputs. See Missing from the Alive2 step. |
-| div64-7-0-div-zero-as-ub | No. pc 1 status alive2=UB rocq=NEXT | pc 1 status alive2=UB rocq=NEXT | This input is not all inputs. See Missing from the Alive2 step. |
+| div64-7-2 | 0000000000000003 | 0000000000000003 | yes |
+| div64-7-0 | 0000000000000000 | 0000000000000000 | yes |
+
+## DIV64 div-zero-as-ub
+
+Bytes `bf100000000000003f200000000000009500000000000000`.
+
+Bug flag is div-zero-as-ub.
+
+### pc 0 alu64 mov r0, r1
+
+Rules `exec_alu`, `eval_alu64`, `nextinstr`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `const 1`.
+
+Rocq projection path is `true [nextinstr]`.
+
+Alive2 smt path is `true`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var undef!28`.
+
+r0 Rocq projection is `undef [create_initial_state]`.
+
+r0 Alive2 smt is `undef!28`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var r1`.
+
+r0 Rocq projection is `var r1 [Vlong]`.
+
+r0 Alive2 smt is `r1`.
+
+Successors.
+
+This instruction has no successor edge.
+
+### pc 1 alu64 div r0, r2
+
+Rules `exec_alu`, `eval_div_u64`, `nextinstr`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `const 1`.
+
+Rocq projection path is `true [nextinstr]`.
+
+Alive2 smt path is `true`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | input | input | EQUIVALENT | EQUIVALENT |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `var r1`.
+
+r0 Rocq projection is `var r1 [Vlong]`.
+
+r0 Alive2 smt is `r1`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | COUNTEREXAMPLE |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `bvudiv(var r1, var r2)`.
+
+r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], const 0 [eval_div_u64]), const 0 [eval_div_u64], udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong]))`.
+
+r0 Alive2 smt is `(bvudiv r1 r2)`.
+
+r0 model is `isundef_r1 -> #b0
+isundef_r2 -> #b0
+r1 -> #x0000000000400000
+np_r1 -> true
+np_r2 -> true
+r2 -> #x0000000000000000
+`.
+
+Successors.
+
+This instruction has no successor edge.
+
+### pc 2 jmp exit
+
+Rules `exec_ret`.
+
+Symbolic path condition is EQUIVALENT.
+
+Alive2 path is `const 1`.
+
+Rocq projection path is `true [nextinstr]`.
+
+Alive2 smt path is `true`.
+
+Pre-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | COUNTEREXAMPLE |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `bvudiv(var r1, var r2)`.
+
+r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], const 0 [eval_div_u64]), const 0 [eval_div_u64], udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong]))`.
+
+r0 Alive2 smt is `(bvudiv r1 r2)`.
+
+r0 model is `isundef_r2 -> #b0
+isundef_r1 -> #b0
+r1 -> #x0000000000400000
+np_r1 -> true
+np_r2 -> true
+r2 -> #x0000000000000000
+`.
+
+Post-state.
+
+| reg | alive tag | rocq tag | definedness | value |
+| --- | --- | --- | --- | --- |
+| r0 | bits | bits | EQUIVALENT | COUNTEREXAMPLE |
+| r1 | input | input | EQUIVALENT | EQUIVALENT |
+| r2 | input | input | EQUIVALENT | EQUIVALENT |
+| r3 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r4 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r5 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r6 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r7 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r8 | undef | undef | EQUIVALENT | UNSUPPORTED |
+| r9 | undef | undef | EQUIVALENT | UNSUPPORTED |
+
+r0 Alive2 expression is `bvudiv(var r1, var r2)`.
+
+r0 Rocq projection is `ite [eval_div_u64](eq [eval_div_u64](var r2 [Vlong], const 0 [eval_div_u64]), const 0 [eval_div_u64], udiv [eval_div_u64](var r1 [Vlong], var r2 [Vlong]))`.
+
+r0 Alive2 smt is `(bvudiv r1 r2)`.
+
+r0 model is `isundef_r1 -> #b0
+r1 -> #x0000000000400000
+r2 -> #x0000000000000000
+np_r1 -> true
+isundef_r2 -> #b0
+np_r2 -> true
+`.
+
+Successors.
+
+Edge to exit is EQUIVALENT.
+
+Alive2 jump condition is `const 1`.
+
+Rocq projection condition is `true [nextinstr]`.
+
+Alive2 smt condition is `true`.
+
+## Concrete sanity
+
+These edges are concrete traces. They are not the symbolic path condition.
+
+### jgt64-11
+
+The concrete traces agree.
+
+pc 0 NEXT to pc1, r0 000000000000000b.
+
+pc 1 NEXT to pc4, r0 000000000000000b.
+
+pc 4 NEXT to pc5, r0 000000000000000c.
+
+pc 5 EXIT to exit, r0 000000000000000c.
+
+### jgt64-10
+
+The concrete traces agree.
+
+pc 0 NEXT to pc1, r0 000000000000000a.
+
+pc 1 NEXT to pc2, r0 000000000000000a.
+
+pc 2 NEXT to pc3, r0 0000000000000009.
+
+pc 3 NEXT to pc5, r0 0000000000000009.
+
+pc 5 EXIT to exit, r0 0000000000000009.
+
+### div64-7-0-div-zero-as-ub
+
+Divergence is pc 1 status alive2=UB rocq=NEXT.
+
+pc 0 NEXT to pc1, r0 0000000000000007.
+
+pc 1 NEXT to pc2, r0 0000000000000000.
+
+pc 2 EXIT to exit, r0 0000000000000000.
+
+### div64-7-2
+
+The concrete traces agree.
+
+pc 0 NEXT to pc1, r0 0000000000000007.
+
+pc 1 NEXT to pc2, r0 0000000000000003.
+
+pc 2 EXIT to exit, r0 0000000000000003.
+
+### sdiv64-min--1
+
+The concrete traces agree.
+
+pc 0 NEXT to pc1, r0 8000000000000000.
+
+pc 1 NEXT to pc2, r0 8000000000000000.
+
+pc 2 EXIT to exit, r0 8000000000000000.
+
+### div64-7-0
+
+The concrete traces agree.
+
+pc 0 NEXT to pc1, r0 0000000000000007.
+
+pc 1 NEXT to pc2, r0 0000000000000000.
+
+pc 2 EXIT to exit, r0 0000000000000000.
+

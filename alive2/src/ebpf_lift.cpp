@@ -99,11 +99,12 @@ class Lifter {
       : fn(fn), i64(types.i64), i32(types.i32), i1(types.i1), i8(types.i8),
         i16(types.i16), code(code), bug(bug) {}
 
-  LiftInfo run(const std::vector<std::pair<uint8_t, std::string>> &inputs) {
+  LiftInfo run(const std::vector<std::pair<uint8_t, std::string>> &inputs,
+               LiftInit init_mode) {
     if (code.empty())
       throw std::runtime_error("empty eBPF program");
     build_blocks();
-    init_regs(inputs);
+    init_regs(inputs, init_mode);
     auto &pre = fn.getBB("%entry");
     for (auto &b : blocks)
       b.entry = &fn.getBB("%b" + std::to_string(&b - blocks.data()));
@@ -113,6 +114,7 @@ class Lifter {
     LiftInfo info;
     info.loop = loop;
     info.cfg = cfg.str();
+    info.sites = std::move(sites);
     return info;
   }
 
@@ -130,6 +132,8 @@ class Lifter {
   bool loop = false;
   std::ostringstream cfg;
   std::vector<SourceEnd> ends;
+  std::vector<EbSite> sites;
+  std::unordered_map<const Value *, RegOrigin> origins;
 
   bool bare_mov(const EbAlu &alu) const {
     EbWidth width = alu.width;
@@ -277,16 +281,115 @@ class Lifter {
     }
   }
 
-  void init_regs(const std::vector<std::pair<uint8_t, std::string>> &inputs) {
-    Value &zero = c64(0);
-    for (auto &slot : init)
-      slot = &zero;
+  void init_regs(const std::vector<std::pair<uint8_t, std::string>> &inputs,
+                 LiftInit init_mode) {
     for (auto [reg, name] : inputs) {
       if (reg > 10)
         throw std::runtime_error("input register out of range");
-      auto in = std::make_unique<Input>(i64, std::string(name));
-      init[reg] = in.get();
-      fn.addInput(std::move(in));
+      (void)name;
+    }
+    if (init_mode == LiftInit::Zero) {
+      Value &zero = c64(0);
+      origins[&zero] = RegOrigin::Zero;
+      for (auto &slot : init)
+        slot = &zero;
+      for (auto [reg, name] : inputs) {
+        auto in = std::make_unique<Input>(i64, std::string(name));
+        init[reg] = in.get();
+        origins[init[reg]] = RegOrigin::Input;
+        fn.addInput(std::move(in));
+      }
+      return;
+    }
+    for (int reg = 0; reg <= 10; ++reg) {
+      std::string seeded;
+      for (auto [id, name] : inputs) {
+        if (id == reg)
+          seeded = name;
+      }
+      if (!seeded.empty()) {
+        auto in = std::make_unique<Input>(i64, std::move(seeded));
+        init[reg] = in.get();
+        origins[init[reg]] = RegOrigin::Input;
+        fn.addInput(std::move(in));
+      } else if (reg == 1 || reg == 10) {
+        // Poison, not an Input. An unused Input puts its undef mask into
+        // every jump condition. Poison is not a bitvector constant.
+        auto mark = std::make_unique<PoisonValue>(i64);
+        init[reg] = mark.get();
+        origins[init[reg]] = RegOrigin::Pointer;
+        fn.addConstant(std::move(mark));
+      } else {
+        auto undef = std::make_unique<UndefValue>(i64);
+        init[reg] = undef.get();
+        origins[init[reg]] = RegOrigin::Undef;
+        fn.addUndef(std::move(undef));
+      }
+    }
+  }
+
+  std::array<EbSlot, 10> snapshot(const std::array<Value *, 11> &regs) const {
+    std::array<EbSlot, 10> out{};
+    for (int i = 0; i < 10; ++i) {
+      out[i].value = regs[i];
+      auto found = origins.find(regs[i]);
+      out[i].origin =
+          found == origins.end() ? RegOrigin::Value : found->second;
+    }
+    return out;
+  }
+
+  bool is_pointer(const Value *value) const {
+    auto found = origins.find(value);
+    return found != origins.end() && found->second == RegOrigin::Pointer;
+  }
+
+  bool pointer_alu(const EbAlu &alu, const std::array<Value *, 11> &regs) const {
+    if (is_pointer(regs[alu.dst]))
+      return true;
+    if (alu.op == EbAlu::Movsx)
+      return is_pointer(regs[alu.src_reg]);
+    return alu.op != EbAlu::Neg && alu.src == EbSrc::Reg &&
+           is_pointer(regs[alu.src_reg]);
+  }
+
+  bool pointer_jmp(const EbJmp &jmp, const std::array<Value *, 11> &regs) const {
+    if (jmp.op == EbJmp::Ja || jmp.op == EbJmp::Exit)
+      return false;
+    if (is_pointer(regs[jmp.dst]))
+      return true;
+    return jmp.src == EbSrc::Reg && is_pointer(regs[jmp.src_reg]);
+  }
+
+  void push_site(uint32_t index, BasicBlock *block,
+                 const std::array<EbSlot, 10> &pre,
+                 const std::array<EbSlot, 10> &post, bool pointer_use) {
+    EbSite site;
+    site.pc = index;
+    site.block = block;
+    site.block_name = block ? block->getName() : std::string();
+    site.pre = pre;
+    site.post = post;
+    site.pointer_use = pointer_use;
+    sites.push_back(std::move(site));
+  }
+
+  void attach_edges(EbSite &site, const Block &block) {
+    site.term = block.exit;
+    const auto *jmp = std::get_if<EbJmp>(&code[block.end - 1].op);
+    if (jmp && jmp->op == EbJmp::Exit) {
+      EbEdge edge;
+      edge.exit = true;
+      edge.name = "exit";
+      site.edges.push_back(edge);
+      return;
+    }
+    for (int dest : block.succ) {
+      EbEdge edge;
+      edge.block = blocks[dest].entry;
+      edge.name = blocks[dest].entry->getName();
+      edge.target_pc = blocks[dest].start;
+      site.edges.push_back(edge);
     }
   }
 
@@ -364,24 +467,32 @@ class Lifter {
       const auto &insn = code[pc];
       if (const auto *alu = std::get_if<EbAlu>(&insn.op)) {
         bool bare = bare_mov(*alu);
+        auto pre = snapshot(regs);
+        bool pointer = pointer_alu(*alu, regs);
         Value *produced = emit_alu(*alu, regs);
         regs[alu->dst] = produced;
+        BasicBlock *where = b.entry;
         if (bare && !emitted) {
           note_at_entry(insn.index, b.entry, regs);
         } else if (bare) {
           note_after(insn.index, home, anchor, regs);
+          where = home;
         } else {
           home = cur;
           anchor = dynamic_cast<Instr *>(produced);
           emitted = true;
           note_after(insn.index, home, anchor, regs);
+          where = home;
         }
+        push_site(insn.index, where, pre, snapshot(regs), pointer);
       } else if (pc != b.end - 1) {
         throw std::runtime_error("jump in the middle of a block");
       }
     }
     const auto &last = code[b.end - 1];
     if (const auto *j = std::get_if<EbJmp>(&last.op)) {
+      auto file = snapshot(regs);
+      bool pointer = pointer_jmp(*j, regs);
       if (j->op == EbJmp::Exit) {
         cur->addInstr(std::make_unique<Return>(i64, *regs[0]));
       } else if (j->op == EbJmp::Ja) {
@@ -392,11 +503,14 @@ class Lifter {
             cond, *blocks[b.succ[0]].entry, *blocks[b.succ[1]].entry));
       }
       note_after(last.index, cur, &cur->back(), regs);
+      push_site(last.index, cur, file, file, pointer);
     } else {
       cur->addInstr(std::make_unique<Branch>(*blocks[b.succ[0]].entry));
     }
     b.exit = cur;
     b.out = regs;
+    if (!sites.empty() && sites.back().pc == code[b.end - 1].index)
+      attach_edges(sites.back(), b);
   }
 
   Value *emit_alu(const EbAlu &alu, const std::array<Value *, 11> &regs) {
@@ -882,7 +996,7 @@ Trace make_alive_trace(const std::vector<uint8_t> &bytes,
   LiftBug lift_bug =
       bug == BugFlag::DivZeroAsUb ? LiftBug::DivZeroAsUb : LiftBug::None;
   Lifter lifter(fn, types, insns, lift_bug);
-  lifter.run(named);
+  lifter.run(named, LiftInit::Zero);
   return lifter.concrete(bound);
 }
 
@@ -891,8 +1005,8 @@ Trace make_alive_trace(const std::vector<uint8_t> &bytes,
 LiftInfo lift_ebpf(IR::Function &fn, EbTypes &types,
                    const std::vector<EbInsn> &code,
                    const std::vector<std::pair<uint8_t, std::string>> &inputs,
-                   LiftBug bug) {
-  return Lifter(fn, types, code, bug).run(inputs);
+                   LiftBug bug, LiftInit init) {
+  return Lifter(fn, types, code, bug).run(inputs, init);
 }
 
 Trace alive2_trace(const std::vector<uint8_t> &code,

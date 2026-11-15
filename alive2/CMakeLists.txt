@@ -100,6 +100,7 @@ add_executable(ebpf-exhibit
   src/ebpf_concrete.cpp
   src/ebpf_gate.cpp
   src/ebpf_run.cpp
+  src/ebpf_project.cpp
   src/ebpf_exhibit.cpp)
 alive2_link(ebpf-exhibit)
 target_compile_options(ebpf-exhibit PRIVATE -Wall -Wextra -Wno-unused-parameter)
