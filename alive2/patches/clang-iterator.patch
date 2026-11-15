@@ -1,0 +1,60 @@
+diff --git a/ir/attrs.cpp b/ir/attrs.cpp
+index d5de437..9212f82 100644
+--- a/ir/attrs.cpp
++++ b/ir/attrs.cpp
+@@ -12,6 +12,7 @@
+ #include "util/compiler.h"
+ #include <algorithm>
+ #include <cassert>
++#include <iterator>
+ 
+ using namespace std;
+ using namespace smt;
+diff --git a/ir/function.cpp b/ir/function.cpp
+index 81a97eb..894029a 100644
+--- a/ir/function.cpp
++++ b/ir/function.cpp
+@@ -9,6 +9,7 @@
+ #include "util/unionfind.h"
+ #include <algorithm>
+ #include <fstream>
++#include <iterator>
+ #include <set>
+ #include <unordered_set>
+ 
+diff --git a/ir/instr.cpp b/ir/instr.cpp
+index 0e61684..16e140e 100644
+--- a/ir/instr.cpp
++++ b/ir/instr.cpp
+@@ -12,6 +12,7 @@
+ #include "util/config.h"
+ #include <algorithm>
+ #include <functional>
++#include <iterator>
+ #include <numeric>
+ #include <sstream>
+ 
+diff --git a/ir/state.cpp b/ir/state.cpp
+index c2cdf23..d5da477 100644
+--- a/ir/state.cpp
++++ b/ir/state.cpp
+@@ -10,6 +10,7 @@
+ #include "util/errors.h"
+ #include <algorithm>
+ #include <cassert>
++#include <iterator>
+ 
+ using namespace smt;
+ using namespace util;
+diff --git a/smt/exprs.cpp b/smt/exprs.cpp
+index e73f1bb..a1d572f 100644
+--- a/smt/exprs.cpp
++++ b/smt/exprs.cpp
+@@ -5,6 +5,7 @@
+ #include "smt/smt.h"
+ #include "util/compiler.h"
+ #include <algorithm>
++#include <iterator>
+ #include <vector>
+ 
+ using namespace std;

@@ -1,0 +1,8 @@
+div64-7-2 comparator=PASS sanity=ok
+div64-7-0 comparator=PASS sanity=ok
+sdiv64-min--1 comparator=PASS sanity=ok
+jgt64-11 comparator=PASS sanity=ok
+jgt64-10 comparator=PASS sanity=ok
+div64-7-0-div-zero-as-ub comparator=FAIL sanity=ok
+  pc 1 status alive2=UB rocq=NEXT
+suite=PASS

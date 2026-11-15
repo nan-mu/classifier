@@ -1,0 +1,29 @@
+name: "Code Scanning - Action"
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '30 1 * * 0'
+
+jobs:
+  CodeQL-Build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: sudo apt-get install z3 re2c
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4.38.2
+        with:
+          languages: cpp
+
+      - name: Build
+        uses: github/codeql-action/autobuild@v4.38.2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4.38.2

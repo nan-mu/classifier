@@ -8,7 +8,10 @@
 /tooling/web/node_modules/
 /tooling/web/dist/
 /tooling/**/__pycache__/
-/.audit/
+
+# .audit holds the committed requirement checklists. Decision trails stay local.
+/.audit/*.tsv
+/.audit/__pycache__/
 
 # Local Codex / legacy agent dirs (never commit)
 /.codex/

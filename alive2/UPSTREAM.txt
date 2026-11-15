@@ -1,0 +1,11 @@
+This directory is a normal subtree of classifier. It is not a git submodule.
+The upstream checkout has no .git directory, so git add records plain files.
+
+alive2 https://github.com/AliveToolkit/alive2
+commit adacbd5180ccf95075e9867c4f0c259f59c9fef2
+subject fix: bitcast from ptr to <1 x ptr> (#1373)
+date 2026-10-25 19:18:18 +0000
+local patch patches/clang-iterator.patch
+The patch is already applied to third_party/alive2.
+build -DBUILD_TV=OFF -DCMAKE_BUILD_TYPE=Release
+llvm not linked. ir, smt, tools, and util only.
