@@ -1832,6 +1832,35 @@ int symbolic_check() {
         cross_ok = false;
     }
   }
+  bool definedness_ok = false;
+  const char *definedness_shown = "missing";
+  if (mutation) {
+    const CheckedPc *bad = pc_with_insn(*mutation, "div");
+    if (bad && !bad->post.empty()) {
+      definedness_shown = verdict_name(bad->post[0].definedness);
+      definedness_ok = bad->post[0].definedness == Verdict::Counterexample &&
+                       bad->post[0].value == Verdict::Counterexample;
+    }
+  }
+  bool undef_agree = false;
+  for (const auto &program : doc.programs) {
+    for (const auto &row : program.cross) {
+      for (const auto &step : row.steps) {
+        auto scan = [&](const std::vector<CrossObs> &cells) {
+          for (const auto &obs : cells) {
+            if (obs.projection == "undef" && obs.verdict == "agree")
+              undef_agree = true;
+          }
+        };
+        scan(step.pre);
+        scan(step.post);
+      }
+    }
+  }
+  std::vector<uint8_t> r10_bytes = {0xbf, 0xa0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                    0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  AliveProgram bypass = observe_ebpf(r10_bytes, {}, LiftBug::None);
+  bool observe_open = !bypass.pcs.empty();
   std::cout << "JGT bitvector " << (jgt_ok ? "EQUIVALENT" : "FAIL") << "\n";
   if (jgt_ok)
     std::cout << "JGT undef value UNSUPPORTED\n";
@@ -1847,6 +1876,11 @@ int symbolic_check() {
       std::cout << "mutation model absent: " << absent << "\n";
   }
   std::cout << "unseeded r0 " << (init_ok ? "undef" : "FAIL") << "\n";
+  std::cout << "mutation definedness " << definedness_shown << "\n";
+  if (undef_agree)
+    std::cout << "undef reported agree\n";
+  if (observe_open)
+    std::cout << "observe bypass " << bypass.pcs.size() << "\n";
   if (!cross_ok) {
     for (const auto &program : doc.programs) {
       for (const auto &row : program.cross) {
@@ -1856,7 +1890,8 @@ int symbolic_check() {
       }
     }
   }
-  if (!jgt_ok || !div_ok || !mutation_ok || !init_ok || !cross_ok) {
+  if (!jgt_ok || !div_ok || !mutation_ok || !init_ok || !cross_ok || !definedness_ok ||
+      undef_agree || observe_open) {
     if (jgt && !jgt->phi_swap_rejected)
       std::cerr << "phi swap still matched\n";
     if (jgt && !jgt->phi_drop_unsupported)
