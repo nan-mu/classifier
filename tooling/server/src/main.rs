@@ -70,7 +70,10 @@ fn app(state: AppState) -> Router {
         .route("/api/alive2/corpus", get(server::alive2_runs::corpus))
         .route("/api/alive2/runs", post(server::alive2_runs::create_run))
         .route("/api/alive2/runs/{id}", get(server::alive2_runs::get_run))
-        .route("/api/alive2/runs/{id}/graph", get(server::alive2_runs::get_graph))
+        .route(
+            "/api/alive2/runs/{id}/graph",
+            get(server::alive2_runs::get_graph),
+        )
         .layer(DefaultBodyLimit::max(API_BODY_LIMIT))
         .layer(CorsLayer::permissive())
         .with_state(state)

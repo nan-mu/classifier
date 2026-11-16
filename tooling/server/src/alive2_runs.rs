@@ -70,7 +70,11 @@ pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>
     let id = store().next.fetch_add(1, Ordering::Relaxed).to_string();
     let dir = std::env::temp_dir().join(format!("alive2-run-{id}"));
     if let Err(err) = std::fs::create_dir_all(&dir) {
-        return fail(StatusCode::INTERNAL_SERVER_ERROR, "ENGINE_FAILURE", err.to_string());
+        return fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ENGINE_FAILURE",
+            err.to_string(),
+        );
     }
     let program = dir.join("program.alive");
     let initial_path = dir.join("initial.json");
@@ -79,9 +83,14 @@ pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>
         .initial
         .map(|value| value.to_string())
         .unwrap_or_else(|| "{\"inputs\":[]}".into());
-    if let Err(err) = std::fs::write(&program, &ir).and_then(|_| std::fs::write(&initial_path, initial_text))
+    if let Err(err) =
+        std::fs::write(&program, &ir).and_then(|_| std::fs::write(&initial_path, initial_text))
     {
-        return fail(StatusCode::INTERNAL_SERVER_ERROR, "ENGINE_FAILURE", err.to_string());
+        return fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ENGINE_FAILURE",
+            err.to_string(),
+        );
     }
     let bin = explore_bin();
     let output = match Command::new(&bin)
@@ -128,13 +137,21 @@ pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>
     let bytes = match std::fs::read(&graph_path) {
         Ok(bytes) => bytes,
         Err(err) => {
-            return fail(StatusCode::INTERNAL_SERVER_ERROR, "ENGINE_FAILURE", err.to_string());
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ENGINE_FAILURE",
+                err.to_string(),
+            );
         }
     };
     let graph: Value = match serde_json::from_slice(&bytes) {
         Ok(graph) => graph,
         Err(err) => {
-            return fail(StatusCode::INTERNAL_SERVER_ERROR, "ENGINE_FAILURE", err.to_string());
+            return fail(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "ENGINE_FAILURE",
+                err.to_string(),
+            );
         }
     };
     store().runs.lock().expect("runs").insert(
@@ -175,12 +192,12 @@ pub async fn get_graph(Path(id): Path<String>) -> (StatusCode, Json<Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::{get, post};
     use axum::Router;
     use http_body_util::BodyExt;
+    use std::path::PathBuf;
     use tower::ServiceExt;
 
     fn explore_path() -> Option<PathBuf> {
