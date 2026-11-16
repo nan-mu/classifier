@@ -8,7 +8,6 @@ enum Kind {
     I64,
     Ctx,
     Stack,
-    Pkt,
     Map,
 }
 
@@ -62,8 +61,8 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
     for (bi, block) in blocks.iter().enumerate() {
         if block.preds.len() > 1 || block.preds.iter().any(|pred| pred.is_some_and(|p| p >= bi)) {
             let mut names = std::array::from_fn(|_| String::new());
-            for reg in 0..11 {
-                names[reg] = format!("%s{}_r{reg}", block.start);
+            for (reg, name) in names.iter_mut().enumerate() {
+                *name = format!("%s{}_r{reg}", block.start);
             }
             phi_names.push(Some(names));
         } else {
@@ -171,8 +170,8 @@ fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
     }
     let starts: Vec<u32> = blocks.iter().map(|block| block.start).collect();
     let block_at = |slot: u32| starts.iter().position(|start| *start == slot);
-    for bi in 0..blocks.len() {
-        let end = blocks[bi].insns.end;
+    for block in &mut blocks {
+        let end = block.insns.end;
         let last = &insns[end - 1];
         let mut succ = Vec::new();
         if let Insn::Jmp { cond, .. } = last {
@@ -191,14 +190,13 @@ fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
         } else {
             return Err("program does not end in a jump".into());
         }
-        blocks[bi].succ = succ;
+        block.succ = succ;
     }
     for bi in 0..blocks.len() {
-        for target in blocks[bi].succ.clone() {
-            if let Some(slot) = target {
-                let tb = block_at(slot).unwrap();
-                blocks[tb].preds.push(Some(bi));
-            }
+        let slots: Vec<u32> = blocks[bi].succ.iter().flatten().copied().collect();
+        for slot in slots {
+            let tb = block_at(slot).unwrap();
+            blocks[tb].preds.push(Some(bi));
         }
     }
     if !blocks.is_empty() {
@@ -424,7 +422,7 @@ fn transfer(regs: &mut [Kind; 11], insn: &Insn, relocated: &std::collections::BT
                 } else {
                     regs[*dst as usize] = Kind::I64;
                 }
-            } else if *op == AluOp::Add && matches!(src, Src::Imm(_)) && matches!(regs[*dst as usize], Kind::Ctx | Kind::Stack | Kind::Map | Kind::Pkt) {
+            } else if *op == AluOp::Add && matches!(src, Src::Imm(_)) && matches!(regs[*dst as usize], Kind::Ctx | Kind::Stack | Kind::Map) {
                 need(regs, *dst)?;
             } else {
                 need(regs, *dst)?;
@@ -460,8 +458,8 @@ fn transfer(regs: &mut [Kind; 11], insn: &Insn, relocated: &std::collections::BT
         }
         Insn::Call { .. } => {
             regs[0] = Kind::Map;
-            for reg in 1..=5 {
-                regs[reg] = Kind::Uninit;
+            for slot in &mut regs[1..=5] {
+                *slot = Kind::Uninit;
             }
         }
     }
@@ -485,7 +483,7 @@ fn emit_block(emit: &mut Emit, insns: &[Insn], maps: &BTreeMap<u32, String>, reg
             break;
         }
         let before = emit.n;
-        let result = match insn {
+        match insn {
             Insn::Alu { width, op, dst, src, extra, .. } => {
                 if *op == AluOp::Mov && matches!(src, Src::Reg(_)) {
                     let Src::Reg(reg) = src else { unreachable!() };
@@ -526,13 +524,12 @@ fn emit_block(emit: &mut Emit, insns: &[Insn], maps: &BTreeMap<u32, String>, reg
                 let name = emit.fresh();
                 emit.lines.push(format!("  {name} = call ptr @bpf_map_lookup_elem({map}, {key})"));
                 regs[0] = Rv::Ptr(Kind::Map, name);
-                for reg in 1..=5 {
-                    regs[reg] = Rv::None;
+                for slot in &mut regs[1..=5] {
+                    *slot = Rv::None;
                 }
             }
             Insn::Jmp { .. } => {}
-        };
-        let _ = result;
+        }
         let created: Vec<String> = (before..emit.n).map(|id| format!("%v{id}")).collect();
         emit.origin.entry(insn.index()).or_default().extend(created);
     }
@@ -795,7 +792,6 @@ fn address(emit: &mut Emit, base: &Rv, off: i64) -> Result<String, String> {
         Rv::Ptr(Kind::Ctx, name) => Ok(gep(emit, &format!("ptr {name}"), off)),
         Rv::Ptr(Kind::Stack, name) => Ok(gep(emit, &format!("ptr {name}"), off)),
         Rv::Ptr(Kind::Map, name) => Ok(gep(emit, &format!("ptr {name}"), off)),
-        Rv::Ptr(Kind::Pkt, name) => Ok(gep(emit, &format!("ptr {name}"), off)),
         Rv::I64(name) => {
             let delta = bin(emit, "i64", "sub", name, "%pkt_base");
             let adjusted = if off == 0 { delta } else { bin(emit, "i64", "add", &delta, &off.to_string()) };
