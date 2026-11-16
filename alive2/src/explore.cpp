@@ -5,6 +5,7 @@
 #include "ir/type.h"
 #include "smt/expr.h"
 #include "smt/smt.h"
+#include "alive_file.h"
 #include "tools/alive_parser.h"
 #include "util/config.h"
 #include "util/symexec.h"
@@ -138,7 +139,17 @@ unsigned unroll_index(std::string_view name) {
   return n;
 }
 
-struct Terms {
+std::optional<bool> concrete_bool(const smt::expr &expr) {
+    if (expr.isTrue())
+      return true;
+    if (expr.isFalse())
+      return false;
+    if (expr.isBV() && expr.isConst() && expr.bits() == 1)
+      return std::string(expr.numeral_string()) == "1";
+    return std::nullopt;
+  }
+
+  struct Terms {
   std::vector<Term> items;
   std::unordered_map<std::string, std::string> by_key;
 
@@ -165,10 +176,15 @@ struct Terms {
   std::string from_expr(const smt::expr &expr) {
     std::ostringstream shown;
     shown << expr;
-    if (expr.isTrue())
-      return boolean(true);
-    if (expr.isFalse())
-      return boolean(false);
+    if (auto bit = concrete_bool(expr))
+      return boolean(*bit);
+    if (expr.isBV() && expr.bits() == 1) {
+      Term term;
+      term.op = "opaque";
+      term.sort = "bool";
+      term.display = shown.str();
+      return add(std::move(term));
+    }
     Term term;
     term.display = shown.str();
     if (expr.isBV() && expr.isConst()) {
@@ -248,10 +264,23 @@ int main(int argc, char **argv) {
     if (environment_path)
       read_file(*environment_path);
 
-    tools::parser_initializer parser_init;
-    auto parsed = tools::parse_single(read_file(program_path));
-    std::string fn_name = std::move(parsed.first);
-    Function fn = std::move(parsed.second);
+    std::string program_text = read_file(program_path);
+    std::optional<tools::parser_initializer> parser_init;
+    std::optional<AliveModule> loaded;
+    std::optional<std::pair<std::string, Function>> parsed;
+    Function *fn_ptr = nullptr;
+    std::string fn_name;
+    if (program_text.find("alive-file v1") != std::string::npos) {
+      loaded = load_alive_v1(program_text);
+      fn_ptr = &loaded->function();
+      fn_name = fn_ptr->getName();
+    } else {
+      parser_init.emplace();
+      parsed.emplace(tools::parse_single(program_text));
+      fn_name = std::move(parsed->first);
+      fn_ptr = &parsed->second;
+    }
+    Function &fn = *fn_ptr;
 
     configure_pure_alu();
     util::config::src_unroll_cnt = unroll;
@@ -328,7 +357,7 @@ int main(int argc, char **argv) {
         }
         if (val.val.non_poison.isFalse())
           node.unsupported_reason = "poison";
-        if (!val.domain.isTrue())
+        if (val.domain().isFalse())
           node.state = "ub";
         else if (dynamic_cast<const Return *>(&instr))
           node.state = "exit";
@@ -378,6 +407,28 @@ int main(int argc, char **argv) {
         auto link = [&](const BasicBlock &dst, const char *kind, const std::string &guard) {
           auto target = bb_first.find(std::string(dst.getName()));
           if (target == bb_first.end()) {
+            if (std::string(dst.getName()) == "#sink") {
+              Node sink;
+              sink.id = "n" + std::to_string(nodes.size());
+              sink.function = fn_name;
+              sink.block = "#sink";
+              sink.text = "#sink";
+              sink.unroll = unroll;
+              sink.state = "bound_truncated";
+              sink.path = guard;
+              sink.term = truth;
+              bb_first.emplace("#sink", sink.id);
+              Edge edge;
+              edge.id = "e" + std::to_string(edges.size());
+              edge.from = last->second;
+              edge.to = sink.id;
+              edge.kind = "boundary";
+              edge.guard = guard;
+              saw_sink = true;
+              nodes.push_back(std::move(sink));
+              edges.push_back(std::move(edge));
+              return;
+            }
             assumptions.push_back("no node for target " + std::string(dst.getName()));
             return;
           }
@@ -396,19 +447,22 @@ int main(int argc, char **argv) {
         } else {
           auto &cond = state[*br->getCond()].value;
           std::string guard = terms.from_expr(cond);
-          Term negated;
-          negated.op = "not";
-          negated.sort = "bool";
-          negated.args = {guard};
-          std::string neg = terms.add(std::move(negated));
-          if (cond.isTrue())
+          auto decided = concrete_bool(cond);
+          auto negated = [&]() {
+            Term neg;
+            neg.op = "not";
+            neg.sort = "bool";
+            neg.args = {guard};
+            return terms.add(std::move(neg));
+          };
+          if (decided && *decided)
             link(br->getTrue(), "taken", guard);
-          else if (cond.isFalse())
-            link(*br->getFalse(), "not_taken", neg);
+          else if (decided && !*decided)
+            link(*br->getFalse(), "not_taken", negated());
           else {
             link(br->getTrue(), "taken", guard);
             if (br->getFalse())
-              link(*br->getFalse(), "not_taken", neg);
+              link(*br->getFalse(), "not_taken", negated());
           }
         }
       }

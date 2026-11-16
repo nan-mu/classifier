@@ -37,9 +37,11 @@ target_compile_options(direct_ir PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 add_executable(alive2-explore
   src/explore.cpp
+  src/alive_file.cpp
   "${ALIVE2_SRC}/tools/alive_parser.cpp"
   "${ALIVE2_BUILD}/tools/alive_lexer.cpp")
 alive2_link(alive2-explore)
+target_include_directories(alive2-explore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(alive2-explore PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 set(EBPF_FRONTEND
@@ -57,8 +59,9 @@ add_executable(ebpf_file ${EBPF_FRONTEND} src/ebpf_file.cpp)
 alive2_link(ebpf_file)
 target_compile_options(ebpf_file PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
-add_executable(alive2-load src/alive_load.cpp)
+add_executable(alive2-load src/alive_load.cpp src/alive_file.cpp)
 alive2_link(alive2-load)
+target_include_directories(alive2-load PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(alive2-load PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 set(ROCQ_STEP_BIN "${CMAKE_CURRENT_BINARY_DIR}/rocq/rocq-step")
