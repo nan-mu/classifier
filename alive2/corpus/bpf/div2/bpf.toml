@@ -1,0 +1,45 @@
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/div2.c"
+size = 5784
+
+[xdp]
+size = 232
+asm = """
+0000000000000000 <div2>:
+       0:	w0 = 0x0
+       1:	w2 = *(u32 *)(r1 + 0x4)
+       2:	w1 = *(u32 *)(r1 + 0x0)
+       3:	r3 = r1
+       4:	r3 += 0x8
+       5:	if r3 > r2 goto +0x16 <L0>
+       6:	w3 = *(u8 *)(r1 + 0x5)
+       7:	w3 <<= 0x8
+       8:	w2 = *(u8 *)(r1 + 0x4)
+       9:	w3 |= w2
+      10:	w4 = *(u8 *)(r1 + 0x6)
+      11:	w4 <<= 0x10
+      12:	w2 = *(u8 *)(r1 + 0x7)
+      13:	w2 <<= 0x18
+      14:	w2 |= w4
+      15:	w2 |= w3
+      16:	if w2 == 0x0 goto +0xb <L0>
+      17:	w3 = *(u8 *)(r1 + 0x1)
+      18:	w3 <<= 0x8
+      19:	w4 = *(u8 *)(r1 + 0x0)
+      20:	w3 |= w4
+      21:	w4 = *(u8 *)(r1 + 0x2)
+      22:	w4 <<= 0x10
+      23:	w0 = *(u8 *)(r1 + 0x3)
+      24:	w0 <<= 0x18
+      25:	w0 |= w4
+      26:	w0 |= w3
+      27:	w0 /= w2
+<L0>:
+      28:	exit
+"""
+
+[CORE]
+records = """
+insn_off,type_id,access_str,kind,type_name,section
+0x0008,2,0:1,0,xdp_md,xdp
+0x0010,2,0:0,0,xdp_md,xdp
+"""

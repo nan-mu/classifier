@@ -1,0 +1,60 @@
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/helper_loop.c"
+size = 7184
+
+[xdp]
+size = 224
+asm = """
+0000000000000000 <helper_loop>:
+       0:	w6 = 0x0
+       1:	w2 = *(u32 *)(r1 + 0x4)
+       2:	w1 = *(u32 *)(r1 + 0x0)
+       3:	r3 = r1
+       4:	r3 += 0x4
+       5:	if r3 > r2 goto +0x9 <L2>
+       6:	w7 = *(u32 *)(r1 + 0x0)
+       7:	if w7 < 0x8 goto +0x1 <L0>
+       8:	w7 = 0x8
+<L0>:
+       9:	w6 = 0x2
+      10:	if w7 == 0x0 goto +0x4 <L2>
+      11:	w8 = 0x0
+      12:	goto +0x4 <L3>
+<L1>:
+      13:	w8 += 0x1
+      14:	if w8 < w7 goto +0x2 <L3>
+<L2>:
+      15:	w0 = w6
+      16:	exit
+<L3>:
+      17:	*(u32 *)(r10 - 0x4) = w8
+      18:	r2 = r10
+      19:	r2 += -0x4
+      20:	r1 = 0x0 ll
+      22:	call 0x1
+      23:	if r0 == 0x0 goto -0xb <L1>
+      24:	w1 = *(u32 *)(r0 + 0x0)
+      25:	w1 += 0x1
+      26:	*(u32 *)(r0 + 0x0) = w1
+      27:	goto -0xf <L1>
+"""
+
+[maps.counters]
+map_type = "BPF_MAP_TYPE_ARRAY"
+max_entries = 8
+key_size = 4
+value_size = 4
+estimated_bytes = 32
+aot_addr = 0x40380270
+key = """
+    u32 v
+"""
+value = """
+    u32 v
+"""
+
+[CORE]
+records = """
+insn_off,type_id,access_str,kind,type_name,section
+0x0008,13,0:1,0,xdp_md,xdp
+0x0010,13,0:0,0,xdp_md,xdp
+"""

@@ -50,6 +50,10 @@ add_executable(ebpf_file ${EBPF_FRONTEND} src/ebpf_file.cpp)
 alive2_link(ebpf_file)
 target_compile_options(ebpf_file PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
+add_executable(alive2-load src/alive_load.cpp)
+alive2_link(alive2-load)
+target_compile_options(alive2-load PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
 set(ROCQ_STEP_BIN "${CMAKE_CURRENT_BINARY_DIR}/rocq/rocq-step")
 set(UPSTREAM_SRC "${CMAKE_CURRENT_SOURCE_DIR}/rocq/upstream")
 set(UPSTREAM_BUILD "${CMAKE_CURRENT_BINARY_DIR}/rocq/upstream")

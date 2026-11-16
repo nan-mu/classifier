@@ -1,0 +1,10 @@
+[package]
+name = "ebpf-to-alive2"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Read a relocatable BPF ELF and write an Alive2 IR file."
+
+[lib]
+name = "ebpf_to_alive2"
+path = "src/lib.rs"

@@ -1,0 +1,53 @@
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/xdp_drop.c"
+size = 8392
+
+[xdp]
+size = 176
+asm = """
+0000000000000000 <xdp_firewall>:
+       0:	w0 = 0x0
+       1:	w3 = *(u32 *)(r1 + 0x4)
+       2:	w1 = *(u32 *)(r1 + 0x0)
+       3:	r2 = r1
+       4:	r2 += 0xe
+       5:	if r2 > r3 goto +0xf <L0>
+       6:	w0 = 0x2
+       7:	w4 = *(u16 *)(r1 + 0xc)
+       8:	if w4 != 0x8 goto +0xc <L0>
+       9:	r1 += 0x22
+      10:	w0 = 0x0
+      11:	if r1 > r3 goto +0x9 <L0>
+      12:	r1 = 0xc
+      13:	r2 += r1
+      14:	r1 = 0x0 ll
+      16:	call 0x1
+      17:	r1 = r0
+      18:	w0 = 0x2
+      19:	if r1 == 0x0 goto +0x1 <L0>
+      20:	w0 = 0x1
+<L0>:
+      21:	exit
+"""
+
+[maps.blocklist]
+map_type = "BPF_MAP_TYPE_HASH"
+max_entries = 256
+key_size = 4
+value_size = 4
+estimated_bytes = 2048
+aot_addr = 0x40380258
+key = """
+    u32 v
+"""
+value = """
+    u32 v
+"""
+
+[CORE]
+records = """
+insn_off,type_id,access_str,kind,type_name,section
+0x0008,13,0:1,0,xdp_md,xdp
+0x0010,13,0:0,0,xdp_md,xdp
+0x0038,16,0:2,0,ethhdr,xdp
+0x0060,22,0:9:0:0,0,iphdr,xdp
+"""
