@@ -35,6 +35,13 @@ add_executable(direct_ir src/direct_ir.cpp)
 alive2_link(direct_ir)
 target_compile_options(direct_ir PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
+add_executable(alive2-explore
+  src/explore.cpp
+  "${ALIVE2_SRC}/tools/alive_parser.cpp"
+  "${ALIVE2_BUILD}/tools/alive_lexer.cpp")
+alive2_link(alive2-explore)
+target_compile_options(alive2-explore PRIVATE -Wall -Wextra -Wno-unused-parameter)
+
 set(EBPF_FRONTEND
   src/ebpf_decode.cpp
   src/ebpf_ref.cpp

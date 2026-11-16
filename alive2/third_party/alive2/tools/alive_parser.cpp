@@ -1529,6 +1529,27 @@ vector<Transform> parse(string_view buf) {
   return ret;
 }
 
+pair<string, Function> parse_single(string_view buf) {
+  yylex_init(buf);
+  if (tokenizer.empty())
+    error("empty IR file");
+
+  Transform t;
+  sym_num = struct_num = 0;
+  parse_src = true;
+  parse_name(t);
+  parse_pre(t);
+  parse_fn(t.src);
+  if (!tokenizer.empty()) {
+    auto tok = *tokenizer;
+    if (tok == ARROW)
+      error("a single-program .alive file cannot contain =>");
+    error("trailing tokens after the function", tok);
+  }
+  string name = t.name.empty() ? string("f") : std::move(t.name);
+  return {std::move(name), std::move(t.src)};
+}
+
 
 parser_initializer::parser_initializer() {
   int_types.resize(65);

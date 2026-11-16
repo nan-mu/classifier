@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "alive2-state-graph.schema.json",
+  "title": "Alive2 state graph",
+  "x_provenance": {
+    "reconstructed": true,
+    "date": "2026-11-16",
+    "reason": "The author package file was not in the workspace. Required fields are the ones named in the task. Extra fields are allowed. This is not a claim that an unseen author file was copied."
+  },
+  "type": "object",
+  "required": [
+    "schema",
+    "schema_version",
+    "fixture",
+    "run",
+    "program",
+    "environment",
+    "terms",
+    "memories",
+    "nodes",
+    "edges",
+    "coverage",
+    "evidence"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {"const": "alive2-state-graph"},
+    "schema_version": {"const": 1},
+    "fixture": {"type": "boolean"},
+    "run": {"type": "object"},
+    "program": {"type": "object"},
+    "environment": {"type": "object"},
+    "terms": {"type": "array"},
+    "memories": {"type": "array"},
+    "nodes": {"type": "array"},
+    "edges": {"type": "array"},
+    "coverage": {"type": "object"},
+    "evidence": {"type": "array"}
+  }
+}
