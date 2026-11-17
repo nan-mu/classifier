@@ -97,6 +97,7 @@ pub fn find_file() -> Result<PathBuf, String> {
 }
 
 pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
+    let mut legacy = false;
     let mut build_rel: Option<String> = None;
     let mut programs: Vec<(String, String, String, Expect)> = Vec::new();
     let mut cur: Option<RawProgram> = None;
@@ -115,6 +116,15 @@ pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
         }
         let (key, value) = split_assign(line).map_err(|e| format!("line {}: {e}", lineno + 1))?;
         match key {
+            "semantics" => {
+                if cur.is_some() || legacy || unquote(value)? != "legacy-dual-arch" {
+                    return Err(format!(
+                        "line {}: expected one top-level semantics = \"legacy-dual-arch\"",
+                        lineno + 1
+                    ));
+                }
+                legacy = true;
+            }
             "build" => {
                 if cur.is_some() {
                     return Err(format!("line {}: build belongs at the top", lineno + 1));
@@ -139,6 +149,9 @@ pub fn parse(text: &str, base: &Path) -> Result<Profile, String> {
     }
     if let Some(done) = cur.take() {
         programs.push(finish_program(done)?);
+    }
+    if !legacy {
+        return Err("profile.toml needs semantics = \"legacy-dual-arch\"; raw BPF conversion reports use a separate contract".into());
     }
     let build_rel = build_rel.ok_or("profile.toml needs build = \"...\"")?;
     if programs.is_empty() {
@@ -216,8 +229,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_raw_bpf_results_as_legacy_expectations() {
+        let text = "semantics = \"raw-bpf-alive2\"\nbuild = \"../build\"\n";
+        assert!(parse(text, Path::new("/repo"))
+            .unwrap_err()
+            .contains("legacy-dual-arch"));
+    }
+
+    #[test]
     fn parses_build_and_programs() {
         let text = r#"
+semantics = "legacy-dual-arch"
 build = "../build"
 [[program]]
 name = "just_tx"

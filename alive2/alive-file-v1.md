@@ -1,69 +1,100 @@
 # Alive file v1
 
-A `.alive` file is text. It is not an ELF object, not SMT-LIB, and not LLVM bitcode. The body is what `Function::print` writes. The loader rebuilds Alive2 `Function`, `BasicBlock`, and `Instr` objects from that text. It does not parse a source-to-target transform, and it does not wrap the program as `f => f`.
+A `.alive` file contains one program in text form. The loader reconstructs the pinned Alive2 `Function`, `BasicBlock`, and `Instr` objects. It does not use an LLVM frontend or a source-to-target transform. Origin metadata and evidence reports are separate files.
 
-This note records the printers that were read. A form that is not listed here is not part of v1 yet. The loader must reject it. No loader exists yet.
+## Header and module
 
-## Header
+Every file requires these exact lines before its declarations and definition:
 
-`Function::print` does not write a version. v1 adds comment lines before the first `define` or `declare`. A comment starts with `;` and runs to the end of the line.
-
-The first comment is `; alive-file v1`. The file also names the Alive2 pin and the Rocq pin.
-
-```
+```text
 ; alive-file v1
 ; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
 ; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
 ```
 
-A missing `alive-file v1` line, or a different version token, is a hard error. The pins are checked against the loader's built-in pins. A mismatch is a hard error. Comments elsewhere are ignored. The body contains no pass lines, no JSON, and no proof result.
+Other `;` comments and blank lines are ignored. Unsupported versions and mismatched pins are errors. The body contains optional declarations followed by exactly one definition and its closing brace. Globals, multiple definitions, varargs, and content after the definition are unsupported.
 
-The conditional text in `alive2/ebpf-test.log` under `Generated Alive2 IR` is a real `Function::print` body. It has no v1 header. A generated file adds the header above that body.
+```text
+declare ptr bpf_map_lookup_elem(ptr, ptr) memory(argmem: read, inaccessiblemem: readwrite)
+define i64 @example(ptr %ctx, ptr %pkt, i64 %pkt_base) memory(argmem: readwrite, inaccessiblemem: readwrite) {
+entry:
+  %a = add i64 1, 2
+  ret i64 %a
+}
+```
 
-## Module
+Declaration and call names may have a leading `@`. The pinned printers omit it for these names. The definition name requires `@`; SSA inputs and results require `%`. Block labels omit `%`, while references retain it. Commas, parentheses, and whitespace separate tokens. `--normalize` writes the exact header followed by the pinned `Function::print` output.
 
-`Function::print` (`alive2/third_party/alive2/ir/function.cpp:877`) writes optional declarations, optional globals, then one function.
+Memory attributes are required on declarations and definitions. Supported locations are `argmem`, `globals`, `inaccessiblemem`, `errno`, and `other`; modes are `read`, `write`, and `readwrite`. The aggregate forms `memory(none)`, `memory(read)`, and `memory(write)` are supported. Calls inherit their declaration attributes. An explicit call memory attribute must match the declaration, so printing and reading preserve effects.
 
-A declaration is `declare`, the return type, a name, `(`, comma-separated typed inputs, optional `...`, `)`, and the function attributes. Inputs print as attribute text immediately followed by the type (`function.cpp:885`).
+## Instruction subset
 
-The function header is `define`, the return type, ` @`, the name, `(`, comma-separated inputs, `)`, the attributes, and ` {`. Each input prints through `operator<<` on `Value` (`value.cpp:33`), which is the type, a space, and the name. Attributes come from `FnAttrs` (`attrs.cpp:105`) and end with `MemoryAccess` (`attrs.cpp:283`). `memory(none)` is the zero mask. `memory(read)` and `memory(write)` are the read-anything and write-anything cases. A narrower mask prints `argmem`, `globals`, `inaccessiblemem`, `errno`, or `other`, each with `: read`, `: write`, or `: readwrite`.
+Types are `i1`, `i8`, `i16`, `i32`, `i64`, and address-space-zero `ptr`. Constants are decimal integers. Result types, operand types, conversion widths, and literal ranges are checked.
 
-A helper that stores must not be declared `memory(none)`.
+| Form | Accepted spelling |
+| --- | --- |
+| Integer arithmetic | `%r = add i64 %a, %b`; `sub`, `mul`, `udiv`, `sdiv`, `urem`, `srem`, `shl`, `lshr`, `ashr`, `and`, `or`, `xor` |
+| Integer comparison | `%c = icmp ult i64 %a, %b`; also `eq`, `ne`, signed and unsigned `lt`, `le`, `gt`, `ge` |
+| Integer conversion | `%r = trunc i64 %a to i32`; `zext`, `sext` |
+| Pointer conversion | `%r = ptrtoint ptr %p to i64` |
+| Allocation | `%stack = alloca i64 512, align 8` |
+| Pointer offset | `%p = gep ptr %base, 1 x i64 %offset` |
+| Load | `%r = load i32, ptr %p, align 4` |
+| Store | `store i32 %r, ptr %p, align 4` |
+| Phi | `%r = phi i64 [ %a, %left ], [ %b, %right ]` |
+| Branch | `br label %next`; `br i1 %c, label %yes, label %no` |
+| Return | `ret i64 %r` |
+| Declared call | `%r = call ptr bpf_map_lookup_elem(ptr %map, ptr %key)` |
 
-## Blocks
+The loader rejects unsupported opcodes and flags. Alignments must be nonzero powers of two. Branch conditions must be `i1`; memory addresses must be pointers. A declared call must match its return type, argument count, and argument types. Void calls and void returns are unsupported.
 
-`operator<<` for `BasicBlock` (`function.cpp:120`) prints the name without its leading `%`, then `:`, then each instruction indented two spaces. Blocks are separated by a blank line. The function ends with `}`.
+Blocks must be reachable and terminate with `br` or `ret`. The entry block has no predecessors. Duplicate definitions, duplicate labels, unresolved names, instructions after terminators, and phis after ordinary instructions are errors. Phi incoming labels must match the actual predecessor set exactly. Values must dominate their uses, including uses on phi incoming edges. Non-phi operands are resolved in source order; forward value references are supported only by phis. Instruction diagnostics include the source line; module-level checks identify the failed invariant.
 
-A block name in a branch or a phi keeps the `%`. The label at the block does not.
+The pinned printers are in `third_party/alive2/ir/function.cpp` and `third_party/alive2/ir/instr.cpp`. The file subset deliberately excludes other forms those printers can produce.
 
-## Types and names
+## Compiler representation
 
-`IntType::print` (`type.cpp:409`) writes `i` and the bit width. `PtrType::print` (`type.cpp:776`) writes `ptr`, plus ` addrspace(N)` when the address space is not 0. `print_type` (`instr.cpp:36`) prints the type and a trailing space when the type string is not empty.
+The Rust compiler preserves source loops as CFG backedges. It masks shift counts and lowers division and remainder corner cases into explicit branches and phis. Extra division blocks use their actual outgoing labels in later phi inputs.
 
-A value prints as its type, a space, and its name, unless the type string is empty. Instruction names in the existing lifter output are `%0`, `%b3_r0`, register inputs such as `r1`, and integer constants such as `10`.
+Register facts distinguish scalar integers, context pointers, packet addresses, stack pointers, map handles, and map-value pointers. Packet addresses have an integer representation tied to `%pkt_base`; ordinary scalar integers cannot be dereferenced as packets. Stack pointer spills retain their kind and known offset. Partial or incompatible pointer-slot reloads are rejected. Unsupported function ranges, ambiguous entries, relocation kinds, and pointer flows fail conversion.
 
-## Instructions read
+The current context layout assumes the XDP data/data_end fields at offsets 0 and 4. Helper lookup is represented by a declared external call with memory effects. These choices need source-to-target relation proofs. Successful parsing and execution do not establish that relation.
 
-`BinOp::print` (`instr.cpp:153`) writes the result name, ` = `, the opcode, optional `nsw `, `nuw `, `exact `, and `disjoint `, then the left value with its type and the right name without a type. Opcodes read from that switch include `add`, `sub`, `mul`, `sdiv`, `udiv`, `srem`, `urem`, `shl`, `ashr`, `lshr`, `and`, `or`, and `xor`. An eBPF shift is the opcode after a mask. An eBPF divide is not a bare `udiv` or `sdiv` on the zero or overflow path. Those paths are branches and phis, because Alive2 treats them as undefined behavior.
+## Commands and evidence
 
-`ICmp::print` (`instr.cpp:2953`) writes `name = icmp `, optional `samesign `, the condition, the left value with its type, `, `, and the right name. Conditions read there are `eq`, `ne`, `sle`, `slt`, `sge`, `sgt`, `ule`, `ult`, `uge`, and `ugt`. Optional suffixes are `, use_provenance` and `, offsetonly`.
+```sh
+cargo build --manifest-path tooling/Cargo.toml -p ebpf-to-alive2
+cmake --build alive2/build --target alive2-load -j8
 
-`Phi::print` (`instr.cpp:3300`) writes `name = phi `, the type with a trailing space, then `[ `, the value name, `, `, the predecessor block name, ` ]`. Later pairs follow `, `.
+tooling/target/debug/ebpf-to-alive2 compile INPUT.o \
+  --out OUTPUT.alive --origin OUTPUT.origin.json --report compile-report.toml
 
-`Branch::print` (`instr.cpp:3403`) writes `br `, the condition value with its type when present, `, `, `label `, and the true block name. A conditional branch adds `, label ` and the false block name.
+tooling/target/debug/ebpf-to-alive2 compile-corpus \
+  --index alive2/corpus/snapshot.toml --out-dir /path/outside/input-tree
 
-`Return::print` (`instr.cpp:3521`) writes `ret `, the type with a trailing space, and the value name.
+alive2/build/alive2-load --inspect OUTPUT.alive
+alive2/build/alive2-load --normalize OUTPUT.alive
+alive2/build/alive2-load --smoke OUTPUT.alive
+alive2/build/alive2-load --smoke LOOP.alive --unroll 1
+alive2/build/alive2-load --self-test
+```
 
-`Load::print` (`instr.cpp:4411`) writes `name = load `, the loaded type, `, `, the pointer value with its type, `, align `, and the alignment.
+`--inspect` reports instruction kinds, types, operands, branch targets, and the pinned instruction text, including predicates, offsets, alignments, callee names, phi edges, and memory effects. `--smoke` calls the existing upstream symbolic executor. It uses a local memory-size configuration derived from the loaded function. Cyclic CFGs require an explicit positive unroll bound, passed to the existing upstream unroller. Smoke completion checks construction of a symbolic return state; it neither solves equivalence nor proves source safety or termination.
 
-`Store::print` (`instr.cpp:4458`) writes `store `, the stored value with its type, `, `, the pointer value with its type, `, align `, and the alignment.
+The compiler checks the snapshot's input SHA-256 and size. It stages the three outputs, publishes `.alive` and origin, and renames the conversion report last. A caught failure removes that invocation's outputs. The report is the completion marker; publication is not a crash-safe multi-file transaction. Concurrent writers to the same output paths are unsupported.
 
-`FnCall::print` (`instr.cpp:2599`) writes an optional `name = `, then `call `, the return type with a trailing space, the callee name, `(`, arguments, `)`, and the call attributes. Each argument is its attribute text plus the value. A void call omits the result name.
+Origin schema v1 records ELF and Alive hashes, selected function/section, raw instruction bytes, source slots, and the actual generated SSA definitions. Branch instructions and complete LDDW pairs are included. IR loading has no dependency on origin. Full R0–R10/RAX/PC/stack/code-id/tail-call checkpoint expressions and a source-view consumer remain incomplete. The loader has no source-view mode, so it cannot validate or present those mappings yet.
 
-## Not accepted yet
+`compile-report.toml` says `status = "converted"` and `implementation_proof = "not_proven"`. The snapshot records 17 observed raw BPF objects. The Task A `index.toml` is unavailable; the snapshot does not fulfill that upstream manifest contract. `profile.toml` explicitly selects `legacy-dual-arch`, retaining the old page's interpretation of native ELF/BPF outcomes. Raw BPF conversion reports have a separate contract and are not interpreted as those legacy outcomes.
 
-Printers for `trunc`, `zext`, `sext`, `getelementptr`, `alloca`, `switch`, `freeze`, and `select` were not read. v1 does not accept those spellings until the printer is cited and the loader builds that instruction. The corpus needs byte and word loads, so a later pass has to add the conversion printers or choose a load type that `Load::print` already emits.
+Run the reproducible file integration gate with Python 3.11 or newer:
 
-`END` / `be32` / `be64` is not an Alive2 opcode. The compiler rewrites it into instructions whose printers are listed above. It does not invent a `bswap` token.
+```sh
+python3 alive2/tests/run-rust-file-e2e.py \
+  --compiler tooling/target/debug/ebpf-to-alive2 \
+  --loader alive2/build/alive2-load \
+  --index alive2/corpus/snapshot.toml \
+  --out-dir /path/outside/input-tree
+```
 
-A forward reference to a block or a value is allowed in the text. The loader resolves names in a second pass. A missing name, a repeated definition, a phi predecessor that is not a predecessor, or a block that does not end in `br` or `ret` is a hard error.
+It compiles and independently reads all 17 programs, compares complete printed structure after normalization, checks recorded hashes and origin independence, and runs two real symbolic-execution smoke cases. Its `verification.json` is test evidence and an artifact index. It records implementation and artifact proofs as `not_proven`. The older C++/Rocq checks do not prove this Rust implementation. The PR remains Draft until the actual implementation connection and remaining contract gaps are resolved.
