@@ -43,6 +43,10 @@ def main():
         assert report["status"] == "converted"
         assert report["implementation_proof"] == "not_proven"
         assert len(metadata["instructions"]) == report["instructions"]
+        definitions = {line.strip().split(" = ", 1)[0] for line in alive.read_text().splitlines() if " = " in line}
+        mapped = set(metadata["prologue_ir"])
+        mapped.update(value for instruction in metadata["instructions"] for value in instruction["ir"])
+        assert definitions == mapped, f"{name}: incomplete definition origin"
         structure = run([args.loader, "--inspect", alive])
         normalized = directory / f"{name}.normalized.alive"
         normalized.write_text(run([args.loader, "--normalize", alive]))
@@ -70,6 +74,10 @@ def main():
     for name in ["div2", "xdp_drop"]:
         alive = args.out_dir / name / f"{name}.alive"
         smoke.append({"name": name, "result": run([args.loader, "--smoke", alive]).strip()})
+    loop = args.out_dir / "helper_loop" / "helper_loop.alive"
+    rejected = subprocess.run([str(args.loader), "--smoke", str(loop)], capture_output=True, text=True, timeout=30)
+    assert rejected.returncode != 0 and "explicit --unroll" in rejected.stderr
+    smoke.append({"name": "helper_loop", "unroll": 1, "result": run([args.loader, "--smoke", loop, "--unroll", "1"]).strip()})
     evidence = {
         "evidence_kind": "test", "status": "verified_for_recorded_checks",
         "compiler_sha256": sha256(args.compiler), "loader_sha256": sha256(args.loader),

@@ -6,14 +6,14 @@ This branch is a Draft prototype. The 17 snapshotted raw BPF objects convert to 
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| Rust compiler and CLI tests | 22 passed | `cargo test --manifest-path tooling/Cargo.toml -p ebpf-to-alive2 --offline` |
+| Rust compiler and CLI tests | 26 passed | `cargo test --manifest-path tooling/Cargo.toml -p ebpf-to-alive2 --offline` |
 | Rust formatting and workspace clippy | passed | `tooling/scripts/rust-ci.sh`, with the installed Lean toolchain on PATH |
 | Explicit legacy profile tests | 2 passed | `cargo test --manifest-path tooling/Cargo.toml -p server --lib profile::tests --offline` |
 | Loader validation self-test | passed | `alive2/build/alive2-load --self-test` |
 | Real corpus compile and independent load | 17 of 17 | `corpus/rust-file-verification.json` |
-| Pinned printer round trip, including instruction text | 17 of 17 | same report; compares kinds, types, operands, targets, predicates, phi labels, memory effects, and alignment |
-| IR load without valid origin metadata | 17 of 17 | same report; tests missing and corrupt origin |
-| Upstream symbolic executor smoke | div2 and xdp_drop completed | same report; no equivalence or safety solver result |
+| Pinned parser/printer self-consistency, including instruction text | 17 of 17 | same report; compares kinds, types (including declaration arguments), operands, targets, predicates, phi labels, memory effects, and alignment; not an independent semantic oracle |
+| IR loading independent of origin metadata | 17 of 17 | same report; missing and corrupt origin are never read by the loader; origin validation is not implemented |
+| Upstream symbolic executor smoke | div2, xdp_drop, and helper_loop with unroll 1 completed | same report; loop without a bound rejected; no equivalence or safety solver result |
 
 The integration command is in `alive-file-v1.md` and implemented in `tests/run-rust-file-e2e.py`. The recorded report binds the compiler and loader binaries, input snapshot, and per-program input/output files by SHA-256. Those binary hashes are machine/build-specific. Rebuild and rerun to obtain a new report.
 
@@ -27,7 +27,9 @@ The interrupted register-facts migration now compiles. Scalar values cannot sile
 
 The loader validates pins, syntax, references, types, terminators, reachability, SSA dominance, phi predecessor sets, call signatures, and memory effects. Printer round trips exposed two real protocol gaps: bare declaration/call names, and missing call memory attributes. Calls now inherit declared effects and reject contradictory explicit effects. Neither the upstream executor nor its unroller was modified.
 
-ELF loading validates complete table entries and relocation targets. It rejects multiple functions in a selected section and functions that do not span that section, rather than silently compiling a different byte range. CLI output publication checks input hashes, uses staged files and a report-last completion marker, and invalidates old outputs on caught conversion failures. Origin names are actual emitted definitions; branches and full LDDW instruction bytes are retained.
+ELF loading validates complete table entries and relocation targets. It rejects multiple functions in a selected section and functions that do not span that section, rather than silently compiling a different byte range. CLI output publication checks input hashes, uses staged files and a report-last completion marker, and invalidates old outputs on caught conversion failures. A corpus ownership file tracks output names: subsequent invocations invalidate managed reports before manifest parsing and remove managed artifacts for programs omitted from a valid manifest. Unrelated files are preserved. Origin names are actual emitted definitions, including block-entry phis and separate prologue definitions; branches and full LDDW instruction bytes are retained.
+
+The DeepSeek audit found six actionable issues: invalid signed 64-bit loads, invalid sign-ext stores, omitted phi origin names, stale batch reports, misplaced headers, and sanitized map-name collisions. All have fixes and regressions. The decoder accepts sign-ext memory mode only for narrow loads. Origin coverage is checked in both directions. Loader headers must precede the body, and distinct map symbols cannot collapse to one parameter. Declaration input types and a real loop smoke now extend the recorded checks. The audit inspected only the resumed activity slice, not the entire historical thread.
 
 ## Remaining obligations
 

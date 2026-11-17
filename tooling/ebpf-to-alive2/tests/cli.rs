@@ -144,3 +144,45 @@ fn manifest_hash_mismatch_cannot_leave_a_success_report() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("SHA-256 mismatch"));
     assert!(!run.output("corpus/div2/compile-report.toml").exists());
 }
+
+fn manifest_for(names: &[&str]) -> String {
+    names.iter().map(|name| {
+        let object = corpus(name).canonicalize().unwrap();
+        let bytes = fs::read(&object).unwrap();
+        format!("[[program]]\nname = '{name}'\nobject = '{}'\nsha256 = '{:x}'\nsize = {}\nformat = 'elf-bpf-relocatable'\nrole = 'bpf_object'\nmode = 'bpf'\n", object.display(), Sha256::digest(&bytes), bytes.len())
+    }).collect()
+}
+
+#[test]
+fn manifest_failure_invalidates_all_previously_owned_reports() {
+    let run = Run::new();
+    assert!(run
+        .corpus(&manifest_for(&["div2", "just_drop"]))
+        .status
+        .success());
+    assert!(!run.corpus("program = []").status.success());
+    for name in ["div2", "just_drop"] {
+        assert!(!run
+            .output(&format!("corpus/{name}/compile-report.toml"))
+            .exists());
+    }
+}
+
+#[test]
+fn programs_removed_from_manifest_lose_their_owned_artifacts() {
+    let run = Run::new();
+    assert!(run
+        .corpus(&manifest_for(&["div2", "just_drop"]))
+        .status
+        .success());
+    fs::write(run.output("corpus/keep.txt"), "unrelated").unwrap();
+    assert!(run.corpus(&manifest_for(&["just_drop"])).status.success());
+    for file in ["div2.alive", "div2.origin.json", "compile-report.toml"] {
+        assert!(!run.output(&format!("corpus/div2/{file}")).exists());
+    }
+    assert_eq!(
+        fs::read_to_string(run.output("corpus/keep.txt")).unwrap(),
+        "unrelated"
+    );
+    assert!(run.output("corpus/just_drop/compile-report.toml").exists());
+}

@@ -207,7 +207,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
             let size = mem_size(opcode)?;
             let mode = opcode >> 5;
             let signed = mode == 4;
-            if mode != 3 && mode != 4 {
+            if mode != 3 && !(class == 0x01 && mode == 4 && size != MemSize::Dword) {
                 return Err(format!("slot {slot}: memory mode {mode} is not MEM"));
             }
             if class == 0x01 {

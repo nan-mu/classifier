@@ -115,3 +115,40 @@ fn empty_or_unreachable_programs_return_errors() {
     ]);
     assert!(lift(&func).err().unwrap().contains("unreachable"));
 }
+
+#[test]
+fn signed_memory_mode_is_limited_to_narrow_loads() {
+    for opcode in [0x82, 0x83, 0x8a, 0x8b, 0x92, 0x93, 0x9a, 0x9b, 0x99] {
+        let bytes = [
+            instruction(opcode, 0, 10, -8, 0),
+            instruction(0x95, 0, 0, 0, 0),
+        ]
+        .concat();
+        assert!(
+            decode(&bytes).is_err(),
+            "accepted invalid opcode {opcode:#x}"
+        );
+    }
+    for opcode in [0x81, 0x89, 0x91] {
+        let compiled = lift(&program(&[
+            instruction(0x7a, 10, 0, -8, 1),
+            instruction(opcode, 0, 10, -8, 0),
+            instruction(0x95, 0, 0, 0, 0),
+        ]))
+        .unwrap();
+        assert!(compiled.alive.contains(" = sext "));
+        assert!(!compiled.alive.contains(" = sext i64"));
+    }
+}
+
+#[test]
+fn distinct_map_symbols_cannot_share_a_sanitized_parameter() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../alive2/corpus/bpf/just_drop/bpf.o");
+    let mut func = ebpf_to_alive2::load_function(&std::fs::read(path).unwrap(), None).unwrap();
+    func.relocs[0].symbol = "a-b".into();
+    let mut second = func.relocs[0].clone();
+    second.symbol = "a_b".into();
+    func.relocs.push(second);
+    assert!(lift(&func).err().unwrap().contains("share emitted name"));
+}

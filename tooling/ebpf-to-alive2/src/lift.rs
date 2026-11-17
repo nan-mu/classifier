@@ -30,6 +30,7 @@ struct Emit {
 pub struct Compiled {
     pub alive: String,
     pub origin_insns: Vec<(u32, Vec<String>)>,
+    pub prologue_ir: Vec<String>,
     pub maps: Vec<String>,
     pub loop_header: bool,
 }
@@ -47,7 +48,7 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
         lines: Vec::new(),
         origin: BTreeMap::new(),
     };
-    let maps = map_names(func);
+    let maps = map_names(func)?;
     let map_at: BTreeMap<u32, String> = func
         .relocs
         .iter()
@@ -79,6 +80,7 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
     emit.lines.push(header);
     emit.lines.push("entry:\n  %stack = alloca i64 512, align 8\n  %fp = gep ptr %stack, 1 x i64 512\n  br label %s0\n".into());
 
+    let prologue_ir = vec!["%stack".to_string(), "%fp".to_string()];
     let mut outs: Vec<[Rv; 11]> = Vec::new();
     let mut phi_names: Vec<Option<[String; 11]>> = Vec::new();
     for (bi, block) in blocks.iter().enumerate() {
@@ -153,6 +155,10 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
                 }
                 emit.lines
                     .push(format!("  {} = phi {ty} {}", names[reg], pairs.join(", ")));
+                emit.origin
+                    .entry(func.insns[block.insns.start].index())
+                    .or_default()
+                    .push(names[reg].clone());
             }
         }
         emit.lines.extend(bodies[bi].clone());
@@ -164,6 +170,7 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
     Ok(Compiled {
         alive,
         origin_insns,
+        prologue_ir,
         maps,
         loop_header: blocks.iter().any(|block| {
             block
@@ -868,7 +875,8 @@ fn record_uses(insns: &[Insn], gen: &mut [bool; 11], kill: &mut [bool; 11]) {
     }
 }
 
-fn map_names(func: &Func) -> Vec<String> {
+fn map_names(func: &Func) -> Result<Vec<String>, String> {
+    let mut symbols = BTreeMap::new();
     let mut names = Vec::new();
     for reloc in &func.relocs {
         let name = format!(
@@ -877,11 +885,19 @@ fn map_names(func: &Func) -> Vec<String> {
                 .symbol
                 .replace(|ch: char| !ch.is_ascii_alphanumeric(), "_")
         );
+        if let Some(previous) = symbols.insert(name.clone(), &reloc.symbol) {
+            if previous != &reloc.symbol {
+                return Err(format!(
+                    "map symbols {previous:?} and {:?} share emitted name {name}",
+                    reloc.symbol
+                ));
+            }
+        }
         if !names.contains(&name) {
             names.push(name);
         }
     }
-    names
+    Ok(names)
 }
 
 fn emit_block(
@@ -1377,15 +1393,13 @@ fn emit_load(
         "  {loaded} = load {ty}, {ptr}, align {}",
         align(size)
     ));
-    let wide = if ty == "ptr" {
+    let wide = if ty == "ptr" || size == MemSize::Dword {
         loaded
     } else if signed {
         let name = emit.fresh();
         emit.lines
             .push(format!("  {name} = sext {ty} {loaded} to i64"));
         name
-    } else if size == MemSize::Dword {
-        loaded
     } else {
         let name = emit.fresh();
         emit.lines

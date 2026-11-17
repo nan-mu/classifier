@@ -75,6 +75,13 @@ fn corpus_converts_every_program_and_maps_only_existing_values() {
             .lines()
             .filter_map(|line| line.trim().split_once(" = ").map(|(name, _)| name))
             .collect();
+        let mapped: std::collections::BTreeSet<_> = compiled
+            .prologue_ir
+            .iter()
+            .chain(compiled.origin_insns.iter().flat_map(|(_, values)| values))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(defined, mapped, "{name}: definitions missing from origin");
         for (_, values) in &compiled.origin_insns {
             for value in values {
                 assert!(

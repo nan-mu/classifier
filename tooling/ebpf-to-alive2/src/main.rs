@@ -158,7 +158,7 @@ fn compile_to(
     let origin = serde_json::to_vec_pretty(&serde_json::json!({
         "schema": "classifier-alive-origin-v1", "entry": func.name, "section": func.section,
         "elf_sha256": elf_sha, "alive_sha256": alive_sha, "instructions": instructions,
-        "state_mapping": "incomplete"
+        "state_mapping": "incomplete", "prologue_ir": compiled.prologue_ir
     }))
     .map_err(|e| e.to_string())?;
     let report = toml::to_string(&CompileReport {
@@ -202,6 +202,23 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
     let opts = flags(args, &["--index", "--out-dir"])?;
     let index = Path::new(required(&opts, "--index")?);
     let out_dir = Path::new(required(&opts, "--out-dir")?);
+    let output_root = resolved(out_dir)?;
+    if resolved(index)?.starts_with(&output_root) {
+        return Err("corpus index must be outside the output directory".into());
+    }
+    let ownership = out_dir.join("corpus-outputs.json");
+    let previous: Vec<String> = if ownership.exists() {
+        serde_json::from_slice(&fs::read(&ownership).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid corpus output ownership: {e}"))?
+    } else {
+        Vec::new()
+    };
+    for name in &previous {
+        if !valid_program_name(name) || !resolved(&out_dir.join(name))?.starts_with(&output_root) {
+            return Err("invalid corpus output ownership name or path".into());
+        }
+        remove_if_present(&out_dir.join(name).join("compile-report.toml"))?;
+    }
     let text = fs::read_to_string(index).map_err(|e| format!("read {}: {e}", index.display()))?;
     let snapshot: Snapshot =
         toml::from_str(&text).map_err(|e| format!("invalid corpus manifest: {e}"))?;
@@ -210,13 +227,7 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
     }
     let mut names = std::collections::BTreeSet::new();
     for program in &snapshot.program {
-        if program.name.is_empty()
-            || !program
-                .name
-                .bytes()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'_')
-            || !names.insert(&program.name)
-        {
+        if !valid_program_name(&program.name) || !names.insert(&program.name) {
             return Err(format!(
                 "invalid or duplicate program name {:?}",
                 program.name
@@ -241,6 +252,27 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
         }
     }
     let root = index.parent().unwrap_or(Path::new("."));
+    for program in &snapshot.program {
+        if resolved(&root.join(&program.object))?.starts_with(&output_root) {
+            return Err("corpus inputs must be outside the output directory".into());
+        }
+    }
+    for name in previous {
+        if !names.contains(&name) {
+            let directory = out_dir.join(&name);
+            remove_if_present(&directory.join(format!("{name}.alive")))?;
+            remove_if_present(&directory.join(format!("{name}.origin.json")))?;
+        }
+    }
+    fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    let owned: Vec<_> = names.into_iter().collect();
+    let staged = out_dir.join(format!(".corpus-outputs.{}.partial", std::process::id()));
+    fs::write(
+        &staged,
+        serde_json::to_vec(&owned).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    fs::rename(&staged, ownership).map_err(|e| e.to_string())?;
     let mut failures = Vec::new();
     for program in snapshot.program {
         let path = root.join(&program.object);
@@ -265,6 +297,13 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
     } else {
         Err(failures.join("\n"))
     }
+}
+
+fn valid_program_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == b'_')
 }
 
 fn remove_if_present(path: &Path) -> Result<(), String> {

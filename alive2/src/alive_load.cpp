@@ -446,6 +446,7 @@ void load_text(Prog &p, const std::string &text) {
     ++lineno;
     auto trimmed = trim(line);
     if (trimmed.starts_with(";")) {
+      if (!body.empty() && (trimmed.starts_with("; alive-file") || trimmed.starts_with("; alive2-pin") || trimmed.starts_with("; rocq-pin"))) bad(lineno, "header must precede declarations and definition");
       note_header(trimmed, saw_file, saw_alive, saw_rocq);
       continue;
     }
@@ -455,6 +456,7 @@ void load_text(Prog &p, const std::string &text) {
       trimmed = trim(trimmed.substr(0, cut));
     }
     if (trimmed.empty()) continue;
+    if (!saw_file || !saw_alive || !saw_rocq) bad(lineno, "missing alive-file header or pin before body");
     if (closed) bad(lineno, "content after function closing brace");
     if (trimmed.starts_with("define ")) {
       if (opened) bad(lineno, "multiple function definitions");
@@ -656,7 +658,9 @@ std::string inspect(const Function &fn) {
   out << "mem" << fn.getFnAttrs().mem << "\n";
   for (auto &decl : fn.getFnDecls()) {
     out << "decl " << decl.name << " " << decl.output->toString() << " args " << decl.inputs.size();
-    out << " mem" << decl.attrs.mem << "\n";
+    out << " mem" << decl.attrs.mem << " types=";
+    for (auto &[type, attrs] : decl.inputs) out << attrs << type->toString() << ";";
+    out << "\n";
   }
   for (auto &input : fn.getInputs())
     out << "in " << input.getName() << " " << input.getType().toString() << "\n";
@@ -759,6 +763,9 @@ void self_test() {
   expect_throw(std::string(ALIVE_FILE) + "\n; alive2-pin 000\n" + ROCQ_PIN + "\ndefine i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "unsupported alive2 pin");
   expect_throw(header() + "define i64 @a() memory(argmem: execute) {\nentry:\n  ret i64 0\n}\n", "unknown memory");
   expect_throw("define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "missing alive-file");
+
+  expect_throw("define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n" + header(), "header");
+  expect_throw(header() + "define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n" + header(), "header must precede");
 
   for (const auto &instruction : {"br i1 %c label %entry", "store i64 0 ptr %p align", "%x = gep ptr %p 1 x i64", "%x = zext i8 0 to", "%x = add i64 0", "%x = phi i64 [ 0 %entry"}) {
     expect_throw(header() + "define i64 @bad(i1 %c, ptr %p) memory(none) {\nentry:\n  " + instruction + "\n  ret i64 0\n}\n", "line ");
