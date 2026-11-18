@@ -6,6 +6,7 @@
 #   weak   — both sides complete, kind order matches, some branch expression does not
 #   fail   — a side does not complete, or some segment's kind order disagrees
 
+semantics = "legacy-dual-arch"
 build = "../build"
 
 [[program]]

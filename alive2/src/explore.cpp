@@ -1,3 +1,4 @@
+#include "ir/constant.h"
 #include "ir/function.h"
 #include "ir/globals.h"
 #include "ir/instr.h"
@@ -5,13 +6,22 @@
 #include "ir/type.h"
 #include "smt/expr.h"
 #include "smt/smt.h"
+#include "smt/ctx.h"
+#include <z3.h>
+#include <algorithm>
 #include "alive_file.h"
-#include "tools/alive_parser.h"
+#include "explore_initial.h"
 #include "util/config.h"
 #include "util/symexec.h"
 
-#include <CommonCrypto/CommonDigest.h>
+#include <openssl/evp.h>
+#include <charconv>
+#include <unistd.h>
 
+#include <filesystem>
+#include <json-c/json.h>
+#include <set>
+#include <map>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -34,6 +44,9 @@ struct Term {
   std::string digits;
   std::string display;
   std::string poison;
+  std::string sort_json;
+  std::string symbol;
+  std::string parameters = "[]";
 };
 
 struct Node {
@@ -47,6 +60,13 @@ struct Node {
   std::string path;
   std::string term;
   std::string unsupported_reason;
+  std::string definedness;
+  std::string preconditions, axioms, call_preconditions;
+  std::string memory;
+  std::string origin = "null", snapshot_kind = "native_after_instruction";
+  std::string returned_values = "[]", returned_memories = "[]";
+  struct Binding { std::string name, type, term, non_poison, domain; };
+  std::vector<Binding> values;
 };
 
 struct Edge {
@@ -55,6 +75,7 @@ struct Edge {
   std::string to;
   std::string kind;
   std::string guard;
+  bool native_jump = false;
 };
 
 std::string json_string(std::string_view text) {
@@ -77,16 +98,14 @@ std::string json_string(std::string_view text) {
   return out;
 }
 
-std::string sha256_file(const std::string &path) {
-  std::ifstream in(path, std::ios::binary);
-  std::ostringstream buf;
-  buf << in.rdbuf();
-  auto bytes = buf.str();
-  unsigned char hash[CC_SHA256_DIGEST_LENGTH];
-  CC_SHA256(bytes.data(), static_cast<CC_LONG>(bytes.size()), hash);
+std::string sha256(const std::string &bytes) {
+  unsigned char hash[EVP_MAX_MD_SIZE];
+  unsigned length = 0;
+  if (!EVP_Digest(bytes.data(), bytes.size(), hash, &length, EVP_sha256(), nullptr))
+    throw std::runtime_error("SHA256 failed");
   static const char *hexd = "0123456789abcdef";
-  std::string out(CC_SHA256_DIGEST_LENGTH * 2, '0');
-  for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+  std::string out(length * 2, '0');
+  for (unsigned i = 0; i < length; ++i) {
     out[i * 2] = hexd[hash[i] >> 4];
     out[i * 2 + 1] = hexd[hash[i] & 0xf];
   }
@@ -102,30 +121,6 @@ std::string read_file(const std::string &path) {
   return buf.str();
 }
 
-void configure_pure_alu() {
-  num_locals_src = 0;
-  num_locals_tgt = 0;
-  num_nonlocals = 0;
-  num_nonlocals_src = 0;
-  num_globals_src = 0;
-  num_ptrinputs = 0;
-  has_fncall = false;
-  has_alloca = false;
-  has_null_block = false;
-  has_int2ptr = false;
-  has_nocapture = false;
-  has_initializes_attr = false;
-  does_int_load = false;
-  does_int_store = false;
-  does_ptr_load = false;
-  does_ptr_store = false;
-  observes_addresses = false;
-  bits_byte = 8;
-  bits_poison_per_byte = 1;
-  bits_program_pointer = 64;
-  little_endian = true;
-}
-
 unsigned unroll_index(std::string_view name) {
   auto pos = name.rfind('#');
   if (pos == std::string_view::npos || pos + 1 >= name.size())
@@ -139,24 +134,17 @@ unsigned unroll_index(std::string_view name) {
   return n;
 }
 
-std::optional<bool> concrete_bool(const smt::expr &expr) {
-    if (expr.isTrue())
-      return true;
-    if (expr.isFalse())
-      return false;
-    if (expr.isBV() && expr.isConst() && expr.bits() == 1)
-      return std::string(expr.numeral_string()) == "1";
-    return std::nullopt;
-  }
-
-  struct Terms {
+struct Terms {
   std::vector<Term> items;
   std::unordered_map<std::string, std::string> by_key;
+  std::unordered_map<unsigned, std::string> by_ast;
+  std::vector<Z3_ast> retained;
+  ~Terms() { for (auto ast : retained) Z3_dec_ref(smt::ctx(), ast); }
 
   std::string add(Term term) {
-    std::string key = term.op + "|" + term.sort + "|" + term.digits + "|" + term.display;
-    for (auto &arg : term.args)
-      key += "|" + arg;
+    std::string key = "[" + json_string(term.op) + "," + json_string(term.sort_json) + "," + json_string(term.sort) + "," + std::to_string(term.width) + "," + json_string(term.digits) + "," + json_string(term.symbol) + "," + term.parameters + "," + json_string(term.op == "unsupported" ? term.display : "");
+    for (auto &arg : term.args) key += "," + json_string(arg);
+    key += "]";
     auto found = by_key.find(key);
     if (found != by_key.end())
       return found->second;
@@ -173,38 +161,148 @@ std::optional<bool> concrete_bool(const smt::expr &expr) {
     return add(std::move(term));
   }
 
-  std::string from_expr(const smt::expr &expr) {
-    std::ostringstream shown;
-    shown << expr;
-    if (auto bit = concrete_bool(expr))
-      return boolean(*bit);
-    if (expr.isBV() && expr.bits() == 1) {
-      Term term;
-      term.op = "opaque";
-      term.sort = "bool";
-      term.display = shown.str();
-      return add(std::move(term));
+  static std::string sort_of(Z3_sort sort) {
+    switch (Z3_get_sort_kind(smt::ctx(), sort)) {
+    case Z3_BOOL_SORT: return "{\"kind\":\"bool\"}";
+    case Z3_BV_SORT: return "{\"kind\":\"bv\",\"width\":" + std::to_string(Z3_get_bv_sort_size(smt::ctx(), sort)) + "}";
+    case Z3_ARRAY_SORT:
+      return "{\"kind\":\"array\",\"domain\":" + sort_of(Z3_get_array_sort_domain(smt::ctx(), sort))
+        + ",\"range\":" + sort_of(Z3_get_array_sort_range(smt::ctx(), sort)) + "}";
+    default: return "{\"kind\":\"unsupported\",\"native\":" + json_string(Z3_sort_to_string(smt::ctx(), sort)) + "}";
     }
+  }
+
+  std::string from_ast(Z3_ast ast) {
+    auto id = Z3_get_ast_id(smt::ctx(), ast);
+    if (auto it = by_ast.find(id); it != by_ast.end()) return it->second;
+    auto result = build_ast(ast);
+    Z3_inc_ref(smt::ctx(), ast);
+    retained.push_back(ast);
+    by_ast.emplace(id, result);
+    return result;
+  }
+
+  std::string build_ast(Z3_ast ast) {
     Term term;
-    term.display = shown.str();
-    if (expr.isBV() && expr.isConst()) {
+    // The graph carries the DAG. Expanding each shared subexpression into a
+    // display tree can be exponential for symbolic memory.
+    term.display = "";
+    auto sort = Z3_get_sort(smt::ctx(), ast);
+    auto kind = Z3_get_sort_kind(smt::ctx(), sort);
+    term.sort = kind == Z3_BOOL_SORT ? "bool" : kind == Z3_BV_SORT ? "bv" : kind == Z3_ARRAY_SORT ? "array" : "unsupported";
+    if (kind == Z3_BV_SORT) term.width = Z3_get_bv_sort_size(smt::ctx(), sort);
+    term.sort_json = sort_of(sort);
+    auto ast_kind = Z3_get_ast_kind(smt::ctx(), ast);
+    if (ast_kind == Z3_NUMERAL_AST && kind == Z3_BV_SORT) {
       term.op = "bv";
-      term.sort = "bv";
-      term.width = static_cast<int>(expr.bits());
-      term.digits = std::string(expr.numeral_string());
-      term.display.clear();
-      return add(std::move(term));
+      term.digits = Z3_get_numeral_string(smt::ctx(), ast);
+    } else if (ast_kind == Z3_VAR_AST) {
+      term.op = "bound";
+      term.digits = std::to_string(Z3_get_index_value(smt::ctx(), ast));
+    } else if (ast_kind == Z3_QUANTIFIER_AST && term.sort != "unsupported") {
+      term.op = Z3_is_lambda(smt::ctx(), ast) ? "lambda" : Z3_is_quantifier_forall(smt::ctx(), ast) ? "forall" : "exists";
+      term.parameters = "[";
+      for (unsigned i = 0; i < Z3_get_quantifier_num_bound(smt::ctx(), ast); ++i) {
+        if (i) term.parameters += ",";
+        term.parameters += sort_of(Z3_get_quantifier_bound_sort(smt::ctx(), ast, i));
+      }
+      term.parameters += "]";
+      term.args.push_back(from_ast(Z3_get_quantifier_body(smt::ctx(), ast)));
+    } else if (ast_kind == Z3_APP_AST && term.sort != "unsupported") {
+      auto app = Z3_to_app(smt::ctx(), ast);
+      auto decl = Z3_get_app_decl(smt::ctx(), app);
+      auto op = Z3_get_decl_kind(smt::ctx(), decl);
+      if (op == Z3_OP_TRUE || op == Z3_OP_FALSE) return boolean(op == Z3_OP_TRUE);
+      auto symbol = Z3_get_decl_name(smt::ctx(), decl);
+      auto name = Z3_get_symbol_kind(smt::ctx(), symbol) == Z3_STRING_SYMBOL
+        ? std::string(Z3_get_symbol_string(smt::ctx(), symbol)) : std::to_string(Z3_get_symbol_int(smt::ctx(), symbol));
+      term.op = op == Z3_OP_EQ ? "eq" : op == Z3_OP_UNINTERPRETED ? "symbol" : name;
+      if (op == Z3_OP_UNINTERPRETED) term.symbol = name;
+      for (unsigned i = 0; i < Z3_get_app_num_args(smt::ctx(), app); ++i)
+        term.args.push_back(from_ast(Z3_get_app_arg(smt::ctx(), app, i)));
+      term.parameters = "[";
+      for (unsigned i = 0; i < Z3_get_decl_num_parameters(smt::ctx(), decl); ++i) {
+        if (i) term.parameters += ",";
+        auto parameter_kind = Z3_get_decl_parameter_kind(smt::ctx(), decl, i);
+        if (parameter_kind == Z3_PARAMETER_INT)
+          term.parameters += std::to_string(Z3_get_decl_int_parameter(smt::ctx(), decl, i));
+        else if (parameter_kind == Z3_PARAMETER_SORT)
+          term.parameters += sort_of(Z3_get_decl_sort_parameter(smt::ctx(), decl, i));
+        else if (parameter_kind == Z3_PARAMETER_SYMBOL) {
+          auto parameter = Z3_get_decl_symbol_parameter(smt::ctx(), decl, i);
+          term.parameters += json_string(Z3_get_symbol_kind(smt::ctx(), parameter) == Z3_STRING_SYMBOL ? Z3_get_symbol_string(smt::ctx(), parameter) : std::to_string(Z3_get_symbol_int(smt::ctx(), parameter)));
+        } else {
+          term.op = "unsupported";
+          term.parameters += "null";
+        }
+      }
+      term.parameters += "]";
+    } else {
+      // Unhandled sorts remain explicit gaps.
+      term.op = "unsupported";
+      term.display = "native AST kind " + std::to_string(ast_kind) + ", sort " + std::to_string(kind);
+      term.symbol = "unsupported-native-ast-" + std::to_string(Z3_get_ast_id(smt::ctx(), ast));
     }
-    if (expr.isBV()) {
-      term.op = "opaque";
-      term.sort = "bv";
-      term.width = static_cast<int>(expr.bits());
-      return add(std::move(term));
-    }
-    term.op = "opaque";
-    term.sort = "bool";
     return add(std::move(term));
   }
+
+  std::string from_expr(const smt::expr &expr) {
+    if (expr.isValid()) return from_ast(expr.observerAST());
+    Term term;
+    term.op = "unsupported";
+    term.sort = "unsupported";
+    term.display = "native expression is invalid (e.g. void instruction)";
+    return add(std::move(term));
+  }
+
+};
+
+std::string observe_memory(const Memory &memory, Terms &terms) {
+  std::ostringstream out;
+  out << "[";
+  bool first = true;
+  for (auto &block : memory.observeBlocks()) {
+    if (!first) out << ",";
+    first = false;
+    Pointer pointer(memory, block.bid, block.local);
+    out << "{\"id\":" << json_string(std::string(block.local ? "local:" : "nonlocal:") + std::to_string(block.bid))
+        << ",\"local\":" << (block.local ? "true" : "false")
+        << ",\"array\":" << json_string(terms.from_expr(block.array))
+        << ",\"byte_encoding\":" << unsigned(block.type)
+        << ",\"size\":" << json_string(terms.from_expr(pointer.blockSize()))
+        << ",\"alignment\":" << json_string(terms.from_expr(pointer.blockAlignment()))
+        << ",\"alive\":" << json_string(terms.from_expr(pointer.isBlockAlive()))
+        << ",\"writable\":" << json_string(terms.from_expr(pointer.isWritable()))
+        << ",\"allocation_type\":" << json_string(terms.from_expr(pointer.getAllocType()))
+        << ",\"undef\":[";
+    bool first_undef = true;
+    for (auto &undef : block.undef) {
+      if (!first_undef) out << ",";
+      first_undef = false;
+      out << json_string(terms.from_expr(undef));
+    }
+    out << "]}";
+  }
+  out << "]";
+  return out.str();
+}
+
+unsigned positive_integer(const std::string &text) {
+  unsigned value = 0;
+  auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
+  if (ec != std::errc{} || end != text.data() + text.size() || !value)
+    throw std::runtime_error("positive integer required: " + text);
+  return value;
+}
+
+struct TemporaryOutput {
+  std::string path;
+  explicit TemporaryOutput(const std::string &target) : path(target + ".tmp.XXXXXX") {
+    int fd = mkstemp(path.data());
+    if (fd < 0) throw std::runtime_error("cannot create graph temporary file");
+    close(fd);
+  }
+  ~TemporaryOutput() { std::error_code ec; std::filesystem::remove(path, ec); }
 };
 
 const char *usage() {
@@ -240,7 +338,7 @@ int main(int argc, char **argv) {
         initial_path = need("--initial");
       else if (flag == "--unroll") {
         saw_unroll = true;
-        unroll = static_cast<unsigned>(std::stoul(need("--unroll")));
+        unroll = positive_integer(need("--unroll"));
       } else if (flag == "--graph-out")
         graph_path = need("--graph-out");
       else if (flag == "--origin")
@@ -248,7 +346,7 @@ int main(int argc, char **argv) {
       else if (flag == "--environment")
         environment_path = need("--environment");
       else if (flag == "--budget-steps")
-        budget_steps = static_cast<unsigned>(std::stoul(need("--budget-steps")));
+        budget_steps = positive_integer(need("--budget-steps"));
       else
         throw std::runtime_error("unknown argument " + flag);
     }
@@ -256,35 +354,66 @@ int main(int argc, char **argv) {
       throw std::runtime_error(usage());
 
     smt::smt_initializer smt_init;
-    std::string initial = read_file(initial_path);
-    if (initial.find('{') == std::string::npos)
-      throw std::runtime_error("INITIAL_STATE_INVALID");
-    if (origin_path)
-      read_file(*origin_path);
+    auto initial_text = read_file(initial_path);
+    auto initial = explorer::parse_json(initial_text);
     if (environment_path)
-      read_file(*environment_path);
-
-    std::string program_text = read_file(program_path);
-    std::optional<tools::parser_initializer> parser_init;
-    std::optional<AliveModule> loaded;
-    std::optional<std::pair<std::string, Function>> parsed;
-    Function *fn_ptr = nullptr;
-    std::string fn_name;
-    if (program_text.find("alive-file v1") != std::string::npos) {
-      loaded = load_alive_v1(program_text);
-      fn_ptr = &loaded->function();
-      fn_name = fn_ptr->getName();
-    } else {
-      parser_init.emplace();
-      parsed.emplace(tools::parse_single(program_text));
-      fn_name = std::move(parsed->first);
-      fn_ptr = &parsed->second;
+      throw std::runtime_error("ENVIRONMENT_UNSUPPORTED: explicit memory/helper environments are not implemented");
+    auto program_text = read_file(program_path);
+    auto loaded = load_alive_v1(program_text);
+    explorer::Json origin(nullptr, json_object_put);
+    std::string origin_json = "null";
+    std::map<std::string, std::string> origin_definitions;
+    std::map<std::string, std::vector<std::string>> origin_statements;
+    auto trim = [](std::string text) {
+      const auto begin = text.find_first_not_of(" \t\r\n");
+      if (begin == std::string::npos) return std::string();
+      return text.substr(begin, text.find_last_not_of(" \t\r\n") - begin + 1);
+    };
+    if (origin_path) {
+      auto origin_text = read_file(*origin_path);
+      origin = explorer::parse_json(origin_text);
+      if (explorer::string_field(origin.get(), "schema") != "classifier-alive-origin-v1" ||
+          explorer::string_field(origin.get(), "alive_sha256") != sha256(program_text))
+        throw std::runtime_error("ORIGIN_INVALID: schema or Alive2 hash mismatch");
+      auto instructions = explorer::field(origin.get(), "instructions");
+      if (!json_object_is_type(instructions, json_type_array)) throw std::runtime_error("ORIGIN_INVALID: instructions must be an array");
+      for (size_t row = 0; row < json_object_array_length(instructions); ++row) {
+        auto instruction = json_object_array_get_idx(instructions, row);
+        auto definitions = explorer::field(instruction, "ir");
+        if (!json_object_is_type(definitions, json_type_array)) throw std::runtime_error("ORIGIN_INVALID: ir must be an array");
+        json_object *checkpoint = nullptr;
+        if (json_object_object_get_ex(instruction, "checkpoint", &checkpoint)) {
+          json_object *generated = nullptr;
+          if (json_object_object_get_ex(checkpoint, "generated_ir", &generated) && json_object_is_type(generated, json_type_array)) {
+            for (size_t g = 0; g < json_object_array_length(generated); ++g) {
+              auto line = json_object_array_get_idx(generated, g);
+              if (!json_object_is_type(line, json_type_string)) throw std::runtime_error("ORIGIN_INVALID: generated_ir string required");
+              origin_statements[trim(json_object_get_string(line))].push_back(json_object_to_json_string_ext(instruction, JSON_C_TO_STRING_PLAIN));
+            }
+          }
+        }
+        for (size_t d = 0; d < json_object_array_length(definitions); ++d) {
+          auto name = json_object_array_get_idx(definitions, d);
+          if (!json_object_is_type(name, json_type_string) ||
+              !origin_definitions.emplace(json_object_get_string(name), json_object_to_json_string_ext(instruction, JSON_C_TO_STRING_PLAIN)).second)
+            throw std::runtime_error("ORIGIN_INVALID: duplicate/invalid SSA definition");
+        }
+      }
+      origin_json = "{\"ir_hash\":" + json_string(sha256(program_text)) + ",\"sha256\":" + json_string(sha256(origin_text)) +
+        ",\"mapping_status\":\"instruction_only\",\"elf_hash_validation\":\"declared_only\",\"metadata\":" + json_object_to_json_string_ext(origin.get(), JSON_C_TO_STRING_PLAIN) + "}";
     }
-    Function &fn = *fn_ptr;
-
-    configure_pure_alu();
+    Function &fn = loaded.function();
+    std::string fn_name = fn.getName();
+    auto initialized = explorer::initialize(fn, initial.get());
+    configure_alive_execution(fn);
+    // "symbolic" initial values denote defined, stable native inputs.
+    // Explicit undef/poison bindings are native constants and remain distinct.
+    util::config::disable_undef_input = true;
+    util::config::disable_poison_input = true;
     util::config::src_unroll_cnt = unroll;
+    if (!unroll) throw std::runtime_error("unroll bound must be positive");
     fn.unroll(unroll);
+    fn.topSort();
 
     State::resetGlobals();
     State state(fn, true);
@@ -298,14 +427,61 @@ int main(int argc, char **argv) {
     std::vector<std::string> instr_text;
     std::unordered_map<std::string, std::string> bb_first;
     std::unordered_map<std::string, std::string> bb_last;
-    std::unordered_map<std::string, const Instr *> bb_term;
+    std::map<std::string, const Instr *> bb_term;
+    struct Jump { const BasicBlock *source, *destination; std::string kind, guard; };
+    std::vector<Jump> jumps;
     std::string first_node;
     std::vector<std::string> assumptions;
     bool saw_sink = false;
     bool saw_resource = false;
 
+    auto capture_values = [&](Node &node) {
+      node.preconditions = terms.from_expr(state.getPre()());
+      node.axioms = terms.from_expr(state.getAxioms()());
+      node.call_preconditions = terms.from_expr(state.getFnPre());
+      std::ostringstream returns, memories;
+      returns << "[";
+      bool first_return = true;
+      if (auto variants = std::get_if<smt::DisjointExpr<StateValue>>(&state.observeReturnValues())) {
+        for (auto &[value, domain] : *variants) {
+          if (!first_return) returns << ",";
+          first_return = false;
+          returns << "{\"value\":" << json_string(terms.from_expr(value.value))
+            << ",\"non_poison\":" << json_string(terms.from_expr(value.non_poison))
+            << ",\"path_condition\":" << json_string(terms.from_expr(domain)) << "}";
+        }
+      }
+      returns << "]";
+      node.returned_values = returns.str();
+      memories << "[";
+      bool first_memory = true;
+      if (auto variants = std::get_if<smt::DisjointExpr<Memory>>(&state.observeReturnMemories())) {
+        for (auto &[memory, domain] : *variants) {
+          if (!first_memory) memories << ",";
+          first_memory = false;
+          memories << "{\"path_condition\":" << json_string(terms.from_expr(domain))
+            << ",\"blocks\":" << observe_memory(memory, terms) << "}";
+        }
+      }
+      memories << "]";
+      node.returned_memories = memories.str();
+      auto capture = [&](const Value &value) {
+        const Value *source = &value;
+        if (auto it = initialized.find(source); it != initialized.end()) source = it->second;
+        if (auto saved = state.at(*source))
+          node.values.push_back({value.getName(), value.getType().toString(),
+            terms.from_expr(saved->val.value), terms.from_expr(saved->val.non_poison),
+            terms.from_expr(saved->domain())});
+      };
+      for (auto &input : fn.getInputs()) capture(input);
+      for (auto *global : fn.getGlobalVars()) capture(*global);
+      for (auto &instruction : fn.instrs())
+        if (instruction.getName().starts_with("%")) capture(instruction);
+    };
+
     Node entry;
     entry.id = "n0";
+    entry.snapshot_kind = "native_after_initialization";
     entry.function = fn_name;
     entry.block = "entry";
     entry.instr = "";
@@ -313,6 +489,9 @@ int main(int argc, char **argv) {
     entry.state = "normal";
     entry.path = truth;
     entry.term = truth;
+    entry.definedness = truth;
+    entry.memory = observe_memory(state.getMemory(), terms);
+    capture_values(entry);
     nodes.push_back(entry);
 
     unsigned steps = 0;
@@ -348,15 +527,15 @@ int main(int argc, char **argv) {
         node.block = std::string(bb->getName());
         node.instr = iid;
         node.text = printed.str();
+        if (auto it = origin_definitions.find(instr.getName()); it != origin_definitions.end()) node.origin = it->second;
+        else if (auto statement = origin_statements.find(trim(printed.str())); statement != origin_statements.end() && statement->second.size() == 1)
+          node.origin = statement->second.front();
         node.unroll = unroll_index(bb->getName());
-        node.path = truth;
+        node.path = terms.from_expr(state.getPath(*bb));
+        node.definedness = terms.from_expr(val.domain());
+        node.memory = observe_memory(state.getMemory(), terms);
+        capture_values(node);
         node.term = terms.from_expr(val.val.value);
-        if (auto *ret = dynamic_cast<const Return *>(&instr)) {
-          if (!ret->operands().empty() && ret->operands()[0])
-            node.term = terms.from_expr(state[*ret->operands()[0]].value);
-        }
-        if (val.val.non_poison.isFalse())
-          node.unsupported_reason = "poison";
         if (val.domain().isFalse())
           node.state = "ub";
         else if (dynamic_cast<const Return *>(&instr))
@@ -383,8 +562,17 @@ int main(int argc, char **argv) {
         }
         previous = node.id;
         bb_last[node.block] = node.id;
-        if (dynamic_cast<const JumpInstr *>(&instr))
+        if (auto *br = dynamic_cast<const Branch *>(&instr)) {
           bb_term[node.block] = &instr;
+          auto remember = [&](const BasicBlock &dst, const char *kind) {
+            auto guard = state.getJumpCond(*bb, dst);
+            // Syntactically false is the only pruning performed. No solver
+            // query means no claim that another path is feasible/infeasible.
+            if (!guard.isFalse()) jumps.push_back({bb, &dst, kind, terms.from_expr(guard)});
+          };
+          remember(br->getTrue(), br->getCond() ? "taken" : "step");
+          if (br->getFalse()) remember(*br->getFalse(), "not_taken");
+        }
         nodes.push_back(std::move(node));
       }
     }
@@ -399,74 +587,49 @@ int main(int argc, char **argv) {
       edges.push_back(edge);
     }
 
-    for (auto &[block, term_instr] : bb_term) {
-      auto last = bb_last.find(block);
-      if (last == bb_last.end())
-        continue;
-      if (auto *br = dynamic_cast<const Branch *>(term_instr)) {
-        auto link = [&](const BasicBlock &dst, const char *kind, const std::string &guard) {
-          auto target = bb_first.find(std::string(dst.getName()));
-          if (target == bb_first.end()) {
-            if (std::string(dst.getName()) == "#sink") {
-              Node sink;
-              sink.id = "n" + std::to_string(nodes.size());
-              sink.function = fn_name;
-              sink.block = "#sink";
-              sink.text = "#sink";
-              sink.unroll = unroll;
-              sink.state = "bound_truncated";
-              sink.path = guard;
-              sink.term = truth;
-              bb_first.emplace("#sink", sink.id);
-              Edge edge;
-              edge.id = "e" + std::to_string(edges.size());
-              edge.from = last->second;
-              edge.to = sink.id;
-              edge.kind = "boundary";
-              edge.guard = guard;
-              saw_sink = true;
-              nodes.push_back(std::move(sink));
-              edges.push_back(std::move(edge));
-              return;
-            }
-            assumptions.push_back("no node for target " + std::string(dst.getName()));
-            return;
-          }
-          Edge edge;
-          edge.id = "e" + std::to_string(edges.size());
-          edge.from = last->second;
-          edge.to = target->second;
-          edge.kind = dst.getName() == "#sink" ? "boundary" : kind;
-          if (edge.kind == "boundary")
-            saw_sink = true;
-          edge.guard = guard;
-          edges.push_back(std::move(edge));
-        };
-        if (!br->getCond()) {
-          link(br->getTrue(), "step", truth);
-        } else {
-          auto &cond = state[*br->getCond()].value;
-          std::string guard = terms.from_expr(cond);
-          auto decided = concrete_bool(cond);
-          auto negated = [&]() {
-            Term neg;
-            neg.op = "not";
-            neg.sort = "bool";
-            neg.args = {guard};
-            return terms.add(std::move(neg));
-          };
-          if (decided && *decided)
-            link(br->getTrue(), "taken", guard);
-          else if (decided && !*decided)
-            link(*br->getFalse(), "not_taken", negated());
-          else {
-            link(br->getTrue(), "taken", guard);
-            if (br->getFalse())
-              link(*br->getFalse(), "not_taken", negated());
-          }
-        }
+    for (auto &jump : jumps) {
+      auto last = bb_last.find(jump.source->getName());
+      if (last == bb_last.end()) continue;
+      auto target = bb_first.find(jump.destination->getName());
+      std::string target_id = target == bb_first.end() ? std::string() : target->second;
+      if (jump.destination->getName() == "#sink") {
+        Node sink;
+        sink.id = "n" + std::to_string(nodes.size());
+        sink.function = fn_name;
+        sink.block = "#sink";
+        sink.snapshot_kind = "native_predecessor_at_boundary";
+        sink.text = "#sink";
+        sink.unroll = unroll;
+        sink.state = "bound_truncated";
+        sink.path = jump.guard;
+        sink.term = truth;
+        sink.definedness = jump.guard;
+        // A boundary is an observation of the actual predecessor state;
+        // never fabricate a zero/empty memory at the sink.
+        const auto &predecessor = nodes.at(std::stoul(last->second.substr(1)));
+        sink.memory = predecessor.memory;
+        sink.preconditions = predecessor.preconditions;
+        sink.axioms = predecessor.axioms;
+        sink.call_preconditions = predecessor.call_preconditions;
+        sink.returned_values = predecessor.returned_values;
+        sink.returned_memories = predecessor.returned_memories;
+        sink.values = predecessor.values;
+        target_id = sink.id;
+        nodes.push_back(std::move(sink));
       }
+      if (target_id.empty()) {
+        assumptions.push_back("unobserved target " + jump.destination->getName());
+        continue;
+      }
+      bool boundary = jump.destination->getName() == "#sink";
+      saw_sink |= boundary;
+      edges.push_back({"e" + std::to_string(edges.size()), last->second, target_id,
+        boundary ? "boundary" : jump.kind, jump.guard, true});
     }
+    std::map<std::string, unsigned> incoming_jumps;
+    for (const auto &edge : edges) if (edge.native_jump) ++incoming_jumps[edge.to];
+    for (auto &edge : edges)
+      if (edge.native_jump && edge.kind == "step" && incoming_jumps[edge.to] > 1) edge.kind = "merge";
 
     std::vector<std::string> frontier;
     std::vector<std::string> returns;
@@ -489,16 +652,18 @@ int main(int argc, char **argv) {
       reason = "step budget exhausted";
     }
 
-    std::ofstream out(graph_path);
+    TemporaryOutput temporary(graph_path);
+    const auto &temporary_path = temporary.path;
+    std::ofstream out(temporary_path);
     if (!out)
       throw std::runtime_error("cannot write " + graph_path);
-    std::string ir_hash = sha256_file(program_path);
-    std::string initial_hash = sha256_file(initial_path);
+    std::string ir_hash = sha256(program_text);
+    std::string initial_hash = sha256(initial_text);
     out << "{\n";
     out << "  \"schema\": \"alive2-state-graph\",\n";
-    out << "  \"schema_version\": 1,\n";
+    out << "  \"schema_version\": 2,\n";
     out << "  \"fixture\": false,\n";
-    out << "  \"run\": {\"id\": " << json_string("run-" + ir_hash.substr(0, 12))
+    out << "  \"run\": {\"id\": " << json_string("run-" + sha256(ir_hash + initial_hash + std::to_string(unroll) + ":" + std::to_string(budget_steps)).substr(0, 24))
         << ", \"status\": \"finished\", \"initial_id\": " << json_string(initial_hash)
         << ", \"engine_pin\": \"alive2 adacbd5180ccf95075e9867c4f0c259f59c9fef2\""
         << ", \"unroll_bound\": " << unroll
@@ -513,7 +678,7 @@ int main(int argc, char **argv) {
         out << ", ";
       out << "{\"id\": " << json_string(instr_ids[i]) << ", \"text\": " << json_string(instr_text[i]) << "}";
     }
-    out << "], \"origin\": null},\n";
+    out << "], \"origin\": " << origin_json << "},\n";
     auto unsupported = [](const char *why) {
       return std::string("{\"unsupported\": ") + json_string(why) + "}";
     };
@@ -535,10 +700,17 @@ int main(int argc, char **argv) {
       if (i)
         out << ", ";
       out << "{\"id\": " << json_string(term.id) << ", \"op\": " << json_string(term.op)
-          << ", \"sort\": {\"kind\": " << json_string(term.sort);
-      if (term.width >= 0)
-        out << ", \"width\": " << term.width;
-      out << "}, \"args\": [";
+          << ", \"sort\": ";
+      if (!term.sort_json.empty()) out << term.sort_json;
+      else {
+        out << "{\"kind\": " << json_string(term.sort);
+        if (term.width >= 0) out << ", \"width\": " << term.width;
+        out << "}";
+      }
+      out << ", \"parameters\": " << term.parameters;
+      if (term.op == "unsupported") out << ", \"unsupported\": \"native AST kind, sort or declaration parameter not supported\"";
+      if (!term.symbol.empty()) out << ", \"symbol\": " << json_string(term.symbol);
+      out << ", \"args\": [";
       for (size_t a = 0; a < term.args.size(); ++a) {
         if (a)
           out << ", ";
@@ -552,8 +724,13 @@ int main(int argc, char **argv) {
       out << "}";
     }
     out << "],\n";
-    out << "  \"memories\": [{\"id\": \"mem0\", \"next_block\": \"0\", \"blocks\": [{"
-        << "\"id\": \"none\", \"unsupported\": \"this build does not dump Alive2 memory bytes\"}]}],\n";
+    out << "  \"memories\": [";
+    for (size_t i = 0; i < nodes.size(); ++i) {
+      if (i) out << ", ";
+      out << "{\"id\": " << json_string("mem" + std::to_string(i))
+          << ", \"representation\": \"alive2-native-arrays\", \"blocks\": " << nodes[i].memory << ",\"returned\":" << nodes[i].returned_memories << "}";
+    }
+    out << "],\n";
     out << "  \"nodes\": [";
     for (size_t i = 0; i < nodes.size(); ++i) {
       auto &node = nodes[i];
@@ -563,17 +740,33 @@ int main(int argc, char **argv) {
           << ", \"location\": {\"function\": " << json_string(node.function)
           << ", \"block\": " << json_string(node.block)
           << ", \"instr\": " << json_string(node.instr) << "}"
-          << ", \"origin_location\": null, \"unroll\": " << node.unroll
+          << ", \"origin_location\": " << node.origin << ", \"unroll\": " << node.unroll
+          << ", \"snapshot_kind\": " << json_string(node.snapshot_kind)
           << ", \"state\": " << json_string(node.state)
           << ", \"path_condition\": " << json_string(node.path)
           << ", \"ir_state\": {\"function\": " << json_string(node.function)
           << ", \"block\": " << json_string(node.block)
           << ", \"instr\": " << json_string(node.instr)
-          << ", \"values\": [{\"instr\": " << json_string(node.instr)
-          << ", \"term\": " << json_string(node.term) << "}]"
-          << ", \"memory_id\": \"mem0\", \"memory_status\": \"unsupported\""
+          << ", \"values\": [";
+      for (size_t v = 0; v < node.values.size(); ++v) {
+        if (v) out << ", ";
+        const auto &binding = node.values[v];
+        out << "{\"instr\": " << json_string(binding.name)
+            << ", \"type\": " << json_string(binding.type)
+            << ", \"term\": " << json_string(binding.term)
+            << ", \"non_poison\": " << json_string(binding.non_poison)
+            << ", \"definedness\": " << json_string(binding.domain) << "}";
+      }
+      out << "]"
+          << ", \"returned_values\": " << node.returned_values
+          << ", \"current_value\": " << json_string(node.term)
+          << ", \"preconditions\": " << json_string(node.preconditions)
+          << ", \"axioms\": " << json_string(node.axioms)
+          << ", \"call_preconditions\": " << json_string(node.call_preconditions)
+          << ", \"definedness\": " << json_string(node.definedness)
+          << ", \"memory_id\": " << json_string("mem" + std::to_string(i)) << ", \"memory_status\": \"native_arrays\""
           << ", \"exec_status\": " << json_string(node.state) << "}"
-          << ", \"rocq_ebpf\": null, \"evidence_ids\": []";
+          << ", \"rocq_ebpf\": null, \"rocq_mapping\": {\"status\":\"unsupported\",\"reason\":\"full source state embedding and independent Rocq checkpoint comparison are not implemented\"}, \"evidence_ids\": []";
       if (!node.unsupported_reason.empty())
         out << ", \"unsupported_reason\": " << json_string(node.unsupported_reason);
       out << "}";
@@ -588,7 +781,28 @@ int main(int argc, char **argv) {
           << ", \"to\": " << json_string(edge.to)
           << ", \"kind\": " << json_string(edge.kind)
           << ", \"guard\": " << json_string(edge.guard)
-          << ", \"ir_span\": [], \"events\": [], \"changed\": [], \"evidence_ids\": []}";
+          << ", \"ir_span\": [";
+      const auto &source = nodes.at(std::stoul(edge.from.substr(1)));
+      const auto &destination = nodes.at(std::stoul(edge.to.substr(1)));
+      if (!source.instr.empty()) out << json_string(source.instr);
+      if (!destination.instr.empty() && destination.instr != source.instr) {
+        if (!source.instr.empty()) out << ",";
+        out << json_string(destination.instr);
+      }
+      std::vector<std::string> changed;
+      if (source.path != destination.path) changed.push_back("path_condition");
+      if (source.definedness != destination.definedness) changed.push_back("ir_state.definedness");
+      if (source.memory != destination.memory || source.returned_memories != destination.returned_memories) changed.push_back("ir_state.memory");
+      if (source.returned_values != destination.returned_values) changed.push_back("ir_state.returned_values");
+      for (const auto &binding : destination.values) {
+        auto before = std::find_if(source.values.begin(), source.values.end(), [&](const auto &value) { return binding.name == value.name; });
+        if (before == source.values.end() || before->term != binding.term || before->non_poison != binding.non_poison || before->domain != binding.domain)
+          changed.push_back("ir_state.values." + binding.name);
+      }
+      out << "], \"guard_scope\": " << json_string(edge.native_jump ? "native_predecessor_path_and_ub" : "unconditional_step")
+          << ", \"events\": [], \"events_status\":\"not_observed\", \"changed\": [";
+      for (size_t c = 0; c < changed.size(); ++c) { if (c) out << ","; out << json_string(changed[c]); }
+      out << "], \"evidence_ids\": []}";
     }
     out << "],\n  \"coverage\": {\"return_domain\": [";
     for (size_t i = 0; i < returns.size(); ++i) {
@@ -597,10 +811,12 @@ int main(int argc, char **argv) {
       out << json_string(returns[i]);
     }
     out << "], \"sink_domain\": [";
-    for (size_t i = 0; i < frontier.size(); ++i) {
-      if (i)
-        out << ", ";
-      out << json_string(frontier[i]);
+    bool first_sink = true;
+    for (const auto &node : nodes) {
+      if (node.state != "bound_truncated") continue;
+      if (!first_sink) out << ", ";
+      first_sink = false;
+      out << json_string(node.id);
     }
     out << "], \"assumptions\": [";
     for (size_t i = 0; i < assumptions.size(); ++i) {
@@ -626,18 +842,14 @@ int main(int argc, char **argv) {
     out << "], \"all_inputs_covered\": \"not_established\"},\n";
     out << "  \"evidence\": [{\"id\": \"ev-observer\", \"kind\": \"implementation_proof\","
         << " \"status\": \"pending\", \"scope\": [{\"kind\": \"file\", \"id\": "
-        << json_string(program_path) << "}],"
+        << json_string(ir_hash) << "}],"
         << " \"note\": \"The C++ observer that walks State::exec is not a Rocq proof.\"}]\n";
     out << "}\n";
 
-    if (origin_path) {
-      std::cerr << "ORIGIN_PRESENT_BUT_UNUSED " << *origin_path << "\n";
-    }
-    (void)environment_path;
+    out.close();
+    if (!out) throw std::runtime_error("failed to write graph");
+    std::filesystem::rename(temporary_path, graph_path);
     return 0;
-  } catch (const tools::ParseException &err) {
-    std::cerr << "IR_PARSE_ERROR:" << err.lineno << ": " << err.str << "\n";
-    return 2;
   } catch (const std::exception &err) {
     std::cerr << err.what() << "\n";
     return 2;

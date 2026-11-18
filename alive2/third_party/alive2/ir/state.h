@@ -341,6 +341,10 @@ public:
   bool isImplied(const smt::expr &e, const smt::expr &domain);
 
   auto& getFn() const { return f; }
+  // Read-only snapshots avoid returnVal()/returnMemory(), which finalize and
+  // consume the native disjoint accumulators and cannot be called mid-run.
+  const auto& observeReturnValues() const { return return_val; }
+  const auto& observeReturnMemories() const { return return_memory; }
   auto& getMemory() const { return memory; }
   auto& getMemory() { return memory; }
   auto& getFpRoundingMode() const { return fp_rounding_mode; }

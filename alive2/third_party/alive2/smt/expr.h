@@ -113,6 +113,9 @@ public:
 
   bool isValid() const { return ptr != 0; }
 
+  // Read-only observation; the AST is borrowed from the live SMT context.
+  Z3_ast observerAST() const { return isValid() ? ast() : nullptr; }
+
   bool isConst() const;
   bool isVar() const;
   bool isQVar() const;

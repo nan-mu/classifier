@@ -22,3 +22,7 @@ struct AliveModule {
 };
 
 AliveModule load_alive_v1(const std::string &text);
+void configure_alive_execution(IR::Function &fn);
+std::string inspect_alive_function(const IR::Function &fn);
+std::string alive_file_header();
+void alive_loader_self_test();

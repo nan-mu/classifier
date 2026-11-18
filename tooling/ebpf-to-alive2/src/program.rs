@@ -29,7 +29,9 @@ pub fn load_function(bytes: &[u8], entry: Option<&str>) -> Result<Func, String> 
     }
     if code.len() > 1 && entry.is_none() {
         let names: Vec<_> = code.iter().map(|section| section.name.as_str()).collect();
-        return Err(format!("multiple executable sections {names:?}; pass --entry"));
+        return Err(format!(
+            "multiple executable sections {names:?}; pass --entry"
+        ));
     }
     let mut chosen: Option<&Section> = None;
     let mut func_name = String::new();
@@ -42,20 +44,43 @@ pub fn load_function(bytes: &[u8], entry: Option<&str>) -> Result<Func, String> 
             }
         }
         if chosen.is_none() {
-            return Err(format!("entry {want} is not a function in an executable section"));
+            return Err(format!(
+                "entry {want} is not a function in an executable section"
+            ));
         }
     } else {
         let section = code[0];
         let names = func_names(&object, bytes, section)?;
         if names.len() > 1 {
-            return Err(format!("section {} has several functions {names:?}; pass --entry", section.name));
+            return Err(format!(
+                "section {} has several functions {names:?}; pass --entry",
+                section.name
+            ));
         }
-        func_name = names.into_iter().next().unwrap_or_else(|| section.name.clone());
+        func_name = names
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| section.name.clone());
         chosen = Some(section);
     }
     let section = chosen.unwrap();
+    let functions: Vec<_> = symbols(&object, bytes)?
+        .into_iter()
+        .filter(|sym| sym.shndx == section_index(&object, section).unwrap() && sym.kind == STT_FUNC)
+        .collect();
+    if functions.len() > 1 {
+        let names: Vec<_> = functions.iter().map(|sym| sym.name.as_str()).collect();
+        return Err(format!("section {} contains multiple functions {names:?}; splitting function bodies is unsupported", section.name));
+    }
+    if let Some(symbol) = functions.first() {
+        if symbol.value != 0 || (symbol.size != 0 && symbol.size != section.size) {
+            return Err(format!("function {} does not span its executable section; splitting function bodies is unsupported", symbol.name));
+        }
+    }
     let start = section.offset as usize;
-    let end = start.checked_add(section.size as usize).ok_or("section size overflows")?;
+    let end = start
+        .checked_add(section.size as usize)
+        .ok_or("section size overflows")?;
     if end > bytes.len() {
         return Err(format!("section {} extends past the file", section.name));
     }
@@ -64,18 +89,35 @@ pub fn load_function(bytes: &[u8], entry: Option<&str>) -> Result<Func, String> 
     let relocs = relocs_for(&object, bytes, section)?;
     for reloc in &relocs {
         let Some(insn) = insns.iter_mut().find(|insn| insn.index() == reloc.slot) else {
-            return Err(format!("relocation {} hits slot {} which is not an instruction", reloc.symbol, reloc.slot));
+            return Err(format!(
+                "relocation {} hits slot {} which is not an instruction",
+                reloc.symbol, reloc.slot
+            ));
         };
         match insn {
             Insn::Lddw { pseudo, .. } => {
                 if *pseudo != 0 {
-                    return Err(format!("slot {}: LDDW pseudo {pseudo} plus relocation {} is not a raw map object", reloc.slot, reloc.symbol));
+                    return Err(format!(
+                        "slot {}: LDDW pseudo {pseudo} plus relocation {} is not a raw map object",
+                        reloc.slot, reloc.symbol
+                    ));
                 }
             }
-            _ => return Err(format!("relocation {} hits slot {} which is not LDDW", reloc.symbol, reloc.slot)),
+            _ => {
+                return Err(format!(
+                    "relocation {} hits slot {} which is not LDDW",
+                    reloc.symbol, reloc.slot
+                ))
+            }
         }
     }
-    Ok(Func { name: sanitize(&func_name), section: section.name.clone(), insns, relocs, bytes: body })
+    Ok(Func {
+        name: sanitize(&func_name),
+        section: section.name.clone(),
+        insns,
+        relocs,
+        bytes: body,
+    })
 }
 
 fn sanitize(name: &str) -> String {
@@ -87,7 +129,11 @@ fn sanitize(name: &str) -> String {
             out.push('_');
         }
     }
-    if out.is_empty() { "prog".into() } else { out }
+    if out.is_empty() {
+        "prog".into()
+    } else {
+        out
+    }
 }
 
 fn func_names(object: &Object, bytes: &[u8], section: &Section) -> Result<Vec<String>, String> {
@@ -101,7 +147,12 @@ fn func_names(object: &Object, bytes: &[u8], section: &Section) -> Result<Vec<St
     Ok(names)
 }
 
-fn func_named(object: &Object, bytes: &[u8], section: &Section, want: &str) -> Result<Option<String>, String> {
+fn func_named(
+    object: &Object,
+    bytes: &[u8],
+    section: &Section,
+    want: &str,
+) -> Result<Option<String>, String> {
     let names = func_names(object, bytes, section)?;
     Ok(names.into_iter().find(|name| name == want))
 }
@@ -115,24 +166,62 @@ fn relocs_for(object: &Object, bytes: &[u8], section: &Section) -> Result<Vec<Re
             continue;
         }
         if rel_section.entsize != 16 {
-            return Err(format!("relocation section {} has entry size {}", rel_section.name, rel_section.entsize));
+            return Err(format!(
+                "relocation section {} has entry size {}",
+                rel_section.name, rel_section.entsize
+            ));
         }
-        let start = rel_section.offset as usize;
-        let size = rel_section.size as usize;
-        let raw = bytes.get(start..start + size).ok_or("relocation section is truncated")?;
-        for entry in raw.chunks(16) {
+        let table = object
+            .sections
+            .get(rel_section.link as usize)
+            .ok_or("relocation symbol table is absent")?;
+        if table.sh_type != SHT_SYMTAB {
+            return Err("relocation link is not a symbol table".into());
+        }
+        if rel_section.size % 16 != 0 {
+            return Err("relocation section has a partial entry".into());
+        }
+        let raw = section_bytes(bytes, rel_section)?;
+        for entry in raw.as_chunks::<16>().0 {
             let offset = u64::from_le_bytes(entry[0..8].try_into().unwrap());
             let info = u64::from_le_bytes(entry[8..16].try_into().unwrap());
             let kind = info as u32;
             let sym_index = (info >> 32) as usize;
             if kind != R_BPF_64_64 {
-                return Err(format!("section {} has relocation type {kind}, which is not R_BPF_64_64", section.name));
+                return Err(format!(
+                    "section {} has relocation type {kind}, which is not R_BPF_64_64",
+                    section.name
+                ));
             }
             if offset % 8 != 0 {
-                return Err(format!("relocation offset {offset} is not instruction aligned"));
+                return Err(format!(
+                    "relocation offset {offset} is not instruction aligned"
+                ));
             }
-            let symbol = symbols.get(sym_index).ok_or("relocation symbol index is out of range")?;
-            relocs.push(Reloc { slot: (offset / 8) as u32, symbol: symbol.name.clone() });
+            let symbol = symbols
+                .get(sym_index)
+                .ok_or("relocation symbol index is out of range")?;
+            if offset >= section.size {
+                return Err("relocation is outside the executable section".into());
+            }
+            let target = object
+                .sections
+                .get(symbol.shndx as usize)
+                .ok_or("map symbol section is absent")?;
+            if symbol.kind != 1
+                || !matches!(target.name.as_str(), "maps" | ".maps")
+                || symbol.name.is_empty()
+            {
+                return Err(format!("relocation {} is not a map object", symbol.name));
+            }
+            let slot = u32::try_from(offset / 8).map_err(|_| "relocation slot overflows")?;
+            if relocs.iter().any(|reloc: &Reloc| reloc.slot == slot) {
+                return Err("duplicate relocation slot".into());
+            }
+            relocs.push(Reloc {
+                slot,
+                symbol: symbol.name.clone(),
+            });
         }
     }
     Ok(relocs)
@@ -142,27 +231,68 @@ struct Sym {
     name: String,
     kind: u8,
     shndx: u16,
+    value: u64,
+    size: u64,
 }
 
 fn symbols(object: &Object, bytes: &[u8]) -> Result<Vec<Sym>, String> {
-    let Some(table) = object.sections.iter().find(|section| section.sh_type == SHT_SYMTAB) else {
+    if object
+        .sections
+        .iter()
+        .filter(|section| section.sh_type == SHT_SYMTAB)
+        .count()
+        > 1
+    {
+        return Err("multiple symbol tables are unsupported".into());
+    }
+    let Some(table) = object
+        .sections
+        .iter()
+        .find(|section| section.sh_type == SHT_SYMTAB)
+    else {
         return Ok(Vec::new());
     };
     if table.entsize != 24 {
         return Err(format!("symbol entry size {} is not 24", table.entsize));
     }
-    let strings = object.sections.get(table.link as usize).ok_or("symbol table has no string table")?;
-    let str_bytes = bytes.get(strings.offset as usize..(strings.offset + strings.size) as usize).ok_or("symbol strings are truncated")?;
-    let raw = bytes.get(table.offset as usize..(table.offset + table.size) as usize).ok_or("symbol table is truncated")?;
+    let strings = object
+        .sections
+        .get(table.link as usize)
+        .ok_or("symbol table has no string table")?;
+    if strings.sh_type != 3 {
+        return Err("symbol strings are not a string table".into());
+    }
+    if table.size % 24 != 0 {
+        return Err("symbol table has a partial entry".into());
+    }
+    let str_bytes = section_bytes(bytes, strings)?;
+    let raw = section_bytes(bytes, table)?;
     let mut out = Vec::new();
-    for entry in raw.chunks(24) {
+    for entry in raw.as_chunks::<24>().0 {
         let name_off = u32::from_le_bytes(entry[0..4].try_into().unwrap()) as usize;
         let info = entry[4];
         let shndx = u16::from_le_bytes(entry[6..8].try_into().unwrap());
-        let name = cstr(str_bytes, name_off).unwrap_or_default();
-        out.push(Sym { name, kind: info & 0xf, shndx });
+        let name = cstr(str_bytes, name_off).ok_or("invalid symbol string")?;
+        let value = u64::from_le_bytes(entry[8..16].try_into().unwrap());
+        let size = u64::from_le_bytes(entry[16..24].try_into().unwrap());
+        out.push(Sym {
+            name,
+            kind: info & 0xf,
+            shndx,
+            value,
+            size,
+        });
     }
     Ok(out)
+}
+
+fn section_bytes<'a>(bytes: &'a [u8], section: &Section) -> Result<&'a [u8], String> {
+    let start = usize::try_from(section.offset).map_err(|_| "section offset overflows")?;
+    let size = usize::try_from(section.size).map_err(|_| "section size overflows")?;
+    let end = start.checked_add(size).ok_or("section range overflows")?;
+    bytes
+        .get(start..end)
+        .ok_or_else(|| "section is truncated".into())
 }
 
 fn cstr(bytes: &[u8], offset: usize) -> Option<String> {
@@ -172,5 +302,10 @@ fn cstr(bytes: &[u8], offset: usize) -> Option<String> {
 }
 
 fn section_index(object: &Object, section: &Section) -> Result<u16, String> {
-    object.sections.iter().position(|item| std::ptr::eq(item, section)).map(|index| index as u16).ok_or_else(|| "section is not in this object".into())
+    object
+        .sections
+        .iter()
+        .position(|item| std::ptr::eq(item, section))
+        .map(|index| index as u16)
+        .ok_or_else(|| "section is not in this object".into())
 }

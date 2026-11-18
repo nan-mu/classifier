@@ -3,6 +3,11 @@ export type AliveNode = {
   location: { function: string; block: string; instr: string | null };
   state: string;
   unroll: number;
+  path_condition?: string;
+  ir_state?: Record<string, unknown>;
+  rocq_ebpf?: unknown;
+  rocq_mapping?: { status: string; reason?: string };
+  origin_location?: unknown;
 };
 
 export type AliveEdge = {
@@ -11,9 +16,18 @@ export type AliveEdge = {
   to: string;
   kind: string;
   guard: string;
+  changed?: string[];
+  events?: unknown[];
 };
 
+export type AliveTerm = { id: string; op: string; args: string[]; sort: { kind: string; width?: number }; digits?: string; symbol?: string; unsupported?: string };
+
 export type AliveGraph = {
+  schema?: string;
+  schema_version?: number;
+  terms?: AliveTerm[];
+  memories?: unknown[];
+  evidence?: unknown[];
   run: { status: string; truncation: { kind: string; reason: string } };
   coverage: { all_inputs_covered: string; frontier: string[] };
   nodes: AliveNode[];

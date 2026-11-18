@@ -1,7 +1,7 @@
-"""Check an Alive2 state graph against the constraints named in the task.
+"""Validate the implemented G(R0) protocol, including native array snapshots.
 
-The author file contracts/alive2-state-graph.schema.json was not in this
-workspace. This module is the reconstructed check, not a copy of that file.
+Version 1 remains readable. Version 2 adds typed expression parameters and
+Alive2 memory arrays; neither version establishes source correspondence.
 """
 
 from __future__ import annotations
@@ -72,8 +72,8 @@ def validate(doc: Any) -> list[str]:
         return errs
     if doc["schema"] != "alive2-state-graph":
         errs.append("missing_field: $.schema: must be alive2-state-graph")
-    if doc["schema_version"] != 1:
-        errs.append("missing_field: $.schema_version: must be 1")
+    if doc["schema_version"] not in (1, 2):
+        errs.append("missing_field: $.schema_version: must be 1 or 2")
     if not isinstance(doc["fixture"], bool):
         errs.append("missing_field: $.fixture: must be bool")
 
@@ -84,14 +84,14 @@ def validate(doc: Any) -> list[str]:
     _index(doc["evidence"], "evidence", errs)
 
     _cycles(terms, errs)
-    _terms(terms, errs)
-    recoverable, explicit_mem = _memories(memories, errs)
+    _terms(terms, errs, doc["schema_version"])
+    recoverable, explicit_mem = _memories(memories, errs, terms, doc["schema_version"])
     _walk_numbers(doc, "$", errs)
     _program(doc["program"], errs)
     _run(doc["run"], errs)
     _environment(doc["environment"], errs)
     origin = _has_origin(doc["program"])
-    _nodes(doc["nodes"], terms, memories, recoverable, explicit_mem, origin, errs)
+    _nodes(doc["nodes"], terms, memories, recoverable, explicit_mem, origin, errs, doc["schema_version"])
     _edges(doc["edges"], nodes, terms, errs)
     _coverage(doc, nodes, errs)
     _evidence_records(doc["evidence"], nodes, edges, errs)
@@ -138,7 +138,7 @@ def _cycles(terms: dict[str, dict[str, Any]], errs: list[str]) -> None:
             walk(ident)
 
 
-def _terms(terms: dict[str, dict[str, Any]], errs: list[str]) -> None:
+def _terms(terms: dict[str, dict[str, Any]], errs: list[str], version: int) -> None:
     for ident, term in terms.items():
         sort = term.get("sort")
         op = term.get("op")
@@ -146,7 +146,7 @@ def _terms(terms: dict[str, dict[str, Any]], errs: list[str]) -> None:
             errs.append(f"missing_field: $.terms.{ident}: op and sort required")
             continue
         kind = sort.get("kind")
-        if kind not in {"bv", "bool", "pointer", "undef", "poison", "float", "aggregate", "unsupported"}:
+        if kind not in {"bv", "bool", "pointer", "undef", "poison", "float", "aggregate", "array", "unsupported"}:
             errs.append(f"width_mismatch: $.terms.{ident}: unknown sort {kind}")
         if kind == "bv":
             width = sort.get("width")
@@ -164,6 +164,8 @@ def _terms(terms: dict[str, dict[str, Any]], errs: list[str]) -> None:
                 aw = terms[arg].get("sort", {}).get("width")
                 if aw != sort.get("width"):
                     errs.append(f"width_mismatch: $.terms.{ident}: arg {arg} width {aw}")
+        if version == 2:
+            _typed_term(term, terms, errs)
         if op == "eq":
             if kind != "bool":
                 errs.append(f"width_mismatch: $.terms.{ident}: eq must be bool")
@@ -176,11 +178,104 @@ def _terms(terms: dict[str, dict[str, Any]], errs: list[str]) -> None:
                 errs.append(f"width_mismatch: $.terms.{ident}: eq arg widths differ")
 
 
-def _memories(memories: dict[str, dict[str, Any]], errs: list[str]) -> tuple[set[str], set[str]]:
+def _typed_term(term: dict[str, Any], terms: dict[str, dict[str, Any]], errs: list[str]) -> None:
+    ident, op, sort = term["id"], term["op"], term["sort"]
+    refs = term.get("args", [])
+    if any(not isinstance(ref, str) or ref not in terms for ref in refs):
+        return
+    args = [terms[ref].get("sort") for ref in refs]
+    if any(not isinstance(arg, dict) for arg in args):
+        errs.append(f"width_mismatch: $.terms.{ident}: operand sort missing")
+        return
+    for value_sort in [sort, *args]:
+        if value_sort.get("kind") == "bv" and (type(value_sort.get("width")) is not int or value_sort["width"] <= 0):
+            errs.append(f"width_mismatch: $.terms.{ident}: invalid operand/result width")
+            return
+    if not isinstance(term.get("parameters", []), list):
+        errs.append(f"missing_field: $.terms.{ident}.parameters: list required")
+        return
+    bad = False
+    bv_ops = {"bvadd", "bvsub", "bvmul", "bvand", "bvor", "bvxor", "bvshl", "bvlshr", "bvashr", "bvudiv", "bvurem", "bvsdiv", "bvsrem", "bvnot", "bvneg"}
+    comparisons = {"bvult", "bvule", "bvugt", "bvuge", "bvslt", "bvsle", "bvsgt", "bvsge"}
+    if op in bv_ops:
+        bad = sort.get("kind") != "bv" or not args or any(arg != sort for arg in args)
+    elif op in comparisons:
+        bad = sort != {"kind": "bool"} or len(args) != 2 or args[0] != args[1] or args[0].get("kind") != "bv"
+    elif op in ("and", "or", "not", "xor", "=>"):
+        bad = sort != {"kind": "bool"} or any(arg != sort for arg in args)
+    elif op in ("eq", "distinct"):
+        bad = sort != {"kind": "bool"} or len(args) < 2 or any(arg != args[0] for arg in args)
+    elif op == "concat":
+        bad = sort.get("kind") != "bv" or not args or any(a.get("kind") != "bv" for a in args) or sum(a.get("width", 0) for a in args) != sort.get("width")
+    elif op == "extract":
+        params = term.get("parameters", [])
+        bad = len(args) != 1 or args[0].get("kind") != "bv" or sort.get("kind") != "bv" or len(params) != 2 or any(type(p) is not int for p in params)
+        if not bad:
+            high, low = params
+            bad = not (0 <= low <= high < args[0].get("width", 0)) or sort.get("width") != high - low + 1
+    elif op in ("zero_extend", "sign_extend"):
+        params = term.get("parameters", [])
+        bad = len(args) != 1 or args[0].get("kind") != "bv" or sort.get("kind") != "bv" or len(params) != 1 or type(params[0]) is not int
+        if not bad:
+            bad = params[0] < 0 or sort.get("width") != args[0].get("width", 0) + params[0]
+    elif op in ("ite", "if"):
+        bad = len(args) != 3 or args[0] != {"kind": "bool"} or args[1] != sort or args[2] != sort
+    elif op == "select":
+        bad = len(args) != 2 or args[0].get("kind") != "array" or args[0].get("domain") != args[1] or args[0].get("range") != sort
+    elif op == "store":
+        bad = len(args) != 3 or args[0] != sort or sort.get("domain") != args[1] or sort.get("range") != args[2]
+    elif op == "opaque":
+        bad = True
+    elif op == "unsupported":
+        bad = not isinstance(term.get("unsupported"), str)
+    if bad:
+        errs.append(f"width_mismatch: $.terms.{ident}: ill-typed or incomplete {op}")
+
+
+def _memories(memories: dict[str, dict[str, Any]], errs: list[str], terms: dict[str, dict[str, Any]], version: int) -> tuple[set[str], set[str]]:
     recoverable: set[str] = set()
     explicit: set[str] = set()
     for ident, mem in memories.items():
         blocks = mem.get("blocks")
+        if version == 2 and mem.get("representation") == "alive2-native-arrays":
+            before = len(errs)
+            if not isinstance(blocks, list):
+                errs.append(f"memory_not_recoverable: $.memories.{ident}: blocks must be a list")
+                continue
+            seen = set()
+            for block in blocks:
+                if not isinstance(block, dict) or not isinstance(block.get("id"), str):
+                    errs.append(f"memory_not_recoverable: $.memories.{ident}: invalid native block")
+                    continue
+                if block["id"] in seen:
+                    errs.append(f"duplicate_id: $.memories.{ident}: {block['id']}")
+                seen.add(block["id"])
+                for key in ("array", "size", "alignment", "alive", "writable", "allocation_type"):
+                    ref = block.get(key)
+                    if ref not in terms:
+                        errs.append(f"missing_ref: $.memories.{ident}.{key}: {ref}")
+                if block.get("array") in terms and terms[block["array"]].get("sort", {}).get("kind") not in ("array", "bv"):
+                    errs.append(f"width_mismatch: $.memories.{ident}.array: native block must be an array or a compact bitvector")
+                for key in ("alive", "writable"):
+                    if block.get(key) in terms:
+                        _ref_term(block[key], terms, "bool", f"$.memories.{ident}.{key}", errs)
+                if not isinstance(block.get("local"), bool) or block.get("byte_encoding") not in (0, 1, 2, 3):
+                    errs.append(f"memory_not_recoverable: $.memories.{ident}: block encoding/local missing")
+                if not isinstance(block.get("undef"), list) or any(ref not in terms for ref in block.get("undef", [])):
+                    errs.append(f"missing_ref: $.memories.{ident}.undef: invalid references")
+            returned = mem.get("returned", [])
+            if not isinstance(returned, list):
+                errs.append(f"memory_not_recoverable: $.memories.{ident}.returned: list required")
+            else:
+                for i, alternative in enumerate(returned):
+                    if not isinstance(alternative, dict):
+                        errs.append(f"memory_not_recoverable: $.memories.{ident}.returned[{i}]")
+                        continue
+                    _ref_term(alternative.get("path_condition"), terms, "bool", f"$.memories.{ident}.returned[{i}]", errs)
+                    _memories({f"{ident}.returned[{i}]": {"representation": "alive2-native-arrays", "blocks": alternative.get("blocks")}}, errs, terms, version)
+            if len(errs) == before:
+                recoverable.add(ident)
+            continue
         if not isinstance(blocks, list) or "next_block" not in mem:
             errs.append(f"memory_not_recoverable: $.memories.{ident}: blocks and next_block required")
             continue
@@ -232,7 +327,8 @@ def _walk_numbers(value: Any, path: str, errs: list[str]) -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             child_path = f"{path}.{key}"
-            if key in DIGIT_KEYS and isinstance(child, (int, float)) and not isinstance(child, bool):
+            source_offset = key == "offset" and isinstance(value.get("slot"), int) and not isinstance(value["slot"], bool) and child == value["slot"] * 8 and isinstance(value.get("bytes"), str)
+            if key in DIGIT_KEYS and isinstance(child, (int, float)) and not isinstance(child, bool) and not source_offset:
                 errs.append(f"js_number_for_bv: {child_path}: wide value must be a string")
             elif isinstance(child, int) and not isinstance(child, bool) and abs(child) > JS_MAX:
                 errs.append(f"js_number_for_bv: {child_path}: exceeds the JS safe integer range")
@@ -314,6 +410,7 @@ def _nodes(
     explicit_mem: set[str],
     origin: bool,
     errs: list[str],
+    version: int,
 ) -> None:
     if not isinstance(items, list):
         return
@@ -331,6 +428,31 @@ def _nodes(
         _ref_term(node.get("path_condition"), terms, "bool", f"$.nodes.{ident}.path_condition", errs)
         ir_state = node.get("ir_state")
         if isinstance(ir_state, dict):
+            if version == 2:
+                for key in ("definedness", "preconditions", "axioms", "call_preconditions"):
+                    _ref_term(ir_state.get(key), terms, "bool", f"$.nodes.{ident}.ir_state.{key}", errs)
+                if ir_state.get("current_value") not in terms:
+                    errs.append(f"missing_ref: $.nodes.{ident}.ir_state.current_value")
+                returned_values = ir_state.get("returned_values", [])
+                if not isinstance(returned_values, list):
+                    errs.append(f"missing_field: $.nodes.{ident}.ir_state.returned_values: list required")
+                    returned_values = []
+                for value in returned_values:
+                    if not isinstance(value, dict) or value.get("value") not in terms:
+                        errs.append(f"missing_ref: $.nodes.{ident}.ir_state.returned_values")
+                        continue
+                    for key in ("non_poison", "path_condition"):
+                        _ref_term(value.get(key), terms, "bool", f"$.nodes.{ident}.ir_state.returned_values.{key}", errs)
+                values = ir_state.get("values")
+                if not isinstance(values, list):
+                    errs.append(f"missing_field: $.nodes.{ident}.ir_state.values: list required")
+                else:
+                    for value in values:
+                        if not isinstance(value, dict) or not isinstance(value.get("type"), str) or value.get("term") not in terms:
+                            errs.append(f"missing_ref: $.nodes.{ident}.ir_state.values: malformed binding")
+                            continue
+                        for key in ("non_poison", "definedness"):
+                            _ref_term(value.get(key), terms, "bool", f"$.nodes.{ident}.ir_state.values.{key}", errs)
             mem = ir_state.get("memory_id")
             if mem not in memories:
                 errs.append(f"missing_ref: $.nodes.{ident}.ir_state.memory_id: {mem}")
@@ -341,8 +463,10 @@ def _nodes(
             else:
                 errs.append(f"memory_not_recoverable: $.nodes.{ident}: memory {mem} is not recoverable")
         view = node.get("rocq_ebpf")
+        mapping = node.get("rocq_mapping", {})
+        explicit_gap = version == 2 and isinstance(mapping, dict) and mapping.get("status") == "unsupported" and isinstance(mapping.get("reason"), str) and bool(mapping["reason"])
         if origin:
-            if view is None:
+            if view is None and not explicit_gap:
                 errs.append(f"rocq_null_on_origin: $.nodes.{ident}.rocq_ebpf: imported eBPF cannot omit R")
             elif isinstance(view, dict):
                 _rocq(view, ident, errs)
@@ -410,10 +534,11 @@ def _coverage(doc: dict[str, Any], nodes: dict[str, dict[str, Any]], errs: list[
         if ident not in nodes:
             errs.append(f"missing_ref: $.coverage.frontier: node {ident} missing")
     bound = _is_bound(doc)
-    if bound and not frontier:
-        errs.append("frontier_mismatch: $.coverage.frontier: bound truncation needs a frontier")
-    if not bound and frontier:
-        errs.append("frontier_mismatch: $.coverage.frontier: frontier set without a bound truncation")
+    truncated = bound or doc.get("run", {}).get("truncation", {}).get("kind") == "resource"
+    if truncated and not frontier:
+        errs.append("frontier_mismatch: $.coverage.frontier: truncation needs a frontier")
+    if not truncated and frontier:
+        errs.append("frontier_mismatch: $.coverage.frontier: frontier set without truncation")
     if coverage.get("all_inputs_covered") == "established" and not _established_evidence(doc.get("evidence")):
         errs.append("established_without_evidence: $.coverage.all_inputs_covered: finished is not coverage")
 
@@ -439,7 +564,7 @@ def _established_evidence(items: Any) -> bool:
     for item in items:
         if not isinstance(item, dict):
             continue
-        if item.get("kind") not in {"concrete_correspondence", "symbolic_correspondence"}:
+        if item.get("kind") != "symbolic_correspondence":
             continue
         if item.get("status") not in {"checked", "proved"}:
             continue

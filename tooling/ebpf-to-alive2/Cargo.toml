@@ -8,3 +8,9 @@ description = "Read a relocatable BPF ELF and write an Alive2 IR file."
 [lib]
 name = "ebpf_to_alive2"
 path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"

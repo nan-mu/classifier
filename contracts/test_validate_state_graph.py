@@ -37,7 +37,7 @@ class ContractTest(unittest.TestCase):
     def test_schema_keeps_the_named_root_fields(self) -> None:
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
         self.assertEqual(list(schema["required"]), list(ROOT_REQUIRED))
-        self.assertTrue(schema["x_provenance"]["reconstructed"])
+        self.assertEqual(schema["properties"]["schema_version"]["enum"], [1, 2])
 
     def test_duplicate_id_is_rejected(self) -> None:
         doc = load_example()

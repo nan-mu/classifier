@@ -13,6 +13,8 @@ pub enum ElfError {
     NotElf64,
     NotLittleEndian,
     NotBpf,
+    NotRelocatable,
+    BadVersion,
     BadSection,
 }
 
@@ -61,7 +63,13 @@ pub fn parse(bytes: &[u8]) -> Result<Object, ElfError> {
     if read_u16(bytes, 18)? != EM_BPF {
         return Err(ElfError::NotBpf);
     }
-    let shoff = read_u64(bytes, 40)? as usize;
+    if read_u16(bytes, 16)? != 1 {
+        return Err(ElfError::NotRelocatable);
+    }
+    if bytes[6] != 1 || read_u32(bytes, 20)? != 1 || read_u16(bytes, 52)? != 64 {
+        return Err(ElfError::BadVersion);
+    }
+    let shoff = usize::try_from(read_u64(bytes, 40)?).map_err(|_| ElfError::BadSection)?;
     let shentsize = read_u16(bytes, 58)? as usize;
     let shnum = read_u16(bytes, 60)? as usize;
     let shstrndx = read_u16(bytes, 62)? as usize;
@@ -101,6 +109,14 @@ pub fn parse(bytes: &[u8]) -> Result<Object, ElfError> {
 
     let mut sections = Vec::with_capacity(raw.len());
     for section in raw {
+        if section.sh_type != 8
+            && section
+                .offset
+                .checked_add(section.size)
+                .is_none_or(|end| end > bytes.len() as u64)
+        {
+            return Err(ElfError::Truncated);
+        }
         sections.push(Section {
             name: name_at(string_table, section.name_off as usize)?,
             sh_type: section.sh_type,
@@ -128,22 +144,31 @@ struct RawSection {
 
 fn name_at(table: &[u8], offset: usize) -> Result<String, ElfError> {
     let rest = table.get(offset..).ok_or(ElfError::BadSection)?;
-    let end = rest.iter().position(|byte| *byte == 0).ok_or(ElfError::BadSection)?;
+    let end = rest
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or(ElfError::BadSection)?;
     let name = std::str::from_utf8(&rest[..end]).map_err(|_| ElfError::BadSection)?;
     Ok(name.to_string())
 }
 
 fn read_u16(bytes: &[u8], at: usize) -> Result<u16, ElfError> {
     let chunk = bytes.get(at..at + 2).ok_or(ElfError::Truncated)?;
-    Ok(u16::from_le_bytes(chunk.try_into().map_err(|_| ElfError::Truncated)?))
+    Ok(u16::from_le_bytes(
+        chunk.try_into().map_err(|_| ElfError::Truncated)?,
+    ))
 }
 
 fn read_u32(bytes: &[u8], at: usize) -> Result<u32, ElfError> {
     let chunk = bytes.get(at..at + 4).ok_or(ElfError::Truncated)?;
-    Ok(u32::from_le_bytes(chunk.try_into().map_err(|_| ElfError::Truncated)?))
+    Ok(u32::from_le_bytes(
+        chunk.try_into().map_err(|_| ElfError::Truncated)?,
+    ))
 }
 
 fn read_u64(bytes: &[u8], at: usize) -> Result<u64, ElfError> {
     let chunk = bytes.get(at..at + 8).ok_or(ElfError::Truncated)?;
-    Ok(u64::from_le_bytes(chunk.try_into().map_err(|_| ElfError::Truncated)?))
+    Ok(u64::from_le_bytes(
+        chunk.try_into().map_err(|_| ElfError::Truncated)?,
+    ))
 }

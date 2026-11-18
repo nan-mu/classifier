@@ -11,8 +11,10 @@ endif()
 
 set(ALIVE2_SRC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/alive2")
 set(ALIVE2_BUILD "${ALIVE2_SRC}/build" CACHE PATH "Alive2 build directory")
-set(Z3_INCLUDE_DIR "/opt/homebrew/opt/z3/include" CACHE PATH "Z3 headers")
-set(Z3_LIBRARY "/opt/homebrew/opt/z3/lib/libz3.dylib" CACHE FILEPATH "Z3 library")
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(Z3_PC QUIET z3)
+find_path(Z3_INCLUDE_DIR z3.h HINTS ${Z3_PC_INCLUDE_DIRS} REQUIRED)
+find_library(Z3_LIBRARY NAMES z3 HINTS ${Z3_PC_LIBRARY_DIRS} REQUIRED)
 
 function(alive2_link target)
   target_include_directories(${target} PRIVATE
@@ -37,10 +39,11 @@ target_compile_options(direct_ir PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
 add_executable(alive2-explore
   src/explore.cpp
-  src/alive_file.cpp
-  "${ALIVE2_SRC}/tools/alive_parser.cpp"
-  "${ALIVE2_BUILD}/tools/alive_lexer.cpp")
+  src/alive_file.cpp)
+find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 alive2_link(alive2-explore)
+target_link_libraries(alive2-explore PRIVATE PkgConfig::JSONC OpenSSL::Crypto)
 target_include_directories(alive2-explore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(alive2-explore PRIVATE -Wall -Wextra -Wno-unused-parameter)
 
@@ -70,6 +73,8 @@ set(UPSTREAM_BUILD "${CMAKE_CURRENT_BINARY_DIR}/rocq/upstream")
 file(GLOB_RECURSE UPSTREAM_SOURCES CONFIGURE_DEPENDS
   "${UPSTREAM_SRC}/*.v" "${UPSTREAM_SRC}/validator/*.ml"
   "${UPSTREAM_SRC}/Makefile")
+# Make/Ninja enter WORKING_DIRECTORY before executing the custom commands.
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rocq")
 add_custom_command(
   OUTPUT "${ROCQ_STEP_BIN}"
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${UPSTREAM_BUILD}"

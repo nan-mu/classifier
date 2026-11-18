@@ -120,13 +120,20 @@ impl Insn {
     }
 
     pub fn slots(&self) -> u32 {
-        if matches!(self, Insn::Lddw { .. }) { 2 } else { 1 }
+        if matches!(self, Insn::Lddw { .. }) {
+            2
+        } else {
+            1
+        }
     }
 }
 
 pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
     if bytes.len() % 8 != 0 {
-        return Err(format!("bytecode length {} is not a multiple of 8", bytes.len()));
+        return Err(format!(
+            "bytecode length {} is not a multiple of 8",
+            bytes.len()
+        ));
     }
     let mut out = Vec::new();
     let mut slot = 0u32;
@@ -147,12 +154,21 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 16 => 16,
                 32 => 32,
                 64 => 64,
-                _ => return Err(format!("slot {slot}: END immediate {imm} is not 16, 32, or 64")),
+                _ => {
+                    return Err(format!(
+                        "slot {slot}: END immediate {imm} is not 16, 32, or 64"
+                    ))
+                }
             };
             if off != 0 {
                 return Err(format!("slot {slot}: END offset must be 0"));
             }
-            out.push(Insn::End { index: slot, dst, bits, to_be: opcode & 0x08 != 0 });
+            out.push(Insn::End {
+                index: slot,
+                dst,
+                bits,
+                to_be: opcode & 0x08 != 0,
+            });
             slot += 1;
             continue;
         }
@@ -162,12 +178,28 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 return Err(format!("slot {slot}: LDDW is missing its second slot"));
             }
             let hi_at = next * 8;
-            if bytes[hi_at] != 0 || bytes[hi_at + 1] != 0 || bytes[hi_at + 2] != 0 || bytes[hi_at + 3] != 0 {
-                return Err(format!("slot {slot}: LDDW second slot is not reserved zeros"));
+            if bytes[hi_at] != 0
+                || bytes[hi_at + 1] != 0
+                || bytes[hi_at + 2] != 0
+                || bytes[hi_at + 3] != 0
+            {
+                return Err(format!(
+                    "slot {slot}: LDDW second slot is not reserved zeros"
+                ));
             }
-            let hi = i32::from_le_bytes([bytes[hi_at + 4], bytes[hi_at + 5], bytes[hi_at + 6], bytes[hi_at + 7]]);
+            let hi = i32::from_le_bytes([
+                bytes[hi_at + 4],
+                bytes[hi_at + 5],
+                bytes[hi_at + 6],
+                bytes[hi_at + 7],
+            ]);
             let wide = ((hi as u32 as u64) << 32) | (imm as u32 as u64);
-            out.push(Insn::Lddw { index: slot, dst, imm: wide as i64, pseudo: src });
+            out.push(Insn::Lddw {
+                index: slot,
+                dst,
+                imm: wide as i64,
+                pseudo: src,
+            });
             slot += 2;
             continue;
         }
@@ -175,60 +207,113 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
             let size = mem_size(opcode)?;
             let mode = opcode >> 5;
             let signed = mode == 4;
-            if mode != 3 && mode != 4 {
+            if mode != 3 && !(class == 0x01 && mode == 4 && size != MemSize::Dword) {
                 return Err(format!("slot {slot}: memory mode {mode} is not MEM"));
             }
             if class == 0x01 {
                 if imm != 0 {
                     return Err(format!("slot {slot}: LDX immediate must be 0"));
                 }
-                out.push(Insn::Load { index: slot, size, signed, dst, base: src, off });
+                out.push(Insn::Load {
+                    index: slot,
+                    size,
+                    signed,
+                    dst,
+                    base: src,
+                    off,
+                });
             } else if class == 0x03 {
                 if imm != 0 {
                     return Err(format!("slot {slot}: STX immediate must be 0"));
                 }
-                out.push(Insn::Store { index: slot, size, base: dst, off, src: Src::Reg(src) });
+                out.push(Insn::Store {
+                    index: slot,
+                    size,
+                    base: dst,
+                    off,
+                    src: Src::Reg(src),
+                });
             } else {
                 if src != 0 {
                     return Err(format!("slot {slot}: ST source register must be 0"));
                 }
-                out.push(Insn::Store { index: slot, size, base: dst, off, src: Src::Imm(imm) });
+                out.push(Insn::Store {
+                    index: slot,
+                    size,
+                    base: dst,
+                    off,
+                    src: Src::Imm(imm),
+                });
             }
             slot += 1;
             continue;
         }
         if class == 0x04 || class == 0x07 {
-            let width = if class == 0x07 { Width::W64 } else { Width::W32 };
+            let width = if class == 0x07 {
+                Width::W64
+            } else {
+                Width::W32
+            };
             let reg_src = opcode & 0x08 != 0;
-            let src_op = if reg_src { Src::Reg(src) } else { Src::Imm(imm) };
+            let src_op = if reg_src {
+                Src::Reg(src)
+            } else {
+                Src::Imm(imm)
+            };
             let (op, extra) = alu_op(slot, code, off, reg_src, width)?;
             if matches!(src_op, Src::Imm(_)) && src != 0 && op != AluOp::Neg {
-                return Err(format!("slot {slot}: immediate ALU source register must be 0"));
+                return Err(format!(
+                    "slot {slot}: immediate ALU source register must be 0"
+                ));
             }
-            out.push(Insn::Alu { index: slot, width, op, dst, src: src_op, extra });
+            out.push(Insn::Alu {
+                index: slot,
+                width,
+                op,
+                dst,
+                src: src_op,
+                extra,
+            });
             slot += 1;
             continue;
         }
         if class == 0x05 || class == 0x06 {
-            let width = if class == 0x06 { Width::W32 } else { Width::W64 };
+            let width = if class == 0x06 {
+                Width::W32
+            } else {
+                Width::W64
+            };
             if code == 0x80 {
                 if src != 0 {
-                    return Err(format!("slot {slot}: call source {src} is not a static helper id"));
+                    return Err(format!(
+                        "slot {slot}: call source {src} is not a static helper id"
+                    ));
                 }
                 if off != 0 || dst != 0 {
                     return Err(format!("slot {slot}: malformed call"));
                 }
-                out.push(Insn::Call { index: slot, id: imm });
+                out.push(Insn::Call {
+                    index: slot,
+                    id: imm,
+                });
                 slot += 1;
                 continue;
             }
             let reg_src = opcode & 0x08 != 0;
-            let cond = jump_op(code).ok_or_else(|| format!("slot {slot}: unknown jump opcode {opcode:#x}"))?;
+            let cond = jump_op(code)
+                .ok_or_else(|| format!("slot {slot}: unknown jump opcode {opcode:#x}"))?;
             if cond == Cond::Exit {
                 if class != 0x05 || reg_src || off != 0 || src != 0 || dst != 0 {
                     return Err(format!("slot {slot}: malformed exit"));
                 }
-                out.push(Insn::Jmp { index: slot, width, cond, dst, src: Src::Imm(0), off: 0 });
+                out.push(Insn::Jmp {
+                    index: slot,
+                    width,
+                    cond,
+                    dst,
+                    src: Src::Imm(0),
+                    off: 0,
+                });
             } else if cond == Cond::Ja {
                 if reg_src || src != 0 || dst != 0 {
                     return Err(format!("slot {slot}: malformed ja"));
@@ -244,25 +329,56 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                     }
                     off as i32
                 };
-                out.push(Insn::Jmp { index: slot, width, cond, dst, src: Src::Imm(0), off: disp });
+                out.push(Insn::Jmp {
+                    index: slot,
+                    width,
+                    cond,
+                    dst,
+                    src: Src::Imm(0),
+                    off: disp,
+                });
             } else {
                 if !reg_src && src != 0 {
-                    return Err(format!("slot {slot}: immediate jump source register must be 0"));
+                    return Err(format!(
+                        "slot {slot}: immediate jump source register must be 0"
+                    ));
                 }
-                let src_op = if reg_src { Src::Reg(src) } else { Src::Imm(imm) };
-                out.push(Insn::Jmp { index: slot, width, cond, dst, src: src_op, off: off as i32 });
+                let src_op = if reg_src {
+                    Src::Reg(src)
+                } else {
+                    Src::Imm(imm)
+                };
+                out.push(Insn::Jmp {
+                    index: slot,
+                    width,
+                    cond,
+                    dst,
+                    src: src_op,
+                    off: off as i32,
+                });
             }
             slot += 1;
             continue;
         }
-        return Err(format!("slot {slot}: unsupported class in opcode {opcode:#x}"));
+        return Err(format!(
+            "slot {slot}: unsupported class in opcode {opcode:#x}"
+        ));
     }
     Ok(out)
 }
 
 pub fn target_slot(insn: &Insn) -> Option<i64> {
-    let Insn::Jmp { index, cond, off, .. } = insn else { return None };
-    if *cond == Cond::Exit { None } else { Some(*index as i64 + 1 + *off as i64) }
+    let Insn::Jmp {
+        index, cond, off, ..
+    } = insn
+    else {
+        return None;
+    };
+    if *cond == Cond::Exit {
+        None
+    } else {
+        Some(*index as i64 + 1 + *off as i64)
+    }
 }
 
 fn check_reg(slot: u32, reg: u8) -> Result<(), String> {
@@ -283,10 +399,18 @@ fn mem_size(opcode: u8) -> Result<MemSize, String> {
     }
 }
 
-fn alu_op(slot: u32, code: u8, off: i16, reg_src: bool, width: Width) -> Result<(AluOp, u8), String> {
+fn alu_op(
+    slot: u32,
+    code: u8,
+    off: i16,
+    reg_src: bool,
+    width: Width,
+) -> Result<(AluOp, u8), String> {
     if code == 0x80 {
         if reg_src {
-            return Err(format!("slot {slot}: NEG with a register source is not in the ISA"));
+            return Err(format!(
+                "slot {slot}: NEG with a register source is not in the ISA"
+            ));
         }
         if off != 0 {
             return Err(format!("slot {slot}: NEG offset must be 0"));
@@ -302,7 +426,11 @@ fn alu_op(slot: u32, code: u8, off: i16, reg_src: bool, width: Width) -> Result<
             return Err(format!("slot {slot}: DIV/MOD offset must be 0 or 1"));
         };
         let op = if code == 0x30 {
-            if signed { AluOp::Sdiv } else { AluOp::Div }
+            if signed {
+                AluOp::Sdiv
+            } else {
+                AluOp::Div
+            }
         } else if signed {
             AluOp::Smod
         } else {
@@ -318,7 +446,9 @@ fn alu_op(slot: u32, code: u8, off: i16, reg_src: bool, width: Width) -> Result<
             return Err(format!("slot {slot}: MOVSX requires a register source"));
         }
         if off != 8 && off != 16 && off != 32 {
-            return Err(format!("slot {slot}: MOVSX width {off} is not 8, 16, or 32"));
+            return Err(format!(
+                "slot {slot}: MOVSX width {off} is not 8, 16, or 32"
+            ));
         }
         if off == 32 && width == Width::W32 {
             return Err(format!("slot {slot}: MOVSX from 32 bits requires ALU64"));
@@ -326,7 +456,9 @@ fn alu_op(slot: u32, code: u8, off: i16, reg_src: bool, width: Width) -> Result<
         return Ok((AluOp::Movsx, off as u8));
     }
     if off != 0 {
-        return Err(format!("slot {slot}: non-zero ALU offset is not a supported instruction"));
+        return Err(format!(
+            "slot {slot}: non-zero ALU offset is not a supported instruction"
+        ));
     }
     let op = match code {
         0x00 => AluOp::Add,
