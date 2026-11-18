@@ -55,6 +55,7 @@ fn partial_symbol_and_relocation_entries_return_errors() {
         assert!(load_function(&bytes, None)
             .err()
             .unwrap()
+            .message
             .contains("partial entry"));
     }
 }
@@ -77,7 +78,7 @@ fn named_entry_cannot_accidentally_include_other_functions() {
     bytes[at + 4] = 2;
     bytes[at + 6..at + 8].copy_from_slice(&(code as u16).to_le_bytes());
     let error = load_function(&bytes, Some("xdp_prog1")).err().unwrap();
-    assert!(error.contains("multiple functions"), "{error}");
+    assert!(error.message.contains("multiple functions"), "{error}");
 }
 
 #[test]
@@ -97,6 +98,7 @@ fn function_must_cover_the_selected_section() {
     assert!(load_function(&bytes, None)
         .err()
         .unwrap()
+        .message
         .contains("does not span"));
 }
 #[test]

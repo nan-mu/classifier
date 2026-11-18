@@ -8,6 +8,11 @@ excluded = ["case_drop", "case_tx", "hot_mark", "hot_swap"]
 
 [[program]]
 name = "bitswap"
+expected_status = "converted"
+expected_entry = "bitswap"
+expected_section = "xdp"
+expected_instructions = 68
+expected_backedges = [[61, 24]]
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/bitswap.c"
 object = "bpf/bitswap/bpf.o"
 sha256 = "775dc8cf4a221765493bf915d79d54905e5f456c013943718d9237e20582a980"
@@ -19,6 +24,11 @@ mode = "bpf"
 
 [[program]]
 name = "bsort"
+expected_status = "converted"
+expected_entry = "bsort"
+expected_section = "xdp"
+expected_instructions = 619
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/bsort.c"
 object = "bpf/bsort/bpf.o"
 sha256 = "9c477f4bf4cddbf47748c5e7c2154b9f9cd967e57bb09b44d6aaa7e8c63daf18"
@@ -30,6 +40,11 @@ mode = "bpf"
 
 [[program]]
 name = "buf"
+expected_status = "converted"
+expected_entry = "buf"
+expected_section = "xdp"
+expected_instructions = 46
+expected_backedges = [[29, 21]]
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/buf.c"
 object = "bpf/buf/bpf.o"
 sha256 = "9850410ce7b7fbef0174791ecfe621d485909c193294cf5ffab180d5c45c899c"
@@ -41,6 +56,11 @@ mode = "bpf"
 
 [[program]]
 name = "case_mark"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 104
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/case_mark.c"
 object = "bpf/case_mark/bpf.o"
 sha256 = "2d440d2e2f9370670073b5ffe50fc704732e326a76da4b4f99506af44c52649e"
@@ -52,6 +72,11 @@ mode = "bpf"
 
 [[program]]
 name = "case_swap"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 104
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/case_swap.c"
 object = "bpf/case_swap/bpf.o"
 sha256 = "2c93af665233795f5a7df5db2d301736469ef71e6a7cc355a27c96e7702c87b2"
@@ -63,6 +88,11 @@ mode = "bpf"
 
 [[program]]
 name = "div2"
+expected_status = "converted"
+expected_entry = "div2"
+expected_section = "xdp"
+expected_instructions = 29
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/div2.c"
 object = "bpf/div2/bpf.o"
 sha256 = "1d590716c4a7f4e3c583280c4a985ddfaa193e758e6c7037c2c36a17df2395a4"
@@ -74,6 +104,11 @@ mode = "bpf"
 
 [[program]]
 name = "fib"
+expected_status = "converted"
+expected_entry = "fib"
+expected_section = "xdp"
+expected_instructions = 41
+expected_backedges = [[29, 25]]
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/fib.c"
 object = "bpf/fib/bpf.o"
 sha256 = "598dbebb210b224b1c8ef5cdbd4245fd5bebfaafc8ca8e0ab29eb4ef601d825c"
@@ -85,6 +120,11 @@ mode = "bpf"
 
 [[program]]
 name = "firewall"
+expected_status = "converted"
+expected_entry = "firewall"
+expected_section = "xdp"
+expected_instructions = 22
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/firewall.c"
 object = "bpf/firewall/bpf.o"
 sha256 = "143bd90de464fd13d032818d5a9f626044238c44a34230319d93b36161a9aa3f"
@@ -96,6 +136,11 @@ mode = "bpf"
 
 [[program]]
 name = "fletcher32"
+expected_status = "converted"
+expected_entry = "fletcher32"
+expected_section = "xdp"
+expected_instructions = 402
+expected_backedges = [[401, 395]]
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/fletcher32.c"
 object = "bpf/fletcher32/bpf.o"
 sha256 = "80ee54d740ac5df55b3ef80d7ee3ac095f92fb95294861dfd2bec920081d9b26"
@@ -107,6 +152,11 @@ mode = "bpf"
 
 [[program]]
 name = "helper_loop"
+expected_status = "converted"
+expected_entry = "helper_loop"
+expected_section = "xdp"
+expected_instructions = 27
+expected_backedges = [[23, 13], [27, 13]]
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/helper_loop.c"
 object = "bpf/helper_loop/bpf.o"
 sha256 = "973a78d63dba1f7ab4b1d2246855f0c92b17d1f0d5d4372dc52308622872dcb9"
@@ -118,6 +168,11 @@ mode = "bpf"
 
 [[program]]
 name = "incr"
+expected_status = "converted"
+expected_entry = "incr"
+expected_section = "xdp"
+expected_instructions = 30
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/incr.c"
 object = "bpf/incr/bpf.o"
 sha256 = "8103639ae59dff73ffe7eef0c43cd9e7c3893bcc4a570bfad674635b66eca99b"
@@ -129,6 +184,11 @@ mode = "bpf"
 
 [[program]]
 name = "just_drop"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 33
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_drop.c"
 object = "bpf/just_drop/bpf.o"
 sha256 = "78090f2b29c64caea9ff52f2ede01ab27f3b69e4c46be41030105760f7c9ed24"
@@ -140,6 +200,11 @@ mode = "bpf"
 
 [[program]]
 name = "just_tx"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 57
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_tx.c"
 object = "bpf/just_tx/bpf.o"
 sha256 = "97d6033cd68d1d56b193dd303ce04a2ffcc1c607402ebb8fc7faa15f41317201"
@@ -151,6 +216,11 @@ mode = "bpf"
 
 [[program]]
 name = "memcpy"
+expected_status = "converted"
+expected_entry = "memcpy_xdp"
+expected_section = "xdp"
+expected_instructions = 73
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/memcpy.c"
 object = "bpf/memcpy/bpf.o"
 sha256 = "d6c2f0cce069229f473fb49983147e7ca351a9effad43c3ddda395b62f46a1fa"
@@ -162,6 +232,11 @@ mode = "bpf"
 
 [[program]]
 name = "merge_try"
+expected_status = "converted"
+expected_entry = "merge_try"
+expected_section = "xdp"
+expected_instructions = 16
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/merge_try.c"
 object = "bpf/merge_try/bpf.o"
 sha256 = "19432b3394729eb9dd1698f317ba31223d1afe749da03dad0bf14be1a09d88ba"
@@ -173,6 +248,11 @@ mode = "bpf"
 
 [[program]]
 name = "square"
+expected_status = "converted"
+expected_entry = "square"
+expected_section = "xdp"
+expected_instructions = 30
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/square.c"
 object = "bpf/square/bpf.o"
 sha256 = "d99e28628825f172ea6815a58b0bb5e77567b1468a49f0997686ada5123a90d1"
@@ -184,6 +264,11 @@ mode = "bpf"
 
 [[program]]
 name = "xdp_drop"
+expected_status = "converted"
+expected_entry = "xdp_firewall"
+expected_section = "xdp"
+expected_instructions = 21
+expected_backedges = []
 source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/xdp_drop.c"
 object = "bpf/xdp_drop/bpf.o"
 sha256 = "1197f07a580c3cd1b971e0de6ff2edfabcc1af78830b7f198d8d4dee09b76184"

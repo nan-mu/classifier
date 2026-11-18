@@ -13,7 +13,7 @@ if ! rustup run nightly rustc -vV >/dev/null 2>&1; then
   exit 1
 fi
 
-pkgs=(-p lean-binding -p server)
+pkgs=(-p lean-binding -p server -p ebpf-to-alive2)
 
 echo "==> fmt (nightly, workspace crates only)"
 cargo +nightly fmt --manifest-path "$manifest" "${pkgs[@]}" -- --check

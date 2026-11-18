@@ -186,3 +186,100 @@ fn programs_removed_from_manifest_lose_their_owned_artifacts() {
     );
     assert!(run.output("corpus/just_drop/compile-report.toml").exists());
 }
+
+#[test]
+fn source_root_and_symlink_destinations_are_rejected_before_mutation() {
+    let run = Run::new();
+    let root = run.output("source");
+    fs::create_dir_all(&root).unwrap();
+    let sentinel = root.join("program.alive");
+    fs::write(&sentinel, "keep").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&root, run.output("alias")).unwrap();
+    for output in [sentinel.clone(), run.output("alias/program.alive")] {
+        let result = Command::new(env!("CARGO_BIN_EXE_ebpf-to-alive2"))
+            .current_dir(std::env::temp_dir())
+            .arg("compile")
+            .arg(corpus("div2"))
+            .arg("--source-root")
+            .arg(&root)
+            .arg("--out")
+            .arg(output)
+            .arg("--origin")
+            .arg(run.output("origin.json"))
+            .arg("--report")
+            .arg(run.output("report.toml"))
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("inside source root"));
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "keep");
+    }
+}
+
+#[test]
+fn outside_checkout_requires_explicit_root_and_runs_from_other_cwd() {
+    let run = Run::new();
+    let input = run.output("input.o");
+    fs::copy(corpus("div2"), &input).unwrap();
+    let invoke = |root: Option<&Path>| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_ebpf-to-alive2"));
+        command
+            .current_dir(&run.0)
+            .arg("compile")
+            .arg(&input)
+            .arg("--out")
+            .arg(run.output("program.alive"))
+            .arg("--origin")
+            .arg(run.output("origin.json"))
+            .arg("--report")
+            .arg(run.output("report.toml"));
+        if let Some(root) = root {
+            command.arg("--source-root").arg(root);
+        }
+        command.output().unwrap()
+    };
+    let result = invoke(None);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("cannot discover source root"));
+    assert!(!run.output("program.alive").exists());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    let result = invoke(Some(root));
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+#[test]
+fn failures_have_categories_and_are_removed_on_success() {
+    let run = Run::new();
+    let input = run.output("bad.o");
+    fs::write(&input, b"bad ELF").unwrap();
+    assert!(!run.compile(&input).status.success());
+    let failure: serde_json::Value =
+        serde_json::from_slice(&fs::read(run.output("report.failure.json")).unwrap()).unwrap();
+    assert_eq!(failure["status"], "invalid_elf");
+    assert_eq!(failure["stage"], "elf");
+    assert!(failure["elf_sha256"].as_str().is_some());
+    assert!(run.compile(&corpus("div2")).status.success());
+    assert!(!run.output("report.failure.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_output_symlinks_are_rejected_without_mutation() {
+    let run = Run::new();
+    let missing = run.output("missing");
+    std::os::unix::fs::symlink(&missing, run.output("program.alive")).unwrap();
+    let result = run.compile(&corpus("div2"));
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("dangling symlink"));
+    assert!(!missing.exists());
+    assert!(run.output("program.alive").is_symlink());
+}

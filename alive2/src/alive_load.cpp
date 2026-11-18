@@ -58,7 +58,16 @@ struct Prog {
     if (!ty.isIntType())
       throw std::runtime_error("integer literal with non-integer type");
     size_t used = 0;
-    int64_t n = std::stoll(text, &used);
+    int64_t n;
+    if (!text.empty() && text[0] == '-') {
+      n = std::stoll(text, &used);
+    } else {
+      uint64_t value = std::stoull(text, &used);
+      if (value > INT64_MAX && ty.bits() != 64)
+        throw std::runtime_error("integer literal outside type range");
+      n = value <= INT64_MAX ? static_cast<int64_t>(value)
+                            : -1 - static_cast<int64_t>(UINT64_MAX - value);
+    }
     if (used != text.size())
       throw std::runtime_error("invalid integer literal " + text);
     if (ty.bits() < 64) {
@@ -423,14 +432,17 @@ void note_header(const std::string &line, bool &file, bool &alive, bool &rocq) {
   if (line.starts_with("; alive-file")) {
     if (line != ALIVE_FILE)
       throw std::runtime_error("unsupported alive-file version");
+    if (file) throw std::runtime_error("duplicate alive-file header");
     file = true;
   } else if (line.starts_with("; alive2-pin")) {
     if (line != ALIVE2_PIN)
       throw std::runtime_error("unsupported alive2 pin");
+    if (alive) throw std::runtime_error("duplicate alive2 pin");
     alive = true;
   } else if (line.starts_with("; rocq-pin")) {
     if (line != ROCQ_PIN)
       throw std::runtime_error("unsupported rocq pin");
+    if (rocq) throw std::runtime_error("duplicate rocq pin");
     rocq = true;
   }
 }
@@ -681,6 +693,15 @@ std::string inspect(const Function &fn) {
         if (br->getFalse())
           out << "," << br->getFalse()->getName();
       }
+      if (auto *cmp = dynamic_cast<const ICmp *>(&insn))
+        out << " predicate=" << static_cast<int>(cmp->getCond());
+      if (auto *phi = dynamic_cast<const Phi *>(&insn)) {
+        out << " incoming=";
+        for (const auto &[value, source] : phi->getValues())
+          out << "[" << value_desc(*value) << "," << source << "]";
+      }
+      if (auto *call = dynamic_cast<const FnCall *>(&insn))
+        out << " callee=" << call->getFnName() << " attrs=" << call->getAttributes().mem;
       out << " text=";
       insn.print(out);
       out << "\n";
@@ -761,7 +782,16 @@ void self_test() {
   expect_has(mem, "decl bpf_map_lookup_elem ptr args 2 mem memory(argmem: read, inaccessiblemem: readwrite)");
   expect_throw(std::string("; alive-file v2\n") + ALIVE2_PIN + "\n" + ROCQ_PIN + "\ndefine i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "unsupported alive-file");
   expect_throw(std::string(ALIVE_FILE) + "\n; alive2-pin 000\n" + ROCQ_PIN + "\ndefine i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "unsupported alive2 pin");
+  expect_throw(std::string(ALIVE_FILE) + "\n" + header() + "define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "duplicate alive-file");
+  expect_throw(std::string("; prefix ") + ALIVE_FILE + "\n" + ALIVE2_PIN + "\n" + ROCQ_PIN + "\ndefine i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "missing alive-file");
   expect_throw(header() + "define i64 @a() memory(argmem: execute) {\nentry:\n  ret i64 0\n}\n", "unknown memory");
+  const std::string minimal = "define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n";
+  expect_throw(std::string(ALIVE_FILE) + "\n" + ALIVE2_PIN + "\n" + minimal, "missing alive-file header or pin");
+  expect_throw(std::string(ALIVE_FILE) + "\n" + ROCQ_PIN + "\n" + minimal, "missing alive-file header or pin");
+  expect_throw(std::string(ALIVE_FILE) + "\n" + ALIVE2_PIN + "\n; rocq-pin 000\n" + minimal, "unsupported rocq pin");
+  expect_throw(header() + ALIVE2_PIN + "\n" + minimal, "duplicate alive2");
+  expect_throw(header() + ROCQ_PIN + "\n" + minimal, "duplicate rocq");
+  expect_throw(std::string(ALIVE_FILE) + "\n; prefix " + ALIVE2_PIN + "\n" + ROCQ_PIN + "\n" + minimal, "missing alive-file header or pin");
   expect_throw("define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n", "missing alive-file");
 
   expect_throw("define i64 @a() memory(none) {\nentry:\n  ret i64 0\n}\n" + header(), "header");
@@ -781,6 +811,70 @@ void self_test() {
   auto called = load("declare ptr lookup(ptr) memory(argmem: read)\ndefine ptr @ok(ptr %p) memory(argmem: read) {\nentry:\n  %x = call ptr lookup(ptr %p)\n  ret ptr %x\n}\n");
   expect_has(called, "%x = call ptr lookup(ptr %p) memory(argmem: read)");
 
+  {
+    Prog p;
+    load_text(p, header() + "declare ptr lookup(ptr) memory(argmem: read)\ndefine ptr @f(ptr %p) memory(argmem: readwrite) {\nentry:\n  %x = call ptr lookup(ptr %p) memory(argmem: read)\n  ret ptr %x\n}\n");
+    MemoryAccess fn_mem, call_mem;
+    fn_mem.setCanAlsoAccess(MemoryAccess::Args);
+    call_mem.setCanAlsoRead(MemoryAccess::Args);
+    const auto &decls = p.fn->getFnDecls();
+    auto &bb = p.fn->getBB("%entry");
+    auto *call = dynamic_cast<const FnCall *>(&bb.at(0));
+    if (p.fn->getFnAttrs().mem != fn_mem || decls.size() != 1 ||
+        decls[0].attrs.mem != call_mem || !call || call->getAttributes().mem != call_mem ||
+        call->getFnName() != "lookup" || call->getArgs().size() != 1 ||
+        call->getArgs()[0].first->getName() != "%p" ||
+        !dynamic_cast<const Return *>(&bb.at(1)))
+      throw std::runtime_error("loaded call or memory attributes differ from expectation");
+  }
+  {
+    Prog p;
+    load_text(p, header() + "define i32 @f(i32 %a, i32 %b) memory(none) {\nentry:\n  %q = udiv i32 %a, %b\n  %c = icmp ult i32 %q, 7\n  br i1 %c, label %yes, label %no\nyes:\n  ret i32 %q\nno:\n  br label %yes\n}\n");
+    auto &entry = p.fn->getBB("%entry");
+    auto *div = dynamic_cast<const BinOp *>(&entry.at(0));
+    auto *cmp = dynamic_cast<const ICmp *>(&entry.at(1));
+    auto *branch = dynamic_cast<const Branch *>(&entry.at(2));
+    auto *jump = dynamic_cast<const Branch *>(&p.fn->getBB("%no").at(0));
+    if (p.fn->getType().toString() != "i32" || !div || div->getOp() != BinOp::UDiv ||
+        div->getType().toString() != "i32" || div->operands().size() != 2 ||
+        div->operands()[0]->getName() != "%a" || div->operands()[1]->getName() != "%b" ||
+        !cmp || cmp->getCond() != ICmp::ULT || cmp->operands()[0] != div ||
+        !branch || branch->operands()[0] != cmp || branch->getTrue().getName() != "%yes" ||
+        !branch->getFalse() || branch->getFalse()->getName() != "%no" ||
+        !jump || jump->getTrue().getName() != "%yes" || jump->getFalse())
+      throw std::runtime_error("loaded arithmetic or control flow differs from expectation");
+  }
+  for (const auto &[ty, low, high] : std::vector<std::tuple<std::string, int64_t, int64_t>>{
+         {"i1", 0, 1}, {"i8", -128, 255}, {"i16", -32768, 65535},
+         {"i32", -2147483648LL, 4294967295LL}, {"i64", INT64_MIN, INT64_MAX}}) {
+    Prog p;
+    load_text(p, header() + "define " + ty + " @p(i1 %c) memory(none) {\nentry:\n  br i1 %c, label %left, label %right\nleft:\n  br label %join\nright:\n  br label %join\njoin:\n  %x = phi " + ty + " [ " + std::to_string(low) + ", %left ], [ " + std::to_string(high) + ", %right ]\n  ret " + ty + " %x\n}\n");
+    auto *phi = dynamic_cast<const Phi *>(&p.fn->getBB("%join").at(0));
+    if (!phi || phi->getType().toString() != ty || phi->getValues().size() != 2)
+      throw std::runtime_error("phi type or arity differs from expectation");
+    const auto &values = phi->getValues();
+    auto *a = dynamic_cast<const IntConst *>(values[0].first);
+    auto *b = dynamic_cast<const IntConst *>(values[1].first);
+    if (!a || !b || !a->getInt() || !b->getInt() || *a->getInt() != low ||
+        *b->getInt() != high || a->getType().toString() != ty || b->getType().toString() != ty ||
+        values[0].second != "%left" || values[1].second != "%right")
+      throw std::runtime_error("phi values or predecessors differ from expectation");
+  }
+
+  {
+    Prog p;
+    load_text(p, header() + "define i64 @unsigned_phi(i1 %c) memory(none) {\nentry:\n  br i1 %c, label %left, label %right\nleft:\n  br label %join\nright:\n  br label %join\njoin:\n  %x = phi i64 [ 9223372036854775808, %left ], [ 18446744073709551615, %right ]\n  ret i64 %x\n}\n");
+    auto *phi = dynamic_cast<const Phi *>(&p.fn->getBB("%join").at(0));
+    if (!phi || phi->getValues().size() != 2)
+      throw std::runtime_error("unsigned i64 phi arity differs from expectation");
+    auto *low = dynamic_cast<const IntConst *>(phi->getValues()[0].first);
+    auto *high = dynamic_cast<const IntConst *>(phi->getValues()[1].first);
+    if (!low || !high || !low->getInt() || !high->getInt() ||
+        *low->getInt() != INT64_MIN || *high->getInt() != -1 ||
+        low->getType().toString() != "i64" || high->getType().toString() != "i64" ||
+        phi->getValues()[0].second != "%left" || phi->getValues()[1].second != "%right")
+      throw std::runtime_error("unsigned i64 phi values differ from expectation");
+  }
   Types types;
   Function built(types.i64, std::string("built"));
   built.getFnAttrs().mem.setCanAlsoAccess(MemoryAccess::Args);

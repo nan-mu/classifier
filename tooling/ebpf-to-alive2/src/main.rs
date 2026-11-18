@@ -1,4 +1,4 @@
-use ebpf_to_alive2::{lift, load_function};
+use ebpf_to_alive2::{lift, load_function, CompileError, Status};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::env;
@@ -52,7 +52,10 @@ fn required<'a>(
 
 fn compile(args: &[String]) -> Result<(), String> {
     let input = args.first().ok_or("compile needs a BPF object path")?;
-    let opts = flags(&args[1..], &["--out", "--origin", "--report", "--entry"])?;
+    let opts = flags(
+        &args[1..],
+        &["--out", "--origin", "--report", "--entry", "--source-root"],
+    )?;
     let outputs = [
         required(&opts, "--out")?,
         required(&opts, "--origin")?,
@@ -64,6 +67,7 @@ fn compile(args: &[String]) -> Result<(), String> {
         outputs,
         opts.get("--entry").copied(),
         None,
+        source_root(opts.get("--source-root").copied(), Path::new(input))?.as_deref(),
     )
 }
 
@@ -73,26 +77,63 @@ fn resolved(path: &Path) -> Result<PathBuf, String> {
     } else {
         env::current_dir().map_err(|e| e.to_string())?.join(path)
     };
-    let mut normalized = PathBuf::new();
+    let mut result = PathBuf::new();
     for component in absolute.components() {
         match component {
             Component::ParentDir => {
-                normalized.pop();
+                result.pop();
             }
             Component::CurDir => {}
-            other => normalized.push(other),
+            other => {
+                result.push(other);
+                if result.is_symlink() && !result.exists() {
+                    return Err(format!("dangling symlink in path: {}", result.display()));
+                }
+                if result.exists() {
+                    result = result.canonicalize().map_err(|e| e.to_string())?;
+                }
+            }
         }
     }
-    if normalized.exists() {
-        return normalized.canonicalize().map_err(|e| e.to_string());
+    Ok(result)
+}
+
+fn source_root(explicit: Option<&str>, anchor: &Path) -> Result<Option<Vec<PathBuf>>, String> {
+    let explicit = explicit.map(|root| resolved(Path::new(root))).transpose()?;
+    let mut discovered = Vec::new();
+    for start in [
+        resolved(anchor)?,
+        resolved(&env::current_dir().map_err(|e| e.to_string())?)?,
+    ] {
+        for ancestor in start.ancestors() {
+            if ancestor.join(".git").exists()
+                && ancestor.join("alive2").is_dir()
+                && ancestor.join("tooling").is_dir()
+            {
+                discovered.push(ancestor.to_path_buf());
+                break;
+            }
+        }
     }
-    let parent = normalized.parent().ok_or("output has no parent")?;
-    Ok(resolved(parent)?.join(normalized.file_name().ok_or("output has no filename")?))
+    if let Some(root) = explicit {
+        discovered.push(root);
+    }
+    if discovered.is_empty() {
+        return Err("cannot discover source root; pass --source-root".into());
+    }
+    Ok(Some(discovered))
+}
+
+fn reject_source_output(path: &Path, root: Option<&[PathBuf]>) -> Result<(), String> {
+    if root.is_some_and(|roots| roots.iter().any(|root| path.starts_with(root))) {
+        return Err(format!("output inside source root: {}", path.display()));
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
 struct CompileReport<'a> {
-    status: &'static str,
+    status: Status,
     entry: &'a str,
     section: &'a str,
     instructions: usize,
@@ -100,6 +141,12 @@ struct CompileReport<'a> {
     has_loop: bool,
     elf_sha256: &'a str,
     alive_sha256: &'a str,
+    origin_sha256: &'a str,
+    schema: &'static str,
+    compiler_version: &'static str,
+    origin_revision: u32,
+    alive2_pin: &'static str,
+    rocq_pin: &'static str,
     model_proof: &'static str,
     artifact_proof: &'static str,
     source_view: &'static str,
@@ -111,13 +158,22 @@ fn compile_to(
     outputs: [&Path; 3],
     entry: Option<&str>,
     expected: Option<(&str, u64)>,
+    source_root: Option<&[PathBuf]>,
 ) -> Result<(), String> {
     let input_path = resolved(input)?;
     let paths = outputs
         .iter()
         .map(|p| resolved(p))
         .collect::<Result<Vec<_>, _>>()?;
+    let failure_path = outputs[2].with_extension("failure.json");
+    let failure_resolved = resolved(&failure_path)?;
+    reject_source_output(&failure_resolved, source_root)?;
+    if failure_resolved == input_path || paths.contains(&failure_resolved) || failure_path.is_dir()
+    {
+        return Err("failure report must be distinct from input and products".into());
+    }
     for (i, path) in paths.iter().enumerate() {
+        reject_source_output(path, source_root)?;
         if *path == input_path || paths[..i].contains(path) {
             return Err("input and all output paths must be distinct".into());
         }
@@ -128,20 +184,32 @@ fn compile_to(
     for path in outputs.iter().rev() {
         remove_if_present(path)?;
     }
-    let bytes = fs::read(input).map_err(|e| format!("read {}: {e}", input.display()))?;
-    let elf_sha = sha256(&bytes);
-    if let Some((expected_sha, expected_size)) = expected {
-        if expected_sha != elf_sha {
-            return Err(format!("{}: ELF SHA-256 mismatch", input.display()));
+    remove_if_present(&failure_path)?;
+    let mut input_sha = None;
+    let result = (|| -> Result<(), CompileError> {
+        let bytes = fs::read(input).map_err(|e| {
+            CompileError::new(
+                Status::InternalError,
+                "read_input",
+                None,
+                None,
+                format!("read {}: {e}", input.display()),
+            )
+        })?;
+        let elf_sha = sha256(&bytes);
+        input_sha = Some(elf_sha.clone());
+        if let Some((expected_sha, expected_size)) = expected {
+            if expected_sha != elf_sha {
+                return Err(format!("{}: ELF SHA-256 mismatch", input.display()).into());
+            }
+            if expected_size != bytes.len() as u64 {
+                return Err(format!("{}: ELF size mismatch", input.display()).into());
+            }
         }
-        if expected_size != bytes.len() as u64 {
-            return Err(format!("{}: ELF size mismatch", input.display()));
-        }
-    }
-    let func = load_function(&bytes, entry).map_err(|e| format!("{}: {e}", input.display()))?;
-    let compiled = lift(&func).map_err(|e| format!("{}: {e}", input.display()))?;
-    let alive_sha = sha256(compiled.alive.as_bytes());
-    let instructions: Vec<_> = compiled
+        let func = load_function(&bytes, entry)?;
+        let compiled = lift(&func)?;
+        let alive_sha = sha256(compiled.alive.as_bytes());
+        let instructions: Vec<_> = compiled
         .origin_insns
         .iter()
         .map(|(slot, ir)| {
@@ -152,33 +220,84 @@ fn compile_to(
                 .find(|insn| insn.index() == *slot)
                 .map_or(1, |insn| insn.slots());
             let raw = &func.bytes[at..at + slots as usize * 8];
-            serde_json::json!({"slot": slot, "offset": slot * 8, "bytes": hex(raw), "ir": ir})
+            serde_json::json!({"slot": slot, "offset": slot * 8, "bytes": hex(raw), "ir": ir,
+                "decoded": func.insns.iter().find(|insn| insn.index() == *slot),
+                "generated_instruction_ids": compiled.generated.iter().filter(|inst| inst.slot == Some(*slot)).map(|inst| &inst.id).collect::<Vec<_>>()})
         })
         .collect();
-    let origin = serde_json::to_vec_pretty(&serde_json::json!({
+        let origin = serde_json::to_vec_pretty(&serde_json::json!({
         "schema": "classifier-alive-origin-v1", "entry": func.name, "section": func.section,
         "elf_sha256": elf_sha, "alive_sha256": alive_sha, "instructions": instructions,
-        "state_mapping": "incomplete", "prologue_ir": compiled.prologue_ir
+        "state_mapping": "incomplete", "prologue_ir": compiled.prologue_ir,
+        "origin_revision": 2, "generated_instructions": compiled.generated,
+        "generated_cfg_edges": compiled.generated.iter().flat_map(|inst| inst.targets.iter().map(|target| serde_json::json!({"from": inst.block, "to": target, "instruction": inst.id}))).collect::<Vec<_>>(),
+        "source_cfg_blocks": compiled.source_blocks, "source_cfg_edges": compiled.source_edges
     }))
     .map_err(|e| e.to_string())?;
-    let report = toml::to_string(&CompileReport {
-        status: "converted",
-        entry: &func.name,
-        section: &func.section,
-        instructions: func.insns.len(),
-        has_loop: compiled.loop_header,
-        elf_sha256: &elf_sha,
-        alive_sha256: &alive_sha,
-        model_proof: "not_proven",
-        artifact_proof: "not_proven",
-        source_view: "incomplete",
-        implementation_proof: "not_proven",
-    })
-    .map_err(|e| e.to_string())?;
-    publish(
-        outputs,
-        [compiled.alive.as_bytes(), &origin, report.as_bytes()],
-    )
+        let report = toml::to_string(&CompileReport {
+            status: Status::Converted,
+            entry: &func.name,
+            section: &func.section,
+            instructions: func.insns.len(),
+            has_loop: compiled.loop_header,
+            elf_sha256: &elf_sha,
+            alive_sha256: &alive_sha,
+            origin_sha256: &sha256(&origin),
+            schema: "classifier-alive-origin-v1",
+            compiler_version: env!("CARGO_PKG_VERSION"),
+            origin_revision: 2,
+            alive2_pin: "adacbd5180ccf95075e9867c4f0c259f59c9fef2",
+            rocq_pin: "78d65a77592aae84b31f86385f8be4ab83b45ccb",
+            model_proof: "not_proven",
+            artifact_proof: "not_proven",
+            source_view: "incomplete",
+            implementation_proof: "not_proven",
+        })
+        .map_err(|e| e.to_string())?;
+        publish(
+            outputs,
+            [compiled.alive.as_bytes(), &origin, report.as_bytes()],
+        )
+        .map_err(|message| {
+            CompileError::new(Status::InternalError, "publication", None, None, message)
+        })
+    })();
+    if let Err(error) = &result {
+        for path in outputs.iter().rev() {
+            remove_if_present(path)?;
+        }
+        let body = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": "classifier-alive-failure-v1", "compiler_version": env!("CARGO_PKG_VERSION"),
+            "alive2_pin": "adacbd5180ccf95075e9867c4f0c259f59c9fef2",
+            "rocq_pin": "78d65a77592aae84b31f86385f8be4ab83b45ccb",
+            "elf_sha256": input_sha,
+            "status": error.status, "stage": error.stage, "slot": error.slot,
+            "register": error.register, "message": error.message,
+            "model_proof": "not_proven", "implementation_proof": "not_proven", "artifact_proof": "not_proven"
+        }))
+        .map_err(|e| e.to_string())?;
+        let temporary = failure_path.with_extension(format!("{}.partial", std::process::id()));
+        let mut created = false;
+        let publication = (|| -> Result<(), String> {
+            if let Some(parent) = temporary.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            use std::io::Write;
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|e| e.to_string())?;
+            created = true;
+            file.write_all(&body).map_err(|e| e.to_string())?;
+            fs::rename(&temporary, &failure_path).map_err(|e| e.to_string())
+        })();
+        if publication.is_err() && created {
+            let _ = fs::remove_file(temporary);
+        }
+        publication?;
+    }
+    result.map_err(|error| error.to_string())
 }
 
 #[derive(Deserialize)]
@@ -199,10 +318,12 @@ struct Program {
 }
 
 fn compile_corpus(args: &[String]) -> Result<(), String> {
-    let opts = flags(args, &["--index", "--out-dir"])?;
+    let opts = flags(args, &["--index", "--out-dir", "--source-root"])?;
     let index = Path::new(required(&opts, "--index")?);
     let out_dir = Path::new(required(&opts, "--out-dir")?);
     let output_root = resolved(out_dir)?;
+    let source_root = source_root(opts.get("--source-root").copied(), index)?;
+    reject_source_output(&output_root, source_root.as_deref())?;
     if resolved(index)?.starts_with(&output_root) {
         return Err("corpus index must be outside the output directory".into());
     }
@@ -218,6 +339,7 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
             return Err("invalid corpus output ownership name or path".into());
         }
         remove_if_present(&out_dir.join(name).join("compile-report.toml"))?;
+        remove_if_present(&out_dir.join(name).join("compile-report.failure.json"))?;
     }
     let text = fs::read_to_string(index).map_err(|e| format!("read {}: {e}", index.display()))?;
     let snapshot: Snapshot =
@@ -267,12 +389,22 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
     fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     let owned: Vec<_> = names.into_iter().collect();
     let staged = out_dir.join(format!(".corpus-outputs.{}.partial", std::process::id()));
-    fs::write(
-        &staged,
-        serde_json::to_vec(&owned).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    fs::rename(&staged, ownership).map_err(|e| e.to_string())?;
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)
+            .map_err(|e| e.to_string())?;
+        if let Err(e) = file.write_all(&serde_json::to_vec(&owned).map_err(|e| e.to_string())?) {
+            let _ = fs::remove_file(&staged);
+            return Err(e.to_string());
+        }
+    }
+    if let Err(e) = fs::rename(&staged, ownership) {
+        let _ = fs::remove_file(staged);
+        return Err(e.to_string());
+    }
     let mut failures = Vec::new();
     for program in snapshot.program {
         let path = root.join(&program.object);
@@ -287,6 +419,7 @@ fn compile_corpus(args: &[String]) -> Result<(), String> {
             [&outputs[0], &outputs[1], &outputs[2]],
             program.entry.as_deref(),
             Some((&program.sha256, program.size)),
+            source_root.as_deref(),
         );
         if let Err(e) = result {
             failures.push(format!("{}: {e}", program.name));
@@ -315,30 +448,34 @@ fn remove_if_present(path: &Path) -> Result<(), String> {
 }
 
 fn publish(paths: [&Path; 3], bytes: [&[u8]; 3]) -> Result<(), String> {
-    let temporary: Vec<_> = paths
-        .iter()
-        .map(|path| {
-            path.with_file_name(format!(
-                ".{}.{}.partial",
-                path.file_name().unwrap_or_default().to_string_lossy(),
-                std::process::id()
-            ))
-        })
-        .collect();
+    use std::io::Write;
+    let mut staged = Vec::new();
     let result = (|| {
-        for (path, body) in temporary.iter().zip(bytes) {
+        for (path, body) in paths.iter().zip(bytes) {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            fs::write(path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
+            let temporary = path.with_file_name(format!(
+                ".{}.{}.partial",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                std::process::id()
+            ));
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .map_err(|e| format!("stage {}: {e}", temporary.display()))?;
+            staged.push(temporary);
+            file.write_all(body)
+                .map_err(|e| format!("write {}: {e}", path.display()))?;
         }
-        for (from, to) in temporary.iter().zip(paths) {
+        for (from, to) in staged.iter().zip(paths) {
             fs::rename(from, to).map_err(|e| format!("publish {}: {e}", to.display()))?;
         }
         Ok(())
     })();
     if result.is_err() {
-        for path in temporary.iter().map(PathBuf::as_path).chain(paths) {
+        for path in staged.iter().map(PathBuf::as_path).chain(paths) {
             let _ = fs::remove_file(path);
         }
     }
@@ -351,4 +488,33 @@ fn sha256(bytes: &[u8]) -> String {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_report_publication_removes_products_and_preserves_unrelated_files() {
+        let directory = env::temp_dir().join(format!("alive-publication-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let paths = [
+            directory.join("p.alive"),
+            directory.join("origin.json"),
+            directory.join("report.toml"),
+        ];
+        fs::create_dir(&paths[2]).unwrap();
+        let unrelated = paths[2].join("unrelated");
+        fs::write(&unrelated, "keep").unwrap();
+        assert!(publish(
+            [&paths[0], &paths[1], &paths[2]],
+            [b"alive", b"origin", b"report"]
+        )
+        .is_err());
+        assert!(!paths[0].exists());
+        assert!(!paths[1].exists());
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "keep");
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

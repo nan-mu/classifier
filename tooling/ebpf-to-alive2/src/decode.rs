@@ -1,16 +1,17 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
+use crate::{CompileError, Status};
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum Src {
     Reg(u8),
     Imm(i32),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Width {
     W32,
     W64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AluOp {
     Add,
     Sub,
@@ -30,7 +31,7 @@ pub enum AluOp {
     Movsx,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cond {
     Ja,
     Jeq,
@@ -46,7 +47,7 @@ pub enum Cond {
     Exit,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemSize {
     Byte,
     Half,
@@ -54,7 +55,7 @@ pub enum MemSize {
     Dword,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum Insn {
     Alu {
         index: u32,
@@ -128,11 +129,14 @@ impl Insn {
     }
 }
 
-pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
+pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, CompileError> {
     if bytes.len() % 8 != 0 {
-        return Err(format!(
-            "bytecode length {} is not a multiple of 8",
-            bytes.len()
+        return Err(CompileError::new(
+            Status::InvalidInstruction,
+            "decode",
+            None,
+            None,
+            format!("bytecode length {} is not a multiple of 8", bytes.len()),
         ));
     }
     let mut out = Vec::new();
@@ -155,13 +159,23 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 32 => 32,
                 64 => 64,
                 _ => {
-                    return Err(format!(
-                        "slot {slot}: END immediate {imm} is not 16, 32, or 64"
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: END immediate {imm} is not 16, 32, or 64"),
                     ))
                 }
             };
             if off != 0 {
-                return Err(format!("slot {slot}: END offset must be 0"));
+                return Err(CompileError::new(
+                    Status::InvalidInstruction,
+                    "decode",
+                    Some(slot),
+                    None,
+                    format!("slot {slot}: END offset must be 0"),
+                ));
             }
             out.push(Insn::End {
                 index: slot,
@@ -175,7 +189,13 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
         if opcode == 0x18 {
             let next = slot as usize + 1;
             if next * 8 + 8 > bytes.len() {
-                return Err(format!("slot {slot}: LDDW is missing its second slot"));
+                return Err(CompileError::new(
+                    Status::InvalidInstruction,
+                    "decode",
+                    Some(slot),
+                    None,
+                    format!("slot {slot}: LDDW is missing its second slot"),
+                ));
             }
             let hi_at = next * 8;
             if bytes[hi_at] != 0
@@ -183,8 +203,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 || bytes[hi_at + 2] != 0
                 || bytes[hi_at + 3] != 0
             {
-                return Err(format!(
-                    "slot {slot}: LDDW second slot is not reserved zeros"
+                return Err(CompileError::new(
+                    Status::InvalidInstruction,
+                    "decode",
+                    Some(slot),
+                    None,
+                    format!("slot {slot}: LDDW second slot is not reserved zeros"),
                 ));
             }
             let hi = i32::from_le_bytes([
@@ -208,11 +232,23 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
             let mode = opcode >> 5;
             let signed = mode == 4;
             if mode != 3 && !(class == 0x01 && mode == 4 && size != MemSize::Dword) {
-                return Err(format!("slot {slot}: memory mode {mode} is not MEM"));
+                return Err(CompileError::new(
+                    Status::InvalidInstruction,
+                    "decode",
+                    Some(slot),
+                    None,
+                    format!("slot {slot}: memory mode {mode} is not MEM"),
+                ));
             }
             if class == 0x01 {
                 if imm != 0 {
-                    return Err(format!("slot {slot}: LDX immediate must be 0"));
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: LDX immediate must be 0"),
+                    ));
                 }
                 out.push(Insn::Load {
                     index: slot,
@@ -224,7 +260,13 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 });
             } else if class == 0x03 {
                 if imm != 0 {
-                    return Err(format!("slot {slot}: STX immediate must be 0"));
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: STX immediate must be 0"),
+                    ));
                 }
                 out.push(Insn::Store {
                     index: slot,
@@ -235,7 +277,13 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 });
             } else {
                 if src != 0 {
-                    return Err(format!("slot {slot}: ST source register must be 0"));
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: ST source register must be 0"),
+                    ));
                 }
                 out.push(Insn::Store {
                     index: slot,
@@ -262,8 +310,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
             };
             let (op, extra) = alu_op(slot, code, off, reg_src, width)?;
             if matches!(src_op, Src::Imm(_)) && src != 0 && op != AluOp::Neg {
-                return Err(format!(
-                    "slot {slot}: immediate ALU source register must be 0"
+                return Err(CompileError::new(
+                    Status::InvalidInstruction,
+                    "decode",
+                    Some(slot),
+                    None,
+                    format!("slot {slot}: immediate ALU source register must be 0"),
                 ));
             }
             out.push(Insn::Alu {
@@ -285,12 +337,22 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
             };
             if code == 0x80 {
                 if src != 0 {
-                    return Err(format!(
-                        "slot {slot}: call source {src} is not a static helper id"
+                    return Err(CompileError::new(
+                        Status::Unsupported,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: call source {src} is not a static helper id"),
                     ));
                 }
                 if off != 0 || dst != 0 {
-                    return Err(format!("slot {slot}: malformed call"));
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: malformed call"),
+                    ));
                 }
                 out.push(Insn::Call {
                     index: slot,
@@ -300,11 +362,24 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 continue;
             }
             let reg_src = opcode & 0x08 != 0;
-            let cond = jump_op(code)
-                .ok_or_else(|| format!("slot {slot}: unknown jump opcode {opcode:#x}"))?;
+            let cond = jump_op(code).ok_or_else(|| {
+                CompileError::new(
+                    Status::Unsupported,
+                    "decode",
+                    Some(slot),
+                    None,
+                    format!("slot {slot}: unknown jump opcode {opcode:#x}"),
+                )
+            })?;
             if cond == Cond::Exit {
                 if class != 0x05 || reg_src || off != 0 || src != 0 || dst != 0 {
-                    return Err(format!("slot {slot}: malformed exit"));
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: malformed exit"),
+                    ));
                 }
                 out.push(Insn::Jmp {
                     index: slot,
@@ -316,16 +391,34 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 });
             } else if cond == Cond::Ja {
                 if reg_src || src != 0 || dst != 0 {
-                    return Err(format!("slot {slot}: malformed ja"));
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: malformed ja"),
+                    ));
                 }
                 let disp = if class == 0x06 {
                     if off != 0 {
-                        return Err(format!("slot {slot}: jmp32 ja offset field must be 0"));
+                        return Err(CompileError::new(
+                            Status::InvalidInstruction,
+                            "decode",
+                            Some(slot),
+                            None,
+                            format!("slot {slot}: jmp32 ja offset field must be 0"),
+                        ));
                     }
                     imm
                 } else {
                     if imm != 0 {
-                        return Err(format!("slot {slot}: ja immediate must be 0"));
+                        return Err(CompileError::new(
+                            Status::InvalidInstruction,
+                            "decode",
+                            Some(slot),
+                            None,
+                            format!("slot {slot}: ja immediate must be 0"),
+                        ));
                     }
                     off as i32
                 };
@@ -339,8 +432,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
                 });
             } else {
                 if !reg_src && src != 0 {
-                    return Err(format!(
-                        "slot {slot}: immediate jump source register must be 0"
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "decode",
+                        Some(slot),
+                        None,
+                        format!("slot {slot}: immediate jump source register must be 0"),
                     ));
                 }
                 let src_op = if reg_src {
@@ -360,8 +457,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Insn>, String> {
             slot += 1;
             continue;
         }
-        return Err(format!(
-            "slot {slot}: unsupported class in opcode {opcode:#x}"
+        return Err(CompileError::new(
+            Status::Unsupported,
+            "decode",
+            Some(slot),
+            None,
+            format!("slot {slot}: unsupported class in opcode {opcode:#x}"),
         ));
     }
     Ok(out)
@@ -381,21 +482,33 @@ pub fn target_slot(insn: &Insn) -> Option<i64> {
     }
 }
 
-fn check_reg(slot: u32, reg: u8) -> Result<(), String> {
+fn check_reg(slot: u32, reg: u8) -> Result<(), CompileError> {
     if reg > 10 {
-        Err(format!("slot {slot}: register r{reg} is out of range"))
+        Err(CompileError::new(
+            Status::InvalidInstruction,
+            "decode",
+            Some(slot),
+            Some(reg),
+            format!("slot {slot}: register r{reg} is out of range"),
+        ))
     } else {
         Ok(())
     }
 }
 
-fn mem_size(opcode: u8) -> Result<MemSize, String> {
+fn mem_size(opcode: u8) -> Result<MemSize, CompileError> {
     match (opcode >> 3) & 3 {
         0 => Ok(MemSize::Word),
         1 => Ok(MemSize::Half),
         2 => Ok(MemSize::Byte),
         3 => Ok(MemSize::Dword),
-        _ => Err(format!("opcode {opcode:#x}: bad memory size")),
+        _ => Err(CompileError::new(
+            Status::InvalidInstruction,
+            "decode",
+            None,
+            None,
+            format!("opcode {opcode:#x}: bad memory size"),
+        )),
     }
 }
 
@@ -405,15 +518,25 @@ fn alu_op(
     off: i16,
     reg_src: bool,
     width: Width,
-) -> Result<(AluOp, u8), String> {
+) -> Result<(AluOp, u8), CompileError> {
     if code == 0x80 {
         if reg_src {
-            return Err(format!(
-                "slot {slot}: NEG with a register source is not in the ISA"
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: NEG with a register source is not in the ISA"),
             ));
         }
         if off != 0 {
-            return Err(format!("slot {slot}: NEG offset must be 0"));
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: NEG offset must be 0"),
+            ));
         }
         return Ok((AluOp::Neg, 0));
     }
@@ -423,7 +546,13 @@ fn alu_op(
         } else if off == 0 {
             false
         } else {
-            return Err(format!("slot {slot}: DIV/MOD offset must be 0 or 1"));
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: DIV/MOD offset must be 0 or 1"),
+            ));
         };
         let op = if code == 0x30 {
             if signed {
@@ -443,21 +572,41 @@ fn alu_op(
             return Ok((AluOp::Mov, 0));
         }
         if !reg_src {
-            return Err(format!("slot {slot}: MOVSX requires a register source"));
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: MOVSX requires a register source"),
+            ));
         }
         if off != 8 && off != 16 && off != 32 {
-            return Err(format!(
-                "slot {slot}: MOVSX width {off} is not 8, 16, or 32"
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: MOVSX width {off} is not 8, 16, or 32"),
             ));
         }
         if off == 32 && width == Width::W32 {
-            return Err(format!("slot {slot}: MOVSX from 32 bits requires ALU64"));
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: MOVSX from 32 bits requires ALU64"),
+            ));
         }
         return Ok((AluOp::Movsx, off as u8));
     }
     if off != 0 {
-        return Err(format!(
-            "slot {slot}: non-zero ALU offset is not a supported instruction"
+        return Err(CompileError::new(
+            Status::InvalidInstruction,
+            "decode",
+            Some(slot),
+            None,
+            format!("slot {slot}: non-zero ALU offset is not a supported instruction"),
         ));
     }
     let op = match code {
@@ -470,7 +619,15 @@ fn alu_op(
         0x70 => AluOp::Rsh,
         0xa0 => AluOp::Xor,
         0xc0 => AluOp::Arsh,
-        _ => return Err(format!("slot {slot}: unsupported ALU opcode {code:#x}")),
+        _ => {
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "decode",
+                Some(slot),
+                None,
+                format!("slot {slot}: unsupported ALU opcode {code:#x}"),
+            ))
+        }
     };
     Ok((op, 0))
 }

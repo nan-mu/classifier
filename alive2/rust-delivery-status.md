@@ -1,8 +1,8 @@
 # Rust file compiler delivery status
 
-This branch is a Draft prototype. The 17 snapshotted raw BPF objects convert to standalone Alive2 text and load in a separate C++ process. Semantic preservation by the Rust implementation is unproven.
+This document records earlier compiler results and remaining limitations. The 17 snapshotted raw BPF objects convert to standalone Alive2 text and load in a separate C++ process. Semantic preservation by the Rust implementation is unproven.
 
-## Recorded checks
+## Historical compiler results
 
 | Check | Result | Evidence |
 | --- | --- | --- |
@@ -17,11 +17,11 @@ This branch is a Draft prototype. The 17 snapshotted raw BPF objects convert to 
 
 The integration command is in `alive-file-v1.md` and implemented in `tests/run-rust-file-e2e.py`. The recorded report binds the compiler and loader binaries, input snapshot, and per-program input/output files by SHA-256. Those binary hashes are machine/build-specific. Rebuild and rerun to obtain a new report.
 
-Generated `.alive`, origin, per-program conversion reports, and normalized files are outside the input publisher tree at `/Volumes/SSD/bs/classifier-output/alive2-rust-compiler`. The committed verification report is an index into that directory. The input snapshot contains its own copied raw BPF fixtures and hashes.
+The historical verification report indexes artifacts from an earlier machine. Generate fresh artifacts in a directory outside the source tree. The input snapshot contains copied raw BPF fixtures and hashes.
 
 The server profile test initially failed to link because this worktree had no Lean shared libraries. Building `Core:shared`, `Node:shared`, `RV32:shared`, and `EBPF:shared` resolved that prerequisite; the server profile tests then passed. The full server test suite and legacy profile runtime outcomes were not rerun for this change.
 
-## Changes in this pickup
+## Historical implementation notes
 
 The interrupted register-facts migration now compiles. Scalar values cannot silently become packet pointers. Packet addresses, context, stack, map handles, and map values retain distinct facts; typed stack spills track their offsets and reject incompatible partial reloads. ALU32 moves and pointer differences in the actual corpus are handled explicitly. Expanded division blocks provide their actual outgoing predecessor labels to phi nodes.
 
@@ -31,12 +31,14 @@ ELF loading validates complete table entries and relocation targets. It rejects 
 
 The DeepSeek audit found six actionable issues: invalid signed 64-bit loads, invalid sign-ext stores, omitted phi origin names, stale batch reports, misplaced headers, and sanitized map-name collisions. All have fixes and regressions. The decoder accepts sign-ext memory mode only for narrow loads. Origin coverage is checked in both directions. Loader headers must precede the body, and distinct map symbols cannot collapse to one parameter. Declaration input types and a real loop smoke now extend the recorded checks. The audit inspected only the resumed activity slice, not the entire historical thread.
 
-## Remaining obligations
+## Known limitations
 
 1. **Implementation proof:** no mechanized connection from the actual Rust decoder/lifter and produced text to the pinned Rocq ISA and Alive2 semantics exists. The required arbitrary-state simulation, events, UB/poison, memory, helper contracts, and loop relation remain open. The earlier C++ exhibit and Rocq checks do not discharge this obligation. No upstream semantics, axioms, or admitted lemmas were added in this pickup.
 2. **Artifact proof and semantic corruption checks:** there is no independent per-artifact semantic certificate checker. Parser rejection tests cover malformed structure. They do not prove rejection of a well-typed, semantically corrupted ADD, division guard, jump, phi, store, or helper call. Reports retain separate `model_proof`, `artifact_proof`, and `implementation_proof` fields with `not_proven`.
-3. **Full source-state origin:** instruction-to-SSA metadata does not yet provide checkpoint expressions for every R0–R10/RAX/PC/stack/code-id/tail-call state component. `state_mapping = "incomplete"` and `source_view = "incomplete"` make that boundary explicit. There is no source-view consumer or source-state relation checker.
+3. **Full source-state origin:** instruction provenance now includes all emitted instructions and CFG/phi sources, but does not provide checkpoint expressions for every R0–R10/RAX/PC/stack/code-id/tail-call state component. `state_mapping = "incomplete"` and `source_view = "incomplete"` make that boundary explicit. There is no source-view consumer or source-state relation checker.
 4. **Task A contract and consumers:** the authoritative A-task `index.toml` is absent. `corpus/snapshot.toml` is the observed 17-file fallback, not a replacement claim for that contract. `profile.toml` now explicitly selects `legacy-dual-arch`; the server rejects raw BPF results under that interpretation. Migration of the old page to the eventual raw BPF manifest/report format and corresponding legacy fixture provenance remains open.
 5. **General ELF and state coverage:** the compiler supports one function spanning its executable section, little-endian ELF64 ET_REL BPF, and its documented instruction/provenance subset. Other valid BPF programs may be rejected. Snapshot success does not establish general completeness.
 
-These gaps prevent promotion from Draft. The user-authorized fallback is a runnable, reviewable prototype with its proof boundary recorded; it is not full completion of the original formal compiler contract.
+Machine-code and Rocq state-transition proofs are outside this round. The implementation and artifact proof fields remain `not_proven`.
+
+The [round-two report](round-two-report.md) records the current 37 Rust tests, seven independent compiler-to-loader structural fixtures, explicit 17-program expectations, typed outcomes, and publication regressions. The checks table above is historical; use the round-two commands for current evidence.
