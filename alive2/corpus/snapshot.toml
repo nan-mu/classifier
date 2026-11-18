@@ -1,0 +1,279 @@
+# Snapshot of the 17 official BPF objects.
+# task_a_index is absent. This file is not task A's index.toml.
+task_a_index = "absent"
+classifier_base = "356b3323f75c1d74f165950b6a82b14e894b6584"
+libbpf_mcu_commit = "c0b9faaa5dae3525a7c9a63ecfd5bf2b8716c6a0"
+source_root = "/Volumes/SSD/bs/build"
+excluded = ["case_drop", "case_tx", "hot_mark", "hot_swap"]
+
+[[program]]
+name = "bitswap"
+expected_status = "converted"
+expected_entry = "bitswap"
+expected_section = "xdp"
+expected_instructions = 68
+expected_backedges = [[61, 24]]
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/bitswap.c"
+object = "bpf/bitswap/bpf.o"
+sha256 = "775dc8cf4a221765493bf915d79d54905e5f456c013943718d9237e20582a980"
+size = 8880
+bpf_toml_sha256 = "c5c44148c90f2610474032b18f4924c70a229ea0270d14fa79901b057d4bad27"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "bsort"
+expected_status = "converted"
+expected_entry = "bsort"
+expected_section = "xdp"
+expected_instructions = 619
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/bsort.c"
+object = "bpf/bsort/bpf.o"
+sha256 = "9c477f4bf4cddbf47748c5e7c2154b9f9cd967e57bb09b44d6aaa7e8c63daf18"
+size = 29592
+bpf_toml_sha256 = "a9e65e58d241e9d431cd680c5a070bf6c8c901db0653d82f9d62dbfcf5aee433"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "buf"
+expected_status = "converted"
+expected_entry = "buf"
+expected_section = "xdp"
+expected_instructions = 46
+expected_backedges = [[29, 21]]
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/buf.c"
+object = "bpf/buf/bpf.o"
+sha256 = "9850410ce7b7fbef0174791ecfe621d485909c193294cf5ffab180d5c45c899c"
+size = 8656
+bpf_toml_sha256 = "7928e99c0eb61f0f0daefa0c10f1fbdf315468527592303241cb69907ec882f5"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "case_mark"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 104
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/case_mark.c"
+object = "bpf/case_mark/bpf.o"
+sha256 = "2d440d2e2f9370670073b5ffe50fc704732e326a76da4b4f99506af44c52649e"
+size = 14880
+bpf_toml_sha256 = "0a857d7828a6689c7e53167edd54e9e3fbacf5b6f868c92778f83c5b0ce9fdbf"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "case_swap"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 104
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/case_swap.c"
+object = "bpf/case_swap/bpf.o"
+sha256 = "2c93af665233795f5a7df5db2d301736469ef71e6a7cc355a27c96e7702c87b2"
+size = 14880
+bpf_toml_sha256 = "d62bfaf9e1f8e54f8d816942d3dc16b3bbd10941d42a4410c8314b0fd3cf37ef"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "div2"
+expected_status = "converted"
+expected_entry = "div2"
+expected_section = "xdp"
+expected_instructions = 29
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/div2.c"
+object = "bpf/div2/bpf.o"
+sha256 = "1d590716c4a7f4e3c583280c4a985ddfaa193e758e6c7037c2c36a17df2395a4"
+size = 5784
+bpf_toml_sha256 = "302bb383500a67f0d1bc01609d4155107abcf6804d1d4489ad09b32a9870b07e"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "fib"
+expected_status = "converted"
+expected_entry = "fib"
+expected_section = "xdp"
+expected_instructions = 41
+expected_backedges = [[29, 25]]
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/fib.c"
+object = "bpf/fib/bpf.o"
+sha256 = "598dbebb210b224b1c8ef5cdbd4245fd5bebfaafc8ca8e0ab29eb4ef601d825c"
+size = 8544
+bpf_toml_sha256 = "b17c0acadbceefc57957cad264b464dd9a2eaf1a2f552aafdbae8e9cb68542a6"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "firewall"
+expected_status = "converted"
+expected_entry = "firewall"
+expected_section = "xdp"
+expected_instructions = 22
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/firewall.c"
+object = "bpf/firewall/bpf.o"
+sha256 = "143bd90de464fd13d032818d5a9f626044238c44a34230319d93b36161a9aa3f"
+size = 8640
+bpf_toml_sha256 = "5f3b1941ff988128d8e5dd156615abab6b9b10e5e110cde5fe2b12e483f56f4c"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "fletcher32"
+expected_status = "converted"
+expected_entry = "fletcher32"
+expected_section = "xdp"
+expected_instructions = 402
+expected_backedges = [[401, 395]]
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/fletcher32.c"
+object = "bpf/fletcher32/bpf.o"
+sha256 = "80ee54d740ac5df55b3ef80d7ee3ac095f92fb95294861dfd2bec920081d9b26"
+size = 26376
+bpf_toml_sha256 = "3b1dab95de4c65d9bd57c16e47b9320cf5805246578f8ff23f8a99bce1756af2"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "helper_loop"
+expected_status = "converted"
+expected_entry = "helper_loop"
+expected_section = "xdp"
+expected_instructions = 27
+expected_backedges = [[23, 13], [27, 13]]
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/helper_loop.c"
+object = "bpf/helper_loop/bpf.o"
+sha256 = "973a78d63dba1f7ab4b1d2246855f0c92b17d1f0d5d4372dc52308622872dcb9"
+size = 7184
+bpf_toml_sha256 = "6776aad8120f94617c4b9bc369604ad0bac8cccd183703800bacd980f7c888c0"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "incr"
+expected_status = "converted"
+expected_entry = "incr"
+expected_section = "xdp"
+expected_instructions = 30
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/incr.c"
+object = "bpf/incr/bpf.o"
+sha256 = "8103639ae59dff73ffe7eef0c43cd9e7c3893bcc4a570bfad674635b66eca99b"
+size = 8312
+bpf_toml_sha256 = "0ab7da901216de558cdaef27397061f42f13ac6fecfab0d79ec57526337b37ca"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "just_drop"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 33
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_drop.c"
+object = "bpf/just_drop/bpf.o"
+sha256 = "78090f2b29c64caea9ff52f2ede01ab27f3b69e4c46be41030105760f7c9ed24"
+size = 10312
+bpf_toml_sha256 = "ebb3b40a54e8472e61b0facd3925ab4fce12a7a1b783a733fefca3d3ca4d4920"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "just_tx"
+expected_status = "converted"
+expected_entry = "xdp_prog1"
+expected_section = "xdp1"
+expected_instructions = 57
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_tx.c"
+object = "bpf/just_tx/bpf.o"
+sha256 = "97d6033cd68d1d56b193dd303ce04a2ffcc1c607402ebb8fc7faa15f41317201"
+size = 12920
+bpf_toml_sha256 = "34c070a74d2d895cf37e19d53c86034df03e2e9cf97e283e2b1b8ae857bb2f72"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "memcpy"
+expected_status = "converted"
+expected_entry = "memcpy_xdp"
+expected_section = "xdp"
+expected_instructions = 73
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/memcpy.c"
+object = "bpf/memcpy/bpf.o"
+sha256 = "d6c2f0cce069229f473fb49983147e7ca351a9effad43c3ddda395b62f46a1fa"
+size = 9648
+bpf_toml_sha256 = "76d11f6771e81b8657f2cac35ef96000cfb7e28fdf0f22569770dd81efac8150"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "merge_try"
+expected_status = "converted"
+expected_entry = "merge_try"
+expected_section = "xdp"
+expected_instructions = 16
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/merge_try.c"
+object = "bpf/merge_try/bpf.o"
+sha256 = "19432b3394729eb9dd1698f317ba31223d1afe749da03dad0bf14be1a09d88ba"
+size = 7136
+bpf_toml_sha256 = "3ea86e2209697ceda7312d0f9e6c7dfd6e0284a0c2a5455489a6f009b17d343b"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "square"
+expected_status = "converted"
+expected_entry = "square"
+expected_section = "xdp"
+expected_instructions = 30
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/square.c"
+object = "bpf/square/bpf.o"
+sha256 = "d99e28628825f172ea6815a58b0bb5e77567b1468a49f0997686ada5123a90d1"
+size = 8328
+bpf_toml_sha256 = "b105777910770950795441fd163c952a98b92ce0940a9fc34bb60870f213a2fa"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"
+
+[[program]]
+name = "xdp_drop"
+expected_status = "converted"
+expected_entry = "xdp_firewall"
+expected_section = "xdp"
+expected_instructions = 21
+expected_backedges = []
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/xdp_drop.c"
+object = "bpf/xdp_drop/bpf.o"
+sha256 = "1197f07a580c3cd1b971e0de6ff2edfabcc1af78830b7f198d8d4dee09b76184"
+size = 8392
+bpf_toml_sha256 = "fa77a42f4a693de50b8d41fac791be47f420caaec7de8ab7d12644ea52bb36ce"
+format = "elf-bpf-relocatable"
+role = "bpf_object"
+mode = "bpf"

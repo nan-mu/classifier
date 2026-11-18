@@ -1,0 +1,68 @@
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/just_drop.c"
+size = 10312
+
+[xdp]
+size = 272
+asm = """
+0000000000000000 <xdp_prog1>:
+       0:	w2 = *(u32 *)(r1 + 0x4)
+       1:	w1 = *(u32 *)(r1 + 0x0)
+       2:	r3 = r1
+       3:	r3 += 0xe
+       4:	if r3 > r2 goto +0x1b <L2>
+       5:	w5 = *(u16 *)(r1 + 0xc)
+       6:	if w5 == 0x81 goto +0x2 <L0>
+       7:	r4 = 0xe
+       8:	if w5 != 0xa888 goto +0x5 <L1>
+<L0>:
+       9:	r4 = r1
+      10:	r4 += 0x12
+      11:	if r4 > r2 goto +0x14 <L2>
+      12:	r4 = 0x12
+      13:	w5 = *(u16 *)(r3 + 0x2)
+<L1>:
+      14:	if w5 != 0x8 goto +0x11 <L2>
+      15:	r1 += r4
+      16:	r3 = r1
+      17:	r3 += 0x14
+      18:	if r3 > r2 goto +0xd <L2>
+      19:	r2 = 0xc
+      20:	r1 += r2
+      21:	w1 = *(u8 *)(r1 + 0x3)
+      22:	*(u32 *)(r10 - 0x4) = w1
+      23:	r2 = r10
+      24:	r2 += -0x4
+      25:	r1 = 0x0 ll
+      27:	call 0x1
+      28:	if r0 == 0x0 goto +0x3 <L2>
+      29:	r1 = *(u64 *)(r0 + 0x0)
+      30:	r1 += 0x1
+      31:	*(u64 *)(r0 + 0x0) = r1
+<L2>:
+      32:	w0 = 0x1
+      33:	exit
+"""
+
+[maps.counter]
+map_type = "BPF_MAP_TYPE_ARRAY"
+max_entries = 256
+key_size = 4
+value_size = 8
+estimated_bytes = 2048
+aot_addr = 0x4038028c
+key = """
+    u32 v
+"""
+value = """
+    u64 v
+"""
+
+[CORE]
+records = """
+insn_off,type_id,access_str,kind,type_name,section
+0x0000,2,0:1,0,xdp_md,xdp1
+0x0008,2,0:0,0,xdp_md,xdp1
+0x0028,8,0:2,0,ethhdr,xdp1
+0x0068,15,0:1,0,vlan_hdr,xdp1
+0x0098,16,0:9:0:0,0,iphdr,xdp1
+"""

@@ -1,0 +1,35 @@
+source = "/Volumes/SSD/bs/libbpf-mcu/tests/xdp/merge_try.c"
+size = 7136
+
+[xdp]
+size = 128
+asm = """
+0000000000000000 <merge_try>:
+       0:	w0 = 0x1
+       1:	w2 = *(u32 *)(r1 + 0x4)
+       2:	w1 = *(u32 *)(r1 + 0x0)
+       3:	r3 = r1
+       4:	r3 += 0xe
+       5:	if r3 > r2 goto +0x9 <L2>
+       6:	w3 = *(u16 *)(r1 + 0xc)
+       7:	if w3 == 0xdd86 goto +0x4 <L0>
+       8:	if w3 != 0x8 goto +0x6 <L2>
+       9:	r1 += 0x22
+      10:	if r1 > r2 goto +0x4 <L2>
+      11:	goto +0x2 <L1>
+<L0>:
+      12:	r1 += 0x36
+      13:	if r1 > r2 goto +0x1 <L2>
+<L1>:
+      14:	w0 = 0x2
+<L2>:
+      15:	exit
+"""
+
+[CORE]
+records = """
+insn_off,type_id,access_str,kind,type_name,section
+0x0008,2,0:1,0,xdp_md,xdp
+0x0010,2,0:0,0,xdp_md,xdp
+0x0030,8,0:2,0,ethhdr,xdp
+"""
