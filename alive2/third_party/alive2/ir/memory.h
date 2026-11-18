@@ -407,6 +407,29 @@ public:
   }
 
   bool isAsmMode() const;
+  struct ObservedBlock {
+    bool local;
+    unsigned bid;
+    smt::expr array;
+    std::set<smt::expr> undef;
+    unsigned char type;
+  };
+
+  // Copies expressions only. Does not load, simplify, constrain or mutate memory.
+  std::vector<ObservedBlock> observeBlocks() const {
+    std::vector<ObservedBlock> result;
+    auto append = [&](const auto &blocks, bool local) {
+      for (unsigned bid = 0; bid < blocks.size(); ++bid) {
+        const auto &block = blocks[bid];
+        if (block.val.isValid())
+          result.push_back({local, bid, block.val, block.undef, block.type});
+      }
+    };
+    append(non_local_block_val, false);
+    append(local_block_val, true);
+    return result;
+  }
+
   State& getState() const { return *state; }
 
   void print(std::ostream &os, const smt::Model &m) const;

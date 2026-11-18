@@ -27,6 +27,7 @@ struct Emit {
     lines: Vec<String>,
     generated: Vec<GeneratedInst>,
     block: String,
+    checkpoints: BTreeMap<u32, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -124,6 +125,7 @@ pub struct Compiled {
     pub source_blocks: Vec<serde_json::Value>,
     pub source_edges: Vec<(u32, u32)>,
     pub origin_insns: Vec<(u32, Vec<String>)>,
+    pub checkpoints: BTreeMap<u32, serde_json::Value>,
     pub prologue_ir: Vec<String>,
     pub maps: Vec<String>,
     pub loop_header: bool,
@@ -168,6 +170,7 @@ pub fn lift(func: &Func) -> Result<Compiled, CompileError> {
         lines: Vec::new(),
         generated: Vec::new(),
         block: String::new(),
+        checkpoints: BTreeMap::new(),
     };
     let maps = map_names(func)?;
     let map_at: BTreeMap<u32, String> = func
@@ -248,7 +251,18 @@ pub fn lift(func: &Func) -> Result<Compiled, CompileError> {
                 message,
             )
         })?;
-        emit.record(before_term, Some(func.insns[block.insns.end - 1].index()))?;
+        let last = &func.insns[block.insns.end - 1];
+        let checkpoint = emit.checkpoints.entry(last.index()).or_insert_with(|| {
+            serde_json::json!({"slot": last.index(), "before": register_bindings(&regs), "after": register_bindings(&regs), "generated_ir": [], "phi_ir": []})
+        });
+        checkpoint["source_block"] = serde_json::json!(format!("s{}", block.start));
+        checkpoint["source_successors"] = serde_json::json!(block.succ);
+        checkpoint["generated_ir"].as_array_mut().unwrap().extend(
+            emit.lines[before_term..]
+                .iter()
+                .map(|line| serde_json::json!(line)),
+        );
+        emit.record(before_term, Some(last.index()))?;
         let exit_label = emit.lines[mark..]
             .iter()
             .rev()
@@ -292,6 +306,12 @@ pub fn lift(func: &Func) -> Result<Compiled, CompileError> {
                 let start = emit.lines.len();
                 emit.lines
                     .push(format!("  {} = phi {ty} {}", names[reg], pairs.join(", ")));
+                if let Some(checkpoint) = emit.checkpoints.get_mut(&block.start) {
+                    checkpoint["phi_ir"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!(emit.lines[start]));
+                }
                 emit.record(start, Some(block.start))?;
                 emit.generated
                     .last_mut()
@@ -331,6 +351,7 @@ pub fn lift(func: &Func) -> Result<Compiled, CompileError> {
         source_blocks: blocks.iter().map(|block| serde_json::json!({"start": block.start, "slots": func.insns[block.insns.clone()].iter().map(Insn::index).collect::<Vec<_>>()})).collect(),
         source_edges: blocks.iter().flat_map(|block| block.succ.iter().flatten().map(|target| (block.start, *target))).collect(),
         origin_insns,
+        checkpoints: emit.checkpoints,
         prologue_ir,
         maps,
         loop_header: blocks.iter().any(|block| {
@@ -1298,6 +1319,18 @@ fn map_names(func: &Func) -> Result<Vec<String>, CompileError> {
     Ok(names)
 }
 
+fn register_bindings(regs: &[Rv; 11]) -> serde_json::Value {
+    serde_json::Value::Array(regs.iter().enumerate().map(|(reg, value)| {
+        let (kind, ty, operand) = match value {
+            Rv::None => ("uninitialized".to_owned(), None, None),
+            Rv::I64(value) => ("scalar".to_owned(), Some("i64"), Some(value)),
+            Rv::Packet(value) => ("packet_address".to_owned(), Some("i64"), Some(value)),
+            Rv::Ptr(kind, value) => (format!("{kind:?}"), Some("ptr"), Some(value)),
+        };
+        serde_json::json!({"register": format!("R{reg}"), "kind": kind, "ir_type": ty, "operand": operand})
+    }).collect())
+}
+
 fn emit_block(
     emit: &mut Emit,
     insns: &[Insn],
@@ -1311,6 +1344,7 @@ fn emit_block(
             break;
         }
         let before = emit.lines.len();
+        let before_regs = register_bindings(regs);
         let action = (|| -> Result<(), String> {
             apply(&mut facts, insn, relocated).map_err(|e| e.to_string())?;
             match insn {
@@ -1425,6 +1459,13 @@ fn emit_block(
                 message,
             )
         })?;
+        emit.checkpoints.insert(
+            insn.index(),
+            serde_json::json!({
+                "slot": insn.index(), "before": before_regs, "after": register_bindings(regs),
+                "generated_ir": emit.lines[before..], "phi_ir": []
+            }),
+        );
         emit.record(before, Some(insn.index()))?;
     }
     Ok(())

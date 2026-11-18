@@ -1,0 +1,5 @@
+[100%] Built target ir
+[100%] Built target smt
+[100%] Built target tools
+[ 12%] Built target generate_version
+[100%] Built target util

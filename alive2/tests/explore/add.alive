@@ -1,0 +1,2 @@
+Name: add
+%a = add i64 1, 2

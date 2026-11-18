@@ -1,0 +1,1 @@
+{"inputs": [{"name": "%ctx", "type": "ptr", "kind": "symbolic"}, {"name": "%pkt", "type": "ptr", "kind": "symbolic"}, {"name": "%pkt_base", "type": "i64", "kind": "symbolic"}, {"name": "%map_blocklist", "type": "ptr", "kind": "symbolic"}]}

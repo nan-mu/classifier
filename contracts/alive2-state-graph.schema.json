@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "alive2-state-graph.schema.json",
+  "title": "Alive2 state graph protocol",
+  "description": "Implemented protocol, authored for PR8. Version 1 remains readable. Version 2 describes native symbolic snapshots. Use validate_state_graph.py additionally for cross references, term typing, DAG cycles, and coverage consistency.",
+  "type": "object",
+  "required": ["schema", "schema_version", "fixture", "run", "program", "environment", "terms", "memories", "nodes", "edges", "coverage", "evidence"],
+  "properties": {
+    "schema": {"const": "alive2-state-graph"},
+    "schema_version": {"enum": [1, 2]},
+    "fixture": {"type": "boolean"},
+    "run": {
+      "type": "object", "required": ["id", "status", "initial_id", "engine_pin", "unroll_bound", "budgets", "truncation"],
+      "properties": {
+        "id": {"type": "string"}, "status": {"type": "string"}, "initial_id": {"type": "string"}, "engine_pin": {"type": "string"},
+        "unroll_bound": {"type": "integer", "minimum": 1}, "budgets": {"type": "object"},
+        "truncation": {"type": "object", "required": ["kind", "reason"], "properties": {"kind": {"enum": ["none", "bound", "resource", "unsupported"]}, "reason": {"type": "string"}}}
+      }
+    },
+    "program": {"type": "object", "required": ["ir_hash", "functions", "instructions"], "properties": {"ir_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "functions": {"type": "array"}, "instructions": {"type": "array"}, "origin": {"type": ["object", "null"]}}},
+    "environment": {"type": "object"},
+    "terms": {"type": "array", "items": {"$ref": "#/$defs/term"}},
+    "memories": {"type": "array", "items": {"type": "object", "required": ["id", "blocks"], "properties": {"id": {"type": "string"}, "blocks": {"type": "array"}, "returned": {"type": "array"}}}},
+    "nodes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/node"}},
+    "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
+    "coverage": {"type": "object", "required": ["return_domain", "sink_domain", "frontier", "assumptions", "all_inputs_covered"], "properties": {"return_domain": {"$ref": "#/$defs/refs"}, "sink_domain": {"$ref": "#/$defs/refs"}, "frontier": {"$ref": "#/$defs/refs"}, "assumptions": {"type": "array"}, "all_inputs_covered": {"enum": ["not_established", "established", "refuted"]}}},
+    "evidence": {"type": "array", "items": {"type": "object", "required": ["id", "kind", "status", "scope"], "properties": {"id": {"type": "string"}, "kind": {"type": "string"}, "status": {"type": "string"}, "scope": {"type": "array"}}}}
+  },
+  "$defs": {
+    "refs": {"type": "array", "items": {"type": "string"}},
+    "sort": {
+      "type": "object", "required": ["kind"],
+      "properties": {"kind": {"enum": ["bool", "bv", "array", "unsupported", "pointer", "undef", "poison", "float", "aggregate"]}, "width": {"type": "integer", "minimum": 1}, "domain": {"$ref": "#/$defs/sort"}, "range": {"$ref": "#/$defs/sort"}},
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "bv"}}}, "then": {"required": ["width"]}},
+        {"if": {"properties": {"kind": {"const": "array"}}}, "then": {"required": ["domain", "range"]}}
+      ]
+    },
+    "term": {"type": "object", "required": ["id", "op", "sort", "args"], "properties": {"id": {"type": "string"}, "op": {"type": "string"}, "sort": {"$ref": "#/$defs/sort"}, "args": {"$ref": "#/$defs/refs"}, "digits": {"type": "string"}, "symbol": {"type": "string"}, "parameters": {"type": "array"}, "unsupported": {"type": "string"}}},
+    "node": {
+      "type": "object", "required": ["id", "location", "unroll", "state", "path_condition", "ir_state", "rocq_ebpf", "evidence_ids"],
+      "properties": {
+        "id": {"type": "string"}, "location": {"type": "object", "required": ["function", "block", "instr"], "properties": {"function": {"type": "string"}, "block": {"type": "string"}, "instr": {"type": ["string", "null"]}}},
+        "unroll": {"type": "integer", "minimum": 0}, "state": {"type": "string"}, "snapshot_kind": {"type": "string"}, "path_condition": {"type": "string"}, "ir_state": {"type": "object"}, "rocq_ebpf": {"type": ["object", "null"]}, "rocq_mapping": {"type": "object"}, "evidence_ids": {"$ref": "#/$defs/refs"}
+      }
+    },
+    "edge": {"type": "object", "required": ["id", "from", "to", "kind", "guard", "ir_span", "events", "changed", "evidence_ids"], "properties": {"id": {"type": "string"}, "from": {"type": "string"}, "to": {"type": "string"}, "kind": {"enum": ["step", "taken", "not_taken", "merge", "exit", "boundary"]}, "guard": {"type": "string"}, "ir_span": {"$ref": "#/$defs/refs"}, "events": {"type": "array"}, "changed": {"$ref": "#/$defs/refs"}, "evidence_ids": {"$ref": "#/$defs/refs"}}}
+  }
+}

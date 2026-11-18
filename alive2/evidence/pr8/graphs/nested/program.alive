@@ -1,0 +1,17 @@
+; alive-file v1
+; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
+; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
+define i64 @nested(i64 %x) memory(none) {
+entry:
+  %a = icmp eq i64 %x, 0
+  br i1 %a, label %left, label %right
+left:
+  %b = icmp eq i64 %x, 1
+  br i1 %b, label %contradiction, label %other
+contradiction:
+  ret i64 2
+other:
+  ret i64 3
+right:
+  ret i64 4
+}

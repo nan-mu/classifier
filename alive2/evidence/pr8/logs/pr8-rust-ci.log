@@ -1,0 +1,5 @@
+==> fmt (nightly, workspace crates only)
+==> clippy (nightly, target=/Volumes/SSD/.t3/worktrees/classifier/agent-alive2-state-grap-7f21e62489ab53bd/tooling/target-nightly)
+    Checking server v0.1.0 (/Volumes/SSD/.t3/worktrees/classifier/agent-alive2-state-grap-7f21e62489ab53bd/tooling/server)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.79s
+==> ok

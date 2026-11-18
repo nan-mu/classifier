@@ -1,0 +1,19 @@
+; alive-file v1
+; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
+; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
+define i64 @loop() memory(none) {
+entry:
+  br label %head
+
+head:
+  %i = phi i64 [ 0, %entry ], [ %next, %body ]
+  %c = icmp ult i64 %i, 3
+  br i1 %c, label %body, label %exit
+
+body:
+  %next = add i64 %i, 1
+  br label %head
+
+exit:
+  ret i64 %i
+}

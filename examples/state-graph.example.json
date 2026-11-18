@@ -1,0 +1,102 @@
+{
+  "schema": "alive2-state-graph",
+  "schema_version": 1,
+  "fixture": true,
+  "fixture_banner": "设计夹具，不是运行证据",
+  "run": {
+    "id": "run-fixture",
+    "status": "finished",
+    "initial_id": "init-fixture",
+    "engine_pin": "alive2-pin-unset",
+    "unroll_bound": 1,
+    "budgets": {"steps": 10},
+    "truncation": {"kind": "none", "reason": ""}
+  },
+  "program": {
+    "ir_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "functions": [{"id": "fn0", "name": "f"}],
+    "instructions": [{"id": "i0", "text": "ret i64 0"}],
+    "origin": null
+  },
+  "environment": {
+    "main_program": {"unsupported": "no code table on a generic IR fixture"},
+    "code_table": {"unsupported": "no code table on a generic IR fixture"},
+    "jump_table": {"unsupported": "no jump table on a generic IR fixture"},
+    "addr_map": {"unsupported": "no address map on a generic IR fixture"},
+    "helpers": {"unsupported": "no helper contract on a generic IR fixture"},
+    "input_objects": {"unsupported": "no input objects on a generic IR fixture"},
+    "global_reserved": {
+      "threading": "single",
+      "thread_pool": {"status": "unsupported", "reason": "single thread only"},
+      "env": {"status": "unsupported", "reason": "single thread only"},
+      "gm": {"status": "unsupported", "reason": "single thread only"},
+      "atom_bit": {"status": "unsupported", "reason": "single thread only"}
+    }
+  },
+  "terms": [
+    {
+      "id": "t-true",
+      "op": "true",
+      "sort": {"kind": "bool"},
+      "args": [],
+      "display": "true"
+    }
+  ],
+  "memories": [
+    {
+      "id": "mem0",
+      "next_block": "1",
+      "blocks": [
+        {
+          "id": "b0",
+          "bytes": ["0x00"],
+          "init": [true],
+          "current_perm": "read-write",
+          "max_perm": "read-write",
+          "provenance": "input"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "n0",
+      "location": {"function": "fn0", "block": "entry", "instr": "i0"},
+      "origin_location": null,
+      "unroll": 0,
+      "state": "exit",
+      "path_condition": "t-true",
+      "ir_state": {
+        "function": "fn0",
+        "block": "entry",
+        "instr": "i0",
+        "values": [],
+        "memory_id": "mem0",
+        "exec_status": "exit"
+      },
+      "rocq_ebpf": null,
+      "evidence_ids": []
+    }
+  ],
+  "edges": [
+    {
+      "id": "e0",
+      "from": "n0",
+      "to": "n0",
+      "kind": "exit",
+      "guard": "t-true",
+      "ir_span": ["i0"],
+      "events": [],
+      "changed": [],
+      "evidence_ids": []
+    }
+  ],
+  "coverage": {
+    "return_domain": ["n0"],
+    "sink_domain": [],
+    "assumptions": [],
+    "frontier": [],
+    "all_inputs_covered": "not_applicable"
+  },
+  "evidence": []
+}

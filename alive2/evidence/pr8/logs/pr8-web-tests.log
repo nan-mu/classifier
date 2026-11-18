@@ -1,0 +1,81 @@
+npm notice run test
+npm notice run vitest run --run
+
+ RUN  v3.2.7 /Volumes/SSD/.t3/worktrees/classifier/agent-alive2-state-grap-7f21e62489ab53bd/tooling/web
+
+ ✓ src/viewer.test.ts (8 tests) 3ms
+ ✓ src/compareTreeLayout.test.ts (2 tests) 2ms
+ ✓ src/parse.test.ts (10 tests) 3ms
+ ❯ src/formatExpr.test.ts (3 tests | 3 failed) 7ms
+   × formatExprMath > renders ABI names and equality 5ms
+     → expected 'real32:10 = 7' to be 'a0 = 7' // Object.is equality
+   × formatExprMath > shortens unsigned compares and map words 1ms
+     → expected 'real32:13 ≥ᵤ 18' to be 'a3 ≥ᵤ 18' // Object.is equality
+   × formatExprMath > shows Context cells and create entry inputs; add32 as + 1ms
+     → expected 'context32:0 = data°' to be 'ctx.data = data°' // Object.is equality
+ ✓ src/layout.test.ts (5 tests) 2ms
+ ✓ src/nodeRole.test.ts (8 tests) 5ms
+ ✓ src/compareNodeSummary.test.ts (8 tests) 4ms
+ ✓ src/layoutFinal.test.ts (2 tests) 7ms
+ ✓ src/layoutMetrics.test.ts (3 tests) 16ms
+ ✓ src/alive2Graph.test.ts (3 tests) 2ms
+ ✓ src/toCompareRun.test.ts (4 tests) 3ms
+ ✓ src/aggregateWriteChips.test.ts (4 tests) 1ms
+ ✓ src/exprs.test.ts (4 tests) 2ms
+ ✓ src/collapse.test.ts (4 tests) 2ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/formatExpr.test.ts > formatExprMath > renders ABI names and equality
+AssertionError: expected 'real32:10 = 7' to be 'a0 = 7' // Object.is equality
+
+Expected: [32m"[7ma[27m0 = 7"[39m
+Received: [31m"[7mreal32:1[27m0 = 7"[39m
+
+ ❯ src/formatExpr.test.ts:8:7
+      6|     expect(
+      7|       formatExprMath({ reg: "real32:10", rel: "eq", term: "7" }),
+      8|     ).toBe("a0 = 7");
+       |       ^
+      9|   });
+     10|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/formatExpr.test.ts > formatExprMath > shortens unsigned compares and map words
+AssertionError: expected 'real32:13 ≥ᵤ 18' to be 'a3 ≥ᵤ 18' // Object.is equality
+
+Expected: [32m"[7ma[27m3 ≥ᵤ 18"[39m
+Received: [31m"[7mreal32:1[27m3 ≥ᵤ 18"[39m
+
+ ❯ src/formatExpr.test.ts:19:7
+     17|         role: "constraint",
+     18|       }),
+     19|     ).toBe("a3 ≥ᵤ 18");
+       |       ^
+     20|   });
+     21|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/formatExpr.test.ts > formatExprMath > shows Context cells and create entry inputs; add32 as +
+AssertionError: expected 'context32:0 = data°' to be 'ctx.data = data°' // Object.is equality
+
+Expected: [32m"c[7mtx.data[27m = data°"[39m
+Received: [31m"c[7montext32:0[27m = data°"[39m
+
+ ❯ src/formatExpr.test.ts:29:7
+     27|         term: "v32:4",
+     28|       }),
+     29|     ).toBe("ctx.data = data°");
+       |       ^
+     30|     expect(
+     31|       formatExprMath({
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  1 failed | 13 passed (14)
+      Tests  3 failed | 65 passed (68)
+   Start at  13:44:02
+   Duration  410ms (transform 249ms, setup 0ms, collect 560ms, tests 59ms, environment 1ms, prepare 565ms)

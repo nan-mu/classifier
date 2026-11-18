@@ -221,6 +221,7 @@ fn compile_to(
                 .map_or(1, |insn| insn.slots());
             let raw = &func.bytes[at..at + slots as usize * 8];
             serde_json::json!({"slot": slot, "offset": slot * 8, "bytes": hex(raw), "ir": ir,
+                "checkpoint": compiled.checkpoints.get(slot),
                 "decoded": func.insns.iter().find(|insn| insn.index() == *slot),
                 "generated_instruction_ids": compiled.generated.iter().filter(|inst| inst.slot == Some(*slot)).map(|inst| &inst.id).collect::<Vec<_>>()})
         })
@@ -229,6 +230,8 @@ fn compile_to(
         "schema": "classifier-alive-origin-v1", "entry": func.name, "section": func.section,
         "elf_sha256": elf_sha, "alive_sha256": alive_sha, "instructions": instructions,
         "state_mapping": "incomplete", "prologue_ir": compiled.prologue_ir,
+        "checkpoint_schema": "register-bindings-v1",
+        "unmapped_state": ["RAX", "PC embedding", "cstk", "code_id", "tail_call_count", "memory embedding", "events"],
         "origin_revision": 2, "generated_instructions": compiled.generated,
         "generated_cfg_edges": compiled.generated.iter().flat_map(|inst| inst.targets.iter().map(|target| serde_json::json!({"from": inst.block, "to": target, "instruction": inst.id}))).collect::<Vec<_>>(),
         "source_cfg_blocks": compiled.source_blocks, "source_cfg_edges": compiled.source_edges

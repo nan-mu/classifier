@@ -1,5 +1,6 @@
 //! Domain library: expand sessions, compare tree, Kernel command API, CaseSpec harness.
 
+pub mod alive2_runs;
 pub mod api;
 pub mod bpf_image;
 pub mod driver;

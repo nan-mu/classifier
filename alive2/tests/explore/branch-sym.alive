@@ -1,0 +1,14 @@
+; alive-file v1
+; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
+; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
+define i64 @branch(i64 %x) memory(none) {
+entry:
+  %c = icmp eq i64 %x, 1
+  br i1 %c, label %yes, label %no
+
+yes:
+  ret i64 7
+
+no:
+  ret i64 0
+}

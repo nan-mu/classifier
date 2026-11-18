@@ -1,0 +1,86 @@
+   Compiling ebpf-to-alive2 v0.1.0 (/Volumes/SSD/.t3/worktrees/classifier/agent-alive2-state-grap-7f21e62489ab53bd/tooling/ebpf-to-alive2)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running unittests src/lib.rs (tooling/target/debug/build/ebpf-to-alive2/0528fb6817a607c3/out/ebpf_to_alive2-0528fb6817a607c3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (tooling/target/debug/build/ebpf-to-alive2/9d2eb2f674280cd0/out/ebpf_to_alive2-9d2eb2f674280cd0)
+
+running 1 test
+test tests::failed_report_publication_removes_products_and_preserves_unrelated_files ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (tooling/target/debug/build/ebpf-to-alive2/cebbfa599438da8c/out/cli-cebbfa599438da8c)
+
+running 11 tests
+test dangling_output_symlinks_are_rejected_without_mutation ... ok
+test output_alias_cannot_delete_the_input ... ok
+test source_root_and_symlink_destinations_are_rejected_before_mutation ... ok
+test invalid_empty_and_traversing_manifests_fail ... ok
+test failed_recompile_removes_all_old_success_artifacts ... ok
+test outside_checkout_requires_explicit_root_and_runs_from_other_cwd ... ok
+test manifest_hash_mismatch_cannot_leave_a_success_report ... ok
+test published_hashes_and_origin_slots_match_the_artifacts ... ok
+test failures_have_categories_and_are_removed_on_success ... ok
+test manifest_failure_invalidates_all_previously_owned_reports ... ok
+test programs_removed_from_manifest_lose_their_owned_artifacts ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+
+     Running tests/lift.rs (tooling/target/debug/build/ebpf-to-alive2/73e9f935cdda8f0e/out/lift-73e9f935cdda8f0e)
+
+running 4 tests
+test unknown_class_is_rejected ... ok
+test div2_lifts_with_loads_and_a_divide ... ok
+test just_drop_keeps_the_map_relocation ... ok
+test corpus_converts_every_program_and_maps_only_existing_values ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/outcomes.rs (tooling/target/debug/build/ebpf-to-alive2/6a6288a1dfdbc520/out/outcomes-6a6288a1dfdbc520)
+
+running 5 tests
+test categories_and_locations_are_typed ... ok
+test scalar_pointer_mixture_and_conflicting_phi_are_classified ... ok
+test packet_facts_survive_mov64_but_not_narrow_or_sign_extending_moves ... ok
+test phi_origin_uses_expanded_division_predecessor_and_source_definitions ... ok
+test lookup_result_is_dereferenceable_and_helper_arguments_are_clobbered ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/provenance.rs (tooling/target/debug/build/ebpf-to-alive2/85236ccd7895ad2b/out/provenance-85236ccd7895ad2b)
+
+running 9 tests
+test pointer_integer_join_is_rejected ... ok
+test map_handle_cannot_be_used_as_lookup_key ... ok
+test empty_or_unreachable_programs_return_errors ... ok
+test partial_overwrite_cannot_preserve_a_spilled_pointer ... ok
+test integers_and_truncated_packet_addresses_cannot_be_dereferenced ... ok
+test distinct_map_symbols_cannot_share_a_sanitized_parameter ... ok
+test mov32_does_not_read_an_uninitialized_destination ... ok
+test stack_spill_preserves_context_provenance_and_offset ... ok
+test signed_memory_mode_is_limited_to_narrow_loads ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sections.rs (tooling/target/debug/build/ebpf-to-alive2/8fbd5ef30e0763ee/out/sections-8fbd5ef30e0763ee)
+
+running 7 tests
+test executable_and_big_endian_elf_are_rejected ... ok
+test truncated_and_non_bpf_fail ... ok
+test just_drop_code_is_xdp1 ... ok
+test div2_code_is_xdp_not_empty_text ... ok
+test named_entry_cannot_accidentally_include_other_functions ... ok
+test function_must_cover_the_selected_section ... ok
+test partial_symbol_and_relocation_entries_return_errors ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ebpf_to_alive2
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

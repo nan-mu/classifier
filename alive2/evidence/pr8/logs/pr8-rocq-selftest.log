@@ -1,0 +1,4 @@
+int64_min_bits=8000000000000000
+int64_min_roundtrip=ok
+div64-7-2 exit=EXIT r0=0000000000000003 mem_physical=same div_mem_physical=same
+div64-7-0 exit=EXIT r0=0000000000000000 mem_physical=same div_mem_physical=same

@@ -1,0 +1,44 @@
+   Compiling server v0.1.0 (/Volumes/SSD/.t3/worktrees/classifier/agent-alive2-state-grap-7f21e62489ab53bd/tooling/server)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.10s
+     Running unittests src/lib.rs (tooling/target/debug/build/server/ed2c494038a6755c/out/server-ed2c494038a6755c)
+
+running 1 test
+test alive2_runs::tests::concrete_branch_returns_the_graph ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 83 filtered out; finished in 0.02s
+
+     Running unittests src/bin/classifier.rs (tooling/target/debug/build/server/e27fcd19add077e8/out/classifier-e27fcd19add077e8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (tooling/target/debug/build/server/56864b073a929a29/out/server-56864b073a929a29)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/fw_compare_diag.rs (tooling/target/debug/build/server/5dc04ef22299d28f/out/fw_compare_diag-5dc04ef22299d28f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/fw_fixed_diag.rs (tooling/target/debug/build/server/f81dc86d9bce0c2c/out/fw_fixed_diag-f81dc86d9bce0c2c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/just_tx_compare_count.rs (tooling/target/debug/build/server/78e856c06bea626d/out/just_tx_compare_count-78e856c06bea626d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/profile_expect.rs (tooling/target/debug/build/server/49d37322d98d9643/out/profile_expect-49d37322d98d9643)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s

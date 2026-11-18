@@ -1,0 +1,22 @@
+; alive-file v1
+; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
+; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
+define i64 @phi(i64 %x, i8 %y) memory(none) {
+entry:
+  %a = add i64 %x, 1
+  %a2 = add i64 %x, 1
+  %b = sub i64 %a, 3
+  %m = mul i64 %b, 7
+  %bits = xor i64 %m, 19
+  %mask = and i64 %bits, 255
+  %wide = zext i8 %y to i64
+  %c = icmp ult i64 %x, %wide
+  br i1 %c, label %left, label %right
+left:
+  br label %join
+right:
+  br label %join
+join:
+  %p = phi i64 [ %mask, %left ], [ %wide, %right ]
+  ret i64 %p
+}
