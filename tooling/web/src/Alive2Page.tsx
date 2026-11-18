@@ -99,6 +99,7 @@ export function Alive2Page() {
       .alive2 .columns { flex:1; display:grid; grid-template-columns:280px minmax(360px,1fr) minmax(340px,420px); min-height:0; }
       .alive2 aside, .alive2 main { overflow:auto; border-right:1px solid #ccc; padding:12px; }
       .alive2 textarea { width:100%; box-sizing:border-box; font-family:monospace; }
+      .alive2 p { overflow-wrap:anywhere; }
       .alive2 pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
       .alive2 label { display:block; margin-bottom:8px; }
       .alive2 svg { font:12px monospace; }
@@ -130,7 +131,7 @@ export function Alive2Page() {
             const from = layout.points.get(item.from)!, to = layout.points.get(item.to)!;
             const path = `M ${from.x + 90} ${from.y + 48} C ${from.x + 90} ${from.y + 74}, ${to.x + 90} ${to.y - 24}, ${to.x + 90} ${to.y}`;
             const color = item.kind === "boundary" ? "#b45f06" : item.kind === "taken" ? "#16834e" : item.kind === "not_taken" ? "#9652a5" : "#777";
-            return <g key={item.id} onClick={() => setPickedEdge(item.id)} style={{ cursor:"pointer" }}><title>{item.id} {item.kind} · {termText(termIndex.get(item.guard))}</title><path d={path} fill="none" stroke="transparent" strokeWidth="16" /><path d={path} fill="none" stroke={pickedEdge === item.id ? "#176bc1" : color} strokeWidth={pickedEdge === item.id ? 3 : 1.5} markerEnd="url(#alive-arrow)" /><text x={(from.x + to.x) / 2 + 96} y={from.y + 68} fill={color}>{item.kind} · {item.guard}</text></g>;
+            return <g key={item.id} onClick={() => setPickedEdge(item.id)} style={{ cursor:"pointer" }}><title>{item.id} {item.kind} · {termText(termIndex.get(item.guard))}</title><path d={path} fill="none" stroke="transparent" strokeWidth="16" /><path d={path} fill="none" stroke={pickedEdge === item.id ? "#176bc1" : color} strokeWidth={pickedEdge === item.id ? 3 : 1.5} markerEnd="url(#alive-arrow)" /><text x={to.x + 90} y={to.y - 12} textAnchor="middle" fill={color}>{item.kind} · {item.guard.slice(0, 10)}</text></g>;
           })}
           {graph?.nodes.map((item) => { const point = layout.points.get(item.id)!; return <g key={item.id} transform={`translate(${point.x},${point.y})`} className={node?.id === item.id ? "selected" : ""} role="button" tabIndex={0} aria-label={`node ${item.id} ${item.location.block} ${item.state}`} onClick={() => { setPicked(item.id); setPickedEdge(null); }} onKeyDown={(e) => { if (e.key === "Enter") { setPicked(item.id); setPickedEdge(null); } }} style={{ cursor:"pointer" }}><rect width="180" height="48" rx="3" fill={item.state === "exit" ? "#e4f3e9" : item.state.includes("truncated") ? "#fff0d8" : item.state === "ub" ? "#ffe2e2" : "#f5f5f5"} stroke="#999" /><text x="8" y="19">{item.id} {item.location.block}</text><text x="8" y="37">u{item.unroll} · {item.state}</text></g>; })}
         </svg>

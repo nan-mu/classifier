@@ -1,0 +1,251 @@
+{
+  "evidence_kind": "test",
+  "scope": "native Explorer output and structural validation; no source-state or symbolic correspondence proof",
+  "explorer_sha256": "8fb11684f1b7b2cc4699851d6c5346d0646d46e227f39f6aa4759fb7474f1e55",
+  "results": [
+    {
+      "name": "concrete-zero",
+      "status": "passed",
+      "nodes": 4,
+      "terms": 21,
+      "graph": "concrete-zero/graph.json",
+      "sha256": "e7014f9af05d8df2b76644d07d0d9e616adbfa3215c47f97ad3568a7b1fd0b87",
+      "truncation": "none"
+    },
+    {
+      "name": "concrete-one",
+      "status": "passed",
+      "nodes": 4,
+      "terms": 21,
+      "graph": "concrete-one/graph.json",
+      "sha256": "d5d24df09389e81533b2989710f54760ce9378a0f60066f81cad5a2ac8c32ac9",
+      "truncation": "none"
+    },
+    {
+      "name": "symbolic-branch",
+      "status": "passed",
+      "nodes": 5,
+      "terms": 28,
+      "graph": "symbolic-branch/graph.json",
+      "sha256": "9a29e1f60815b4177761bd9e7b9db9c18bc16cc9fe1329172189a44f32d65428",
+      "truncation": "none"
+    },
+    {
+      "name": "symbolic-repeat",
+      "status": "passed",
+      "nodes": 5,
+      "terms": 28,
+      "graph": "symbolic-repeat/graph.json",
+      "sha256": "9a29e1f60815b4177761bd9e7b9db9c18bc16cc9fe1329172189a44f32d65428",
+      "truncation": "none"
+    },
+    {
+      "name": "undefined",
+      "status": "passed",
+      "nodes": 5,
+      "terms": 32,
+      "graph": "undefined/graph.json",
+      "sha256": "228f3327cb91db35b153903cf7eaac0066a0187edf22dde88e0057f8a492a6d3",
+      "truncation": "none"
+    },
+    {
+      "name": "poison",
+      "status": "passed",
+      "nodes": 3,
+      "terms": 21,
+      "graph": "poison/graph.json",
+      "sha256": "b80b50cdd496da45209eb0324f1b19381865ca40ac0d9f4b6cbecfa9bd071474",
+      "truncation": "none"
+    },
+    {
+      "name": "nested",
+      "status": "passed",
+      "nodes": 8,
+      "terms": 37,
+      "graph": "nested/graph.json",
+      "sha256": "731cf79691e040f8122b549a3a113b651b646e53938b31bf785dc7929c0d25f1",
+      "truncation": "none"
+    },
+    {
+      "name": "phi-terms",
+      "status": "passed",
+      "nodes": 14,
+      "terms": 45,
+      "graph": "phi-terms/graph.json",
+      "sha256": "5297838140617f64c4cbc3b5beec80addd79fa65811b8dd7f194872f4912b4d5",
+      "truncation": "none"
+    },
+    {
+      "name": "loop-return",
+      "status": "passed",
+      "nodes": 22,
+      "terms": 19,
+      "graph": "loop-return/graph.json",
+      "sha256": "c5cfdc9418f94f778056f713de585e6ed9c66ff552059d220761a82c7e03eb40",
+      "truncation": "none"
+    },
+    {
+      "name": "loop-boundary",
+      "status": "passed",
+      "nodes": 11,
+      "terms": 16,
+      "graph": "loop-boundary/graph.json",
+      "sha256": "a035f74ebb7a17432a6d28e53943bc499a2a7b7f44f86ded9fad57b62292f76a",
+      "truncation": "bound"
+    },
+    {
+      "name": "step-budget",
+      "status": "passed",
+      "nodes": 3,
+      "terms": 14,
+      "graph": "step-budget/graph.json",
+      "sha256": "a835aa3b39aab98d1632cb7b128e638a44e54b9580fd9d72b300b55a59b91764",
+      "truncation": "resource"
+    },
+    {
+      "name": "pointer-memory",
+      "status": "passed",
+      "nodes": 3,
+      "terms": 64,
+      "graph": "pointer-memory/graph.json",
+      "sha256": "ce10720e6018f5338d3024b18c62694a2dcdd7320954f9358a8807c6c031563e",
+      "truncation": "none"
+    },
+    {
+      "name": "just_drop",
+      "status": "passed",
+      "nodes": 70,
+      "terms": 947,
+      "graph": "just_drop/graph.json",
+      "sha256": "517da9c7978a4b9746fcd55ec78a64ef125dfe7df293fadfa4db07d2737ec5c3",
+      "truncation": "none"
+    },
+    {
+      "name": "just_drop-repeat-0",
+      "status": "passed",
+      "nodes": 70,
+      "terms": 947,
+      "graph": "just_drop-repeat-0/graph.json",
+      "sha256": "517da9c7978a4b9746fcd55ec78a64ef125dfe7df293fadfa4db07d2737ec5c3",
+      "truncation": "none"
+    },
+    {
+      "name": "just_drop-repeat-1",
+      "status": "passed",
+      "nodes": 70,
+      "terms": 947,
+      "graph": "just_drop-repeat-1/graph.json",
+      "sha256": "517da9c7978a4b9746fcd55ec78a64ef125dfe7df293fadfa4db07d2737ec5c3",
+      "truncation": "none"
+    },
+    {
+      "name": "just_drop-repeat-2",
+      "status": "passed",
+      "nodes": 70,
+      "terms": 947,
+      "graph": "just_drop-repeat-2/graph.json",
+      "sha256": "517da9c7978a4b9746fcd55ec78a64ef125dfe7df293fadfa4db07d2737ec5c3",
+      "truncation": "none"
+    },
+    {
+      "name": "firewall",
+      "status": "passed",
+      "nodes": 41,
+      "terms": 665,
+      "graph": "firewall/graph.json",
+      "sha256": "f5eb077496430b5fe70ab7d516d96de690413daef1f6b4c0a8593d6644463175",
+      "truncation": "none"
+    },
+    {
+      "name": "helper_loop",
+      "status": "passed",
+      "nodes": 109,
+      "terms": 1105,
+      "graph": "helper_loop/graph.json",
+      "sha256": "466049574cb6df93a9499536326070058d2a2a807d3c1a4089107d6ef00935ee",
+      "truncation": "bound"
+    },
+    {
+      "name": "xdp_drop",
+      "status": "passed",
+      "nodes": 34,
+      "terms": 520,
+      "graph": "xdp_drop/graph.json",
+      "sha256": "01412eba3adce0d1cf965c23bdf34b542cda628f25b73fd6d0b533518437507c",
+      "truncation": "none"
+    },
+    {
+      "name": "reject-objects",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_UNSUPPORTED: field objects"
+    },
+    {
+      "name": "reject-type",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_INVALID: input type mismatch %x"
+    },
+    {
+      "name": "reject-duplicate",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_INVALID: duplicate input"
+    },
+    {
+      "name": "reject-missing",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_INVALID: missing input %x"
+    },
+    {
+      "name": "reject-malformed",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_INVALID: invalid JSON"
+    },
+    {
+      "name": "reject-range",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_INVALID: integer outside input width"
+    },
+    {
+      "name": "reject-trailing",
+      "status": "passed",
+      "diagnostic": "INITIAL_STATE_INVALID: invalid JSON"
+    },
+    {
+      "name": "reject-unroll",
+      "status": "passed",
+      "diagnostic": "positive integer required: 1junk"
+    },
+    {
+      "name": "reject-environment",
+      "status": "passed",
+      "diagnostic": "ENVIRONMENT_UNSUPPORTED: explicit memory/helper environments are not implemented"
+    },
+    {
+      "name": "reject-origin-hash",
+      "status": "passed",
+      "diagnostic": "ORIGIN_INVALID: schema or Alive2 hash mismatch"
+    },
+    {
+      "name": "reject-origin-duplicate-slot",
+      "status": "passed",
+      "diagnostic": "ORIGIN_INVALID: duplicate/invalid source slot"
+    },
+    {
+      "name": "validator-duplicate-node",
+      "status": "passed"
+    },
+    {
+      "name": "validator-missing-edge-target",
+      "status": "passed"
+    },
+    {
+      "name": "validator-term-cycle",
+      "status": "passed"
+    },
+    {
+      "name": "validator-guard-width",
+      "status": "passed"
+    }
+  ],
+  "rocq_correspondence": "not_implemented",
+  "initial_memory_objects": "unsupported"
+}

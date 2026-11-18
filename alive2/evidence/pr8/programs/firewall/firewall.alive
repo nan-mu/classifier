@@ -1,0 +1,62 @@
+; alive-file v1
+; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
+; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
+define i64 @firewall(ptr %ctx, ptr %pkt, i64 %pkt_base, ptr %map_blacklist) memory(argmem: readwrite, inaccessiblemem: readwrite) {
+declare ptr @bpf_map_lookup_elem(ptr, ptr) memory(argmem: read, inaccessiblemem: readwrite)
+
+
+entry:
+  %stack = alloca i64 512, align 8
+  %fp = gep ptr %stack, 1 x i64 512
+  br label %s0
+
+s0:
+  %v0 = gep ptr %ctx, 1 x i64 4
+  %v1 = load i32, ptr %v0, align 4
+  %v2 = zext i32 %v1 to i64
+  %v3 = load i32, ptr %ctx, align 4
+  %v4 = zext i32 %v3 to i64
+  %v5 = add i64 %v4, 14
+  %v6 = icmp ugt i64 %v5, %v2
+  br i1 %v6, label %s22, label %s6
+
+s6:
+  %v7 = sub i64 %v4, %pkt_base
+  %v8 = add i64 %v7, 12
+  %v9 = gep ptr %pkt, 1 x i64 %v8
+  %v10 = load i16, ptr %v9, align 2
+  %v11 = zext i16 %v10 to i64
+  %v12 = trunc i64 %v11 to i32
+  %v13 = trunc i64 8 to i32
+  %v14 = icmp ne i32 %v12, %v13
+  br i1 %v14, label %s22, label %s8
+
+s8:
+  %v15 = add i64 %v4, 34
+  %v16 = icmp ugt i64 %v15, %v2
+  br i1 %v16, label %s22, label %s10
+
+s10:
+  %v17 = add i64 %v5, 12
+  %v18 = sub i64 %v17, %pkt_base
+  %v19 = gep ptr %pkt, 1 x i64 %v18
+  %v20 = call ptr @bpf_map_lookup_elem(ptr %map_blacklist, ptr %v19)
+  %v21 = ptrtoint ptr %v20 to i64
+  %v22 = icmp eq i64 %v21, 0
+  br i1 %v22, label %s22, label %s18
+
+s18:
+  %v23 = load i32, ptr %v20, align 4
+  %v24 = zext i32 %v23 to i64
+  %v25 = trunc i64 %v24 to i32
+  %v26 = add i32 %v25, 1
+  %v27 = zext i32 %v26 to i64
+  %v28 = trunc i64 %v27 to i32
+  store i32 %v28, ptr %v20, align 4
+  br label %s22
+
+s22:
+  %s22_r0 = phi i64 [ 2, %s0 ], [ 2, %s6 ], [ 2, %s8 ], [ 2, %s10 ], [ 1, %s18 ]
+  ret i64 %s22_r0
+
+}

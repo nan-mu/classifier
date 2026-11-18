@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the real Explorer and validate its exported objects (stdlib only)."""
+
 import argparse
 import copy
 import hashlib
@@ -25,7 +25,7 @@ def digest(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description="Run Explorer and validate exported state graphs")
     parser.add_argument("--explorer", type=Path, required=True)
     parser.add_argument("--loader", type=Path, required=True)
     parser.add_argument("--corpus-out", type=Path, required=True)
@@ -159,6 +159,18 @@ join:
     check(resource["run"]["truncation"]["kind"] == "resource", "instruction budget mislabeled")
     memory = run("pointer-memory", ROOT / "alive2/tests/explore/load.alive", [binding("symbolic", name="%p", ty="ptr")])
     check(any(m["blocks"] for m in memory["memories"]), "symbolic memory arrays omitted")
+    check(any(alternative["blocks"] for m in memory["memories"] for alternative in m["returned"]), "returned memory omitted")
+    check(any(e["kind"] == "merge" for e in phi["edges"]), "native merge edge missing")
+    for edge in cutoff["edges"]:
+        if edge["kind"] == "boundary":
+            snapshots = {node["id"]: node for node in cutoff["nodes"]}
+            source, target = snapshots[edge["from"]], snapshots[edge["to"]]
+            check(target["snapshot_kind"] == "native_predecessor_at_boundary", "boundary snapshot kind lost")
+            for field in ("values", "definedness", "preconditions", "axioms", "call_preconditions", "returned_values"):
+                check(target["ir_state"][field] == source["ir_state"][field], f"boundary lost native predecessor {field}")
+            memories = {memory["id"]: memory for memory in cutoff["memories"]}
+            before, after = (memories[node["ir_state"]["memory_id"]] for node in (source, target))
+            check({key: value for key, value in before.items() if key != "id"} == {key: value for key, value in after.items() if key != "id"}, "boundary memory changed")
 
     for name in ("just_drop", "firewall", "helper_loop", "xdp_drop"):
         program = args.corpus_out / name / (name + ".alive")
@@ -168,10 +180,13 @@ join:
         doc = run(name, program, inputs, 2, ["--origin", origin])
         check(doc["program"]["origin"]["sha256"] == digest(origin), "origin hash lost")
         check(any(n["origin_location"] is not None for n in doc["nodes"]), "original SSA origins not imported")
+        if name == "just_drop":
+            for attempt in range(3):
+                repeat = run(f"just_drop-repeat-{attempt}", program, inputs, 2, ["--origin", origin])
+                check(doc == repeat, "helper-call graph is not reproducible")
         if name == "helper_loop":
             check(doc["run"]["truncation"]["kind"] == "bound", "real loop lost its backedge boundary")
 
-    # Negative cases use a fresh target and must never publish partial graphs.
     bad_dir = args.out_dir / "rejected"
     bad_dir.mkdir(exist_ok=True)
     bad_initial = bad_dir / "initial.json"
@@ -181,7 +196,7 @@ join:
         ("duplicate", json.dumps({"inputs":[binding("symbolic"), binding("symbolic")]}), [], "duplicate input"),
         ("missing", '{"inputs":[]}', [], "missing input"),
         ("malformed", "{", [], "invalid JSON"),
-        ("range", json.dumps({"inputs":[binding("concrete", "18446744073709551616")]}), [], "stoull"),
+        ("range", json.dumps({"inputs":[binding("concrete", "18446744073709551616")]}), [], "integer outside input width"),
         ("trailing", '{"inputs":[]} true', [], "JSON"),
         ("unroll", '{"inputs":[]}', ["--unroll", "1junk"], "positive integer"),
         ("environment", '{"inputs":[]}', ["--environment", bad_dir / "env.json"], "ENVIRONMENT_UNSUPPORTED"),
@@ -191,6 +206,19 @@ join:
         result = subprocess.run([str(args.explorer), "run", str(args.out_dir / "concrete-zero/program.alive"), "--initial", str(bad_initial), "--unroll", "1", "--graph-out", str(graph), *map(str, extra)], capture_output=True, text=True)
         check(result.returncode != 0 and error in result.stderr, f"{label}: unexpected rejection: {result.stderr}")
         check(not graph.exists() and not list(bad_dir.glob(label + ".json.tmp.*")), f"{label}: partial graph left behind")
+        results.append({"name": "reject-" + label, "status": "passed", "diagnostic": result.stderr.strip()})
+    original_origin = json.loads((args.corpus_out / "firewall/firewall.origin.json").read_text())
+    for label in ("origin-hash", "origin-duplicate-slot"):
+        corrupted = copy.deepcopy(original_origin)
+        if label == "origin-hash":
+            corrupted["alive_sha256"] = "0" * 64
+        else:
+            corrupted["instructions"].append(copy.deepcopy(corrupted["instructions"][0]))
+        origin = bad_dir / (label + ".origin.json")
+        origin.write_text(json.dumps(corrupted))
+        graph = bad_dir / (label + ".json")
+        result = subprocess.run([str(args.explorer), "run", str(args.corpus_out / "firewall/firewall.alive"), "--initial", str(args.out_dir / "firewall/initial.json"), "--origin", str(origin), "--unroll", "2", "--graph-out", str(graph)], capture_output=True, text=True)
+        check(result.returncode != 0 and "ORIGIN_INVALID" in result.stderr and not graph.exists(), f"{label}: invalid Origin accepted")
         results.append({"name": "reject-" + label, "status": "passed", "diagnostic": result.stderr.strip()})
     for label, mutation in [
         ("duplicate-node", lambda d: d["nodes"].append(copy.deepcopy(d["nodes"][0]))),

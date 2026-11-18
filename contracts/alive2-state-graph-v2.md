@@ -1,6 +1,6 @@
 # Native State graph protocol (v2)
 
-This protocol is implemented by `alive2-explore` in PR8. It does not come from an earlier design attachment. The JSON Schema and `validate_state_graph.py` describe the serialized shape and relational checks respectively. The Python validator still reads v1 graphs.
+This protocol is implemented by `alive2-explore` in PR8. It does not come from an earlier design attachment. The JSON Schema and `validate_state_graph.py` describe the serialized shape and relational checks respectively. The Python validator reads both v1 and v2 graphs.
 
 ## Execution and snapshots
 
@@ -31,7 +31,7 @@ Normal return, native unroll sink and instruction-budget exhaustion are distinct
 
 Terms are read from the native Z3 AST, with Bool, bitvector and array sorts, recursive argument references, numerals, symbols and declaration parameters. Quantifiers/lambdas retain their body and bound-sort parameters; bound variables use de Bruijn indices. Structural interning includes complete sort and width. Native AST references are retained while IDs are cached. Z3's native declaration spelling is preserved, e.g. `if` for ITE. Rewrites such as subtraction to addition or masks to extracts are native simplifications.
 
-IDs are deterministic for repeat runs with the same artifacts, configuration, pins and native library versions. They are not cross-version semantic equivalence IDs. Display strings are not the representation: recursively printing every native subexpression caused exponential expansion on real programs. Unsupported sorts/AST parameters have an explicit reason and native identity rather than pretending to be an opaque but complete DAG.
+Supported term IDs are SHA256 hashes of their typed structural keys, including operand IDs. Commutative operands and the serialized term table are sorted canonically. IDs are deterministic for repeat runs with the same artifacts, configuration, pins and native library versions. They are not cross-version semantic equivalence IDs. Display strings are not the representation: recursively printing every native subexpression caused exponential expansion on real programs. Unsupported sorts/AST parameters have an explicit reason and native identity rather than pretending to be an opaque but complete DAG.
 
 Memory uses `representation: alive2-native-arrays`. Each materialized block retains its local/nonlocal identity, native byte encoding, array (or native compact bitvector), undef terms, size, alignment, alive/writable and allocation-type terms. Return alternatives retain their separate blocks. Empty active arrays after a return do not discard returned memory. This is native Alive2 memory, **not** a CompCert byte-memory embedding. It is not a serialization of all private allocator, alias-analysis or native solver bookkeeping.
 
@@ -54,7 +54,7 @@ Symbolic pointer inputs are supported. Concrete pointer/object binding, initiali
 
 `--origin` accepts existing `classifier-alive-origin-v1` files and verifies their Alive2 digest. The optional `register-bindings-v1` extension adds original decoded instructions, before/after R0–R10 static bindings, generated IR and Phi source information. Existing fields remain intact. Bindings are metadata from the Rust lifter, not a dynamic eBPF execution.
 
-The observer maps exact declared SSA definitions and uniquely matching compiler-recorded IR statements; ambiguous or cloned/unmapped definitions remain unmapped. It never guesses a register from an SSA name. The source ELF digest is a declaration in Origin: the CLI does not require an ELF and cannot independently verify that declaration. The graph retains the complete Origin metadata and its file digest.
+The observer maps exact declared SSA definitions, block-qualified generated instructions from Origin revision 2, and uniquely matching compiler-recorded IR statements; ambiguous or cloned/unmapped definitions remain unmapped. It never guesses a register from an SSA name. The source ELF digest is a declaration in Origin: the CLI does not require an ELF and cannot independently verify that declaration. The graph retains the complete Origin metadata and its file digest.
 
 Full checkpoint embedding is **not implemented**. RAX, source PC embedding, stack frames, code_id, tail_call_count, source memory and events remain explicitly unmapped. All exported `rocq_ebpf` fields are null with an unsupported reason. There is no full concrete correspondence result and no full Rocq state example in this delivery.
 

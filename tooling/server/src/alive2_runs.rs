@@ -58,7 +58,40 @@ pub async fn corpus() -> Json<Value> {
     Json(json!({"programs": []}))
 }
 
+struct RunDirectory(std::path::PathBuf);
+
+impl Drop for RunDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn remember(id: String, run: Run) {
+    let mut runs = store().runs.lock().expect("runs");
+    if runs.len() >= 64 {
+        if let Some(oldest) = runs
+            .keys()
+            .min_by_key(|key| key.parse::<u64>().unwrap_or(0))
+            .cloned()
+        {
+            runs.remove(&oldest);
+        }
+    }
+    runs.insert(id, run);
+}
+
 pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>) {
+    match tokio::task::spawn_blocking(move || create_run_blocking(body)).await {
+        Ok(result) => result,
+        Err(error) => fail(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ENGINE_FAILURE",
+            error.to_string(),
+        ),
+    }
+}
+
+fn create_run_blocking(body: CreateRun) -> (StatusCode, Json<Value>) {
     let Some(ir) = body.ir_text.filter(|text| !text.trim().is_empty()) else {
         return fail(
             StatusCode::BAD_REQUEST,
@@ -68,14 +101,15 @@ pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>
     };
     let unroll = body.unroll_bound.unwrap_or(1);
     let id = store().next.fetch_add(1, Ordering::Relaxed).to_string();
-    let dir = std::env::temp_dir().join(format!("alive2-run-{id}"));
-    if let Err(err) = std::fs::create_dir_all(&dir) {
+    let dir = std::env::temp_dir().join(format!("alive2-run-{}-{id}", std::process::id()));
+    if let Err(err) = std::fs::create_dir(&dir) {
         return fail(
             StatusCode::INTERNAL_SERVER_ERROR,
             "ENGINE_FAILURE",
             err.to_string(),
         );
     }
+    let _directory = RunDirectory(dir.clone());
     let program = dir.join("program.alive");
     let initial_path = dir.join("initial.json");
     let graph_path = dir.join("graph.json");
@@ -115,17 +149,22 @@ pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>
     };
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     if !output.status.success() {
-        let code = if stderr.contains("IR_PARSE_ERROR") {
-            "IR_PARSE_ERROR"
-        } else {
-            "ENGINE_FAILURE"
-        };
-        let status = if code == "IR_PARSE_ERROR" {
+        let code = [
+            "IR_PARSE_ERROR",
+            "INITIAL_STATE_INVALID",
+            "INITIAL_STATE_UNSUPPORTED",
+            "ENVIRONMENT_UNSUPPORTED",
+            "ORIGIN_INVALID",
+        ]
+        .into_iter()
+        .find(|code| stderr.contains(code))
+        .unwrap_or("ENGINE_FAILURE");
+        let status = if code != "ENGINE_FAILURE" {
             StatusCode::UNPROCESSABLE_ENTITY
         } else {
             StatusCode::INTERNAL_SERVER_ERROR
         };
-        store().runs.lock().expect("runs").insert(
+        remember(
             id,
             Run {
                 status: "failed".into(),
@@ -154,7 +193,7 @@ pub async fn create_run(Json(body): Json<CreateRun>) -> (StatusCode, Json<Value>
             );
         }
     };
-    store().runs.lock().expect("runs").insert(
+    remember(
         id.clone(),
         Run {
             status: "finished".into(),
@@ -201,19 +240,18 @@ mod tests {
     use tower::ServiceExt;
 
     fn explore_path() -> Option<PathBuf> {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../alive2/build-fast/alive2-explore");
+        let path = PathBuf::from(std::env::var_os("ALIVE2_EXPLORE")?);
         path.is_file().then_some(path)
     }
 
     #[tokio::test]
     async fn concrete_branch_returns_the_graph() {
-        let bin = explore_path().expect("build alive2/build-fast/alive2-explore before this test");
+        let bin = explore_path().expect("set ALIVE2_EXPLORE to a freshly built v2 binary");
         set_explore_bin(bin.display().to_string());
         let app = Router::new()
             .route("/api/alive2/runs", post(create_run))
             .route("/api/alive2/runs/{id}/graph", get(get_graph));
-        let body = r#"{"unroll_bound":1,"ir_text":"; alive-file v1\ndefine i64 @branch() memory(none) {\nentry:\n  %c = icmp eq i64 1, 1\n  br i1 %c, label %yes, label %no\nyes:\n  ret i64 7\nno:\n  ret i64 0\n}\n"}"#;
+        let body = json!({"unroll_bound": 1, "ir_text": include_str!("../../../alive2/tests/explore/branch.alive")}).to_string();
         let response = app
             .clone()
             .oneshot(
@@ -242,6 +280,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         let graph: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(graph["schema_version"], 2);
         assert_eq!(graph["run"]["status"], "finished");
         assert_eq!(graph["coverage"]["all_inputs_covered"], "not_established");
         let edges = graph["edges"].as_array().unwrap();

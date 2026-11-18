@@ -37,7 +37,7 @@ fn just_drop_keeps_the_map_relocation() {
 #[test]
 fn unknown_class_is_rejected() {
     let err = ebpf_to_alive2::decode(&[0x61, 0, 0, 0, 1, 0, 0, 0]).expect_err("imm");
-    assert!(err.contains("immediate"));
+    assert!(err.message.contains("immediate"));
 }
 
 #[test]

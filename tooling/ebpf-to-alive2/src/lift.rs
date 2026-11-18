@@ -1,5 +1,6 @@
 use crate::decode::{AluOp, Cond, Insn, MemSize, Src, Width};
 use crate::program::Func;
+use crate::{CompileError, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -24,12 +25,105 @@ enum Rv {
 struct Emit {
     n: u32,
     lines: Vec<String>,
-    origin: BTreeMap<u32, Vec<String>>,
+    generated: Vec<GeneratedInst>,
+    block: String,
     checkpoints: BTreeMap<u32, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PhiInput {
+    pub value: String,
+    pub predecessor: String,
+    pub source_slots: Vec<u32>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct GeneratedInst {
+    pub id: String,
+    pub slot: Option<u32>,
+    pub block: String,
+    pub opcode: String,
+    pub result: Option<String>,
+    pub text: String,
+    pub targets: Vec<String>,
+    pub phi_inputs: Vec<PhiInput>,
+}
+
+impl Emit {
+    fn record(&mut self, start: usize, slot: Option<u32>) -> Result<(), CompileError> {
+        for line in &self.lines[start..] {
+            for text in line.lines() {
+                let text = text.trim();
+                if let Some(label) = text.strip_suffix(':') {
+                    self.block = label.to_owned();
+                } else if !text.is_empty()
+                    && !text.starts_with(';')
+                    && text != "}"
+                    && !text.starts_with("define ")
+                    && !text.starts_with("declare ")
+                {
+                    let (result, body) = text
+                        .split_once(" = ")
+                        .map_or((None, text), |(result, body)| {
+                            (Some(result.to_owned()), body)
+                        });
+                    let opcode = body
+                        .split_whitespace()
+                        .next()
+                        .ok_or("empty emitted instruction")?
+                        .to_owned();
+                    let targets = if opcode == "br" {
+                        body.split("label %")
+                            .skip(1)
+                            .map(|s| s.split([',', ' ']).next().unwrap().to_owned())
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                    let phi_inputs = if opcode == "phi" {
+                        body.split('[')
+                            .skip(1)
+                            .map(|pair| {
+                                let (value, pred) =
+                                    pair.split_once(',').ok_or("malformed emitted phi pair")?;
+                                Ok(PhiInput {
+                                    value: value.trim().to_owned(),
+                                    predecessor: pred
+                                        .split(']')
+                                        .next()
+                                        .ok_or("missing emitted phi predecessor")?
+                                        .trim()
+                                        .trim_start_matches('%')
+                                        .to_owned(),
+                                    source_slots: slot.into_iter().collect(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, CompileError>>()?
+                    } else {
+                        Vec::new()
+                    };
+                    self.generated.push(GeneratedInst {
+                        id: format!("g{}", self.generated.len()),
+                        slot,
+                        block: self.block.clone(),
+                        opcode,
+                        result,
+                        text: text.to_owned(),
+                        targets,
+                        phi_inputs,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct Compiled {
     pub alive: String,
+    pub generated: Vec<GeneratedInst>,
+    pub source_blocks: Vec<serde_json::Value>,
+    pub source_edges: Vec<(u32, u32)>,
     pub origin_insns: Vec<(u32, Vec<String>)>,
     pub checkpoints: BTreeMap<u32, serde_json::Value>,
     pub prologue_ir: Vec<String>,
@@ -37,9 +131,35 @@ pub struct Compiled {
     pub loop_header: bool,
 }
 
-pub fn lift(func: &Func) -> Result<Compiled, String> {
+pub fn lift(func: &Func) -> Result<Compiled, CompileError> {
     if func.insns.is_empty() {
-        return Err("program has no instructions".into());
+        return Err(CompileError::new(
+            Status::InvalidInstruction,
+            "cfg",
+            None,
+            None,
+            "program has no instructions",
+        ));
+    }
+    for pair in func.insns.windows(2) {
+        if pair[0].index() + pair[0].slots() != pair[1].index() {
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "cfg",
+                Some(pair[1].index()),
+                None,
+                "noncontiguous source slots",
+            ));
+        }
+    }
+    if func.insns[0].index() != 0 {
+        return Err(CompileError::new(
+            Status::InvalidInstruction,
+            "cfg",
+            Some(func.insns[0].index()),
+            None,
+            "first instruction must be slot 0",
+        ));
     }
     let blocks = cfg(&func.insns)?;
     let relocated: std::collections::BTreeSet<u32> =
@@ -48,7 +168,8 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
     let mut emit = Emit {
         n: 0,
         lines: Vec::new(),
-        origin: BTreeMap::new(),
+        generated: Vec::new(),
+        block: String::new(),
         checkpoints: BTreeMap::new(),
     };
     let maps = map_names(func)?;
@@ -83,7 +204,8 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
     emit.lines.push(header);
     emit.lines.push("entry:\n  %stack = alloca i64 512, align 8\n  %fp = gep ptr %stack, 1 x i64 512\n  br label %s0\n".into());
 
-    let prologue_ir = vec!["%stack".to_string(), "%fp".to_string()];
+    emit.record(1, None)?;
+    let definitions = reaching_definitions(&func.insns, &blocks);
     let mut outs: Vec<[Rv; 11]> = Vec::new();
     let mut phi_names: Vec<Option<[String; 11]>> = Vec::new();
     for (bi, block) in blocks.iter().enumerate() {
@@ -109,6 +231,7 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
             let pred = block.preds[0].ok_or("internal block has no predecessor")?;
             outs[pred].clone()
         };
+        emit.block = format!("s{}", block.start);
         let mark = emit.lines.len();
         emit_block(
             &mut emit,
@@ -119,7 +242,15 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
             &relocated,
         )?;
         let before_term = emit.lines.len();
-        emit_term(&mut emit, &blocks, bi, &func.insns, &regs)?;
+        emit_term(&mut emit, &blocks, bi, &func.insns, &regs).map_err(|message| {
+            CompileError::new(
+                Status::InternalError,
+                "emit",
+                Some(func.insns[block.insns.end - 1].index()),
+                None,
+                message,
+            )
+        })?;
         let last = &func.insns[block.insns.end - 1];
         let checkpoint = emit.checkpoints.entry(last.index()).or_insert_with(|| {
             serde_json::json!({"slot": last.index(), "before": register_bindings(&regs), "after": register_bindings(&regs), "generated_ir": [], "phi_ir": []})
@@ -127,12 +258,11 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
         checkpoint["source_block"] = serde_json::json!(format!("s{}", block.start));
         checkpoint["source_successors"] = serde_json::json!(block.succ);
         checkpoint["generated_ir"].as_array_mut().unwrap().extend(
-            emit.lines[before_term..].iter().map(|line| serde_json::json!(line)),
+            emit.lines[before_term..]
+                .iter()
+                .map(|line| serde_json::json!(line)),
         );
-        emit.origin
-            .entry(last.index())
-            .or_default()
-            .extend(defined_names(&emit.lines[before_term..]));
+        emit.record(before_term, Some(last.index()))?;
         let exit_label = emit.lines[mark..]
             .iter()
             .rev()
@@ -144,6 +274,7 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
         outs.push(regs);
     }
     for (bi, block) in blocks.iter().enumerate() {
+        emit.block = format!("s{}", block.start);
         emit.lines.push(format!("s{}:", block.start));
         if let Some(names) = &phi_names[bi] {
             for reg in 0..11 {
@@ -156,23 +287,36 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
                     "ptr"
                 };
                 let mut pairs = Vec::new();
+                let mut incoming = Vec::new();
                 for pred in &block.preds {
                     let (label, value) = match pred {
                         None => ("entry".into(), entry_regs()[reg].clone()),
                         Some(pi) => (exit_labels[*pi].clone(), outs[*pi][reg].clone()),
                     };
                     let shown = coerce_name(&value, kinds[bi].kind[reg])?;
+                    incoming.push(PhiInput {
+                        value: shown.clone(),
+                        predecessor: label.clone(),
+                        source_slots: pred.map_or_else(Vec::new, |pi| {
+                            definitions[pi][reg].iter().copied().collect()
+                        }),
+                    });
                     pairs.push(format!("[ {shown}, %{label} ]"));
                 }
-                let line = format!("  {} = phi {ty} {}", names[reg], pairs.join(", "));
-                if let Some(checkpoint) = emit.checkpoints.get_mut(&func.insns[block.insns.start].index()) {
-                    checkpoint["phi_ir"].as_array_mut().unwrap().push(serde_json::json!(line));
+                let start = emit.lines.len();
+                emit.lines
+                    .push(format!("  {} = phi {ty} {}", names[reg], pairs.join(", ")));
+                if let Some(checkpoint) = emit.checkpoints.get_mut(&block.start) {
+                    checkpoint["phi_ir"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!(emit.lines[start]));
                 }
-                emit.lines.push(line);
-                emit.origin
-                    .entry(func.insns[block.insns.start].index())
-                    .or_default()
-                    .push(names[reg].clone());
+                emit.record(start, Some(block.start))?;
+                emit.generated
+                    .last_mut()
+                    .ok_or("missing emitted phi record")?
+                    .phi_inputs = incoming;
             }
         }
         emit.lines.extend(bodies[bi].clone());
@@ -180,9 +324,32 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
     }
     emit.lines.push("}\n".into());
     let alive = emit.lines.join("\n");
-    let origin_insns = emit.origin.into_iter().collect();
+    validate_emission(&alive, &emit.generated, &func.insns)?;
+    let origin_insns = func
+        .insns
+        .iter()
+        .map(|insn| {
+            (
+                insn.index(),
+                emit.generated
+                    .iter()
+                    .filter(|record| record.slot == Some(insn.index()))
+                    .filter_map(|record| record.result.clone())
+                    .collect(),
+            )
+        })
+        .collect();
+    let prologue_ir = emit
+        .generated
+        .iter()
+        .filter(|record| record.slot.is_none())
+        .filter_map(|record| record.result.clone())
+        .collect();
     Ok(Compiled {
         alive,
+        generated: emit.generated,
+        source_blocks: blocks.iter().map(|block| serde_json::json!({"start": block.start, "slots": func.insns[block.insns.clone()].iter().map(Insn::index).collect::<Vec<_>>()})).collect(),
+        source_edges: blocks.iter().flat_map(|block| block.succ.iter().flatten().map(|target| (block.start, *target))).collect(),
         origin_insns,
         checkpoints: emit.checkpoints,
         prologue_ir,
@@ -194,6 +361,145 @@ pub fn lift(func: &Func) -> Result<Compiled, String> {
                 .any(|pred| pred.is_some_and(|p| blocks[p].start >= block.start))
         }),
     })
+}
+
+fn validate_emission(
+    alive: &str,
+    records: &[GeneratedInst],
+    insns: &[Insn],
+) -> Result<(), CompileError> {
+    let invalid = |message| CompileError::new(Status::InternalError, "origin", None, None, message);
+    let slots: BTreeSet<_> = insns.iter().map(Insn::index).collect();
+    let mut blocks = BTreeSet::new();
+    let mut emitted = BTreeMap::new();
+    let mut block = None;
+    for line in alive.lines().map(str::trim) {
+        if let Some(label) = line.strip_suffix(':') {
+            block = Some(label.to_owned());
+            blocks.insert(label.to_owned());
+        } else if let Some(block) = &block {
+            if !line.is_empty() && line != "}" {
+                *emitted
+                    .entry((block.clone(), line.to_owned()))
+                    .or_insert(0usize) += 1;
+            }
+        }
+    }
+    let mut recorded = BTreeMap::new();
+    let mut definitions = BTreeSet::new();
+    for (index, record) in records.iter().enumerate() {
+        if record.id != format!("g{index}")
+            || record.slot.is_some_and(|slot| !slots.contains(&slot))
+            || !blocks.contains(&record.block)
+        {
+            return Err(invalid("invalid emitted instruction identity or owner"));
+        }
+        if record
+            .result
+            .as_ref()
+            .is_some_and(|result| !definitions.insert(result.clone()))
+        {
+            return Err(invalid("duplicate SSA definition"));
+        }
+        *recorded
+            .entry((record.block.clone(), record.text.clone()))
+            .or_insert(0usize) += 1;
+        for target in &record.targets {
+            if !blocks.contains(target) {
+                return Err(invalid("unknown generated edge target"));
+            }
+        }
+        for incoming in &record.phi_inputs {
+            if incoming
+                .source_slots
+                .iter()
+                .any(|slot| !slots.contains(slot))
+                || !records.iter().any(|pred| {
+                    pred.block == incoming.predecessor && pred.targets.contains(&record.block)
+                })
+            {
+                return Err(invalid("invalid phi predecessor or source definition"));
+            }
+        }
+    }
+    let symbols = |text: &str| -> Vec<String> {
+        text.split(|c: char| !c.is_ascii_alphanumeric() && !matches!(c, '%' | '_' | '.'))
+            .filter(|token| token.starts_with('%'))
+            .map(str::to_owned)
+            .collect()
+    };
+    let mut bound = definitions;
+    bound.extend(blocks.iter().map(|block| format!("%{block}")));
+    for line in alive.lines().filter(|line| line.starts_with("define ")) {
+        bound.extend(symbols(line));
+    }
+    for record in records {
+        if symbols(&record.text)
+            .iter()
+            .any(|symbol| !bound.contains(symbol))
+        {
+            return Err(invalid(
+                "emitted instruction refers to an undefined SSA value or block",
+            ));
+        }
+        let (result, body) = record
+            .text
+            .split_once(" = ")
+            .map_or((None, record.text.as_str()), |(result, body)| {
+                (Some(result), body)
+            });
+        if result != record.result.as_deref()
+            || body.split_whitespace().next() != Some(record.opcode.as_str())
+        {
+            return Err(invalid(
+                "emitted instruction metadata differs from emission",
+            ));
+        }
+    }
+    if emitted != recorded {
+        return Err(invalid("emission span coverage mismatch"));
+    }
+    Ok(())
+}
+
+fn reaching_definitions(insns: &[Insn], blocks: &[Block]) -> Vec<[BTreeSet<u32>; 11]> {
+    let mut output: Vec<[BTreeSet<u32>; 11]> =
+        vec![std::array::from_fn(|_| BTreeSet::new()); blocks.len()];
+    loop {
+        let mut changed = false;
+        for (bi, block) in blocks.iter().enumerate() {
+            let mut regs: [BTreeSet<u32>; 11] = std::array::from_fn(|_| BTreeSet::new());
+            for pi in block.preds.iter().flatten() {
+                for (reg, sources) in regs.iter_mut().enumerate() {
+                    sources.extend(&output[*pi][reg]);
+                }
+            }
+            for insn in &insns[block.insns.clone()] {
+                match insn {
+                    Insn::Alu { dst, .. }
+                    | Insn::End { dst, .. }
+                    | Insn::Load { dst, .. }
+                    | Insn::Lddw { dst, .. } => {
+                        regs[*dst as usize] = BTreeSet::from([insn.index()]);
+                    }
+                    Insn::Call { .. } => {
+                        regs[0] = BTreeSet::from([insn.index()]);
+                        for reg in &mut regs[1..=5] {
+                            reg.clear();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if regs != output[bi] {
+                output[bi] = regs;
+                changed = true;
+            }
+        }
+        if !changed {
+            return output;
+        }
+    }
 }
 
 fn entry_regs() -> [Rv; 11] {
@@ -228,7 +534,7 @@ struct Block {
     succ: Vec<Option<u32>>,
 }
 
-fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
+fn cfg(insns: &[Insn]) -> Result<Vec<Block>, CompileError> {
     let mut slot_of = BTreeMap::new();
     for (index, insn) in insns.iter().enumerate() {
         slot_of.insert(insn.index(), index);
@@ -238,9 +544,15 @@ fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
     for (index, insn) in insns.iter().enumerate() {
         if let Some(target) = crate::decode::target_slot(insn) {
             let Some(&at) = slot_of.get(&(target as u32)) else {
-                return Err(format!(
-                    "slot {}: jump target {target} is not an instruction",
-                    insn.index()
+                return Err(CompileError::new(
+                    Status::InvalidInstruction,
+                    "cfg",
+                    Some(insn.index()),
+                    None,
+                    format!(
+                        "slot {}: jump target {target} is not an instruction",
+                        insn.index()
+                    ),
                 ));
             };
             leaders.insert(at);
@@ -279,9 +591,15 @@ fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
             if *cond != Cond::Exit {
                 let target = crate::decode::target_slot(last).unwrap() as u32;
                 if block_at(target).is_none() {
-                    return Err(format!(
-                        "slot {}: target {target} is not a block leader",
-                        last.index()
+                    return Err(CompileError::new(
+                        Status::InvalidInstruction,
+                        "cfg",
+                        Some(last.index()),
+                        None,
+                        format!(
+                            "slot {}: target {target} is not a block leader",
+                            last.index()
+                        ),
                     ));
                 }
                 succ.push(Some(target));
@@ -292,7 +610,13 @@ fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
         } else if end < insns.len() {
             succ.push(Some(insns[end].index()));
         } else {
-            return Err("program does not end in a jump".into());
+            return Err(CompileError::new(
+                Status::InvalidInstruction,
+                "cfg",
+                Some(last.index()),
+                None,
+                "program does not end in a jump",
+            ));
         }
         block.succ = succ;
     }
@@ -319,7 +643,13 @@ fn cfg(insns: &[Insn]) -> Result<Vec<Block>, String> {
         }
     }
     if reachable.len() != blocks.len() {
-        return Err("unsupported: unreachable instruction blocks".into());
+        return Err(CompileError::new(
+            Status::Unsupported,
+            "cfg",
+            None,
+            None,
+            "unsupported: unreachable instruction blocks",
+        ));
     }
     Ok(blocks)
 }
@@ -328,7 +658,7 @@ fn kinds(
     insns: &[Insn],
     blocks: &[Block],
     relocated: &BTreeSet<u32>,
-) -> Result<Vec<Facts>, String> {
+) -> Result<Vec<Facts>, CompileError> {
     let live = live_in(insns, blocks, relocated)?;
     let mut input = vec![entry_facts(); blocks.len()];
     let mut output = vec![entry_facts(); blocks.len()];
@@ -337,10 +667,16 @@ fn kinds(
     loop {
         guard += 1;
         if guard > blocks.len() * 12 + 4 {
-            return Err("internal: kind fixpoint did not settle".into());
+            return Err(CompileError::new(
+                Status::InternalError,
+                "analysis",
+                None,
+                None,
+                "internal: kind fixpoint did not settle",
+            ));
         }
         let mut changed = false;
-        let mut failed: Option<String> = None;
+        let mut failed: Option<CompileError> = None;
         for (bi, block) in blocks.iter().enumerate() {
             if block.preds.len() != 1 || block.preds[0].is_some() {
                 let mut merged: Option<Facts> = None;
@@ -399,16 +735,28 @@ fn kinds(
                     None => &entry_facts(),
                     Some(pi) if visited[*pi] => &output[*pi],
                     Some(_) => {
-                        return Err(format!(
-                            "internal: block s{} predecessor was not analyzed",
-                            block.start
+                        return Err(CompileError::new(
+                            Status::InternalError,
+                            "analysis",
+                            None,
+                            None,
+                            format!(
+                                "internal: block s{} predecessor was not analyzed",
+                                block.start
+                            ),
                         ));
                     }
                 };
                 if from.kind[reg] == Kind::Uninit || from.kind[reg] != input[bi].kind[reg] {
-                    return Err(format!(
-                        "unsupported: block s{} register r{reg} is not defined on every path",
-                        block.start
+                    return Err(CompileError::new(
+                        Status::Unsupported,
+                        "analysis",
+                        Some(block.start),
+                        Some(reg as u8),
+                        format!(
+                            "unsupported: block s{} register r{reg} is not defined on every path",
+                            block.start
+                        ),
                     ));
                 }
             }
@@ -467,23 +815,27 @@ fn entry_facts() -> Facts {
     }
 }
 
-fn need_kind(facts: &Facts, reg: u8, slot: u32) -> Result<Kind, String> {
+fn need_kind(facts: &Facts, reg: u8, slot: u32) -> Result<Kind, CompileError> {
     let kind = facts.kind[reg as usize];
     if kind == Kind::Uninit {
-        Err(format!(
-            "unsupported: slot {slot}: r{reg} is read before it is written"
+        Err(CompileError::new(
+            Status::Unsupported,
+            "analysis",
+            Some(slot),
+            Some(reg),
+            format!("unsupported: slot {slot}: r{reg} is read before it is written"),
         ))
     } else {
         Ok(kind)
     }
 }
 
-fn merge_slot(left: Slot, right: Slot, block: u32, key: i64) -> Result<Slot, String> {
+fn merge_slot(left: Slot, right: Slot, block: u32, key: i64) -> Result<Slot, CompileError> {
     match (left, right) {
         (Slot::Scalar, Slot::Scalar) => Ok(Slot::Scalar),
         (Slot::Ptr(a, x), Slot::Ptr(b, y)) if a == b => Ok(Slot::Ptr(a, merge_off(x, y))),
         (Slot::Ptr(a, _), Slot::Ptr(b, _)) => {
-            Err(format!("unsupported: block s{block} stack slot {key} is {a:?} on one path and {b:?} on another"))
+            Err(CompileError::new(Status::Unsupported, "analysis", Some(block), None, format!("unsupported: block s{block} stack slot {key} is {a:?} on one path and {b:?} on another")))
         }
         (Slot::Mixed, _) | (_, Slot::Mixed) | (Slot::Ptr(_, _), Slot::Scalar) | (Slot::Scalar, Slot::Ptr(_, _)) => Ok(Slot::Mixed),
     }
@@ -500,7 +852,7 @@ fn merge_slots(
     left: &BTreeMap<i64, Slot>,
     right: &BTreeMap<i64, Slot>,
     block: u32,
-) -> Result<BTreeMap<i64, Slot>, String> {
+) -> Result<BTreeMap<i64, Slot>, CompileError> {
     let mut keys = BTreeSet::new();
     keys.extend(left.keys().copied());
     keys.extend(right.keys().copied());
@@ -524,20 +876,20 @@ fn stack_load(
     size: MemSize,
     signed: bool,
     slot: u32,
-) -> Result<(Kind, i64), String> {
+) -> Result<(Kind, i64), CompileError> {
     let end = at.saturating_add(i64::from(align(size)));
     for (&key, value) in &facts.slots {
         if at == UNKNOWN || (at < key.saturating_add(8) && key < end) {
             return match value {
                 Slot::Ptr(kind, off) if at == key && size == MemSize::Dword && !signed => Ok((*kind, *off)),
-                _ => Err(format!("unsupported: slot {slot}: stack load overlaps a partial or incompatible pointer spill")),
+                _ => Err(CompileError::new(Status::Unsupported, "analysis", Some(slot), None, format!("unsupported: slot {slot}: stack load overlaps a partial or incompatible pointer spill"))),
             };
         }
     }
     Ok((Kind::I64, 0))
 }
 
-fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<(), String> {
+fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<(), CompileError> {
     let slot = insn.index();
     match insn {
         Insn::Alu {
@@ -581,7 +933,7 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
                                 facts.off[dst_i] = 0;
                                 return Ok(());
                             }
-                            return Err(format!("unsupported: slot {slot}: r{dst} and r{reg} have incompatible pointer arithmetic"));
+                            return Err(CompileError::new(Status::Unsupported, "analysis", Some(slot), None, format!("unsupported: slot {slot}: r{dst} and r{reg} have incompatible pointer arithmetic")));
                         }
                         facts.off[dst_i] = UNKNOWN;
                     }
@@ -591,8 +943,14 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
             if let Src::Reg(reg) = src {
                 let src_kind = need_kind(facts, *reg, slot)?;
                 if *width == Width::W64 && *op == AluOp::Sub && is_ptr(src_kind) {
-                    return Err(format!(
-                        "unsupported: slot {slot}: r{reg} is a pointer subtracted from r{dst}"
+                    return Err(CompileError::new(
+                        Status::Unsupported,
+                        "analysis",
+                        Some(slot),
+                        None,
+                        format!(
+                            "unsupported: slot {slot}: r{reg} is a pointer subtracted from r{dst}"
+                        ),
                     ));
                 }
             }
@@ -629,8 +987,12 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
         } => {
             let base_kind = need_kind(facts, *base, slot)?;
             if !is_ptr(base_kind) || base_kind == Kind::Map {
-                return Err(format!(
-                    "unsupported: slot {slot}: r{base} is not a dereferenceable pointer"
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(slot),
+                    Some(*base),
+                    format!("unsupported: slot {slot}: r{base} is not a dereferenceable pointer"),
                 ));
             }
             let at = add_off(facts.off[*base as usize], *off as i64);
@@ -653,8 +1015,12 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
         } => {
             let base_kind = need_kind(facts, *base, slot)?;
             if !is_ptr(base_kind) || base_kind == Kind::Map {
-                return Err(format!(
-                    "unsupported: slot {slot}: r{base} is not a dereferenceable pointer"
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(slot),
+                    Some(*base),
+                    format!("unsupported: slot {slot}: r{base} is not a dereferenceable pointer"),
                 ));
             }
             let stored = match src {
@@ -663,7 +1029,7 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
                     let kind = need_kind(facts, *reg, slot)?;
                     if is_ptr(kind) {
                         if *size != MemSize::Dword || base_kind != Kind::Stack {
-                            return Err(format!("unsupported: slot {slot}: pointer spill requires a full stack slot"));
+                            return Err(CompileError::new(Status::Unsupported, "analysis", Some(slot), None, format!("unsupported: slot {slot}: pointer spill requires a full stack slot")));
                         }
                         Slot::Ptr(kind, facts.off[*reg as usize])
                     } else {
@@ -679,8 +1045,14 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
                         .values()
                         .any(|item| !matches!(item, Slot::Scalar));
                     if matches!(stored, Slot::Ptr(_, _)) || pointer_slot {
-                        return Err(format!(
-                            "unsupported: slot {slot}: stack store through an unknown offset"
+                        return Err(CompileError::new(
+                            Status::Unsupported,
+                            "analysis",
+                            Some(slot),
+                            None,
+                            format!(
+                                "unsupported: slot {slot}: stack store through an unknown offset"
+                            ),
                         ));
                     }
                 } else {
@@ -709,27 +1081,47 @@ fn apply(facts: &mut Facts, insn: &Insn, relocated: &BTreeSet<u32>) -> Result<()
                 facts.kind[*dst as usize] = Kind::I64;
                 facts.off[*dst as usize] = 0;
             } else {
-                return Err(format!(
-                    "unsupported: slot {index}: LDDW pseudo {pseudo} is not a map relocation"
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(slot),
+                    None,
+                    format!(
+                        "unsupported: slot {index}: LDDW pseudo {pseudo} is not a map relocation"
+                    ),
                 ));
             }
         }
         Insn::Call { id, index } => {
             if *id != 1 {
-                return Err(format!(
-                    "unsupported: slot {index}: helper {id} has no call contract"
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(slot),
+                    None,
+                    format!("unsupported: slot {index}: helper {id} has no call contract"),
                 ));
             }
             let map = need_kind(facts, 1, *index)?;
             if map != Kind::Map {
-                return Err(format!(
-                    "unsupported: slot {index}: helper 1 expects a map pointer in r1"
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(slot),
+                    Some(1),
+                    format!("unsupported: slot {index}: helper 1 expects a map pointer in r1"),
                 ));
             }
             let key = need_kind(facts, 2, *index)?;
-            if !is_ptr(key) {
-                return Err(format!(
-                    "unsupported: slot {index}: helper 1 key in r2 is not a pointer"
+            if !is_ptr(key) || key == Kind::Map {
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(slot),
+                    Some(2),
+                    format!(
+                    "unsupported: slot {index}: helper 1 key in r2 is not a dereferenceable pointer"
+                ),
                 ));
             }
             facts.kind[0] = Kind::MapVal;
@@ -748,7 +1140,7 @@ fn merge_facts(
     right: &Facts,
     live: &[bool; 11],
     block: u32,
-) -> Result<Facts, String> {
+) -> Result<Facts, CompileError> {
     let mut next = left.clone();
     for reg in 0..11 {
         if !live[reg] {
@@ -775,9 +1167,9 @@ fn merge_facts(
                 off,
             )
         } else {
-            return Err(format!(
+            return Err(CompileError::new(Status::Unsupported, "analysis", Some(block), Some(reg as u8), format!(
                 "unsupported: block s{block} register r{reg} is a pointer on one path and a different value on another"
-            ));
+            )));
         };
         next.kind[reg] = kind;
         next.off[reg] = off;
@@ -790,7 +1182,7 @@ fn live_in(
     insns: &[Insn],
     blocks: &[Block],
     _relocated: &std::collections::BTreeSet<u32>,
-) -> Result<Vec<[bool; 11]>, String> {
+) -> Result<Vec<[bool; 11]>, CompileError> {
     let mut gen = vec![[false; 11]; blocks.len()];
     let mut kill = vec![[false; 11]; blocks.len()];
     for (bi, block) in blocks.iter().enumerate() {
@@ -801,7 +1193,13 @@ fn live_in(
     loop {
         guard += 1;
         if guard > blocks.len() * 12 + 4 {
-            return Err("liveness did not settle".into());
+            return Err(CompileError::new(
+                Status::InternalError,
+                "analysis",
+                None,
+                None,
+                "liveness did not settle",
+            ));
         }
         let mut changed = false;
         for bi in (0..blocks.len()).rev() {
@@ -890,7 +1288,7 @@ fn record_uses(insns: &[Insn], gen: &mut [bool; 11], kill: &mut [bool; 11]) {
     }
 }
 
-fn map_names(func: &Func) -> Result<Vec<String>, String> {
+fn map_names(func: &Func) -> Result<Vec<String>, CompileError> {
     let mut symbols = BTreeMap::new();
     let mut names = Vec::new();
     for reloc in &func.relocs {
@@ -902,9 +1300,15 @@ fn map_names(func: &Func) -> Result<Vec<String>, String> {
         );
         if let Some(previous) = symbols.insert(name.clone(), &reloc.symbol) {
             if previous != &reloc.symbol {
-                return Err(format!(
-                    "map symbols {previous:?} and {:?} share emitted name {name}",
-                    reloc.symbol
+                return Err(CompileError::new(
+                    Status::Unsupported,
+                    "analysis",
+                    Some(reloc.slot),
+                    None,
+                    format!(
+                        "map symbols {previous:?} and {:?} share emitted name {name}",
+                        reloc.symbol
+                    ),
                 ));
             }
         }
@@ -934,136 +1338,137 @@ fn emit_block(
     regs: &mut [Rv; 11],
     mut facts: Facts,
     relocated: &BTreeSet<u32>,
-) -> Result<(), String> {
+) -> Result<(), CompileError> {
     for insn in insns {
         if matches!(insn, Insn::Jmp { .. }) {
             break;
         }
         let before = emit.lines.len();
         let before_regs = register_bindings(regs);
-        apply(&mut facts, insn, relocated)?;
-        match insn {
-            Insn::Alu {
-                width,
-                op,
-                dst,
-                src,
-                extra,
-                ..
-            } => {
-                if *width == Width::W64 && *op == AluOp::Mov && matches!(src, Src::Reg(_)) {
-                    let Src::Reg(reg) = src else { unreachable!() };
-                    regs[*dst as usize] = regs[*reg as usize].clone();
-                } else if *width == Width::W64
-                    && matches!(*op, AluOp::Add | AluOp::Sub)
-                    && is_ptr(facts.kind[*dst as usize])
-                    && matches!(regs[*dst as usize], Rv::Ptr(_, _))
-                {
-                    let Rv::Ptr(kind, name) = regs[*dst as usize].clone() else {
-                        unreachable!()
-                    };
-                    let raw = match src {
-                        Src::Imm(imm) => (*imm as i64).to_string(),
-                        Src::Reg(reg) => i64_view(emit, &regs[*reg as usize])?,
-                    };
-                    let delta = if *op == AluOp::Sub {
-                        bin(emit, "i64", "sub", "0", &raw)
-                    } else {
-                        raw
-                    };
-                    let updated = emit.fresh();
-                    emit.lines
-                        .push(format!("  {updated} = gep ptr {name}, 1 x i64 {delta}"));
-                    regs[*dst as usize] = Rv::Ptr(kind, updated);
-                } else {
-                    emit_alu(emit, regs, *width, *op, *dst, src, *extra)?;
-                    if facts.kind[*dst as usize] == Kind::Pkt {
-                        let Rv::I64(name) = regs[*dst as usize].clone() else {
+        let action = (|| -> Result<(), String> {
+            apply(&mut facts, insn, relocated).map_err(|e| e.to_string())?;
+            match insn {
+                Insn::Alu {
+                    width,
+                    op,
+                    dst,
+                    src,
+                    extra,
+                    ..
+                } => {
+                    if *width == Width::W64 && *op == AluOp::Mov && matches!(src, Src::Reg(_)) {
+                        let Src::Reg(reg) = src else { unreachable!() };
+                        regs[*dst as usize] = regs[*reg as usize].clone();
+                    } else if *width == Width::W64
+                        && matches!(*op, AluOp::Add | AluOp::Sub)
+                        && is_ptr(facts.kind[*dst as usize])
+                        && matches!(regs[*dst as usize], Rv::Ptr(_, _))
+                    {
+                        let Rv::Ptr(kind, name) = regs[*dst as usize].clone() else {
                             unreachable!()
                         };
-                        regs[*dst as usize] = Rv::Packet(name);
+                        let raw = match src {
+                            Src::Imm(imm) => (*imm as i64).to_string(),
+                            Src::Reg(reg) => i64_view(emit, &regs[*reg as usize])?,
+                        };
+                        let delta = if *op == AluOp::Sub {
+                            bin(emit, "i64", "sub", "0", &raw)
+                        } else {
+                            raw
+                        };
+                        let updated = emit.fresh();
+                        emit.lines
+                            .push(format!("  {updated} = gep ptr {name}, 1 x i64 {delta}"));
+                        regs[*dst as usize] = Rv::Ptr(kind, updated);
+                    } else {
+                        emit_alu(emit, regs, *width, *op, *dst, src, *extra)?;
+                        if facts.kind[*dst as usize] == Kind::Pkt {
+                            let Rv::I64(name) = regs[*dst as usize].clone() else {
+                                unreachable!()
+                            };
+                            regs[*dst as usize] = Rv::Packet(name);
+                        }
                     }
                 }
-            }
-            Insn::End {
-                dst, bits, to_be, ..
-            } => emit_end(emit, regs, *dst, *bits, *to_be)?,
-            Insn::Load {
-                size,
-                signed,
-                dst,
-                base,
-                off,
-                ..
-            } => emit_load(
-                emit,
-                regs,
-                *size,
-                *signed,
-                *dst,
-                *base,
-                *off,
-                facts.kind[*dst as usize],
-            )?,
-            Insn::Store {
-                size,
-                base,
-                off,
-                src,
-                ..
-            } => emit_store(emit, regs, *size, *base, *off, src)?,
-            Insn::Lddw {
-                dst,
-                imm,
-                pseudo,
-                index,
-            } => {
-                if let Some(name) = maps.get(index) {
-                    regs[*dst as usize] = Rv::Ptr(Kind::Map, format!("%{name}"));
-                } else if *pseudo != 0 {
-                    return Err(format!(
-                        "slot {index}: LDDW pseudo {pseudo} is not a constant or a map relocation"
+                Insn::End {
+                    dst, bits, to_be, ..
+                } => emit_end(emit, regs, *dst, *bits, *to_be)?,
+                Insn::Load {
+                    size,
+                    signed,
+                    dst,
+                    base,
+                    off,
+                    ..
+                } => emit_load(
+                    emit,
+                    regs,
+                    *size,
+                    *signed,
+                    *dst,
+                    *base,
+                    *off,
+                    facts.kind[*dst as usize],
+                )?,
+                Insn::Store {
+                    size,
+                    base,
+                    off,
+                    src,
+                    ..
+                } => emit_store(emit, regs, *size, *base, *off, src)?,
+                Insn::Lddw {
+                    dst,
+                    imm,
+                    pseudo,
+                    index,
+                } => {
+                    if let Some(name) = maps.get(index) {
+                        regs[*dst as usize] = Rv::Ptr(Kind::Map, format!("%{name}"));
+                    } else if *pseudo != 0 {
+                        return Err(format!("slot {index}: LDDW pseudo {pseudo} is not a constant or a map relocation"));
+                    } else {
+                        regs[*dst as usize] = Rv::I64(imm.to_string());
+                    }
+                }
+                Insn::Call { id, index } => {
+                    if *id != 1 {
+                        return Err(format!("slot {index}: helper {id} has no call contract"));
+                    }
+                    let map = as_ptr(&regs[1], "helper 1 map")?;
+                    let key = address(emit, &regs[2], 0)?;
+                    let name = emit.fresh();
+                    emit.lines.push(format!(
+                        "  {name} = call ptr @bpf_map_lookup_elem({map}, {key})"
                     ));
-                } else {
-                    regs[*dst as usize] = Rv::I64(imm.to_string());
+                    regs[0] = Rv::Ptr(Kind::MapVal, name);
+                    for slot in &mut regs[1..=5] {
+                        *slot = Rv::None;
+                    }
                 }
+                Insn::Jmp { .. } => {}
             }
-            Insn::Call { id, index } => {
-                if *id != 1 {
-                    return Err(format!("slot {index}: helper {id} has no call contract"));
-                }
-                let map = as_ptr(&regs[1], "helper 1 map")?;
-                let key = address(emit, &regs[2], 0)?;
-                let name = emit.fresh();
-                emit.lines.push(format!(
-                    "  {name} = call ptr @bpf_map_lookup_elem({map}, {key})"
-                ));
-                regs[0] = Rv::Ptr(Kind::MapVal, name);
-                for slot in &mut regs[1..=5] {
-                    *slot = Rv::None;
-                }
-            }
-            Insn::Jmp { .. } => {}
-        }
-        emit.checkpoints.insert(insn.index(), serde_json::json!({
-            "slot": insn.index(), "before": before_regs, "after": register_bindings(regs),
-            "generated_ir": emit.lines[before..], "phi_ir": []
-        }));
-        let created = defined_names(&emit.lines[before..]);
-        emit.origin.entry(insn.index()).or_default().extend(created);
+            Ok(())
+        })();
+        action.map_err(|message| {
+            CompileError::new(
+                Status::InternalError,
+                "emit",
+                Some(insn.index()),
+                None,
+                message,
+            )
+        })?;
+        emit.checkpoints.insert(
+            insn.index(),
+            serde_json::json!({
+                "slot": insn.index(), "before": before_regs, "after": register_bindings(regs),
+                "generated_ir": emit.lines[before..], "phi_ir": []
+            }),
+        );
+        emit.record(before, Some(insn.index()))?;
     }
     Ok(())
-}
-
-fn defined_names(lines: &[String]) -> Vec<String> {
-    lines
-        .iter()
-        .filter_map(|line| {
-            line.trim()
-                .split_once(" = ")
-                .map(|(name, _)| name.to_owned())
-        })
-        .collect()
 }
 
 fn emit_term(

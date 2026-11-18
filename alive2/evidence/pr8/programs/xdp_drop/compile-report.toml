@@ -1,0 +1,17 @@
+status = "converted"
+entry = "xdp_firewall"
+section = "xdp"
+instructions = 21
+loop = false
+elf_sha256 = "1197f07a580c3cd1b971e0de6ff2edfabcc1af78830b7f198d8d4dee09b76184"
+alive_sha256 = "a7cdce8d2eb7f18baf1744f9277c124f7fec3868f6f28a0c138a8ebc998aedc6"
+origin_sha256 = "3c6f1f9bfcef28164a25ee9b08896ef9bb30abb11929d6a656e20ba378e2594c"
+schema = "classifier-alive-origin-v1"
+compiler_version = "0.1.0"
+origin_revision = 2
+alive2_pin = "adacbd5180ccf95075e9867c4f0c259f59c9fef2"
+rocq_pin = "78d65a77592aae84b31f86385f8be4ab83b45ccb"
+model_proof = "not_proven"
+artifact_proof = "not_proven"
+source_view = "incomplete"
+implementation_proof = "not_proven"

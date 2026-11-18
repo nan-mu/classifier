@@ -1,0 +1,5619 @@
+{
+  "alive_sha256": "3699a7a4817afb1fa7db85d2820230ef854de30558b4841983c65ba61de5351d",
+  "checkpoint_schema": "register-bindings-v1",
+  "elf_sha256": "973a78d63dba1f7ab4b1d2246855f0c92b17d1f0d5d4372dc52308622872dcb9",
+  "entry": "helper_loop",
+  "generated_cfg_edges": [
+    {
+      "from": "entry",
+      "instruction": "g2",
+      "to": "s0"
+    },
+    {
+      "from": "s0",
+      "instruction": "g10",
+      "to": "s15"
+    },
+    {
+      "from": "s0",
+      "instruction": "g10",
+      "to": "s6"
+    },
+    {
+      "from": "s6",
+      "instruction": "g18",
+      "to": "s9"
+    },
+    {
+      "from": "s6",
+      "instruction": "g18",
+      "to": "s8"
+    },
+    {
+      "from": "s8",
+      "instruction": "g19",
+      "to": "s9"
+    },
+    {
+      "from": "s9",
+      "instruction": "g23",
+      "to": "s15"
+    },
+    {
+      "from": "s9",
+      "instruction": "g23",
+      "to": "s11"
+    },
+    {
+      "from": "s11",
+      "instruction": "g24",
+      "to": "s17"
+    },
+    {
+      "from": "s13",
+      "instruction": "g31",
+      "to": "s17"
+    },
+    {
+      "from": "s13",
+      "instruction": "g31",
+      "to": "s15"
+    },
+    {
+      "from": "s17",
+      "instruction": "g43",
+      "to": "s13"
+    },
+    {
+      "from": "s17",
+      "instruction": "g43",
+      "to": "s24"
+    },
+    {
+      "from": "s24",
+      "instruction": "g51",
+      "to": "s13"
+    }
+  ],
+  "generated_instructions": [
+    {
+      "block": "entry",
+      "id": "g0",
+      "opcode": "alloca",
+      "phi_inputs": [],
+      "result": "%stack",
+      "slot": null,
+      "targets": [],
+      "text": "%stack = alloca i64 512, align 8"
+    },
+    {
+      "block": "entry",
+      "id": "g1",
+      "opcode": "gep",
+      "phi_inputs": [],
+      "result": "%fp",
+      "slot": null,
+      "targets": [],
+      "text": "%fp = gep ptr %stack, 1 x i64 512"
+    },
+    {
+      "block": "entry",
+      "id": "g2",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": null,
+      "targets": [
+        "s0"
+      ],
+      "text": "br label %s0"
+    },
+    {
+      "block": "s0",
+      "id": "g3",
+      "opcode": "gep",
+      "phi_inputs": [],
+      "result": "%v0",
+      "slot": 1,
+      "targets": [],
+      "text": "%v0 = gep ptr %ctx, 1 x i64 4"
+    },
+    {
+      "block": "s0",
+      "id": "g4",
+      "opcode": "load",
+      "phi_inputs": [],
+      "result": "%v1",
+      "slot": 1,
+      "targets": [],
+      "text": "%v1 = load i32, ptr %v0, align 4"
+    },
+    {
+      "block": "s0",
+      "id": "g5",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v2",
+      "slot": 1,
+      "targets": [],
+      "text": "%v2 = zext i32 %v1 to i64"
+    },
+    {
+      "block": "s0",
+      "id": "g6",
+      "opcode": "load",
+      "phi_inputs": [],
+      "result": "%v3",
+      "slot": 2,
+      "targets": [],
+      "text": "%v3 = load i32, ptr %ctx, align 4"
+    },
+    {
+      "block": "s0",
+      "id": "g7",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v4",
+      "slot": 2,
+      "targets": [],
+      "text": "%v4 = zext i32 %v3 to i64"
+    },
+    {
+      "block": "s0",
+      "id": "g8",
+      "opcode": "add",
+      "phi_inputs": [],
+      "result": "%v5",
+      "slot": 4,
+      "targets": [],
+      "text": "%v5 = add i64 %v4, 4"
+    },
+    {
+      "block": "s0",
+      "id": "g9",
+      "opcode": "icmp",
+      "phi_inputs": [],
+      "result": "%v6",
+      "slot": 5,
+      "targets": [],
+      "text": "%v6 = icmp ugt i64 %v5, %v2"
+    },
+    {
+      "block": "s0",
+      "id": "g10",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 5,
+      "targets": [
+        "s15",
+        "s6"
+      ],
+      "text": "br i1 %v6, label %s15, label %s6"
+    },
+    {
+      "block": "s6",
+      "id": "g11",
+      "opcode": "sub",
+      "phi_inputs": [],
+      "result": "%v7",
+      "slot": 6,
+      "targets": [],
+      "text": "%v7 = sub i64 %v4, %pkt_base"
+    },
+    {
+      "block": "s6",
+      "id": "g12",
+      "opcode": "gep",
+      "phi_inputs": [],
+      "result": "%v8",
+      "slot": 6,
+      "targets": [],
+      "text": "%v8 = gep ptr %pkt, 1 x i64 %v7"
+    },
+    {
+      "block": "s6",
+      "id": "g13",
+      "opcode": "load",
+      "phi_inputs": [],
+      "result": "%v9",
+      "slot": 6,
+      "targets": [],
+      "text": "%v9 = load i32, ptr %v8, align 4"
+    },
+    {
+      "block": "s6",
+      "id": "g14",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v10",
+      "slot": 6,
+      "targets": [],
+      "text": "%v10 = zext i32 %v9 to i64"
+    },
+    {
+      "block": "s6",
+      "id": "g15",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v11",
+      "slot": 7,
+      "targets": [],
+      "text": "%v11 = trunc i64 %v10 to i32"
+    },
+    {
+      "block": "s6",
+      "id": "g16",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v12",
+      "slot": 7,
+      "targets": [],
+      "text": "%v12 = trunc i64 8 to i32"
+    },
+    {
+      "block": "s6",
+      "id": "g17",
+      "opcode": "icmp",
+      "phi_inputs": [],
+      "result": "%v13",
+      "slot": 7,
+      "targets": [],
+      "text": "%v13 = icmp ult i32 %v11, %v12"
+    },
+    {
+      "block": "s6",
+      "id": "g18",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 7,
+      "targets": [
+        "s9",
+        "s8"
+      ],
+      "text": "br i1 %v13, label %s9, label %s8"
+    },
+    {
+      "block": "s8",
+      "id": "g19",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 8,
+      "targets": [
+        "s9"
+      ],
+      "text": "br label %s9"
+    },
+    {
+      "block": "s9",
+      "id": "g20",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v14",
+      "slot": 10,
+      "targets": [],
+      "text": "%v14 = trunc i64 %s9_r7 to i32"
+    },
+    {
+      "block": "s9",
+      "id": "g21",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v15",
+      "slot": 10,
+      "targets": [],
+      "text": "%v15 = trunc i64 0 to i32"
+    },
+    {
+      "block": "s9",
+      "id": "g22",
+      "opcode": "icmp",
+      "phi_inputs": [],
+      "result": "%v16",
+      "slot": 10,
+      "targets": [],
+      "text": "%v16 = icmp eq i32 %v14, %v15"
+    },
+    {
+      "block": "s9",
+      "id": "g23",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 10,
+      "targets": [
+        "s15",
+        "s11"
+      ],
+      "text": "br i1 %v16, label %s15, label %s11"
+    },
+    {
+      "block": "s11",
+      "id": "g24",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 12,
+      "targets": [
+        "s17"
+      ],
+      "text": "br label %s17"
+    },
+    {
+      "block": "s13",
+      "id": "g25",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v17",
+      "slot": 13,
+      "targets": [],
+      "text": "%v17 = trunc i64 %s13_r8 to i32"
+    },
+    {
+      "block": "s13",
+      "id": "g26",
+      "opcode": "add",
+      "phi_inputs": [],
+      "result": "%v18",
+      "slot": 13,
+      "targets": [],
+      "text": "%v18 = add i32 %v17, 1"
+    },
+    {
+      "block": "s13",
+      "id": "g27",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v19",
+      "slot": 13,
+      "targets": [],
+      "text": "%v19 = zext i32 %v18 to i64"
+    },
+    {
+      "block": "s13",
+      "id": "g28",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v20",
+      "slot": 14,
+      "targets": [],
+      "text": "%v20 = trunc i64 %v19 to i32"
+    },
+    {
+      "block": "s13",
+      "id": "g29",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v21",
+      "slot": 14,
+      "targets": [],
+      "text": "%v21 = trunc i64 %s13_r7 to i32"
+    },
+    {
+      "block": "s13",
+      "id": "g30",
+      "opcode": "icmp",
+      "phi_inputs": [],
+      "result": "%v22",
+      "slot": 14,
+      "targets": [],
+      "text": "%v22 = icmp ult i32 %v20, %v21"
+    },
+    {
+      "block": "s13",
+      "id": "g31",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 14,
+      "targets": [
+        "s17",
+        "s15"
+      ],
+      "text": "br i1 %v22, label %s17, label %s15"
+    },
+    {
+      "block": "s15",
+      "id": "g32",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v23",
+      "slot": 15,
+      "targets": [],
+      "text": "%v23 = trunc i64 0 to i32"
+    },
+    {
+      "block": "s15",
+      "id": "g33",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v24",
+      "slot": 15,
+      "targets": [],
+      "text": "%v24 = trunc i64 %s15_r6 to i32"
+    },
+    {
+      "block": "s15",
+      "id": "g34",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v25",
+      "slot": 15,
+      "targets": [],
+      "text": "%v25 = zext i32 %v24 to i64"
+    },
+    {
+      "block": "s15",
+      "id": "g35",
+      "opcode": "ret",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 16,
+      "targets": [],
+      "text": "ret i64 %v25"
+    },
+    {
+      "block": "s17",
+      "id": "g36",
+      "opcode": "gep",
+      "phi_inputs": [],
+      "result": "%v26",
+      "slot": 17,
+      "targets": [],
+      "text": "%v26 = gep ptr %s17_r10, 1 x i64 -4"
+    },
+    {
+      "block": "s17",
+      "id": "g37",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v27",
+      "slot": 17,
+      "targets": [],
+      "text": "%v27 = trunc i64 %s17_r8 to i32"
+    },
+    {
+      "block": "s17",
+      "id": "g38",
+      "opcode": "store",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 17,
+      "targets": [],
+      "text": "store i32 %v27, ptr %v26, align 4"
+    },
+    {
+      "block": "s17",
+      "id": "g39",
+      "opcode": "gep",
+      "phi_inputs": [],
+      "result": "%v28",
+      "slot": 19,
+      "targets": [],
+      "text": "%v28 = gep ptr %s17_r10, 1 x i64 -4"
+    },
+    {
+      "block": "s17",
+      "id": "g40",
+      "opcode": "call",
+      "phi_inputs": [],
+      "result": "%v29",
+      "slot": 22,
+      "targets": [],
+      "text": "%v29 = call ptr @bpf_map_lookup_elem(ptr %map_counters, ptr %v28)"
+    },
+    {
+      "block": "s17",
+      "id": "g41",
+      "opcode": "ptrtoint",
+      "phi_inputs": [],
+      "result": "%v30",
+      "slot": 23,
+      "targets": [],
+      "text": "%v30 = ptrtoint ptr %v29 to i64"
+    },
+    {
+      "block": "s17",
+      "id": "g42",
+      "opcode": "icmp",
+      "phi_inputs": [],
+      "result": "%v31",
+      "slot": 23,
+      "targets": [],
+      "text": "%v31 = icmp eq i64 %v30, 0"
+    },
+    {
+      "block": "s17",
+      "id": "g43",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 23,
+      "targets": [
+        "s13",
+        "s24"
+      ],
+      "text": "br i1 %v31, label %s13, label %s24"
+    },
+    {
+      "block": "s24",
+      "id": "g44",
+      "opcode": "load",
+      "phi_inputs": [],
+      "result": "%v32",
+      "slot": 24,
+      "targets": [],
+      "text": "%v32 = load i32, ptr %v29, align 4"
+    },
+    {
+      "block": "s24",
+      "id": "g45",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v33",
+      "slot": 24,
+      "targets": [],
+      "text": "%v33 = zext i32 %v32 to i64"
+    },
+    {
+      "block": "s24",
+      "id": "g46",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v34",
+      "slot": 25,
+      "targets": [],
+      "text": "%v34 = trunc i64 %v33 to i32"
+    },
+    {
+      "block": "s24",
+      "id": "g47",
+      "opcode": "add",
+      "phi_inputs": [],
+      "result": "%v35",
+      "slot": 25,
+      "targets": [],
+      "text": "%v35 = add i32 %v34, 1"
+    },
+    {
+      "block": "s24",
+      "id": "g48",
+      "opcode": "zext",
+      "phi_inputs": [],
+      "result": "%v36",
+      "slot": 25,
+      "targets": [],
+      "text": "%v36 = zext i32 %v35 to i64"
+    },
+    {
+      "block": "s24",
+      "id": "g49",
+      "opcode": "trunc",
+      "phi_inputs": [],
+      "result": "%v37",
+      "slot": 26,
+      "targets": [],
+      "text": "%v37 = trunc i64 %v36 to i32"
+    },
+    {
+      "block": "s24",
+      "id": "g50",
+      "opcode": "store",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 26,
+      "targets": [],
+      "text": "store i32 %v37, ptr %v29, align 4"
+    },
+    {
+      "block": "s24",
+      "id": "g51",
+      "opcode": "br",
+      "phi_inputs": [],
+      "result": null,
+      "slot": 27,
+      "targets": [
+        "s13"
+      ],
+      "text": "br label %s13"
+    },
+    {
+      "block": "s9",
+      "id": "g52",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s6",
+          "source_slots": [
+            6
+          ],
+          "value": "%v10"
+        },
+        {
+          "predecessor": "s8",
+          "source_slots": [
+            8
+          ],
+          "value": "8"
+        }
+      ],
+      "result": "%s9_r7",
+      "slot": 9,
+      "targets": [],
+      "text": "%s9_r7 = phi i64 [ %v10, %s6 ], [ 8, %s8 ]"
+    },
+    {
+      "block": "s9",
+      "id": "g53",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s6",
+          "source_slots": [],
+          "value": "%fp"
+        },
+        {
+          "predecessor": "s8",
+          "source_slots": [],
+          "value": "%fp"
+        }
+      ],
+      "result": "%s9_r10",
+      "slot": 9,
+      "targets": [],
+      "text": "%s9_r10 = phi ptr [ %fp, %s6 ], [ %fp, %s8 ]"
+    },
+    {
+      "block": "s13",
+      "id": "g54",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s17",
+          "source_slots": [
+            9
+          ],
+          "value": "%s17_r6"
+        },
+        {
+          "predecessor": "s24",
+          "source_slots": [
+            9
+          ],
+          "value": "%s17_r6"
+        }
+      ],
+      "result": "%s13_r6",
+      "slot": 13,
+      "targets": [],
+      "text": "%s13_r6 = phi i64 [ %s17_r6, %s17 ], [ %s17_r6, %s24 ]"
+    },
+    {
+      "block": "s13",
+      "id": "g55",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s17",
+          "source_slots": [
+            6,
+            8
+          ],
+          "value": "%s17_r7"
+        },
+        {
+          "predecessor": "s24",
+          "source_slots": [
+            6,
+            8
+          ],
+          "value": "%s17_r7"
+        }
+      ],
+      "result": "%s13_r7",
+      "slot": 13,
+      "targets": [],
+      "text": "%s13_r7 = phi i64 [ %s17_r7, %s17 ], [ %s17_r7, %s24 ]"
+    },
+    {
+      "block": "s13",
+      "id": "g56",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s17",
+          "source_slots": [
+            11,
+            13
+          ],
+          "value": "%s17_r8"
+        },
+        {
+          "predecessor": "s24",
+          "source_slots": [
+            11,
+            13
+          ],
+          "value": "%s17_r8"
+        }
+      ],
+      "result": "%s13_r8",
+      "slot": 13,
+      "targets": [],
+      "text": "%s13_r8 = phi i64 [ %s17_r8, %s17 ], [ %s17_r8, %s24 ]"
+    },
+    {
+      "block": "s13",
+      "id": "g57",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s17",
+          "source_slots": [],
+          "value": "%s17_r10"
+        },
+        {
+          "predecessor": "s24",
+          "source_slots": [],
+          "value": "%s17_r10"
+        }
+      ],
+      "result": "%s13_r10",
+      "slot": 13,
+      "targets": [],
+      "text": "%s13_r10 = phi ptr [ %s17_r10, %s17 ], [ %s17_r10, %s24 ]"
+    },
+    {
+      "block": "s15",
+      "id": "g58",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s0",
+          "source_slots": [
+            0
+          ],
+          "value": "0"
+        },
+        {
+          "predecessor": "s9",
+          "source_slots": [
+            9
+          ],
+          "value": "2"
+        },
+        {
+          "predecessor": "s13",
+          "source_slots": [
+            9
+          ],
+          "value": "%s13_r6"
+        }
+      ],
+      "result": "%s15_r6",
+      "slot": 15,
+      "targets": [],
+      "text": "%s15_r6 = phi i64 [ 0, %s0 ], [ 2, %s9 ], [ %s13_r6, %s13 ]"
+    },
+    {
+      "block": "s17",
+      "id": "g59",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s11",
+          "source_slots": [
+            9
+          ],
+          "value": "2"
+        },
+        {
+          "predecessor": "s13",
+          "source_slots": [
+            9
+          ],
+          "value": "%s13_r6"
+        }
+      ],
+      "result": "%s17_r6",
+      "slot": 17,
+      "targets": [],
+      "text": "%s17_r6 = phi i64 [ 2, %s11 ], [ %s13_r6, %s13 ]"
+    },
+    {
+      "block": "s17",
+      "id": "g60",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s11",
+          "source_slots": [
+            6,
+            8
+          ],
+          "value": "%s9_r7"
+        },
+        {
+          "predecessor": "s13",
+          "source_slots": [
+            6,
+            8
+          ],
+          "value": "%s13_r7"
+        }
+      ],
+      "result": "%s17_r7",
+      "slot": 17,
+      "targets": [],
+      "text": "%s17_r7 = phi i64 [ %s9_r7, %s11 ], [ %s13_r7, %s13 ]"
+    },
+    {
+      "block": "s17",
+      "id": "g61",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s11",
+          "source_slots": [
+            11
+          ],
+          "value": "0"
+        },
+        {
+          "predecessor": "s13",
+          "source_slots": [
+            13
+          ],
+          "value": "%v19"
+        }
+      ],
+      "result": "%s17_r8",
+      "slot": 17,
+      "targets": [],
+      "text": "%s17_r8 = phi i64 [ 0, %s11 ], [ %v19, %s13 ]"
+    },
+    {
+      "block": "s17",
+      "id": "g62",
+      "opcode": "phi",
+      "phi_inputs": [
+        {
+          "predecessor": "s11",
+          "source_slots": [],
+          "value": "%s9_r10"
+        },
+        {
+          "predecessor": "s13",
+          "source_slots": [],
+          "value": "%s13_r10"
+        }
+      ],
+      "result": "%s17_r10",
+      "slot": 17,
+      "targets": [],
+      "text": "%s17_r10 = phi ptr [ %s9_r10, %s11 ], [ %s13_r10, %s13 ]"
+    }
+  ],
+  "instructions": [
+    {
+      "bytes": "b406000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Ctx",
+            "operand": "%ctx",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Ctx",
+            "operand": "%ctx",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [],
+        "phi_ir": [],
+        "slot": 0
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 6,
+          "extra": 0,
+          "index": 0,
+          "op": "Mov",
+          "src": {
+            "Imm": 0
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [],
+      "ir": [],
+      "offset": 0,
+      "slot": 0
+    },
+    {
+      "bytes": "6112040000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Ctx",
+            "operand": "%ctx",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Ctx",
+            "operand": "%ctx",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v0 = gep ptr %ctx, 1 x i64 4",
+          "  %v1 = load i32, ptr %v0, align 4",
+          "  %v2 = zext i32 %v1 to i64"
+        ],
+        "phi_ir": [],
+        "slot": 1
+      },
+      "decoded": {
+        "Load": {
+          "base": 1,
+          "dst": 2,
+          "index": 1,
+          "off": 4,
+          "signed": false,
+          "size": "Word"
+        }
+      },
+      "generated_instruction_ids": [
+        "g3",
+        "g4",
+        "g5"
+      ],
+      "ir": [
+        "%v0",
+        "%v1",
+        "%v2"
+      ],
+      "offset": 8,
+      "slot": 1
+    },
+    {
+      "bytes": "6111000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Ctx",
+            "operand": "%ctx",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v3 = load i32, ptr %ctx, align 4",
+          "  %v4 = zext i32 %v3 to i64"
+        ],
+        "phi_ir": [],
+        "slot": 2
+      },
+      "decoded": {
+        "Load": {
+          "base": 1,
+          "dst": 1,
+          "index": 2,
+          "off": 0,
+          "signed": false,
+          "size": "Word"
+        }
+      },
+      "generated_instruction_ids": [
+        "g6",
+        "g7"
+      ],
+      "ir": [
+        "%v3",
+        "%v4"
+      ],
+      "offset": 16,
+      "slot": 2
+    },
+    {
+      "bytes": "bf13000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [],
+        "phi_ir": [],
+        "slot": 3
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 3,
+          "extra": 0,
+          "index": 3,
+          "op": "Mov",
+          "src": {
+            "Reg": 1
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [],
+      "ir": [],
+      "offset": 24,
+      "slot": 3
+    },
+    {
+      "bytes": "0703000004000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v5 = add i64 %v4, 4"
+        ],
+        "phi_ir": [],
+        "slot": 4
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 3,
+          "extra": 0,
+          "index": 4,
+          "op": "Add",
+          "src": {
+            "Imm": 4
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g8"
+      ],
+      "ir": [
+        "%v5"
+      ],
+      "offset": 32,
+      "slot": 4
+    },
+    {
+      "bytes": "2d23090000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v6 = icmp ugt i64 %v5, %v2",
+          "  br i1 %v6, label %s15, label %s6"
+        ],
+        "phi_ir": [],
+        "slot": 5,
+        "source_block": "s0",
+        "source_successors": [
+          15,
+          6
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Jgt",
+          "dst": 3,
+          "index": 5,
+          "off": 9,
+          "src": {
+            "Reg": 2
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g9",
+        "g10"
+      ],
+      "ir": [
+        "%v6"
+      ],
+      "offset": 40,
+      "slot": 5
+    },
+    {
+      "bytes": "6117000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v10",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v7 = sub i64 %v4, %pkt_base",
+          "  %v8 = gep ptr %pkt, 1 x i64 %v7",
+          "  %v9 = load i32, ptr %v8, align 4",
+          "  %v10 = zext i32 %v9 to i64"
+        ],
+        "phi_ir": [],
+        "slot": 6
+      },
+      "decoded": {
+        "Load": {
+          "base": 1,
+          "dst": 7,
+          "index": 6,
+          "off": 0,
+          "signed": false,
+          "size": "Word"
+        }
+      },
+      "generated_instruction_ids": [
+        "g11",
+        "g12",
+        "g13",
+        "g14"
+      ],
+      "ir": [
+        "%v7",
+        "%v8",
+        "%v9",
+        "%v10"
+      ],
+      "offset": 48,
+      "slot": 6
+    },
+    {
+      "bytes": "a607010008000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v10",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v10",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v11 = trunc i64 %v10 to i32",
+          "  %v12 = trunc i64 8 to i32",
+          "  %v13 = icmp ult i32 %v11, %v12",
+          "  br i1 %v13, label %s9, label %s8"
+        ],
+        "phi_ir": [],
+        "slot": 7,
+        "source_block": "s6",
+        "source_successors": [
+          9,
+          8
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Jlt",
+          "dst": 7,
+          "index": 7,
+          "off": 1,
+          "src": {
+            "Imm": 8
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g15",
+        "g16",
+        "g17",
+        "g18"
+      ],
+      "ir": [
+        "%v11",
+        "%v12",
+        "%v13"
+      ],
+      "offset": 56,
+      "slot": 7
+    },
+    {
+      "bytes": "b407000008000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "8",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v4",
+            "register": "R1"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v2",
+            "register": "R2"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "packet_address",
+            "operand": "%v5",
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v10",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%fp",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  br label %s9"
+        ],
+        "phi_ir": [],
+        "slot": 8,
+        "source_block": "s8",
+        "source_successors": [
+          9
+        ]
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 7,
+          "extra": 0,
+          "index": 8,
+          "op": "Mov",
+          "src": {
+            "Imm": 8
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g19"
+      ],
+      "ir": [],
+      "offset": 64,
+      "slot": 8
+    },
+    {
+      "bytes": "b406000002000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [],
+        "phi_ir": [
+          "  %s9_r7 = phi i64 [ %v10, %s6 ], [ 8, %s8 ]",
+          "  %s9_r10 = phi ptr [ %fp, %s6 ], [ %fp, %s8 ]"
+        ],
+        "slot": 9
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 6,
+          "extra": 0,
+          "index": 9,
+          "op": "Mov",
+          "src": {
+            "Imm": 2
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g52",
+        "g53"
+      ],
+      "ir": [
+        "%s9_r7",
+        "%s9_r10"
+      ],
+      "offset": 72,
+      "slot": 9
+    },
+    {
+      "bytes": "1607040000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v14 = trunc i64 %s9_r7 to i32",
+          "  %v15 = trunc i64 0 to i32",
+          "  %v16 = icmp eq i32 %v14, %v15",
+          "  br i1 %v16, label %s15, label %s11"
+        ],
+        "phi_ir": [],
+        "slot": 10,
+        "source_block": "s9",
+        "source_successors": [
+          15,
+          11
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Jeq",
+          "dst": 7,
+          "index": 10,
+          "off": 4,
+          "src": {
+            "Imm": 0
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g20",
+        "g21",
+        "g22",
+        "g23"
+      ],
+      "ir": [
+        "%v14",
+        "%v15",
+        "%v16"
+      ],
+      "offset": 80,
+      "slot": 10
+    },
+    {
+      "bytes": "b408000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [],
+        "phi_ir": [],
+        "slot": 11
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 8,
+          "extra": 0,
+          "index": 11,
+          "op": "Mov",
+          "src": {
+            "Imm": 0
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [],
+      "ir": [],
+      "offset": 88,
+      "slot": 11
+    },
+    {
+      "bytes": "0500040000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "2",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s9_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "0",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s9_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  br label %s17"
+        ],
+        "phi_ir": [],
+        "slot": 12,
+        "source_block": "s11",
+        "source_successors": [
+          17
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Ja",
+          "dst": 0,
+          "index": 12,
+          "off": 4,
+          "src": {
+            "Imm": 0
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g24"
+      ],
+      "ir": [],
+      "offset": 96,
+      "slot": 12
+    },
+    {
+      "bytes": "0408000001000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v19",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s13_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s13_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v17 = trunc i64 %s13_r8 to i32",
+          "  %v18 = add i32 %v17, 1",
+          "  %v19 = zext i32 %v18 to i64"
+        ],
+        "phi_ir": [
+          "  %s13_r6 = phi i64 [ %s17_r6, %s17 ], [ %s17_r6, %s24 ]",
+          "  %s13_r7 = phi i64 [ %s17_r7, %s17 ], [ %s17_r7, %s24 ]",
+          "  %s13_r8 = phi i64 [ %s17_r8, %s17 ], [ %s17_r8, %s24 ]",
+          "  %s13_r10 = phi ptr [ %s17_r10, %s17 ], [ %s17_r10, %s24 ]"
+        ],
+        "slot": 13
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 8,
+          "extra": 0,
+          "index": 13,
+          "op": "Add",
+          "src": {
+            "Imm": 1
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g25",
+        "g26",
+        "g27",
+        "g54",
+        "g55",
+        "g56",
+        "g57"
+      ],
+      "ir": [
+        "%v17",
+        "%v18",
+        "%v19",
+        "%s13_r6",
+        "%s13_r7",
+        "%s13_r8",
+        "%s13_r10"
+      ],
+      "offset": 104,
+      "slot": 13
+    },
+    {
+      "bytes": "ae78020000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v19",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s13_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s13_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v19",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s13_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v20 = trunc i64 %v19 to i32",
+          "  %v21 = trunc i64 %s13_r7 to i32",
+          "  %v22 = icmp ult i32 %v20, %v21",
+          "  br i1 %v22, label %s17, label %s15"
+        ],
+        "phi_ir": [],
+        "slot": 14,
+        "source_block": "s13",
+        "source_successors": [
+          17,
+          15
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Jlt",
+          "dst": 8,
+          "index": 14,
+          "off": 2,
+          "src": {
+            "Reg": 7
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g28",
+        "g29",
+        "g30",
+        "g31"
+      ],
+      "ir": [
+        "%v20",
+        "%v21",
+        "%v22"
+      ],
+      "offset": 112,
+      "slot": 14
+    },
+    {
+      "bytes": "bc60000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v25",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s15_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s15_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v23 = trunc i64 0 to i32",
+          "  %v24 = trunc i64 %s15_r6 to i32",
+          "  %v25 = zext i32 %v24 to i64"
+        ],
+        "phi_ir": [
+          "  %s15_r6 = phi i64 [ 0, %s0 ], [ 2, %s9 ], [ %s13_r6, %s13 ]"
+        ],
+        "slot": 15
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 0,
+          "extra": 0,
+          "index": 15,
+          "op": "Mov",
+          "src": {
+            "Reg": 6
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g32",
+        "g33",
+        "g34",
+        "g58"
+      ],
+      "ir": [
+        "%v23",
+        "%v24",
+        "%v25",
+        "%s15_r6"
+      ],
+      "offset": 120,
+      "slot": 15
+    },
+    {
+      "bytes": "9500000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v25",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s15_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v25",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s15_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R7"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  ret i64 %v25"
+        ],
+        "phi_ir": [],
+        "slot": 16,
+        "source_block": "s15",
+        "source_successors": []
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Exit",
+          "dst": 0,
+          "index": 16,
+          "off": 0,
+          "src": {
+            "Imm": 0
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g35"
+      ],
+      "ir": [],
+      "offset": 128,
+      "slot": 16
+    },
+    {
+      "bytes": "638afcff00000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v26 = gep ptr %s17_r10, 1 x i64 -4",
+          "  %v27 = trunc i64 %s17_r8 to i32",
+          "  store i32 %v27, ptr %v26, align 4"
+        ],
+        "phi_ir": [
+          "  %s17_r6 = phi i64 [ 2, %s11 ], [ %s13_r6, %s13 ]",
+          "  %s17_r7 = phi i64 [ %s9_r7, %s11 ], [ %s13_r7, %s13 ]",
+          "  %s17_r8 = phi i64 [ 0, %s11 ], [ %v19, %s13 ]",
+          "  %s17_r10 = phi ptr [ %s9_r10, %s11 ], [ %s13_r10, %s13 ]"
+        ],
+        "slot": 17
+      },
+      "decoded": {
+        "Store": {
+          "base": 10,
+          "index": 17,
+          "off": -4,
+          "size": "Word",
+          "src": {
+            "Reg": 8
+          }
+        }
+      },
+      "generated_instruction_ids": [
+        "g36",
+        "g37",
+        "g38",
+        "g59",
+        "g60",
+        "g61",
+        "g62"
+      ],
+      "ir": [
+        "%v26",
+        "%v27",
+        "%s17_r6",
+        "%s17_r7",
+        "%s17_r8",
+        "%s17_r10"
+      ],
+      "offset": 136,
+      "slot": 17
+    },
+    {
+      "bytes": "bfa2000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [],
+        "phi_ir": [],
+        "slot": 18
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 2,
+          "extra": 0,
+          "index": 18,
+          "op": "Mov",
+          "src": {
+            "Reg": 10
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [],
+      "ir": [],
+      "offset": 144,
+      "slot": 18
+    },
+    {
+      "bytes": "07020000fcffffff",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%v28",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v28 = gep ptr %s17_r10, 1 x i64 -4"
+        ],
+        "phi_ir": [],
+        "slot": 19
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 2,
+          "extra": 0,
+          "index": 19,
+          "op": "Add",
+          "src": {
+            "Imm": -4
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g39"
+      ],
+      "ir": [
+        "%v28"
+      ],
+      "offset": 152,
+      "slot": 19
+    },
+    {
+      "bytes": "18010000000000000000000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Map",
+            "operand": "%map_counters",
+            "register": "R1"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%v28",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%v28",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [],
+        "phi_ir": [],
+        "slot": 20
+      },
+      "decoded": {
+        "Lddw": {
+          "dst": 1,
+          "imm": 0,
+          "index": 20,
+          "pseudo": 0
+        }
+      },
+      "generated_instruction_ids": [],
+      "ir": [],
+      "offset": 160,
+      "slot": 20
+    },
+    {
+      "bytes": "8500000001000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R0"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Map",
+            "operand": "%map_counters",
+            "register": "R1"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%v28",
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v29 = call ptr @bpf_map_lookup_elem(ptr %map_counters, ptr %v28)"
+        ],
+        "phi_ir": [],
+        "slot": 22
+      },
+      "decoded": {
+        "Call": {
+          "id": 1,
+          "index": 22
+        }
+      },
+      "generated_instruction_ids": [
+        "g40"
+      ],
+      "ir": [
+        "%v29"
+      ],
+      "offset": 176,
+      "slot": 22
+    },
+    {
+      "bytes": "1500f5ff00000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v30 = ptrtoint ptr %v29 to i64",
+          "  %v31 = icmp eq i64 %v30, 0",
+          "  br i1 %v31, label %s13, label %s24"
+        ],
+        "phi_ir": [],
+        "slot": 23,
+        "source_block": "s17",
+        "source_successors": [
+          13,
+          24
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Jeq",
+          "dst": 0,
+          "index": 23,
+          "off": -11,
+          "src": {
+            "Imm": 0
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g41",
+        "g42",
+        "g43"
+      ],
+      "ir": [
+        "%v30",
+        "%v31"
+      ],
+      "offset": 184,
+      "slot": 23
+    },
+    {
+      "bytes": "6101000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v33",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v32 = load i32, ptr %v29, align 4",
+          "  %v33 = zext i32 %v32 to i64"
+        ],
+        "phi_ir": [],
+        "slot": 24
+      },
+      "decoded": {
+        "Load": {
+          "base": 0,
+          "dst": 1,
+          "index": 24,
+          "off": 0,
+          "signed": false,
+          "size": "Word"
+        }
+      },
+      "generated_instruction_ids": [
+        "g44",
+        "g45"
+      ],
+      "ir": [
+        "%v32",
+        "%v33"
+      ],
+      "offset": 192,
+      "slot": 24
+    },
+    {
+      "bytes": "0401000001000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v36",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v33",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v34 = trunc i64 %v33 to i32",
+          "  %v35 = add i32 %v34, 1",
+          "  %v36 = zext i32 %v35 to i64"
+        ],
+        "phi_ir": [],
+        "slot": 25
+      },
+      "decoded": {
+        "Alu": {
+          "dst": 1,
+          "extra": 0,
+          "index": 25,
+          "op": "Add",
+          "src": {
+            "Imm": 1
+          },
+          "width": "W32"
+        }
+      },
+      "generated_instruction_ids": [
+        "g46",
+        "g47",
+        "g48"
+      ],
+      "ir": [
+        "%v34",
+        "%v35",
+        "%v36"
+      ],
+      "offset": 200,
+      "slot": 25
+    },
+    {
+      "bytes": "6310000000000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v36",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v36",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  %v37 = trunc i64 %v36 to i32",
+          "  store i32 %v37, ptr %v29, align 4"
+        ],
+        "phi_ir": [],
+        "slot": 26
+      },
+      "decoded": {
+        "Store": {
+          "base": 0,
+          "index": 26,
+          "off": 0,
+          "size": "Word",
+          "src": {
+            "Reg": 1
+          }
+        }
+      },
+      "generated_instruction_ids": [
+        "g49",
+        "g50"
+      ],
+      "ir": [
+        "%v37"
+      ],
+      "offset": 208,
+      "slot": 26
+    },
+    {
+      "bytes": "0500f1ff00000000",
+      "checkpoint": {
+        "after": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v36",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "before": [
+          {
+            "ir_type": "ptr",
+            "kind": "MapVal",
+            "operand": "%v29",
+            "register": "R0"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%v36",
+            "register": "R1"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R2"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R3"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R4"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R5"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r6",
+            "register": "R6"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r7",
+            "register": "R7"
+          },
+          {
+            "ir_type": "i64",
+            "kind": "scalar",
+            "operand": "%s17_r8",
+            "register": "R8"
+          },
+          {
+            "ir_type": null,
+            "kind": "uninitialized",
+            "operand": null,
+            "register": "R9"
+          },
+          {
+            "ir_type": "ptr",
+            "kind": "Stack",
+            "operand": "%s17_r10",
+            "register": "R10"
+          }
+        ],
+        "generated_ir": [
+          "  br label %s13"
+        ],
+        "phi_ir": [],
+        "slot": 27,
+        "source_block": "s24",
+        "source_successors": [
+          13
+        ]
+      },
+      "decoded": {
+        "Jmp": {
+          "cond": "Ja",
+          "dst": 0,
+          "index": 27,
+          "off": -15,
+          "src": {
+            "Imm": 0
+          },
+          "width": "W64"
+        }
+      },
+      "generated_instruction_ids": [
+        "g51"
+      ],
+      "ir": [],
+      "offset": 216,
+      "slot": 27
+    }
+  ],
+  "origin_revision": 2,
+  "prologue_ir": [
+    "%stack",
+    "%fp"
+  ],
+  "schema": "classifier-alive-origin-v1",
+  "section": "xdp",
+  "source_cfg_blocks": [
+    {
+      "slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "start": 0
+    },
+    {
+      "slots": [
+        6,
+        7
+      ],
+      "start": 6
+    },
+    {
+      "slots": [
+        8
+      ],
+      "start": 8
+    },
+    {
+      "slots": [
+        9,
+        10
+      ],
+      "start": 9
+    },
+    {
+      "slots": [
+        11,
+        12
+      ],
+      "start": 11
+    },
+    {
+      "slots": [
+        13,
+        14
+      ],
+      "start": 13
+    },
+    {
+      "slots": [
+        15,
+        16
+      ],
+      "start": 15
+    },
+    {
+      "slots": [
+        17,
+        18,
+        19,
+        20,
+        22,
+        23
+      ],
+      "start": 17
+    },
+    {
+      "slots": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "start": 24
+    }
+  ],
+  "source_cfg_edges": [
+    [
+      0,
+      15
+    ],
+    [
+      0,
+      6
+    ],
+    [
+      6,
+      9
+    ],
+    [
+      6,
+      8
+    ],
+    [
+      8,
+      9
+    ],
+    [
+      9,
+      15
+    ],
+    [
+      9,
+      11
+    ],
+    [
+      11,
+      17
+    ],
+    [
+      13,
+      17
+    ],
+    [
+      13,
+      15
+    ],
+    [
+      17,
+      13
+    ],
+    [
+      17,
+      24
+    ],
+    [
+      24,
+      13
+    ]
+  ],
+  "state_mapping": "incomplete",
+  "unmapped_state": [
+    "RAX",
+    "PC embedding",
+    "cstk",
+    "code_id",
+    "tail_call_count",
+    "memory embedding",
+    "events"
+  ]
+}

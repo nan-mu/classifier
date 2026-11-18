@@ -28,6 +28,7 @@ fn integers_and_truncated_packet_addresses_cannot_be_dereferenced() {
     assert!(lift(&scalar)
         .err()
         .unwrap()
+        .message
         .contains("not a dereferenceable pointer"));
     let truncated = program(&[
         instruction(0x61, 2, 1, 0, 0),
@@ -38,6 +39,7 @@ fn integers_and_truncated_packet_addresses_cannot_be_dereferenced() {
     assert!(lift(&truncated)
         .err()
         .unwrap()
+        .message
         .contains("not a dereferenceable pointer"));
 }
 
@@ -70,6 +72,7 @@ fn partial_overwrite_cannot_preserve_a_spilled_pointer() {
     assert!(lift(&func)
         .err()
         .unwrap()
+        .message
         .contains("incompatible pointer spill"));
 }
 
@@ -86,6 +89,7 @@ fn pointer_integer_join_is_rejected() {
     assert!(lift(&func)
         .err()
         .unwrap()
+        .message
         .contains("different value on another"));
 }
 
@@ -106,6 +110,7 @@ fn empty_or_unreachable_programs_return_errors() {
     assert!(lift(&program(&[]))
         .err()
         .unwrap()
+        .message
         .contains("no instructions"));
     let func = program(&[
         instruction(0xb7, 0, 0, 0, 0),
@@ -113,7 +118,7 @@ fn empty_or_unreachable_programs_return_errors() {
         instruction(0xb7, 0, 0, 0, 1),
         instruction(0x95, 0, 0, 0, 0),
     ]);
-    assert!(lift(&func).err().unwrap().contains("unreachable"));
+    assert!(lift(&func).err().unwrap().message.contains("unreachable"));
 }
 
 #[test]
@@ -150,5 +155,35 @@ fn distinct_map_symbols_cannot_share_a_sanitized_parameter() {
     let mut second = func.relocs[0].clone();
     second.symbol = "a_b".into();
     func.relocs.push(second);
-    assert!(lift(&func).err().unwrap().contains("share emitted name"));
+    assert!(lift(&func)
+        .err()
+        .unwrap()
+        .message
+        .contains("share emitted name"));
+}
+
+#[test]
+fn map_handle_cannot_be_used_as_lookup_key() {
+    let mut func = program(&[
+        instruction(0x18, 1, 0, 0, 0),
+        [0; 8],
+        instruction(0x18, 2, 0, 0, 0),
+        [0; 8],
+        instruction(0x85, 0, 0, 0, 1),
+        instruction(0x95, 0, 0, 0, 0),
+    ]);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../alive2/corpus/bpf/just_drop/bpf.o");
+    let source = ebpf_to_alive2::load_function(&std::fs::read(path).unwrap(), None).unwrap();
+    let mut first = source.relocs[0].clone();
+    first.slot = 0;
+    let mut second = first.clone();
+    second.slot = 2;
+    func.relocs = vec![first, second];
+    let error = lift(&func).err().unwrap();
+    assert!(error.message.contains("slot 4"), "{error}");
+    assert!(
+        error.message.contains("r2") && error.message.contains("dereferenceable"),
+        "{error}"
+    );
 }

@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "tooling/**"
+      - "alive2/**"
       - "lakefile.lean"
       - "lean-toolchain"
       - "src/**"
@@ -11,6 +12,7 @@ on:
   pull_request:
     paths:
       - "tooling/**"
+      - "alive2/**"
       - "lakefile.lean"
       - "lean-toolchain"
       - "src/**"
@@ -28,7 +30,7 @@ jobs:
         with:
           components: rustfmt
       - name: cargo fmt
-        run: cargo +nightly fmt --manifest-path tooling/Cargo.toml -p lean-binding -p server -- --check
+        run: cargo +nightly fmt --manifest-path tooling/Cargo.toml -p lean-binding -p server -p ebpf-to-alive2 -- --check
 
   clippy:
     runs-on: ubuntu-latest
@@ -45,6 +47,8 @@ jobs:
         run: |
           lean --version
           lake build
+      - name: compiler tests
+        run: cargo +nightly test --manifest-path tooling/Cargo.toml -p ebpf-to-alive2
       - name: cargo clippy
         run: |
           cargo +nightly clippy --manifest-path tooling/Cargo.toml --workspace --all-targets -- \

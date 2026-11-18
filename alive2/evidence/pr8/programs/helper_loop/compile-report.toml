@@ -1,0 +1,17 @@
+status = "converted"
+entry = "helper_loop"
+section = "xdp"
+instructions = 27
+loop = true
+elf_sha256 = "973a78d63dba1f7ab4b1d2246855f0c92b17d1f0d5d4372dc52308622872dcb9"
+alive_sha256 = "3699a7a4817afb1fa7db85d2820230ef854de30558b4841983c65ba61de5351d"
+origin_sha256 = "13affc3aff7a680caab0f3eb64021040c803a86b8c55e35688cb01ab222f4660"
+schema = "classifier-alive-origin-v1"
+compiler_version = "0.1.0"
+origin_revision = 2
+alive2_pin = "adacbd5180ccf95075e9867c4f0c259f59c9fef2"
+rocq_pin = "78d65a77592aae84b31f86385f8be4ab83b45ccb"
+model_proof = "not_proven"
+artifact_proof = "not_proven"
+source_view = "incomplete"
+implementation_proof = "not_proven"

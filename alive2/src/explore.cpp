@@ -142,13 +142,18 @@ struct Terms {
   ~Terms() { for (auto ast : retained) Z3_dec_ref(smt::ctx(), ast); }
 
   std::string add(Term term) {
+    static const std::set<std::string> commutative = {
+      "and", "or", "xor", "eq", "distinct", "bvadd", "bvmul",
+      "bvand", "bvor", "bvxor", "bvnand", "bvnor", "bvxnor"
+    };
+    if (commutative.contains(term.op)) std::sort(term.args.begin(), term.args.end());
     std::string key = "[" + json_string(term.op) + "," + json_string(term.sort_json) + "," + json_string(term.sort) + "," + std::to_string(term.width) + "," + json_string(term.digits) + "," + json_string(term.symbol) + "," + term.parameters + "," + json_string(term.op == "unsupported" ? term.display : "");
     for (auto &arg : term.args) key += "," + json_string(arg);
     key += "]";
     auto found = by_key.find(key);
     if (found != by_key.end())
       return found->second;
-    term.id = "t" + std::to_string(items.size());
+    term.id = "t" + sha256(key);
     by_key.emplace(key, term.id);
     items.push_back(std::move(term));
     return items.back().id;
@@ -184,8 +189,6 @@ struct Terms {
 
   std::string build_ast(Z3_ast ast) {
     Term term;
-    // The graph carries the DAG. Expanding each shared subexpression into a
-    // display tree can be exponential for symbolic memory.
     term.display = "";
     auto sort = Z3_get_sort(smt::ctx(), ast);
     auto kind = Z3_get_sort_kind(smt::ctx(), sort);
@@ -238,7 +241,6 @@ struct Terms {
       }
       term.parameters += "]";
     } else {
-      // Unhandled sorts remain explicit gaps.
       term.op = "unsupported";
       term.display = "native AST kind " + std::to_string(ast_kind) + ", sort " + std::to_string(kind);
       term.symbol = "unsupported-native-ast-" + std::to_string(Z3_get_ast_id(smt::ctx(), ast));
@@ -364,6 +366,8 @@ int main(int argc, char **argv) {
     std::string origin_json = "null";
     std::map<std::string, std::string> origin_definitions;
     std::map<std::string, std::vector<std::string>> origin_statements;
+    std::map<std::pair<std::string, std::string>, std::vector<std::string>> origin_block_statements;
+    std::map<int64_t, std::string> source_slots;
     auto trim = [](std::string text) {
       const auto begin = text.find_first_not_of(" \t\r\n");
       if (begin == std::string::npos) return std::string();
@@ -379,6 +383,10 @@ int main(int argc, char **argv) {
       if (!json_object_is_type(instructions, json_type_array)) throw std::runtime_error("ORIGIN_INVALID: instructions must be an array");
       for (size_t row = 0; row < json_object_array_length(instructions); ++row) {
         auto instruction = json_object_array_get_idx(instructions, row);
+        auto slot = explorer::field(instruction, "slot");
+        if (!json_object_is_type(slot, json_type_int) ||
+            !source_slots.emplace(json_object_get_int64(slot), json_object_to_json_string_ext(instruction, JSON_C_TO_STRING_PLAIN)).second)
+          throw std::runtime_error("ORIGIN_INVALID: duplicate/invalid source slot");
         auto definitions = explorer::field(instruction, "ir");
         if (!json_object_is_type(definitions, json_type_array)) throw std::runtime_error("ORIGIN_INVALID: ir must be an array");
         json_object *checkpoint = nullptr;
@@ -399,6 +407,20 @@ int main(int argc, char **argv) {
             throw std::runtime_error("ORIGIN_INVALID: duplicate/invalid SSA definition");
         }
       }
+      json_object *generated = nullptr;
+      if (json_object_object_get_ex(origin.get(), "generated_instructions", &generated)) {
+        if (!json_object_is_type(generated, json_type_array)) throw std::runtime_error("ORIGIN_INVALID: generated_instructions must be an array");
+        for (size_t index = 0; index < json_object_array_length(generated); ++index) {
+          auto record = json_object_array_get_idx(generated, index);
+          auto slot = explorer::field(record, "slot");
+          if (json_object_is_type(slot, json_type_null)) continue;
+          if (!json_object_is_type(slot, json_type_int) || !source_slots.contains(json_object_get_int64(slot)))
+            throw std::runtime_error("ORIGIN_INVALID: generated instruction source slot missing");
+          auto block = explorer::string_field(record, "block");
+          auto statement = trim(explorer::string_field(record, "text"));
+          origin_block_statements[{"%" + block, statement}].push_back(source_slots.at(json_object_get_int64(slot)));
+        }
+      }
       origin_json = "{\"ir_hash\":" + json_string(sha256(program_text)) + ",\"sha256\":" + json_string(sha256(origin_text)) +
         ",\"mapping_status\":\"instruction_only\",\"elf_hash_validation\":\"declared_only\",\"metadata\":" + json_object_to_json_string_ext(origin.get(), JSON_C_TO_STRING_PLAIN) + "}";
     }
@@ -406,8 +428,6 @@ int main(int argc, char **argv) {
     std::string fn_name = fn.getName();
     auto initialized = explorer::initialize(fn, initial.get());
     configure_alive_execution(fn);
-    // "symbolic" initial values denote defined, stable native inputs.
-    // Explicit undef/poison bindings are native constants and remain distinct.
     util::config::disable_undef_input = true;
     util::config::disable_poison_input = true;
     util::config::src_unroll_cnt = unroll;
@@ -427,7 +447,6 @@ int main(int argc, char **argv) {
     std::vector<std::string> instr_text;
     std::unordered_map<std::string, std::string> bb_first;
     std::unordered_map<std::string, std::string> bb_last;
-    std::map<std::string, const Instr *> bb_term;
     struct Jump { const BasicBlock *source, *destination; std::string kind, guard; };
     std::vector<Jump> jumps;
     std::string first_node;
@@ -528,6 +547,8 @@ int main(int argc, char **argv) {
         node.instr = iid;
         node.text = printed.str();
         if (auto it = origin_definitions.find(instr.getName()); it != origin_definitions.end()) node.origin = it->second;
+        else if (auto statement = origin_block_statements.find({bb->getName(), trim(printed.str())}); statement != origin_block_statements.end() && statement->second.size() == 1)
+          node.origin = statement->second.front();
         else if (auto statement = origin_statements.find(trim(printed.str())); statement != origin_statements.end() && statement->second.size() == 1)
           node.origin = statement->second.front();
         node.unroll = unroll_index(bb->getName());
@@ -563,11 +584,8 @@ int main(int argc, char **argv) {
         previous = node.id;
         bb_last[node.block] = node.id;
         if (auto *br = dynamic_cast<const Branch *>(&instr)) {
-          bb_term[node.block] = &instr;
           auto remember = [&](const BasicBlock &dst, const char *kind) {
             auto guard = state.getJumpCond(*bb, dst);
-            // Syntactically false is the only pruning performed. No solver
-            // query means no claim that another path is feasible/infeasible.
             if (!guard.isFalse()) jumps.push_back({bb, &dst, kind, terms.from_expr(guard)});
           };
           remember(br->getTrue(), br->getCond() ? "taken" : "step");
@@ -604,8 +622,6 @@ int main(int argc, char **argv) {
         sink.path = jump.guard;
         sink.term = truth;
         sink.definedness = jump.guard;
-        // A boundary is an observation of the actual predecessor state;
-        // never fabricate a zero/empty memory at the sink.
         const auto &predecessor = nodes.at(std::stoul(last->second.substr(1)));
         sink.memory = predecessor.memory;
         sink.preconditions = predecessor.preconditions;
@@ -695,6 +711,7 @@ int main(int argc, char **argv) {
         << ", \"gm\": {\"status\": \"unsupported\", \"reason\": \"single thread only\"}"
         << ", \"atom_bit\": {\"status\": \"unsupported\", \"reason\": \"single thread only\"}}},\n";
     out << "  \"terms\": [";
+    std::sort(terms.items.begin(), terms.items.end(), [](const Term &left, const Term &right) { return left.id < right.id; });
     for (size_t i = 0; i < terms.items.size(); ++i) {
       auto &term = terms.items[i];
       if (i)

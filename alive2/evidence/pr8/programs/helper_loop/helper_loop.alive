@@ -1,0 +1,91 @@
+; alive-file v1
+; alive2-pin adacbd5180ccf95075e9867c4f0c259f59c9fef2
+; rocq-pin 78d65a77592aae84b31f86385f8be4ab83b45ccb
+define i64 @helper_loop(ptr %ctx, ptr %pkt, i64 %pkt_base, ptr %map_counters) memory(argmem: readwrite, inaccessiblemem: readwrite) {
+declare ptr @bpf_map_lookup_elem(ptr, ptr) memory(argmem: read, inaccessiblemem: readwrite)
+
+
+entry:
+  %stack = alloca i64 512, align 8
+  %fp = gep ptr %stack, 1 x i64 512
+  br label %s0
+
+s0:
+  %v0 = gep ptr %ctx, 1 x i64 4
+  %v1 = load i32, ptr %v0, align 4
+  %v2 = zext i32 %v1 to i64
+  %v3 = load i32, ptr %ctx, align 4
+  %v4 = zext i32 %v3 to i64
+  %v5 = add i64 %v4, 4
+  %v6 = icmp ugt i64 %v5, %v2
+  br i1 %v6, label %s15, label %s6
+
+s6:
+  %v7 = sub i64 %v4, %pkt_base
+  %v8 = gep ptr %pkt, 1 x i64 %v7
+  %v9 = load i32, ptr %v8, align 4
+  %v10 = zext i32 %v9 to i64
+  %v11 = trunc i64 %v10 to i32
+  %v12 = trunc i64 8 to i32
+  %v13 = icmp ult i32 %v11, %v12
+  br i1 %v13, label %s9, label %s8
+
+s8:
+  br label %s9
+
+s9:
+  %s9_r7 = phi i64 [ %v10, %s6 ], [ 8, %s8 ]
+  %s9_r10 = phi ptr [ %fp, %s6 ], [ %fp, %s8 ]
+  %v14 = trunc i64 %s9_r7 to i32
+  %v15 = trunc i64 0 to i32
+  %v16 = icmp eq i32 %v14, %v15
+  br i1 %v16, label %s15, label %s11
+
+s11:
+  br label %s17
+
+s13:
+  %s13_r6 = phi i64 [ %s17_r6, %s17 ], [ %s17_r6, %s24 ]
+  %s13_r7 = phi i64 [ %s17_r7, %s17 ], [ %s17_r7, %s24 ]
+  %s13_r8 = phi i64 [ %s17_r8, %s17 ], [ %s17_r8, %s24 ]
+  %s13_r10 = phi ptr [ %s17_r10, %s17 ], [ %s17_r10, %s24 ]
+  %v17 = trunc i64 %s13_r8 to i32
+  %v18 = add i32 %v17, 1
+  %v19 = zext i32 %v18 to i64
+  %v20 = trunc i64 %v19 to i32
+  %v21 = trunc i64 %s13_r7 to i32
+  %v22 = icmp ult i32 %v20, %v21
+  br i1 %v22, label %s17, label %s15
+
+s15:
+  %s15_r6 = phi i64 [ 0, %s0 ], [ 2, %s9 ], [ %s13_r6, %s13 ]
+  %v23 = trunc i64 0 to i32
+  %v24 = trunc i64 %s15_r6 to i32
+  %v25 = zext i32 %v24 to i64
+  ret i64 %v25
+
+s17:
+  %s17_r6 = phi i64 [ 2, %s11 ], [ %s13_r6, %s13 ]
+  %s17_r7 = phi i64 [ %s9_r7, %s11 ], [ %s13_r7, %s13 ]
+  %s17_r8 = phi i64 [ 0, %s11 ], [ %v19, %s13 ]
+  %s17_r10 = phi ptr [ %s9_r10, %s11 ], [ %s13_r10, %s13 ]
+  %v26 = gep ptr %s17_r10, 1 x i64 -4
+  %v27 = trunc i64 %s17_r8 to i32
+  store i32 %v27, ptr %v26, align 4
+  %v28 = gep ptr %s17_r10, 1 x i64 -4
+  %v29 = call ptr @bpf_map_lookup_elem(ptr %map_counters, ptr %v28)
+  %v30 = ptrtoint ptr %v29 to i64
+  %v31 = icmp eq i64 %v30, 0
+  br i1 %v31, label %s13, label %s24
+
+s24:
+  %v32 = load i32, ptr %v29, align 4
+  %v33 = zext i32 %v32 to i64
+  %v34 = trunc i64 %v33 to i32
+  %v35 = add i32 %v34, 1
+  %v36 = zext i32 %v35 to i64
+  %v37 = trunc i64 %v36 to i32
+  store i32 %v37, ptr %v29, align 4
+  br label %s13
+
+}

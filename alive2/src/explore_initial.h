@@ -4,6 +4,7 @@
 #include "ir/function.h"
 #include "ir/value.h"
 #include <json-c/json.h>
+#include <charconv>
 #include <map>
 #include <memory>
 #include <set>
@@ -42,8 +43,6 @@ inline void keys(json_object *object, const std::set<std::string> &allowed) {
     if (!allowed.contains(key)) throw std::runtime_error(std::string("INITIAL_STATE_UNSUPPORTED: field ") + key);
   }
 }
-// Specialize uses through Alive2's own RAUW API. No instruction semantics are
-// evaluated here. Constants, undef and poison are still evaluated by State.
 inline std::map<const IR::Value *, IR::Value *> initialize(IR::Function &fn, json_object *root) {
   keys(root, {"inputs"});
   auto inputs = field(root, "inputs");
@@ -69,10 +68,18 @@ inline std::map<const IR::Value *, IR::Value *> initialize(IR::Function &fn, jso
       auto digits = string_field(row, "value");
       if (digits.empty()) throw std::runtime_error("INITIAL_STATE_INVALID: empty integer");
       bool negative = digits[0] == '-';
-      size_t used = 0;
-      uint64_t number = negative ? static_cast<uint64_t>(std::stoll(digits, &used)) : std::stoull(digits, &used);
-      if (used != digits.size() || digits.find_first_not_of("0123456789", negative ? 1 : 0) != std::string::npos)
+      if (digits.size() == (negative ? 1u : 0u) || digits.find_first_not_of("0123456789", negative ? 1 : 0) != std::string::npos)
         throw std::runtime_error("INITIAL_STATE_INVALID: decimal integer required");
+      uint64_t number = 0;
+      if (negative) {
+        int64_t signed_number = 0;
+        auto result = std::from_chars(digits.data(), digits.data() + digits.size(), signed_number);
+        if (result.ec != std::errc()) throw std::runtime_error("INITIAL_STATE_INVALID: integer outside input width");
+        number = static_cast<uint64_t>(signed_number);
+      } else {
+        auto result = std::from_chars(digits.data(), digits.data() + digits.size(), number);
+        if (result.ec != std::errc()) throw std::runtime_error("INITIAL_STATE_INVALID: integer outside input width");
+      }
       auto width = input.getType().bits();
       if (width < 64 && (negative ? static_cast<int64_t>(number) < -(int64_t(1) << (width - 1)) : number >= (uint64_t(1) << width)))
         throw std::runtime_error("INITIAL_STATE_INVALID: integer outside input width");

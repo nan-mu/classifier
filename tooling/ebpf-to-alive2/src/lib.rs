@@ -1,3 +1,5 @@
+mod error;
+pub use error::{CompileError, Status};
 mod decode;
 mod elf;
 mod lift;
