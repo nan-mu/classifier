@@ -62,6 +62,7 @@ fn inspect(bytes: &[u8]) -> Result<Value, &'static str> {
         .collect();
 
     Ok(json!({
+        "inspector_version": env!("CARGO_PKG_VERSION"),
         "name": container.name.as_str(),
         "slot_address": container.slot_address,
         "helper_address": container.helper_address,

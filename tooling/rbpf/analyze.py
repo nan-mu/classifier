@@ -1,7 +1,7 @@
 """Inspect one rBPF Compact ELF, or inventory and analyze a release."""
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path, PureWindowsPath
@@ -41,6 +41,7 @@ class Program:
     image_digest: str
     maps: tuple
     instructions: dict
+    inspector: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, data, inspector, expected=None):
@@ -54,7 +55,10 @@ class Program:
             raise ValueError(f"container program is {info['name']!r}, expected {expected!r}")
         maps = tuple(Map(**entry) for entry in info["maps"])
         image = bytes(info["image"])
-        return cls(info["name"], sha(data), sha(image), maps, decode(image, len(maps)))
+        with inspector.open("rb") as binary:
+            build = {"version": info["inspector_version"],
+                     "sha256": hashlib.file_digest(binary, "sha256").hexdigest()}
+        return cls(info["name"], sha(data), sha(image), maps, decode(image, len(maps)), build)
 
 
 class Archive:
@@ -127,8 +131,8 @@ def indexed_container(archive, program):
     if not isinstance(modes, list) or any(not isinstance(row, dict) for row in modes):
         raise ValueError("mode must be an array of tables")
     names = [row.get("name") for row in modes]
-    if any(name not in ("llvm-aot", "ebpf", "jit") for name in names) or len(set(names)) != len(names):
-        raise ValueError("invalid or duplicate deployment mode")
+    if any(not isinstance(name, str) or not name for name in names) or names.count("ebpf") > 1:
+        raise ValueError("invalid deployment mode or duplicate ebpf mode")
     evidence = {"index_sha256": sha(index_bytes), "modes": names}
     for row in modes:
         if row["name"] == "ebpf":
@@ -268,6 +272,7 @@ def main():
     comparison.add_argument("--specs", type=Path, required=True)
     comparison.set_defaults(run=offline)
     args = parser.parse_args()
+    args.inspector = args.inspector.resolve()
     if min(args.max_steps, args.max_paths, args.timeout_ms) < 1 or args.max_back_edges < 0:
         parser.error("limits must be positive (max-back-edges may be zero)")
     args.limits = Limits(args.max_steps, args.max_back_edges, args.max_paths, args.timeout_ms)

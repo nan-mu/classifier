@@ -28,7 +28,7 @@ jobs:
         with:
           components: rustfmt
       - name: cargo fmt
-        run: cargo +nightly fmt --manifest-path tooling/Cargo.toml -p lean-binding -p server -p classifier-rbpf -- --check
+        run: cargo +nightly fmt --manifest-path tooling/Cargo.toml -p lean-binding -p server -p classifier-rbpf -p xpost-elf -- --check
 
   clippy:
     runs-on: ubuntu-latest

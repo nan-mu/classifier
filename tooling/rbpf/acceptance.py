@@ -1,6 +1,7 @@
 """Run and check the v0.1.0 release and offline evidence through the CLI."""
 
 import argparse
+from collections import Counter
 import json
 from pathlib import Path
 import shutil
@@ -11,7 +12,7 @@ import tempfile
 
 from analysis import json_file
 from analyze import Archive, MEMBER_LIMIT, sha
-from make_specs import EXB2
+from make_specs import EXB2, UPSTREAM
 
 
 HERE = Path(__file__).resolve().parent
@@ -40,7 +41,7 @@ def inventory(assets, digests, out, specs=None):
     return read(out / "summary.json")
 
 
-def partial_release(assets, containers, specs, out):
+def partial_release(assets, containers, specs, out, upstream):
     work = out / "partial-fixtures"
     work.mkdir()
     seven_zip = shutil.which("7z")
@@ -52,8 +53,7 @@ def partial_release(assets, containers, specs, out):
         asset = f"{program}.7z"
         original = Archive(assets / asset, seven_zip)
         with tempfile.TemporaryDirectory(prefix="classifier-release-fixture-") as temp:
-            staging = Path(temp)
-            index = original.read("index.toml", 64 * 1024)
+            staging = Path(temp) / program
             source, bpf = f"{program}.c", f"objects/{program}_bpf.o"
             for name in (source, bpf):
                 target = staging / name
@@ -74,10 +74,21 @@ def partial_release(assets, containers, specs, out):
             target = staging / relative
             target.parent.mkdir()
             target.write_bytes(data)
-            row = (f'\n[[mode]]\nname = "ebpf"\nrole = "xpost_container"\n'
-                   f'format = "xpost-compact-elf-v0"\n'
-                   f'elf = {{ path = "{relative}", size_bytes = {len(data)}, sha256 = "{sha(data)}" }}\n')
-            (staging / "index.toml").write_bytes(index + row.encode())
+            subprocess.run([sys.executable, "-c", """
+import sys
+from pathlib import Path
+from layout import load_index, make_index, write_index
+
+root = Path(sys.argv[1])
+write_index(root / "index.toml", make_index(root, root.name, ("ebpf",)))
+if sys.argv[2] == "valid":
+    load_index(root, root.name)
+""", staging, shape], cwd=upstream / "make", check=True)
+            if shape == "valid":
+                # The pinned layout generated and verified the ebpf row above.
+                # Unknown modes must not affect selection of that same row.
+                with (staging / "index.toml").open("a") as index:
+                    index.write('\n[[mode]]\nname = "future-mode"\n')
             subprocess.run([seven_zip, "a", "-bd", work / asset, "index.toml", source, bpf, relative],
                            cwd=staging, stdout=subprocess.DEVNULL, check=True)
         digests[asset] = "sha256:" + sha((work / asset).read_bytes())
@@ -98,7 +109,8 @@ def partial_release(assets, containers, specs, out):
             "indexed just_tx did not replay both vectors")
 
 
-def verify_offline(containers, specs, out):
+def verify_offline(evidence, specs, out):
+    containers = evidence / "containers"
     offline = out / "offline"
     cli("offline", "--containers", containers, "--specs", specs, "--out", offline)
     report = read(offline / "summary.json")
@@ -106,10 +118,15 @@ def verify_offline(containers, specs, out):
     require(statuses == dict.fromkeys(EXB2 + NETWORK, "analyzed"), f"offline inventory: {statuses}")
     vector_count = 0
     for row in report["programs"]:
-        passed, total = (row["concrete_counts"][key] for key in ("passed", "total"))
-        require(passed == total and total > 0, f"failed concrete vector: {row}")
-        vector_count += total
         name = row["program"]
+        expected_vectors = sorted(item.parent.name for item in
+                                  (evidence / "vectors" / name).glob("*/expected.json"))
+        program = read(offline / row["result"])
+        vectors = sorted((item["id"], item["verdict"]) for item in program["vectors"])
+        require(vectors == [(item, "holds") for item in expected_vectors]
+                and row["concrete_counts"] == dict.fromkeys(("passed", "total"), len(vectors)),
+                f"failed or missing concrete vector for {name}: {vectors}")
+        vector_count += len(expected_vectors)
         expected = {case["id"]: "holds" for case in read(specs / f"{name}.json")["cases"]}
         if negative := NEGATIVES.get(name):
             expected[negative] = "counterexample"
@@ -138,7 +155,13 @@ def verify_offline(containers, specs, out):
         run = out / f"budget-{name}"
         cli("analyze", containers / name / "ebpf.elf", "--engine", "ebpf",
             "--spec", path, "--max-back-edges", "0", "--out", run)
-        report = read(run / "cases/magic-byte/result.json")
+        summary = read(run / "result.json")
+        case_directory = run / "cases/magic-byte"
+        report = read(case_directory / "result.json")
+        require(summary["program"] == name and summary["limits"]["max_back_edges"] == 0
+                and report["domain"]["status"] == "sat" and report.get("precondition") is not None
+                and (case_directory / report["domain"]["smtlib"]).is_file()
+                and read(run / "spec.json") == read(path), f"{name}: lost budget or domain metadata")
         require(report["verdict"] == "undetermined" and report["coverage"]["status"] == "sat",
                 f"{name}: loop budget must leave uncovered input")
         require([gap["kind"] for gap in report["unresolved"]] == ["loop_budget"]
@@ -146,26 +169,53 @@ def verify_offline(containers, specs, out):
                 f"{name}: loop budget lost the valid-magic input")
 
 
+def verify_smt(out, solver):
+    counts = Counter()
+    for result in sorted(out.rglob("result.json")):
+        report = read(result)
+        for key in ("domain", "coverage", "spec_coverage", "comparison"):
+            query = report.get(key)
+            if not isinstance(query, dict):
+                continue
+            path = result.with_name(query["smtlib"])
+            status = subprocess.check_output([solver, path], timeout=30, text=True).strip()
+            require(status == query["status"], f"{path}: expected {query['status']}, got {status}")
+            counts[status] += 1
+    require(counts, "no queries were replayed")
+    return dict(counts)
+
+
+def version(*command):
+    return subprocess.check_output(command, timeout=15, text=True).splitlines()[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True, help="extracted taskbook ZIP")
     parser.add_argument("--upstream", type=Path, required=True, help="pinned libbpf-mcu checkout")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--z3", help="also replay all saved SMT-LIB with this executable")
     args = parser.parse_args()
     bundle = args.bundle.resolve()
     evidence, assets = bundle / "evidence", bundle / "release/v0.1.0"
     out = args.out.resolve()
     out.mkdir(parents=True)
+    upstream = args.upstream.resolve()
     report = inventory(assets, evidence / "digests.json", out / "release")
     expected = dict.fromkeys(EXB2 + NETWORK, "missing_rbpf_container")
     require({row["program"]: row["status"] for row in report["programs"]} == expected
             and not report["unexpected_assets"], "unexpected v0.1.0 release inventory")
     specs = out / "specs"
     subprocess.run([sys.executable, HERE / "make_specs.py", "--evidence", evidence,
-                    "--upstream", args.upstream, "--out", specs], check=True)
-    containers = evidence / "containers"
-    partial_release(assets, containers, specs, out)
-    verify_offline(containers, specs, out)
+                    "--upstream", upstream, "--out", specs], check=True)
+    partial_release(assets, evidence / "containers", specs, out, upstream)
+    verify_offline(evidence, specs, out)
+    provenance = {"upstream_commit": UPSTREAM, "cc": version("cc", "--version"),
+                  "host_compile_flags": ["-O2", "-shared", "-fPIC", "-DEB_HOST_ENTRY"]}
+    if args.z3:
+        provenance["smt_replay"] = {"solver": version(args.z3, "--version"),
+                                    "counts": verify_smt(out, args.z3)}
+    json_file(out / "acceptance.json", provenance)
     print("Acceptance passed: 12 release assets, 12 offline programs, 23 vectors, "
           "3 counterexample replays, 7 loop-budget checks.")
 

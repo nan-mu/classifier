@@ -352,9 +352,12 @@ class Machine:
     def alu(self, state, insn, bits):
         op = insn.code & 0xf0
         if op == 0xd0:
+            # RFC 9669 §4.2: ALU selects byte order. ALU64 always swaps,
+            # and its opcode source bit is reserved.
             width = insn.imm
-            if width not in (16, 32, 64):
-                raise Gap("unsupported_instruction", f"invalid endian width {width}")
+            if (width not in (16, 32, 64) or insn.src or insn.offset
+                    or insn.code == 0xdf):
+                raise Gap("unsupported_instruction", "invalid END encoding")
             value = resize(state.register(insn.dst), width)
             if insn.code & 8 or bits == 64:
                 value = z3.Concat(*octets(value, width // 8))

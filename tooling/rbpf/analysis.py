@@ -398,8 +398,10 @@ def analyze_program(program, document, out, limits, selection):
     report = {"program": program.name, "container_sha256": program.digest,
               "engine": "ebpf", "engine_selection": selection,
               "image_sha256": program.image_digest, "maps": [asdict(m) for m in program.maps],
+              "opcodes": sorted({f"0x{insn.code:02x}" for insn in program.instructions.values()}),
               "limits": asdict(limits), "tools": {"python": platform.python_version(),
-                                                  "z3": z3.get_version_string()},
+                                                  "z3": z3.get_version_string(),
+                                                  "inspector": program.inspector},
               "vectors": [], "cases": []}
     json_file(out / "spec.json", document)
     for group in ("vectors", "cases"):

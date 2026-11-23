@@ -39,7 +39,7 @@ py="$run/venv/bin/python"
 - `helpers` 声明有序调用，默认列表为空。每条记录含 `helper`、`map`、`key` 和 `present`。`key` 也可为 `{"packet_offset":26}`，表示从输入包读取一个描述符宽度的键。
 - `when` 可按 `length`、`bytes`、map 的 `present`（条目含 `map`、`key`、`is`）限定期望。`not` 对嵌套条件取反，`all` 对条件列表取合取。每条适用期望都必须满足。遗漏的输入由规格覆盖查询报告。省略 `expect` 的用例只检查退出覆盖。`vectors` 要求固定输入及期望，单独统计通过数。
 
-程序目录保存 `spec.json`、容器与镜像摘要、map 布局、工具版本和预算。每个用例保存 `domain.smt2`、`uncovered.smt2` 及适用的 `spec-uncovered.smt2` 和 `negated-spec.smt2`。可直接用 `z3 <文件>` 复算。域非空、所有输入均有正常退出、期望覆盖全域且否定式 UNSAT 时，用例才报告 `holds`。
+程序目录保存 `spec.json`、容器与镜像摘要、指令操作码清单、map 布局、校验器版本及可执行文件摘要、Python/Z3 版本和预算。每个用例保存 `domain.smt2`、`uncovered.smt2` 及适用的 `spec-uncovered.smt2` 和 `negated-spec.smt2`。可直接用 `z3 <文件>` 复算。域非空、所有输入均有正常退出、期望覆盖全域且否定式 UNSAT 时，用例才报告 `holds`。
 
 `result.json` 含退出条件、动作、有效包范围、字节、context 和稀疏 map 终态，以及按执行顺序记录的写入和 helper 事件。指令位置 `pc` 从镜像首个 8 字节槽开始编号。`packet.origin` 标出所列字节的首个偏移。符号范围通过 `packet_range` 给出。反例目录内的 `counterexample.json` 可直接作为 `--spec` 重放。
 
@@ -63,11 +63,11 @@ py="$run/venv/bin/python"
 unzip /tmp/classifier-release-elf-taskbook.zip -d "$run/bundle"
 git clone --depth 1 --branch v0.1.0 git@github.com:nan-mu/libbpf-mcu.git "$run/libbpf-mcu"
 "$py" tooling/rbpf/acceptance.py --bundle "$run/bundle" \
-  --upstream "$run/libbpf-mcu" --out "$run/acceptance"
+  --upstream "$run/libbpf-mcu" --out "$run/acceptance" --z3 z3
 "$py" -m unittest discover -s tooling/rbpf -v
 ```
 
-发布清点和离线分析分别写 `release/summary.json` 及 `offline/summary.json`。例如，下列查询对应 case_mark 的长度/版本字节域、firewall 的错误计数规格以及 copy 的零回边预算。
+发布清点和离线分析分别写 `release/summary.json` 及 `offline/summary.json`。`acceptance.json` 记录 EXB2 host 编译器、编译参数和上游提交，指定 `--z3` 时也记录外部求解器版本与复算结果。下列查询对应 case_mark 的长度/版本字节域、firewall 的错误计数规格以及 copy 的零回边预算。
 
 ```sh
 z3 "$run/acceptance/offline/case_mark/cases/version/uncovered.smt2"

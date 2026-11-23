@@ -92,6 +92,40 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(path["packet"], {"hex": "bbcc", "origin": 1})
         self.assertEqual(path["events"][0]["resource"], "context")
 
+    def test_end_uses_the_class_specific_source_bit(self):
+        load = [instruction(0x18, dst=2, imm=0x05060708), instruction(0, imm=0x01020304)]
+        finish = [instruction(0x61, dst=3, src=1), instruction(0x7b, dst=3, src=2),
+                  instruction(0xb4, imm=2), instruction(0x95)]
+        domain = {"packet_hex": "00" * 8}
+        for opcode in (0xd4, 0xdc, 0xd7):
+            for width in (16, 32, 64):
+                with self.subTest(opcode=opcode, width=width):
+                    data = bytes.fromhex("0807060504030201")[:width // 8]
+                    if opcode in (0xdc, 0xd7):
+                        data = data[::-1]
+                    expected = [{"action": 2, "bytes": dict(zip(map(str, range(len(data))), data))}]
+                    report = run(load + [instruction(opcode, dst=2, imm=width)] + finish,
+                                 domain, expected)
+                    self.assertEqual(report["verdict"], "holds")
+
+        for encoded in (instruction(0xdf, dst=2, imm=64), instruction(0xd4, dst=2, imm=8),
+                        instruction(0xd4, dst=2, src=1, imm=32),
+                        instruction(0xd7, dst=2, offset=1, imm=32)):
+            with self.subTest(encoded=encoded):
+                report = run(load + [encoded] + finish, domain, [{"action": 2}])
+                self.assertEqual(report["verdict"], "undetermined")
+                self.assertEqual(report["unresolved"][0]["kind"], "unsupported_instruction")
+
+    def test_signed_alu_and_jump(self):
+        for opcode, expected in ((0x34, -4), (0x94, -1)):
+            with self.subTest(opcode=opcode):
+                report = run([
+                    instruction(0xb4, imm=-13), instruction(opcode, offset=1, imm=3),
+                    instruction(0xc6, offset=1),  # JSLT32 r0, 0
+                    instruction(0xb4, imm=0), instruction(0x95),
+                ], {"packet_hex": ""}, [{"action": expected & 0xffffffff}])
+                self.assertEqual(report["verdict"], "holds")
+
 
 if __name__ == "__main__":
     unittest.main()
