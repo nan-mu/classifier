@@ -76,23 +76,34 @@ pub fn build_container(
     metadata: &ImageMetadataV0,
     max_image_len: Option<u32>,
 ) -> Result<heapless::Vec<u8, MAX_CONTAINER_SIZE>, EncodeError> {
+    build_container_with_limit(image, metadata, max_image_len)
+}
+
+/// Encode the same wire format using the caller's complete file size limit.
+pub fn build_container_with_limit<const LIMIT: usize>(
+    image: &[u8],
+    metadata: &ImageMetadataV0,
+    max_image_len: Option<u32>,
+) -> Result<heapless::Vec<u8, LIMIT>, EncodeError> {
     if image.is_empty() {
         return Err(EncodeError::EmptyImage);
     }
     if let Some(max) = max_image_len
-        && (image.len() as u32) > max
+        && image.len() > max as usize
     {
         return Err(EncodeError::ImageExceedsSlot);
     }
 
     let meta = encode_metadata(metadata)?;
     let image_off = META_OFFSET + meta.len();
-    let names_off = image_off + image.len();
-    let digest_off = align4(names_off + SECTION_NAMES.len());
-    let file_len = digest_off
-        .checked_add(IMAGE_DIGEST_SIZE)
+    let names_off = image_off
+        .checked_add(image.len())
         .ok_or(EncodeError::ContainerTooLarge)?;
-    if file_len > MAX_CONTAINER_SIZE {
+    let file_len = names_off
+        .checked_add(SECTION_NAMES.len() + IMAGE_DIGEST_SIZE + 3)
+        .map(|n| n & !3)
+        .ok_or(EncodeError::ContainerTooLarge)?;
+    if file_len > LIMIT || u32::try_from(file_len).is_err() {
         return Err(EncodeError::ContainerTooLarge);
     }
     let slot_end = (metadata.slot_address as u64)
@@ -102,7 +113,7 @@ pub fn build_container(
         return Err(EncodeError::ImageExtentOverflow);
     }
 
-    let mut out = heapless::Vec::<u8, MAX_CONTAINER_SIZE>::new();
+    let mut out = heapless::Vec::<u8, LIMIT>::new();
     push_ehdr(&mut out)?;
     push_shdr(&mut out, [0; 10])?;
     push_shdr(
@@ -286,7 +297,7 @@ fn push_cstring4(
     Ok(())
 }
 
-fn push_ehdr(out: &mut heapless::Vec<u8, MAX_CONTAINER_SIZE>) -> Result<(), EncodeError> {
+fn push_ehdr<const LIMIT: usize>(out: &mut heapless::Vec<u8, LIMIT>) -> Result<(), EncodeError> {
     // IDENT(16) + type=1 + machine=243 + version=1 + entry=0 + phoff=0
     // + shoff=52 + flags=1 + ehsize=52 + phentsize=0 + phnum=0
     // + shentsize=40 + shnum=4 + shstrndx=3
@@ -307,8 +318,8 @@ fn push_ehdr(out: &mut heapless::Vec<u8, MAX_CONTAINER_SIZE>) -> Result<(), Enco
     Ok(())
 }
 
-fn push_shdr(
-    out: &mut heapless::Vec<u8, MAX_CONTAINER_SIZE>,
+fn push_shdr<const LIMIT: usize>(
+    out: &mut heapless::Vec<u8, LIMIT>,
     fields: [u32; 10],
 ) -> Result<(), EncodeError> {
     for f in fields {
@@ -317,11 +328,17 @@ fn push_shdr(
     Ok(())
 }
 
-fn push_u16(out: &mut heapless::Vec<u8, MAX_CONTAINER_SIZE>, v: u16) -> Result<(), EncodeError> {
+fn push_u16<const LIMIT: usize>(
+    out: &mut heapless::Vec<u8, LIMIT>,
+    v: u16,
+) -> Result<(), EncodeError> {
     extend(out, &v.to_le_bytes())
 }
 
-fn push_u32(out: &mut heapless::Vec<u8, MAX_CONTAINER_SIZE>, v: u32) -> Result<(), EncodeError> {
+fn push_u32<const LIMIT: usize>(
+    out: &mut heapless::Vec<u8, LIMIT>,
+    v: u32,
+) -> Result<(), EncodeError> {
     extend(out, &v.to_le_bytes())
 }
 
@@ -346,8 +363,8 @@ fn push_u24le(out: &mut heapless::Vec<u8, MAX_META_SIZE>, v: u32) -> Result<(), 
     Ok(())
 }
 
-fn extend(
-    out: &mut heapless::Vec<u8, MAX_CONTAINER_SIZE>,
+fn extend<const LIMIT: usize>(
+    out: &mut heapless::Vec<u8, LIMIT>,
     bytes: &[u8],
 ) -> Result<(), EncodeError> {
     out.extend_from_slice(bytes)

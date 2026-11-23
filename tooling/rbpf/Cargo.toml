@@ -1,0 +1,13 @@
+[package]
+name = "classifier-rbpf"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "classifier-rbpf-inspect"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+xpost-elf = { path = "../vendor/xpost-elf" }
