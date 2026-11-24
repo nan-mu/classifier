@@ -107,6 +107,8 @@ Lake 库名是 `Core`、`Node`、`RV32`、`EBPF` 和 `Verification`。源码都�
 
 The Lake library names are `Core`, `Node`, `RV32`, `EBPF`, and `Verification`. The sources live in `src/`. Component notes are in the [tooling workspace](tooling/README.md).
 
+libbpf-mcu v0.1.1 的 eBPF 发布对象与观察规格通过 [HEIMDALL 分析入口](tooling/angr/README.md) 复跑。v0.1.0 的 Compact ELF 对照见 [历史 rBPF 工具](tooling/rbpf/README.md)。
+
 `src/` 是 Lean 源码。`Term`、`Expression`、`Observation`、`Interface`、`Wire` 和 `Match` 组成库 `Core`。`Node/` 是路径、预算展开和精确配置合并。`Cross/RV32/` 是 RV32IMC 的入口、解码和单步。`Cross/EBPF/` 是 eBPF 的入口、解码和单步。`Verification/` 是已证陈述，`Unverified/` 不进入这个库。`tooling/` 是 Cargo 工作区、前端、夹具和 vendor。`doc/` 是比较模型笔记。`profile.toml` 列出双架构程序和期望结果。
 
 ## 笔记

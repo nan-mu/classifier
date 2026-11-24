@@ -17,8 +17,8 @@ mod compact;
 mod mem_map;
 
 pub use compact::{
-    build_container, EncodeError, ImageMetadataV0, MapDescriptorV0, MAX_CONTAINER_SIZE,
-    MAX_ENTRIES, MAX_META_SIZE, SECTION_NAMES,
+    build_container, build_container_with_limit, EncodeError, ImageMetadataV0, MapDescriptorV0,
+    MAX_CONTAINER_SIZE, MAX_ENTRIES, MAX_META_SIZE, SECTION_NAMES,
 };
 pub use mem_map::{decode, encode, MemMapError, MemMapV0, MAGIC, SECTION_NAME, WIRE_SIZE};
 
