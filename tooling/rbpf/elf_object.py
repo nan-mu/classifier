@@ -121,6 +121,11 @@ def validate_register_fields(instructions):
         code = insn.code
         cls, op = code & 7, code & 0xf0
         register_source = bool(code & 8)
+        writes_register = cls in (1, 4, 7) or code == 0x18
+        if writes_register and insn.dst == 10:
+            raise ValueError(f"slot {pc}: write to the XDP frame pointer")
+        if cls in (5, 6) and op == 0x80 and (code != 0x85 or insn.src != 0):
+            raise ValueError(f"slot {pc}: only immediate XDP helper calls are supported")
         # Heimdall covers the ordinary forms used by this release. Reject
         # reserved ALU fields and signed DIV/MOD or MOVSX forms at this seam.
         if cls in (4, 7):

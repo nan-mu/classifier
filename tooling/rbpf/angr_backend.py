@@ -93,6 +93,8 @@ class Lookup(angr.SimProcedure):
         address = unique(state, state.regs.R2, "lookup key address")
         self.world.region(state, address, map_.key_bytes)
         key = state.memory.load(address, map_.key_bytes, endness=LE, inspect=False)
+        if key.variables - self.world.input_names:
+            raise Gap("exception", f"slot {pc}: lookup key depends on undefined data")
         cells = state.globals["map_cells"]
         if key.concrete or map_.array:
             key_int = unique(state, key, "ARRAY index")
@@ -282,8 +284,7 @@ class AngrBackend:
         for pc, insn in self.instructions.items():
             if insn.code == 0x85:
                 cc = LookupConvention(project.arch)
-                proc = (Lookup(world, cc=cc) if insn.imm == 1 and insn.src == 0 else
-                        UnsupportedHelper(insn.imm, cc=cc))
+                proc = Lookup(world, cc=cc) if insn.imm == 1 else UnsupportedHelper(insn.imm, cc=cc)
                 project.hook(CODE_BASE + pc * 8, proc, length=8)
         pending = [world.initial(project)]
         exits, gaps = [], []
