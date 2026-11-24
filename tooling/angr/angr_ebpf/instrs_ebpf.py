@@ -423,9 +423,9 @@ class DivOp(FetchDestination, FetchSource):
     operation_name = "div"
 
     def compute_result(self, src, dst):
-        zero, one = self.constant(0, self.size), self.constant(1, self.size)
-        nonzero = src != zero
-        return nonzero.ite(dst // nonzero.ite(src, one), zero)
+        zero = self.constant(0, self.size)
+        divisor = (src == zero).ite(self.constant(1, self.size), src)
+        return (src == zero).ite(zero, dst // divisor)
 
 class OrOp(FetchDestination, FetchSource):
     """Bitwise OR operation"""
@@ -494,9 +494,9 @@ class ModOp(FetchDestination, FetchSource):
     operation_name = "mod"
 
     def compute_result(self, src, dst):
-        zero, one = self.constant(0, self.size), self.constant(1, self.size)
-        nonzero = src != zero
-        return nonzero.ite(dst % nonzero.ite(src, one), dst)
+        zero = self.constant(0, self.size)
+        divisor = (src == zero).ite(self.constant(1, self.size), src)
+        return (src == zero).ite(dst, dst % divisor)
 
 class XorOp(FetchDestination, FetchSource):
     """Bitwise XOR operation"""

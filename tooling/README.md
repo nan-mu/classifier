@@ -30,7 +30,8 @@ API 检查脚本启动临时服务，验证 Compact XDP ELF 会话的创建、�
 - [server](server/README.md) 提供 Lean 驱动的展开会话 API。
 - [web](web/README.md) 显示指令、表达式和展开图。
 - `lean-binding` 将 Lean 导出函数接入 Rust，Rust 模块名为 `lean_binding`。
-- [rbpf](rbpf/README.md) 分析单个 rBPF Compact ELF，并逐包清点和分析 libbpf-mcu 发布。
+- [angr](angr/README.md) 用 HEIMDALL 分析 libbpf-mcu v0.1.1 发布对象及其观察规格。
+- [rbpf](rbpf/README.md) 保留 v0.1.0 Compact ELF 盘点和离线对照。
 - `scripts/dev.py` 管理开发服务进程的启动和停止，由 Lake 调用。
 - `fixtures/just_tx.elf` 是仓库内的默认 Compact XDP ELF。
 - `fixtures/xdp.elf` 是 expand 单测用的 helper 完成 Compact XDP ELF。双架构 firewall 用例使用 `tooling/test/xdp/firewall/`，不用这个文件。

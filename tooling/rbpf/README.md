@@ -1,43 +1,6 @@
-# eBPF 发布对象分析
+# 历史 rBPF 容器对照
 
-`analyze-object` 分析单个 eBPF `.o`。`release` 逐包核对发布 SHA-256、v3 索引和 `bpf.path` 所指成员，使用同一对象装载器和 angr/Heimdall 执行后端。对象需为 ELF64 小端 ET_REL / EM_BPF，具有唯一 XDP 入口。装载器解析 XDP 节的 `R_BPF_64_64` 重定位、ELF 符号和 `.BTF` 中的 map 定义。
-
-对象报告记录对象摘要、代码节和入口符号、重定位绑定，以及 angr、claripy 和 Heimdall 版本。路径来自 angr 的退出状态，报告保留可见 context、完整有效包、map 初态和终态、有序 helper 与写入事件。声明域、退出覆盖和规格查询可使用保存的 SMT-LIB 复算。执行环境支持本批 XDP 程序所需的 HASH、ARRAY 和 `map_lookup_elem`。未建模的代码、符号地址、异常和预算缺口出现在诊断中。初始 context 与栈按 XDP 入口设置，包内 scratch 与包数据一起比较。
-
-## 复跑 v0.1.1
-
-需要 Python 3.12、7-Zip 和原任务包。锁文件保留了原型使用的依赖。Heimdall 的架构和 VEX lifter 来自任务包中固定提交的原型，许可证随源码保留。正式向量规格直接读取原包的 23 组输入和保存的独立期望，不重建历史 C host 用例。
-
-```sh
-run=$(mktemp -d)
-python3.12 -m venv "$run/venv"
-py="$run/venv/bin/python"
-"$py" -m pip install -r tooling/rbpf/requirements-angr.txt
-shasum -a 256 /tmp/classifier-release-elf-taskbook.zip
-unzip -q /tmp/classifier-release-elf-taskbook.zip -d "$run/bundle"
-mkdir "$run/assets"
-gh release download v0.1.1 --repo nan-mu/libbpf-mcu --pattern '*.7z' --dir "$run/assets"
-
-"$py" tooling/rbpf/make_specs.py --release-objects \
-  --evidence "$run/bundle/evidence" --out "$run/specs"
-"$py" tooling/rbpf/analyze.py release --tag v0.1.1 \
-  --assets "$run/assets" --digests tooling/rbpf/libbpf-mcu-v0.1.1-digests.json \
-  --specs "$run/specs" --out "$run/release"
-"$py" tooling/rbpf/acceptance_objects.py --release-results "$run/release" \
-  --assets "$run/assets" --evidence "$run/bundle/evidence" \
-  --specs "$run/specs" --out "$run/checks" --z3 z3
-```
-
-原任务包的 SHA-256 为 `64e25d28e27daffb5c3df264749e95c79da808895195be04413aea8c58208e8f`。`--z3` 用独立的 Z3 可执行文件复算查询，可省略。单文件分析可直接使用复跑脚本导出的已核验对象。
-
-```sh
-"$py" tooling/rbpf/analyze.py analyze-object "$run/checks/case_mark_bpf.o" \
-  --spec "$run/specs/case_mark.json" --out "$run/one-object"
-```
-
-批处理在每条记录中保留摘要或错误定位。合法对象按索引装载，rBPF mode 和容器成员不参与该路径。缺少规格的条目报告 `no_spec`，验收脚本要求 12 个程序均执行并通过对应向量。反例可把 `counterexample.json` 当作 `--spec` 重放。具体失败和未覆盖范围可从 `result.json` 追到指令槽及查询。
-
-## 历史 rBPF 容器对照
+这里提供 libbpf-mcu v0.1.0 的 Compact ELF 盘点和离线对照。发布对象的当前正式入口见 [tooling/angr](../angr/README.md)。历史入口安装 Z3 即可使用 Python 执行模型，与正式入口共用规格和报告格式。
 
 分析入口读取 Compact ELF 的 `.xpost.image`，以容器 map 描述符的顺序解析 `lddw` 中的 map 索引。Rust 校验器复用 vendored `xpost-elf`，核对发布端 8 KiB 上限、规范 ELF 布局和镜像 SHA-256。Compact ELF V0 没有执行引擎字段。单文件由 `--engine ebpf` 声明，发布归档由索引中的 `mode.name = "ebpf"` 声明，离线批处理读取 `<程序>/ebpf.elf`。
 
@@ -78,7 +41,7 @@ py="$run/venv/bin/python"
 - `helpers` 声明有序调用，默认列表为空。每条记录含 `helper`、`map`、`key` 和 `present`。`key` 也可为 `{"packet_offset":26}`，表示从输入包读取一个描述符宽度的键。
 - `when` 可按 `length`、`bytes`、map 的 `present`（条目含 `map`、`key`、`is`）限定期望。`not` 对嵌套条件取反，`all` 对条件列表取合取。每条适用期望都必须满足。遗漏的输入由规格覆盖查询报告。省略 `expect` 的用例只检查退出覆盖。`vectors` 要求固定输入及期望，单独统计通过数。
 
-程序目录保存 `spec.json`、容器与镜像摘要、指令操作码清单、map 布局、校验器版本及可执行文件摘要、Python/Z3 版本和预算。每个用例保存 `domain.smt2`、`uncovered.smt2` 及适用的 `spec-uncovered.smt2` 和 `negated-spec.smt2`。可直接用 `z3 <文件>` 复算。域非空、所有输入均有正常退出、期望覆盖全域且否定式 UNSAT 时，用例才报告 `holds`。
+程序目录保存 `spec.json`、容器与镜像摘要、指令操作码清单、map 布局、校验器版本及可执行文件摘要、Python/Z3 版本和预算。每个用例保存 `domain.smt2`、`uncovered.smt2`、`overlap.smt2`、`reachable-gaps.smt2` 及适用的 `spec-uncovered.smt2` 和 `negated-spec.smt2`。可直接用 `z3 <文件>` 复算。`holds` 要求域非空，正常退出覆盖全域且互斥，规格覆盖全域，执行缺口及否定式均不可满足。
 
 `result.json` 含退出条件、动作、有效包范围、字节、context 和稀疏 map 终态，以及按执行顺序记录的写入和 helper 事件。指令位置 `pc` 从镜像首个 8 字节槽开始编号。`packet.origin` 标出所列字节的首个偏移。符号范围通过 `packet_range` 给出。反例目录内的 `counterexample.json` 可直接作为 `--spec` 重放。
 

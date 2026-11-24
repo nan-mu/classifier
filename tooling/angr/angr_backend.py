@@ -4,26 +4,22 @@ from dataclasses import dataclass
 from io import BytesIO
 
 import angr
-from angr.calling_conventions import SimCC, SimRegArg
+from angr.procedures.definitions import SimSyscallLibrary
 import claripy
 from claripy.errors import ClaripySolverInterruptError
 import z3
 
-from heimdall import ArchExtendedBPF, REVISION
-from heimdall.instrs_ebpf import BPF_CALLER_SAVE_BASE, BPF_CALL_STACK_BASE, BPF_EXIT_SENTINEL
-from machine import CONTEXT, FRAME, MAP_VALUES, PACKET, Entry, Gap, State, bv, unpack
+from angr_ebpf.instrs_ebpf import BPF_CALLER_SAVE_BASE, BPF_CALL_STACK_BASE, BPF_EXIT_SENTINEL
+from angr_ebpf.load_ebpf import ExtendedBPF
+from angr_ebpf.simos_ebpf import BpfMapLookupElem, EbpfMapManager, SimOsEbpf
+from heimdall_formula import guarded_returns, patch_map_relocations, path_predicate
+from model import CONTEXT, FRAME, MAP_VALUES, PACKET, Entry, Gap, State, bv, unpack
 
 
-CODE_BASE = 0x200000
+REVISION = "90b4605e1c6ddae7ae5ead9738d5c1ff8e2843ad"
 LE = "Iend_LE"
 BE = "Iend_BE"
 Z3 = claripy.backends.z3
-
-
-class LookupConvention(SimCC):
-    ARCH = ArchExtendedBPF
-    ARG_REGS = ["R1", "R2", "R3", "R4", "R5"]
-    RETURN_VAL = SimRegArg("R0", 8)
 
 
 def to_angr(value):
@@ -72,100 +68,73 @@ class MapCell:
     present: claripy.ast.Bool
 
 
-class Lookup(angr.SimProcedure):
-    """The fixed helper reads its key from the current XDP memory."""
-
-    NO_RET = True
-
-    def __init__(self, world, **kwargs):
-        super().__init__(**kwargs)
-        self.world = world
-
-    def run(self):
-        state = self.state
-        pc = (self.addr - CODE_BASE) // 8
-        state.globals["pc"] = pc
-        self.world.instruction(state)
-        handle = unique(state, state.regs.R1, "lookup map handle")
-        map_ = self.world.maps.get(handle)
-        if map_ is None:
-            raise Gap("exception", f"slot {pc}: lookup handle has no ELF map binding")
-        address = unique(state, state.regs.R2, "lookup key address")
-        self.world.region(state, address, map_.key_bytes)
-        key = state.memory.load(address, map_.key_bytes, endness=LE, inspect=False)
-        if key.variables - self.world.input_names:
-            raise Gap("exception", f"slot {pc}: lookup key depends on undefined data")
-        cells = state.globals["map_cells"]
-        if key.concrete or map_.array:
-            key_int = unique(state, key, "ARRAY index")
-            key_hex = key_int.to_bytes(map_.key_bytes, "little").hex()
-            cell = cells.get((map_.name, key_hex))
-            if cell is None and map_.array and key_int < map_.capacity:
-                cell = self.world.add_cell(state, (map_.name, key_hex), map_.default(key_hex))
-            result = claripy.BVV(0, 64) if cell is None else claripy.If(
-                cell.present, claripy.BVV(cell.address, 64), claripy.BVV(0, 64))
-        else:
-            key_hex = None
-            result = claripy.BVV(0, 64)
-            for (name, named_key), cell in cells.items():
-                if name == map_.name:
-                    same = key == int.from_bytes(bytes.fromhex(named_key), "little")
-                    result = claripy.If(same & cell.present, claripy.BVV(cell.address, 64), result)
-        self.world.event(state, {
-            "pc": pc, "kind": "helper", "helper": 1, "name": "map_lookup_elem",
-            "resource": "map", "map": map_.name, "key": key_hex if key_hex is not None else to_z3(key),
-            "key_width": map_.key_bytes, "key_value": to_z3(key),
-            "present": to_z3(result != 0), "result": to_z3(result),
-        })
-        state.regs.R0 = result
+class XdpLookup(BpfMapLookupElem):
+    def run(self, map_fd_ptr, key_ptr):
+        index = unique(self.state, map_fd_ptr, "lookup map handle")
+        if index not in self.state.globals["world"].maps:
+            raise Gap("exception", f"lookup handle {index} has no ELF map binding")
+        result = super().run(map_fd_ptr, key_ptr)
         for i in range(1, 6):
-            setattr(state.regs, f"R{i}", claripy.BVS(f"clobbered_r{i}", 64))
-        self.jump(self.addr + 8)
+            setattr(self.state.regs, f"R{i}", claripy.BVS(f"clobbered_r{i}", 64))
+        return result
 
 
-class UnsupportedHelper(angr.SimProcedure):
-    NO_RET = True
+class XdpMaps(EbpfMapManager):
+    def lookup_elem(self, state, map_info, key_bvv):
+        world = state.globals["world"]
+        return world.lookup(state, world.maps[map_info["index"]], key_bvv)
 
-    def __init__(self, helper, **kwargs):
-        super().__init__(**kwargs)
-        self.helper = helper
 
-    def run(self):
-        raise Gap("unknown_helper", f"helper {self.helper} has no XDP model")
+XDP_SYSCALLS = SimSyscallLibrary()
+XDP_SYSCALLS.set_library_names("eBPF")
+XDP_SYSCALLS.add("bpf_map_lookup_elem", XdpLookup)
+XDP_SYSCALLS.add_number_mapping_from_dict("abi", {1: "bpf_map_lookup_elem"})
+
+
+class XdpSimOS(SimOsEbpf):
+    def __init__(self, project):
+        super().__init__(project, syscall_library=XDP_SYSCALLS)
 
 
 class XdpWorld:
-    def __init__(self, domain, maps, limits, instructions):
+    def __init__(self, domain, maps, limits, instructions, section_base):
         self.domain = domain
         self.maps = {map_.vma: map_ for map_ in maps}
         self.limits = limits
         self.instructions = instructions
+        self.section_base = section_base
         self.length = to_angr(domain.length)
         self.input_names = set().union(*(to_angr(value).variables for value in (
             domain.length, *domain.packet,
             *(value for entry in domain.entries.values() for value in (entry.present, entry.value)),
         ) if not (z3.is_bv_value(value) or z3.is_true(value) or z3.is_false(value))))
 
-    def initial(self, project):
-        state = project.factory.blank_state(addr=project.entry)
+    def initial(self, project, entry):
+        state = project.factory.blank_state(addr=entry)
         state.solver.timeout = self.limits.timeout_ms
         state.regs.R1 = CONTEXT
         state.regs.R10 = FRAME
-        state.regs.call_depth = 1
-        state.memory.store(BPF_CALL_STACK_BASE, claripy.BVV(BPF_EXIT_SENTINEL, 64), endness=LE)
         state.memory.store(BPF_CALLER_SAVE_BASE, claripy.BVV(0, 80 * 8), endness=LE)
         initialize_bytes(state, CONTEXT, self.domain.context)
         initialize_bytes(state, PACKET, self.domain.packet)
         state.solver.add(to_angr(self.domain.guard))
         state.globals["events"] = ()
         state.globals["map_cells"] = {}
-        state.globals["pc"] = (project.entry - CODE_BASE) // 8
+        state.globals["pc"] = (entry - self.section_base) // 8
+        state.globals["world"] = self
+        map_manager = XdpMaps()
+        for index, map_ in self.maps.items():
+            map_manager.create_map(index, map_.key_bytes, map_.value_bytes, map_.capacity,
+                                   "array" if map_.array else "hash", map_.name)
+        state.register_plugin("ebpf_map", map_manager)
         state.globals["steps"] = 0
         state.globals["back_edges"] = 0
         for identity, entry in self.domain.entries.items():
             self.add_cell(state, identity, entry)
         state.inspect.b("instruction", when=angr.BP_BEFORE, action=self.on_instruction)
         state.inspect.b("mem_read", when=angr.BP_BEFORE, action=self.on_read)
+        state.inspect.b("mem_read", when=angr.BP_AFTER, action=self.on_read_value)
+        state.inspect.b("reg_read", when=angr.BP_AFTER, action=self.on_register_value)
         state.inspect.b("mem_write", when=angr.BP_BEFORE, action=self.on_write)
         return state
 
@@ -179,14 +148,55 @@ class XdpWorld:
         state.globals["map_cells"] = {**cells, identity: cell}
         return cell
 
-    def instruction(self, state):
+    def lookup(self, state, map_, key):
+        pc = state.globals["pc"]
+        if key.variables - self.input_names:
+            raise Gap("exception", f"slot {pc}: lookup key depends on undefined data")
+        cells = state.globals["map_cells"]
+        if key.concrete or map_.array:
+            key_int = unique(state, key, "ARRAY index")
+            key_hex = key_int.to_bytes(map_.key_bytes, "little").hex()
+            cell = cells.get((map_.name, key_hex))
+            if cell is None and map_.array and key_int < map_.capacity:
+                cell = self.add_cell(state, (map_.name, key_hex), map_.default(key_hex))
+            result = claripy.BVV(0, 64) if cell is None else claripy.If(
+                cell.present, claripy.BVV(cell.address, 64), claripy.BVV(0, 64))
+        else:
+            key_hex = None
+            result = claripy.BVV(0, 64)
+            for (name, named_key), cell in cells.items():
+                if name == map_.name:
+                    same = key == int.from_bytes(bytes.fromhex(named_key), "little")
+                    result = claripy.If(same & cell.present, claripy.BVV(cell.address, 64), result)
+        self.event(state, {
+            "pc": pc, "kind": "helper", "helper": 1, "name": "map_lookup_elem",
+            "resource": "map", "map": map_.name, "key": key_hex if key_hex is not None else to_z3(key),
+            "key_width": map_.key_bytes, "key_value": to_z3(key),
+            "present": to_z3(result != 0), "result": to_z3(result),
+        })
+        return result
+
+    def on_instruction(self, state):
+        delta = state.inspect.instruction - self.section_base
+        pc, remainder = divmod(delta, 8)
+        if remainder or pc not in self.instructions:
+            raise Gap("exception", f"not an XDP instruction slot: {state.inspect.instruction:#x}")
+        previous = state.globals["pc"]
+        if state.globals["steps"] and pc <= previous:
+            state.globals["back_edges"] += 1
+            if state.globals["back_edges"] > self.limits.max_back_edges:
+                raise Gap("loop_budget", f"back edge to slot {pc}")
+        state.globals["pc"] = pc
         state.globals["steps"] += 1
         if state.globals["steps"] > self.limits.max_steps:
             raise Gap("step_budget", "instruction budget exhausted")
-
-    def on_instruction(self, state):
-        state.globals["pc"] = (state.inspect.instruction - CODE_BASE) // 8
-        self.instruction(state)
+        insn = self.instructions[pc]
+        if insn.code == 0x85 and insn.imm != 1:
+            raise Gap("unknown_helper", f"slot {pc}: helper {insn.imm} has no XDP model")
+        cls, mode = insn.code & 7, insn.code & 0xe0
+        if ((cls == 0 and insn.code != 0x18)
+                or (cls in (1, 2, 3) and mode != 0x60)):
+            raise Gap("unsupported_instruction", f"slot {pc}: unsupported XDP opcode {insn.code:#04x}")
 
     def require(self, state, condition, detail):
         if condition.is_false():
@@ -218,6 +228,14 @@ class XdpWorld:
         insn = self.instructions.get(state.globals["pc"])
         self.region(state, address, width, exit_read=insn is not None and insn.code == 0x95)
 
+    def on_read_value(self, state):
+        if state.inspect.mem_read_expr.variables - self.input_names:
+            raise Gap("exception", "memory read depends on undefined data")
+
+    def on_register_value(self, state):
+        if state.inspect.reg_read_expr.variables - self.input_names:
+            raise Gap("exception", "register read depends on undefined data")
+
     def on_write(self, state):
         address = unique(state, state.inspect.mem_write_address, "write address")
         value = state.inspect.mem_write_expr
@@ -242,7 +260,7 @@ class XdpWorld:
         unknown = set().union(*(term.variables for term in state.solver.constraints)) - self.input_names
         if unknown:
             raise Gap("exception", f"execution depended on undeclared symbols: {sorted(unknown)}")
-        return to_z3(claripy.And(*state.solver.constraints))
+        return to_z3(path_predicate(state))
 
     def exit(self, state):
         guard = self.guard(state)
@@ -269,26 +287,49 @@ class AngrBackend:
     name = "angr/Heimdall"
     versions = {"angr": angr.__version__, "claripy": claripy.__version__, "heimdall": REVISION}
 
-    def __init__(self, image, entry_offset, instructions):
-        self.image = image
-        self.entry_offset = entry_offset
+    def __init__(self, data, expected, maps, instructions, artifact):
         self.instructions = instructions
+        try:
+            self.project = angr.Project(
+                BytesIO(data), auto_load_libs=False,
+                main_opts={"backend": ExtendedBPF}, simos=XdpSimOS,
+            )
+            loader = self.project.loader
+            symbol = loader.main_object.get_symbol(artifact["entry"])
+            if symbol is None or symbol.is_import:
+                raise ValueError("CLE did not resolve the XDP entry symbol")
+            self.entry = symbol.rebased_addr
+            self.section_base = self.entry - artifact["entry_offset"]
+            patch_map_relocations(self.project, artifact["bindings"], [m.name for m in maps])
+            if loader.memory.load(self.section_base, len(expected)) != expected:
+                raise ValueError("CLE XDP bytes differ from the validated ELF and map bindings")
+        except (angr.errors.AngrError, KeyError) as err:
+            raise ValueError(f"CLE eBPF ELF load failed: {err}") from err
+        artifact.update(cle_backend=type(loader.main_object).__name__,
+                        simos=type(self.project.simos).__name__,
+                        entry_address=self.entry, section_address=self.section_base)
+
+    @staticmethod
+    def return_formula(exits):
+        output = claripy.BVS("xdp_action", 32, explicit_name=True)
+        paths = ((to_angr(state.guard), to_angr(state.regs[0])[31:0]) for state in exits)
+        return to_z3(guarded_returns(paths, output))
 
     def run(self, domain, maps, limits):
-        world = XdpWorld(domain, maps, limits, self.instructions)
-        project = angr.Project(
-            BytesIO(self.image), arch=ArchExtendedBPF(LE), auto_load_libs=False,
-            main_opts={"backend": "blob", "base_addr": CODE_BASE,
-                       "entry_point": CODE_BASE + self.entry_offset},
+        world = XdpWorld(domain, maps, limits, self.instructions, self.section_base)
+        state = world.initial(self.project, self.entry)
+        simgr = self.project.factory.simulation_manager(
+            state, save_unconstrained=True,
+            resilience=(Gap, angr.errors.AngrError, claripy.errors.ClaripyError, NotImplementedError),
         )
-        for pc, insn in self.instructions.items():
-            if insn.code == 0x85:
-                cc = LookupConvention(project.arch)
-                proc = Lookup(world, cc=cc) if insn.imm == 1 else UnsupportedHelper(insn.imm, cc=cc)
-                project.hook(CODE_BASE + pc * 8, proc, length=8)
-        pending = [world.initial(project)]
         exits, gaps = [], []
-        forks = 1
+
+        def limit_paths(manager):
+            used = len(manager.deadended) + len(manager.errored) + len(manager.unconstrained)
+            capacity = max(0, limits.max_paths - used)
+            manager.stashes.setdefault("path_budget", []).extend(manager.active[capacity:])
+            del manager.active[capacity:]
+            return manager
 
         def record(state, kind, detail):
             try:
@@ -299,40 +340,27 @@ class AngrBackend:
                          "pc": state.globals["pc"], "steps": state.globals["steps"],
                          "back_edges": state.globals["back_edges"]})
 
-        while pending:
-            state = pending.pop()
+        simgr.run(n=limits.max_steps + 2, step_func=limit_paths)
+        for state in simgr.deadended:
             try:
-                address = unique(state, state.regs.ip, "instruction pointer")
-                if address == BPF_EXIT_SENTINEL:
-                    if self.instructions[state.globals["pc"]].code != 0x95:
-                        raise Gap("exception", "exit sentinel reached without EXIT")
-                    exits.append(world.exit(state))
-                    continue
-                pc = (address - CODE_BASE) // 8
-                if (address - CODE_BASE) % 8 or pc not in self.instructions:
-                    raise Gap("exception", f"not an XDP instruction slot: {address:#x}")
-                state.globals["pc"] = pc
-                next_states = project.factory.successors(state)
-                if next_states.unconstrained_successors:
-                    record(state, "symbolic_address", "unconstrained instruction pointer")
-                successors = next_states.flat_successors
-                if not successors and not next_states.unconstrained_successors:
-                    record(state, "exception", "angr stopped before XDP EXIT")
-                forks += max(0, len(successors) - 1)
-                for successor in successors:
-                    target = unique(successor, successor.regs.ip, "instruction pointer")
-                    backwards = (CODE_BASE <= target <= CODE_BASE + successor.globals["pc"] * 8)
-                    if backwards and successor.globals["back_edges"] >= limits.max_back_edges:
-                        record(successor, "loop_budget", f"back edge to slot {(target-CODE_BASE)//8}")
-                    elif len(successors) > 1 and forks > limits.max_paths:
-                        record(successor, "path_budget", "path budget exhausted")
-                    else:
-                        successor.globals["back_edges"] += int(backwards)
-                        pending.append(successor)
+                if (state.addr != BPF_EXIT_SENTINEL
+                        or self.instructions[state.globals["pc"]].code != 0x95):
+                    raise Gap("exception", f"angr stopped before XDP EXIT at {state.addr:#x}")
+                exits.append(world.exit(state))
             except Gap as err:
                 record(state, err.kind, str(err))
             except ClaripySolverInterruptError as err:
                 record(state, "solver_timeout", str(err))
-            except (angr.errors.AngrError, angr.errors.SimError, NotImplementedError) as err:
-                record(state, "exception", f"{type(err).__name__}: {err}")
+        for err in simgr.errored:
+            kind = err.error.kind if isinstance(err.error, Gap) else "exception"
+            if isinstance(err.error, ClaripySolverInterruptError):
+                kind = "solver_timeout"
+            record(err.state, kind, str(err.error))
+        for stash, states in simgr.stashes.items():
+            if stash in {"deadended", "unsat"}:
+                continue
+            kind = {"active": "step_budget", "unconstrained": "symbolic_address",
+                    "path_budget": "path_budget"}.get(stash, "exception")
+            for state in states:
+                record(state, kind, f"unfinished XDP state in angr stash {stash}")
         return exits, gaps

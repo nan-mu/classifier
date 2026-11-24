@@ -9,7 +9,7 @@ from elftools.elf.elffile import ELFFile
 from elftools.elf.relocation import RelocationSection
 from elftools.elf.sections import SymbolTableSection
 
-from machine import Map, decode
+from model import Map, decode
 
 
 @dataclass(frozen=True)
@@ -221,7 +221,7 @@ def relocate(elf, sections, index, code):
             identity = (target, symbol["st_value"], symbol.name)
             if identity not in maps:
                 try:
-                    maps[identity] = btf.map(symbol.name, 0x500000 + 8 * len(maps), symbol["st_size"])
+                    maps[identity] = btf.map(symbol.name, len(maps), symbol["st_size"])
                 except ValueError as err:
                     raise ValueError(f"{site}: {err}") from err
             map_ = maps[identity]
@@ -230,6 +230,7 @@ def relocate(elf, sections, index, code):
             image[offset + 1] &= 15
             struct.pack_into("<I", image, offset + 4, map_.vma)
             bindings.append({"section": relocations.name, "offset": offset,
+                             "file_offset": sections[index]["sh_offset"] + offset,
                              "pc": offset // 8, "symbol": symbol.name, "map": map_.name})
     if len({map_.name for map_ in maps.values()}) != len(maps):
         raise ValueError("duplicate logical map name across XDP relocations")
