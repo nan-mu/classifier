@@ -34,7 +34,7 @@ def cli(*args, **kwargs):
 
 
 def inventory(assets, digests, out, specs=None):
-    command = ["release", "--tag", "v0.1.0", "--assets", assets, "--digests", digests, "--out", out]
+    command = ["container-release", "--tag", "v0.1.0", "--assets", assets, "--digests", digests, "--out", out]
     if specs is not None:
         command.extend(["--specs", specs])
     cli(*command)

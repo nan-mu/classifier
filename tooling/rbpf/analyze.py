@@ -1,4 +1,4 @@
-"""Inspect one rBPF Compact ELF, or inventory and analyze a release."""
+"""Analyze an eBPF object, a release, or a historical rBPF Compact ELF."""
 
 import argparse
 from dataclasses import dataclass, field
@@ -42,6 +42,8 @@ class Program:
     maps: tuple
     instructions: dict
     inspector: dict = field(default_factory=dict)
+    backend: object | None = None
+    artifact: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls, data, inspector, expected=None):
@@ -59,6 +61,19 @@ class Program:
             build = {"version": info["inspector_version"],
                      "sha256": hashlib.file_digest(binary, "sha256").hexdigest()}
         return cls(info["name"], sha(data), sha(image), maps, decode(image, len(maps)), build)
+
+    @classmethod
+    def load_object(cls, data, name):
+        try:
+            from elf_object import load_xdp
+            from angr_backend import AngrBackend
+        except ImportError as err:
+            raise ValueError(f"angr object backend requires requirements-angr.txt: {err}") from err
+        image, maps, instructions, artifact, code = load_xdp(data)
+        backend = AngrBackend(image, artifact["entry_offset"], instructions)
+        artifact.update(object_sha256=sha(data), relocated_image_sha256=sha(image))
+        return cls(name, sha(data), sha(code), maps, instructions,
+                   backend=backend, artifact=artifact)
 
 
 class Archive:
@@ -117,7 +132,7 @@ def member(archive, record, name, limit=MEMBER_LIMIT):
     return data
 
 
-def indexed_container(archive, program):
+def indexed_object(archive, program):
     index_bytes = archive.read("index.toml", 64 * 1024)
     index = tomllib.loads(index_bytes.decode())
     if index.get("schema") != INDEX_SCHEMA or index.get("program") != program:
@@ -127,13 +142,18 @@ def indexed_container(archive, program):
     if (len(bpf) < 64 or bpf[:7] != b"\x7fELF\x02\x01\x01"
             or struct.unpack_from("<HH", bpf, 16) != (1, 247)):
         raise ValueError("bpf entry is not a little-endian relocatable eBPF object")
+    return bpf, index, {"index_sha256": sha(index_bytes), "bpf_path": index["bpf"]["path"]}
+
+
+def indexed_container(archive, program):
+    _, index, evidence = indexed_object(archive, program)
     modes = index.get("mode", [])
     if not isinstance(modes, list) or any(not isinstance(row, dict) for row in modes):
         raise ValueError("mode must be an array of tables")
     names = [row.get("name") for row in modes]
     if any(not isinstance(name, str) or not name for name in names) or names.count("ebpf") > 1:
         raise ValueError("invalid deployment mode or duplicate ebpf mode")
-    evidence = {"index_sha256": sha(index_bytes), "modes": names}
+    evidence["modes"] = names
     for row in modes:
         if row["name"] == "ebpf":
             if (row.get("role") != "xpost_container" or
@@ -145,9 +165,8 @@ def indexed_container(archive, program):
     return None, evidence
 
 
-def analyze_entry(args, data, name, out, row, selection):
-    program = Program.load(data, args.inspector, name)
-    row["container_sha256"] = program.digest
+def analyze_entry(args, program, name, out, row, selection):
+    row["object_sha256" if program.backend else "container_sha256"] = program.digest
     row["engine_selection"] = selection
     path = args.specs / f"{name}.json" if args.specs else None
     document = json.loads(path.read_text()) if path is not None and path.is_file() else {}
@@ -195,14 +214,29 @@ def release(args):
                 row["asset_digest"] = actual
                 if actual != digest:
                     raise ValueError("archive SHA-256 mismatch")
-                data, evidence = indexed_container(Archive(verified, seven_zip), name)
+                row["stage"] = "index"
+                archive = Archive(verified, seven_zip)
+                if args.objects:
+                    data, _, evidence = indexed_object(archive, name)
+                else:
+                    data, evidence = indexed_container(archive, name)
                 row.update(evidence)
             if data is None:
                 row.update(status="missing_rbpf_container", reason="index has no ebpf mode")
             else:
-                analyze_entry(args, data, name, args.out / name, row, "index.toml mode=ebpf")
+                row["stage"] = "object" if args.objects else "container"
+                if args.objects:
+                    program = Program.load_object(data, name)
+                    selection = "index.toml bpf.path"
+                else:
+                    program = Program.load(data, args.inspector, name)
+                    selection = "index.toml mode=ebpf"
+                row["stage"] = "specification or analysis"
+                analyze_entry(args, program, name, args.out / name, row, selection)
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as err:
             row.update(status="error", reason=str(err))
+        else:
+            row.pop("stage", None)
     unexpected = sorted(path.name for path in args.assets.glob("*.7z") if path.name not in digests)
     save_batch(args, "release", rows, tag=args.tag, seven_zip=version, unexpected_assets=unexpected)
 
@@ -218,7 +252,8 @@ def offline(args):
         row = {"program": name, "container_path": str(path)}
         rows.append(row)
         try:
-            analyze_entry(args, load_bytes(path), name, args.out / name, row, "offline ebpf.elf")
+            program = Program.load(load_bytes(path), args.inspector, name)
+            analyze_entry(args, program, name, args.out / name, row, "offline ebpf.elf")
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as err:
             row.update(status="error", reason=str(err))
     save_batch(args, "offline", rows)
@@ -237,10 +272,20 @@ def load_bytes(path):
 
 
 def single(args):
-    program = Program.load(load_bytes(args.container), args.inspector)
+    if args.objects:
+        with args.container.open("rb") as stream:
+            data = stream.read(MEMBER_LIMIT + 1)
+        if len(data) > MEMBER_LIMIT:
+            raise ValueError("eBPF object exceeds the member size limit")
+        name = args.container.stem.removesuffix("_bpf")
+        program = Program.load_object(data, name)
+        selection = "explicit eBPF object"
+    else:
+        program = Program.load(load_bytes(args.container), args.inspector)
+        selection = "explicit --engine ebpf"
     spec = json.loads(args.spec.read_text())
     args.out.mkdir(parents=True)
-    report = analyze_program(program, spec, args.out, args.limits, "explicit --engine ebpf")
+    report = analyze_program(program, spec, args.out, args.limits, selection)
     print(json.dumps({"program": program.name, "concrete_counts": report["concrete_counts"],
                       "cases": {case["id"]: case["verdict"] for case in report["cases"]}}))
 
@@ -259,14 +304,19 @@ def main():
     one.add_argument("container", type=Path)
     one.add_argument("--engine", required=True, choices=["ebpf"])
     one.add_argument("--spec", type=Path, required=True)
-    one.set_defaults(run=single)
-    batch = commands.add_parser("release", parents=[common])
-    batch.add_argument("--tag", required=True)
-    batch.add_argument("--assets", type=Path, required=True)
-    batch.add_argument("--digests", type=Path, required=True)
-    batch.add_argument("--specs", type=Path)
-    batch.add_argument("--seven-zip", default="7z")
-    batch.set_defaults(run=release)
+    one.set_defaults(run=single, objects=False)
+    obj = commands.add_parser("analyze-object", parents=[common])
+    obj.add_argument("container", type=Path, metavar="object")
+    obj.add_argument("--spec", type=Path, required=True)
+    obj.set_defaults(run=single, objects=True)
+    for command, objects in (("release", True), ("container-release", False)):
+        batch = commands.add_parser(command, parents=[common])
+        batch.add_argument("--tag", required=True)
+        batch.add_argument("--assets", type=Path, required=True)
+        batch.add_argument("--digests", type=Path, required=True)
+        batch.add_argument("--specs", type=Path)
+        batch.add_argument("--seven-zip", default="7z")
+        batch.set_defaults(run=release, objects=objects)
     comparison = commands.add_parser("offline", parents=[common])
     comparison.add_argument("--containers", type=Path, required=True)
     comparison.add_argument("--specs", type=Path, required=True)

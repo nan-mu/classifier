@@ -77,6 +77,12 @@ def boolean(value):
     return value
 
 
+def offsets(value):
+    if not isinstance(value, dict):
+        raise ValueError("byte offsets must be an object")
+    return value.items()
+
+
 class Domain:
     def __init__(self, case, maps):
         fields(case, {"id", "input"}, ("expect", "vectors", "source"))
@@ -156,7 +162,7 @@ class Domain:
         if "length" in predicates:
             length = uint(predicates["length"], len(self.packet) + 1, "length")
             clauses.append(self.length == length)
-        for index, value in predicates.get("bytes", {}).items():
+        for index, value in offsets(predicates.get("bytes", {})):
             index = offset(index, len(self.packet))
             clauses.append(self.packet[index] == uint(value, 256, "packet byte"))
         for item in predicates.get("present", []):
@@ -191,9 +197,9 @@ class Expectation:
         self.action = uint(spec["action"], 1 << 32, "XDP action")
         self.packet = domain.packet.copy()
         self.context = domain.context.copy()
-        for index, value in spec.get("bytes", {}).items():
+        for index, value in offsets(spec.get("bytes", {})):
             self.packet[offset(index, len(self.packet))] = bv(uint(value, 256, "packet byte"), 8)
-        for index, value in spec.get("context", {}).items():
+        for index, value in offsets(spec.get("context", {})):
             self.context[offset(index, len(self.context))] = bv(uint(value, 256, "context byte"), 8)
         self.entries = {}
         for item in spec.get("map", []):
@@ -313,6 +319,8 @@ def query(out, name, predicate, timeout):
 
 
 def execute(program, domain, limits):
+    if program.backend is not None:
+        return program.backend.run(domain, program.maps, limits)
     machine = Machine(program.instructions, program.maps, limits.max_steps, limits.max_back_edges,
                       limits.max_paths, limits.timeout_ms)
     return machine.run(domain.initial())
@@ -336,6 +344,9 @@ def run_case(program, case, out, limits):
     nonempty, _ = query(out, "domain", domain.guard, limits.timeout_ms)
     report = {"id": case["id"], "source": case.get("source"), "domain": nonempty,
               "precondition": expression(domain.guard), "comparison": "not_requested",
+              "map_initial": describe([{"map": name, "key": key, "present": entry.present,
+                                        "value": entry.value}
+                                       for (name, key), entry in sorted(domain.entries.items())]),
               "exits": [], "unresolved": []}
     if nonempty["status"] != "sat":
         report["verdict"] = "empty_domain" if nonempty["status"] == "unsat" else "undetermined"
@@ -395,7 +406,8 @@ def run_case(program, case, out, limits):
 
 def analyze_program(program, document, out, limits, selection):
     fields(document, set(), ("cases", "vectors"))
-    report = {"program": program.name, "container_sha256": program.digest,
+    report = {"program": program.name,
+              **program.artifact,
               "engine": "ebpf", "engine_selection": selection,
               "image_sha256": program.image_digest, "maps": [asdict(m) for m in program.maps],
               "opcodes": sorted({f"0x{insn.code:02x}" for insn in program.instructions.values()}),
@@ -403,6 +415,11 @@ def analyze_program(program, document, out, limits, selection):
                                                   "z3": z3.get_version_string(),
                                                   "inspector": program.inspector},
               "vectors": [], "cases": []}
+    if program.backend is None:
+        report.update(backend="Python/Z3", container_sha256=program.digest)
+    else:
+        report["backend"] = program.backend.name
+        report["tools"].update(program.backend.versions)
     json_file(out / "spec.json", document)
     for group in ("vectors", "cases"):
         cases = document.get(group, [])

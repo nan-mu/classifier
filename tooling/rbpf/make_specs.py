@@ -216,9 +216,22 @@ def exb2_cases(upstream, name, vector_path, build):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--evidence", type=Path, required=True)
-    parser.add_argument("--upstream", type=Path, required=True, help=f"checkout at {UPSTREAM}")
+    sources = parser.add_mutually_exclusive_group(required=True)
+    sources.add_argument("--upstream", type=Path, help=f"historical checkout at {UPSTREAM}")
+    sources.add_argument("--release-objects", action="store_true",
+                         help="reuse the 23 original vectors and network specifications")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    if args.release_objects:
+        args.out.mkdir(parents=True)
+        for name in sorted((*EXB2, "case_mark", "case_swap", "firewall", "just_drop", "just_tx")):
+            paths = sorted((args.evidence / "vectors" / name).glob("*/expected.json"))
+            if len(paths) != (1 if name == "just_drop" else 2):
+                raise ValueError(f"missing original vector(s) for {name}")
+            vectors = [vector(path.parent) for path in paths]
+            cases = [] if name in EXB2 else network_cases(name, vectors)
+            json_file(args.out / f"{name}.json", {"vectors": vectors, "cases": cases})
+        return
     upstream = args.upstream.resolve()
     commit = subprocess.check_output(["git", "-C", upstream, "rev-parse", "HEAD"], text=True).strip()
     if commit != UPSTREAM:
